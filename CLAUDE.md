@@ -1,0 +1,1 @@
+.dev/adapters/CLAUDE.md
