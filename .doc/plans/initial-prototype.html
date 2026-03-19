@@ -1,0 +1,1664 @@
+---
+title: initial-prototype
+category: plans
+scope: project
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loopd</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0c0c0e; --bg2: #141416; --bg3: #1c1c1f;
+  --border: rgba(255,255,255,0.08); --border2: rgba(255,255,255,0.14);
+  --text: #f0ede8; --text2: #8a8880; --text3: #525150;
+  --accent: #e8d5b0; --accent2: #c4a96a;
+  --green: #4caf7d; --green-bg: rgba(76,175,125,0.1);
+  --red: #e05555; --amber: #d4922a;
+  --serif: 'DM Serif Display', Georgia, serif;
+  --sans: 'Instrument Sans', system-ui, sans-serif;
+  --mono: 'DM Mono', monospace;
+  --radius: 10px; --radius-lg: 16px;
+}
+html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.shell { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ── Topbar ── */
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: rgba(12,12,14,0.92); backdrop-filter: blur(12px); z-index: 100; }
+.logo { font-family: var(--serif); font-size: 20px; color: var(--accent); letter-spacing: -0.02em; cursor: pointer; }
+.logo span { color: var(--text3); font-size: 14px; font-family: var(--mono); font-style: italic; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.date-chip { font-family: var(--mono); font-size: 12px; color: var(--text3); padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; }
+.phase-indicator { display: flex; gap: 6px; align-items: center; }
+.phase-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border2); transition: all 0.3s; }
+.phase-dot.done { background: var(--green); }
+.phase-dot.active { background: var(--accent); width: 18px; border-radius: 3px; }
+
+/* ── Bottom nav ── */
+.bottom-nav { display: flex; position: sticky; bottom: 0; background: rgba(12,12,14,0.95); backdrop-filter: blur(12px); border-top: 1px solid var(--border); z-index: 100; }
+.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px 8px; cursor: pointer; transition: all 0.15s; border: none; background: transparent; color: var(--text3); font-family: var(--sans); }
+.nav-item:hover { color: var(--text2); }
+.nav-item.active { color: var(--accent); }
+.nav-item svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.nav-item .nav-label { font-size: 10px; font-family: var(--mono); letter-spacing: 0.04em; }
+
+/* ── Screens ── */
+.screen { display: none; flex: 1; }
+.screen.active { display: flex; flex-direction: column; }
+
+/* ── Shared buttons ── */
+.btn-primary { width: 100%; padding: 15px; background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius-lg); font-size: 15px; font-weight: 600; font-family: var(--sans); cursor: pointer; transition: all 0.2s; }
+.btn-primary:hover { opacity: 0.88; transform: translateY(-1px); }
+.btn-ghost { width: 100%; padding: 12px; background: transparent; color: var(--text3); border: 1px solid var(--border); border-radius: var(--radius-lg); font-size: 13px; font-family: var(--sans); cursor: pointer; transition: all 0.2s; }
+.btn-ghost:hover { border-color: var(--border2); color: var(--text2); }
+
+/* ── HOME ── */
+.home-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 28px 24px 16px; gap: 24px; }
+.loop-greeting { font-family: var(--serif); font-size: clamp(28px, 5vw, 44px); color: var(--text); text-align: center; line-height: 1.1; letter-spacing: -0.03em; }
+.loop-greeting em { color: var(--accent); font-style: italic; }
+.loop-sub { font-size: 14px; color: var(--text2); text-align: center; max-width: 300px; }
+.stats-bar { display: flex; gap: 20px; justify-content: center; }
+.stat-item { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.stat-value { font-family: var(--serif); font-size: 26px; color: var(--accent); line-height: 1; }
+.stat-label { font-family: var(--mono); font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.06em; }
+.stat-divider { width: 1px; height: 32px; background: var(--border); align-self: center; }
+.section-eyebrow { font-family: var(--mono); font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+
+/* Plan summary card */
+.home-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; max-width: 480px; width: 100%; transition: border-color 0.2s; }
+.home-card:hover { border-color: var(--border2); }
+.home-card-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.home-card-label { font-family: var(--mono); font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 6px; }
+.home-card-label.green::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+.home-card-label.amber::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.home-card-action { font-family: var(--mono); font-size: 11px; color: var(--text3); cursor: pointer; padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px; transition: all 0.15s; background: transparent; }
+.home-card-action:hover { border-color: var(--border2); color: var(--text2); }
+.home-card-body { padding: 14px 16px; }
+
+/* Plan preview */
+.plan-preview-text { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden; mask-image: linear-gradient(to bottom, black 70%, transparent 100%); }
+.plan-progress-bar { height: 3px; background: var(--border); border-radius: 2px; margin: 10px 16px 0; overflow: hidden; }
+.plan-progress-fill { height: 100%; background: var(--green); border-radius: 2px; transition: width 0.5s ease; }
+.plan-mood-row { display: flex; align-items: center; gap: 8px; padding: 10px 16px 13px; border-top: 1px solid var(--border); margin-top: 10px; }
+.plan-mood-chip { font-size: 16px; }
+.plan-mood-label { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+
+/* Priority tick list */
+.priority-list { display: flex; flex-direction: column; gap: 6px; }
+.priority-row { display: flex; align-items: baseline; gap: 10px; }
+.priority-num { font-family: var(--mono); font-size: 10px; color: var(--text3); width: 14px; flex-shrink: 0; text-align: right; }
+.priority-text { font-size: 14px; color: var(--text); font-weight: 500; line-height: 1.4; flex: 1; }
+.priority-text.done { color: var(--text3); text-decoration: line-through; }
+.priority-check { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--border2); display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all 0.15s; font-size: 10px; color: transparent; }
+.priority-check.ticked { border-color: var(--green); background: var(--green); color: #fff; }
+
+/* Carry items */
+.carry-items { display: flex; flex-direction: column; gap: 7px; }
+.carry-item { font-size: 13px; color: var(--text); padding: 8px 11px; background: var(--bg3); border-radius: 8px; border-left: 2px solid var(--amber); line-height: 1.4; }
+
+/* Phase cards */
+.phase-cards { display: flex; gap: 10px; max-width: 480px; width: 100%; }
+.phase-card { flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; cursor: pointer; transition: all 0.2s; position: relative; overflow: hidden; }
+.phase-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+.phase-card.cta { border-color: var(--accent2); background: linear-gradient(135deg, rgba(200,165,90,0.08), transparent); }
+.phase-card.done { opacity: 0.5; cursor: default; pointer-events: none; }
+.phase-card.done::after { content: '✓'; position: absolute; top: 10px; right: 12px; font-size: 12px; color: var(--green); }
+.phase-card-icon { font-size: 18px; margin-bottom: 6px; }
+.phase-card-name { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.phase-card.cta .phase-card-name { color: var(--accent); }
+.phase-card-hint { font-size: 11px; color: var(--text3); font-family: var(--mono); }
+
+/* Habit check-ins */
+.habit-checkin-section { max-width: 480px; width: 100%; }
+.habit-checkin-list { display: flex; flex-direction: column; gap: 6px; }
+.habit-checkin-row { display: flex; align-items: center; gap: 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 14px; cursor: pointer; transition: all 0.15s; user-select: none; }
+.habit-checkin-row:hover { border-color: var(--border2); }
+.habit-checkin-row.checked { border-color: rgba(76,175,125,0.35); background: rgba(76,175,125,0.04); }
+.hcb { width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--border2); flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all 0.15s; font-size: 11px; font-weight: 700; color: transparent; }
+.habit-checkin-row.checked .hcb { color: #fff; }
+.habit-checkin-info { flex: 1; }
+.habit-checkin-name { font-size: 14px; color: var(--text); font-weight: 500; }
+.habit-checkin-meta { font-size: 11px; color: var(--text3); font-family: var(--mono); margin-top: 1px; }
+.hstreak { font-family: var(--mono); font-size: 11px; color: var(--amber); background: rgba(212,146,42,0.1); border: 1px solid rgba(212,146,42,0.2); border-radius: 20px; padding: 2px 8px; white-space: nowrap; }
+
+/* ── JOURNAL SCREENS (Plan + Reflect) ── */
+.journal-screen { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.journal-header { padding: 24px 24px 0; max-width: 560px; margin: 0 auto; width: 100%; }
+.journal-phase-label { font-family: var(--mono); font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; }
+.journal-title { font-family: var(--serif); font-size: 30px; color: var(--text); line-height: 1.05; letter-spacing: -0.03em; margin-bottom: 4px; }
+.journal-title em { color: var(--accent); font-style: italic; }
+.journal-meta-row { display: flex; align-items: center; gap: 10px; padding: 14px 24px 0; max-width: 560px; margin: 0 auto; width: 100%; }
+
+/* Mood inline row */
+.mood-inline { display: flex; gap: 6px; }
+.mood-pill { padding: 5px 10px; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; font-size: 14px; cursor: pointer; transition: all 0.15s; line-height: 1; }
+.mood-pill:hover { border-color: var(--border2); }
+.mood-pill.sel { border-color: var(--accent2); background: rgba(200,165,90,0.12); }
+
+/* Prompts toggle button */
+.prompts-toggle { margin-left: auto; display: flex; align-items: center; gap: 5px; padding: 5px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; font-size: 12px; font-family: var(--mono); color: var(--text3); cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.prompts-toggle:hover { border-color: var(--border2); color: var(--text2); }
+.prompts-toggle.active { border-color: var(--accent2); color: var(--accent); background: rgba(200,165,90,0.08); }
+.prompts-toggle-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.6; }
+
+/* ── JOURNAL ── */
+.journal-body { flex: 1; display: flex; flex-direction: column; padding: 14px 24px 0; max-width: 560px; margin: 0 auto; width: 100%; }
+.journal-textarea {
+  flex: 1; width: 100%; min-height: 220px;
+  background: transparent; border: none; outline: none; resize: none;
+  font-size: 15px; font-family: var(--sans); color: var(--text);
+  line-height: 1.8; caret-color: var(--accent2); padding: 0;
+}
+.journal-textarea::placeholder { color: var(--text3); }
+
+/* Journal footer */
+.journal-footer { padding: 12px 24px 16px; max-width: 560px; margin: 0 auto; width: 100%; display: flex; gap: 10px; }
+.journal-footer .btn-primary { flex: 1; padding: 14px; font-size: 14px; }
+.journal-footer .btn-ghost { width: auto; padding: 14px 16px; font-size: 13px; flex-shrink: 0; }
+
+/* ── PROMPTS DRAWER ── */
+.prompts-drawer {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: min(320px, 90%);
+  background: var(--bg2); border-left: 1px solid var(--border2);
+  display: flex; flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
+  z-index: 50; overflow: hidden;
+}
+.prompts-drawer.open { transform: translateX(0); }
+.prompts-drawer-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 18px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.prompts-drawer-title { font-family: var(--serif); font-size: 18px; color: var(--text); letter-spacing: -0.02em; }
+.prompts-drawer-close { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text3); font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
+.prompts-drawer-close:hover { border-color: var(--border2); color: var(--text2); }
+
+.prompts-tabs { display: flex; gap: 4px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.prompts-tab { padding: 5px 12px; border-radius: 20px; font-family: var(--mono); font-size: 11px; color: var(--text3); cursor: pointer; transition: all 0.15s; border: 1px solid transparent; }
+.prompts-tab:hover { color: var(--text2); }
+.prompts-tab.active { background: var(--bg3); border-color: var(--border); color: var(--text); }
+
+.prompts-list { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.prompts-list::-webkit-scrollbar { width: 4px; }
+.prompts-list::-webkit-scrollbar-track { background: transparent; }
+.prompts-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.prompt-item {
+  padding: 11px 13px; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.prompt-item:hover { border-color: var(--border2); background: rgba(255,255,255,0.03); }
+.prompt-item:active { transform: scale(0.99); }
+.prompt-text { font-size: 13px; color: var(--text2); line-height: 1.45; flex: 1; }
+.prompt-insert-icon { font-size: 11px; color: var(--text3); flex-shrink: 0; margin-top: 2px; opacity: 0; transition: opacity 0.15s; }
+.prompt-item:hover .prompt-insert-icon { opacity: 1; }
+
+.prompts-hint { padding: 10px 14px 14px; font-size: 11px; color: var(--text3); font-family: var(--mono); line-height: 1.5; }
+
+/* Drawer backdrop (mobile) */
+.drawer-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); z-index: 40; display: none; }
+.drawer-backdrop.open { display: block; }
+
+/* ── IMPROVE ── */
+.improve-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 24px; max-width: 560px; margin: 0 auto; width: 100%; gap: 24px; }
+.improve-eyebrow { font-family: var(--mono); font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.1em; }
+.improve-title { font-family: var(--serif); font-size: 36px; color: var(--text); line-height: 1.05; letter-spacing: -0.03em; text-align: center; }
+.improve-title em { color: var(--accent); font-style: italic; }
+.improve-sub { font-size: 14px; color: var(--text2); text-align: center; }
+.improve-cards { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.improve-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px 20px; display: flex; gap: 14px; align-items: flex-start; opacity: 0; transform: translateY(16px); animation: slideUp 0.4s ease forwards; }
+.improve-card:nth-child(2) { animation-delay: 0.12s; }
+@keyframes slideUp { to { opacity: 1; transform: translateY(0); } }
+.improve-card-icon { width: 34px; height: 34px; border-radius: 8px; background: rgba(212,146,42,0.12); border: 1px solid rgba(212,146,42,0.2); display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+.improve-card-title { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+.improve-card-detail { font-size: 13px; color: var(--text2); line-height: 1.4; }
+.improve-meta { font-family: var(--mono); font-size: 11px; color: var(--text3); text-align: center; }
+.improve-actions { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+
+/* ── HABITS ── */
+.habits-wrap { flex: 1; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; width: 100%; padding: 28px 24px 32px; }
+.habits-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.habits-title { font-family: var(--serif); font-size: 28px; color: var(--text); letter-spacing: -0.03em; }
+.habits-title em { font-style: italic; color: var(--accent); }
+.add-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--bg2); border: 1px solid var(--border2); border-radius: 20px; font-size: 13px; font-weight: 500; color: var(--text2); cursor: pointer; transition: all 0.15s; font-family: var(--sans); }
+.add-btn:hover { border-color: var(--accent2); color: var(--accent); background: rgba(200,165,90,0.06); }
+.habit-list { display: flex; flex-direction: column; gap: 10px; }
+.habit-row { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 15px 16px; display: flex; align-items: center; gap: 12px; transition: border-color 0.15s; }
+.habit-row:hover { border-color: var(--border2); }
+.habit-color-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.habit-info { flex: 1; min-width: 0; }
+.habit-name-text { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.habit-sub-text { font-size: 11px; color: var(--text3); font-family: var(--mono); }
+.hm-mini { display: flex; gap: 3px; margin-top: 5px; }
+.hm-cell { width: 12px; height: 12px; border-radius: 3px; background: var(--bg3); }
+.hm-cell.done { opacity: 0.85; }
+.hm-cell.today-ring { outline: 1.5px solid var(--accent2); outline-offset: 1px; }
+.habit-streak-badge { font-family: var(--mono); font-size: 12px; color: var(--amber); background: rgba(212,146,42,0.1); border: 1px solid rgba(212,146,42,0.2); border-radius: 20px; padding: 3px 9px; white-space: nowrap; }
+.habit-actions { display: flex; gap: 6px; }
+.hab-btn { width: 30px; height: 30px; border-radius: 8px; background: transparent; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s; font-size: 13px; color: var(--text2); }
+.hab-btn:hover { border-color: var(--border2); background: var(--bg3); }
+.hab-btn.del:hover { border-color: var(--red); color: var(--red); }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 48px 20px; text-align: center; }
+.empty-icon { font-size: 36px; opacity: 0.4; }
+.empty-title { font-size: 16px; font-weight: 500; color: var(--text2); }
+.empty-sub { font-size: 13px; color: var(--text3); max-width: 220px; line-height: 1.5; }
+
+/* ── TRACKER ── */
+.tracker-wrap { flex: 1; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; width: 100%; padding: 28px 24px 32px; }
+.tracker-header { margin-bottom: 28px; }
+.tracker-title { font-family: var(--serif); font-size: 28px; color: var(--text); letter-spacing: -0.03em; }
+.tracker-title em { font-style: italic; color: var(--accent); }
+.tracker-sub { font-size: 12px; color: var(--text3); font-family: var(--mono); margin-top: 4px; }
+.tracker-habit-block { margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid var(--border); }
+.tracker-habit-block:last-child { border-bottom: none; }
+.tracker-habit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.tracker-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.tracker-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.tracker-pct { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text3); }
+.hm-full { display: flex; flex-wrap: wrap; gap: 3px; }
+.hm-full-cell { width: 14px; height: 14px; border-radius: 3px; background: var(--bg3); }
+.hm-full-cell.done { opacity: 0.9; }
+.hm-full-cell.today-cell { outline: 1.5px solid var(--accent2); outline-offset: 1.5px; }
+.tracker-stats-row { display: flex; gap: 10px; margin-top: 10px; }
+.tstat { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; flex: 1; }
+.tstat-val { font-family: var(--serif); font-size: 22px; color: var(--accent); line-height: 1; }
+.tstat-lbl { font-family: var(--mono); font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+/* ── Modal ── */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); backdrop-filter: blur(4px); z-index: 200; display: none; align-items: flex-end; justify-content: center; }
+.modal-backdrop.open { display: flex; }
+.modal-sheet { background: var(--bg2); border: 1px solid var(--border2); border-radius: 20px 20px 0 0; width: 100%; max-width: 560px; padding: 22px 24px 32px; animation: sheetUp 0.25s ease; }
+@keyframes sheetUp { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.modal-handle { width: 36px; height: 4px; background: var(--border2); border-radius: 2px; margin: 0 auto 18px; }
+.modal-title { font-family: var(--serif); font-size: 22px; color: var(--text); margin-bottom: 18px; letter-spacing: -0.02em; }
+.mfield { margin-bottom: 14px; }
+.mlabel { font-size: 11px; color: var(--text3); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 7px; }
+.minput { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 13px; font-size: 14px; font-family: var(--sans); color: var(--text); outline: none; transition: border-color 0.15s; }
+.minput:focus { border-color: var(--border2); }
+.minput::placeholder { color: var(--text3); }
+.color-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.cswatch { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2.5px solid transparent; transition: all 0.15s; }
+.cswatch.sel { border-color: var(--text); transform: scale(1.15); }
+.freq-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.freq-btn { padding: 7px 14px; background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; font-size: 12px; font-family: var(--mono); color: var(--text2); cursor: pointer; transition: all 0.15s; }
+.freq-btn:hover { border-color: var(--border2); }
+.freq-btn.sel { border-color: var(--accent2); color: var(--accent); background: rgba(200,165,90,0.08); }
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+.msave { flex: 1; padding: 13px; background: var(--accent); color: var(--bg); border: none; border-radius: var(--radius); font-size: 14px; font-weight: 600; font-family: var(--sans); cursor: pointer; transition: all 0.2s; }
+.msave:hover { opacity: 0.88; }
+.mcancel { padding: 13px 18px; background: transparent; color: var(--text3); border: 1px solid var(--border); border-radius: var(--radius); font-size: 14px; font-family: var(--sans); cursor: pointer; transition: all 0.2s; }
+.mcancel:hover { border-color: var(--border2); color: var(--text2); }
+
+/* ── JOURNAL HISTORY ── */
+.jlog-wrap { flex: 1; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; width: 100%; padding: 28px 24px 32px; }
+.jlog-header { margin-bottom: 24px; }
+.jlog-title { font-family: var(--serif); font-size: 28px; color: var(--text); letter-spacing: -0.03em; }
+.jlog-title em { font-style: italic; color: var(--accent); }
+.jlog-sub { font-size: 12px; color: var(--text3); font-family: var(--mono); margin-top: 4px; }
+
+.jlog-day { margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; transition: border-color 0.2s; }
+.jlog-day:hover { border-color: var(--border2); }
+.jlog-day.today { border-color: rgba(200,165,90,0.35); }
+
+.jlog-day-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; cursor: pointer; user-select: none;
+  background: var(--bg2);
+}
+.jlog-day-header:hover { background: var(--bg3); }
+.jlog-day-left { flex: 1; display: flex; align-items: center; gap: 10px; }
+.jlog-date-label { font-size: 14px; font-weight: 500; color: var(--text); }
+.jlog-today-chip { font-family: var(--mono); font-size: 10px; color: var(--accent2); background: rgba(200,165,90,0.1); border: 1px solid rgba(200,165,90,0.25); border-radius: 20px; padding: 2px 7px; }
+.jlog-day-pills { display: flex; gap: 5px; margin-left: auto; }
+.jlog-pill { font-size: 12px; padding: 2px 8px; border-radius: 20px; font-family: var(--mono); }
+.jlog-pill.plan { background: rgba(76,175,125,0.1); color: var(--green); border: 1px solid rgba(76,175,125,0.2); }
+.jlog-pill.reflect { background: rgba(91,143,232,0.1); color: #5b8fe8; border: 1px solid rgba(91,143,232,0.2); }
+.jlog-pill.empty { background: var(--bg3); color: var(--text3); border: 1px solid var(--border); }
+.jlog-chevron { font-size: 12px; color: var(--text3); transition: transform 0.2s; flex-shrink: 0; }
+.jlog-day.open .jlog-chevron { transform: rotate(180deg); }
+.jlog-mood-row { display: flex; gap: 6px; align-items: center; }
+.jlog-mood-em { font-size: 14px; }
+
+.jlog-day-body { display: none; border-top: 1px solid var(--border); }
+.jlog-day.open .jlog-day-body { display: block; }
+
+.jlog-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.jlog-section:last-child { border-bottom: none; }
+.jlog-section-label { font-family: var(--mono); font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+.jlog-section-label::before { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.jlog-section-label.plan-label { color: var(--green); }
+.jlog-section-label.reflect-label { color: #5b8fe8; }
+.jlog-section-label.improve-label { color: var(--amber); }
+.jlog-text { font-size: 14px; color: var(--text2); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.jlog-empty-day { padding: 20px 16px; font-size: 13px; color: var(--text3); font-style: italic; text-align: center; }
+
+.jlog-improve-item { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; }
+.jlog-improve-item:last-child { margin-bottom: 0; }
+.jlog-improve-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--amber); flex-shrink: 0; margin-top: 7px; }
+.jlog-improve-text { font-size: 13px; color: var(--text2); line-height: 1.5; }
+
+/* Animations */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+.screen.active .home-wrap,
+.screen.active .habits-wrap,
+.screen.active .tracker-wrap,
+.screen.active .improve-wrap,
+.screen.active .jlog-wrap,
+.screen.active .settings-wrap { animation: fadeUp 0.28s ease both; }
+.screen.active .journal-screen { animation: fadeUp 0.28s ease both; }
+
+@media (max-width: 480px) {
+  .phase-cards { flex-direction: column; }
+  .topbar { padding: 14px 18px; }
+  .prompts-drawer { width: 100%; border-left: none; border-top: 1px solid var(--border2); top: auto; border-radius: 20px 20px 0 0; transform: translateY(100%); }
+  .prompts-drawer.open { transform: translateY(0); }
+}
+
+/* ── SETTINGS ── */
+.settings-wrap { flex: 1; display: flex; flex-direction: column; max-width: 560px; margin: 0 auto; width: 100%; padding: 28px 24px 40px; gap: 28px; }
+.settings-header { display: flex; flex-direction: column; gap: 4px; }
+.settings-title { font-family: var(--serif); font-size: 28px; color: var(--text); letter-spacing: -0.03em; }
+.settings-title em { font-style: italic; color: var(--accent); }
+.settings-sub { font-size: 13px; color: var(--text3); font-family: var(--mono); }
+
+/* Connection status banner */
+.conn-status {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--bg2);
+  transition: all 0.3s;
+}
+.conn-status.connected { border-color: rgba(76,175,125,0.35); background: rgba(76,175,125,0.06); }
+.conn-status.disconnected { border-color: rgba(212,146,42,0.3); background: rgba(212,146,42,0.05); }
+.conn-status.error { border-color: rgba(224,85,85,0.35); background: rgba(224,85,85,0.05); }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--text3); transition: background 0.3s; }
+.conn-status.connected .conn-dot { background: var(--green); box-shadow: 0 0 0 3px rgba(76,175,125,0.2); }
+.conn-status.disconnected .conn-dot { background: var(--amber); }
+.conn-status.error .conn-dot { background: var(--red); }
+.conn-label { font-size: 13px; font-weight: 500; color: var(--text2); flex: 1; }
+.conn-status.connected .conn-label { color: var(--green); }
+.conn-status.disconnected .conn-label { color: var(--amber); }
+.conn-status.error .conn-label { color: var(--red); }
+.conn-source { font-family: var(--mono); font-size: 11px; color: var(--text3); }
+
+/* Settings card */
+.settings-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.settings-card-header { padding: 16px 18px 12px; border-bottom: 1px solid var(--border); }
+.settings-card-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 3px; }
+.settings-card-sub { font-size: 12px; color: var(--text3); line-height: 1.4; }
+.settings-card-body { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+
+/* Settings field */
+.sfield-label { font-size: 11px; color: var(--text3); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 7px; }
+.sfield-input-wrap { position: relative; }
+.sfield-input {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 11px 40px 11px 13px;
+  font-size: 13px; font-family: var(--mono); color: var(--text);
+  outline: none; transition: border-color 0.15s;
+}
+.sfield-input:focus { border-color: var(--border2); }
+.sfield-input::placeholder { color: var(--text3); font-family: var(--mono); }
+.sfield-input.valid { border-color: rgba(76,175,125,0.4); }
+.sfield-input.invalid { border-color: rgba(224,85,85,0.4); }
+.sfield-toggle { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text3); cursor: pointer; font-size: 13px; padding: 4px; transition: color 0.15s; }
+.sfield-toggle:hover { color: var(--text2); }
+.sfield-hint { font-size: 11px; color: var(--text3); margin-top: 6px; line-height: 1.4; }
+.sfield-hint a { color: var(--accent2); text-decoration: none; }
+.sfield-hint a:hover { text-decoration: underline; }
+
+/* Test + save buttons */
+.settings-actions { display: flex; gap: 10px; padding: 0 18px 18px; }
+.test-btn {
+  flex: 1; padding: 12px; background: transparent;
+  border: 1px solid var(--accent2); border-radius: var(--radius);
+  color: var(--accent); font-size: 13px; font-weight: 500;
+  font-family: var(--sans); cursor: pointer; transition: all 0.2s;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+}
+.test-btn:hover { background: rgba(200,165,90,0.08); }
+.test-btn:disabled { opacity: 0.45; cursor: default; }
+.test-btn .spin { display: none; width: 13px; height: 13px; border: 1.5px solid var(--accent2); border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; }
+.test-btn.testing .spin { display: block; }
+.test-btn.testing .btn-text { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.disconnect-btn {
+  padding: 12px 16px; background: transparent;
+  border: 1px solid rgba(224,85,85,0.3); border-radius: var(--radius);
+  color: var(--red); font-size: 13px; font-family: var(--sans);
+  cursor: pointer; transition: all 0.2s;
+}
+.disconnect-btn:hover { background: rgba(224,85,85,0.08); }
+
+/* Test result message */
+.test-result { margin: 0 18px 14px; padding: 10px 13px; border-radius: 8px; font-size: 13px; line-height: 1.4; display: none; }
+.test-result.success { display: block; background: var(--green-bg); border: 1px solid rgba(76,175,125,0.25); color: var(--green); }
+.test-result.fail { display: block; background: rgba(224,85,85,0.07); border: 1px solid rgba(224,85,85,0.25); color: var(--red); }
+
+/* How-to accordion */
+.howto { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.howto-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; cursor: pointer; user-select: none; }
+.howto-header:hover { background: var(--bg3); }
+.howto-title { font-size: 13px; font-weight: 500; color: var(--text2); }
+.howto-chevron { font-size: 12px; color: var(--text3); transition: transform 0.2s; }
+.howto.open .howto-chevron { transform: rotate(180deg); }
+.howto-body { display: none; border-top: 1px solid var(--border); padding: 16px 18px; }
+.howto.open .howto-body { display: block; }
+.howto-step { display: flex; gap: 12px; margin-bottom: 14px; }
+.howto-step:last-child { margin-bottom: 0; }
+.howto-step-num { width: 20px; height: 20px; border-radius: 50%; background: var(--bg3); border: 1px solid var(--border2); display: flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: 10px; color: var(--text3); flex-shrink: 0; margin-top: 1px; }
+.howto-step-text { font-size: 13px; color: var(--text2); line-height: 1.5; }
+.howto-step-text code { font-family: var(--mono); font-size: 11px; background: var(--bg3); padding: 1px 5px; border-radius: 4px; color: var(--accent2); }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- Topbar -->
+<header class="topbar">
+  <div class="logo" onclick="nav('home')">loopd <span>/ daily loop</span></div>
+  <div class="topbar-right">
+    <div class="date-chip" id="date-chip">Thu · Mar 19</div>
+      <button id="settings-btn" onclick="nav('settings')" style="background:none;border:none;cursor:pointer;color:var(--text3);display:flex;align-items:center;padding:4px;border-radius:8px;transition:color 0.15s" title="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></button>
+    <div class="phase-indicator">
+      <div class="phase-dot" id="dot-0"></div>
+      <div class="phase-dot" id="dot-1"></div>
+      <div class="phase-dot" id="dot-2"></div>
+      <div class="phase-dot" id="dot-3"></div>
+    </div>
+  </div>
+</header>
+
+<!-- ══ HOME ══ -->
+<div class="screen active" id="screen-home">
+  <div class="home-wrap">
+    <div style="text-align:center">
+      <div class="loop-greeting" id="home-greeting">Good morning,<br><em>let's plan today.</em></div>
+      <div class="loop-sub" id="home-sub" style="margin-top:8px">Yesterday's loop is ready. Pick up where you left off.</div>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat-item"><div class="stat-value">4</div><div class="stat-label">Day streak</div></div>
+      <div class="stat-divider"></div>
+      <div class="stat-item"><div class="stat-value">71%</div><div class="stat-label">Completion</div></div>
+      <div class="stat-divider"></div>
+      <div class="stat-item"><div class="stat-value">12</div><div class="stat-label">Days logged</div></div>
+    </div>
+
+    <!-- Plan summary card (shown after plan submitted) -->
+    <div class="home-card" id="plan-home-card" style="display:none">
+      <div class="home-card-header">
+        <div class="home-card-label green">Today's plan</div>
+        <button class="home-card-action" onclick="showJournal('plan')">edit ✎</button>
+      </div>
+      <div class="home-card-body">
+        <div class="priority-list" id="plan-priority-list"></div>
+      </div>
+      <div class="plan-progress-bar"><div class="plan-progress-fill" id="plan-home-prog" style="width:0%"></div></div>
+      <div class="plan-mood-row">
+        <div class="plan-mood-chip" id="plan-mood-chip">—</div>
+        <div class="plan-mood-label" id="plan-mood-label"></div>
+        <div style="margin-left:auto;font-size:12px;color:var(--text3);font-family:var(--mono)" id="plan-word-count-home"></div>
+      </div>
+    </div>
+
+    <!-- Habit check-ins -->
+    <div class="habit-checkin-section" id="home-habits-section">
+      <div class="section-eyebrow">Today's habits</div>
+      <div class="habit-checkin-list" id="home-habit-list"></div>
+    </div>
+
+    <!-- Yesterday's improvement -->
+    <div class="home-card">
+      <div class="home-card-header">
+        <div class="home-card-label amber">Yesterday's improvement</div>
+      </div>
+      <div class="home-card-body">
+        <div class="carry-items" id="carry-items">
+          <div class="carry-item">Limit to 2 priorities — you overplanned on Wednesday</div>
+          <div class="carry-item">Start with your hardest task before 10am</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase action cards -->
+    <div class="phase-cards">
+      <div class="phase-card cta" id="plan-card" onclick="showJournal('plan')">
+        <div class="phase-card-icon">🌅</div>
+        <div class="phase-card-name">Plan morning</div>
+        <div class="phase-card-hint">~5 min</div>
+      </div>
+      <div class="phase-card" id="reflect-card" onclick="showJournal('reflect')" style="opacity:0.4;pointer-events:none;">
+        <div class="phase-card-icon">🌙</div>
+        <div class="phase-card-name">Reflect tonight</div>
+        <div class="phase-card-hint">unlocks later</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PLAN JOURNAL ══ -->
+<div class="screen" id="screen-plan">
+  <div class="journal-screen">
+    <!-- Drawer backdrop -->
+    <div class="drawer-backdrop" id="plan-backdrop" onclick="closeDrawer('plan')"></div>
+
+    <div class="journal-header">
+      <div class="journal-phase-label">Morning · Plan</div>
+      <div class="journal-title">What's the <em>plan</em> for today?</div>
+    </div>
+
+    <div class="journal-meta-row">
+      <!-- Inline mood picker -->
+      <div class="mood-inline" id="plan-mood-row">
+        <div class="mood-pill" onclick="setMood('plan',1,this)" title="flat">😶</div>
+        <div class="mood-pill" onclick="setMood('plan',2,this)" title="ok">😐</div>
+        <div class="mood-pill" onclick="setMood('plan',3,this)" title="good">🙂</div>
+        <div class="mood-pill" onclick="setMood('plan',4,this)" title="great">😊</div>
+        <div class="mood-pill" onclick="setMood('plan',5,this)" title="fired up">🔥</div>
+      </div>
+      <button class="prompts-toggle" id="plan-prompts-btn" onclick="toggleDrawer('plan')">
+        <div class="prompts-toggle-dot"></div>
+        prompts
+      </button>
+    </div>
+
+    <div class="journal-body">
+      <textarea
+        class="journal-textarea"
+        id="plan-textarea"
+        placeholder="Write freely about your day ahead — priorities, what's on your mind, what you're adjusting from yesterday…"
+        oninput="onJournalInput('plan')"
+        spellcheck="true"
+      ></textarea>
+      <div class="journal-wordcount" id="plan-wordcount">0 words</div>
+    </div>
+
+    <div class="journal-footer">
+      <button class="btn-ghost" onclick="nav('home')">← Back</button>
+      <button class="btn-primary" onclick="submitPlan()">Lock in my day →</button>
+    </div>
+
+    <!-- Plan prompts drawer -->
+    <div class="prompts-drawer" id="plan-drawer">
+      <div class="prompts-drawer-header">
+        <div class="prompts-drawer-title">Prompts</div>
+        <button class="prompts-drawer-close" onclick="closeDrawer('plan')">✕</button>
+      </div>
+      <div class="prompts-tabs">
+        <div class="prompts-tab active" onclick="switchTab('plan','plan-tab',this)">Planning</div>
+        <div class="prompts-tab" onclick="switchTab('plan','intention-tab',this)">Intention</div>
+        <div class="prompts-tab" onclick="switchTab('plan','mindset-tab',this)">Mindset</div>
+      </div>
+      <div class="prompts-list" id="plan-prompts-list">
+        <!-- rendered by JS -->
+      </div>
+      <div class="prompts-hint">Tap a prompt to append it to your journal</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ REFLECT JOURNAL ══ -->
+<div class="screen" id="screen-reflect">
+  <div class="journal-screen">
+    <div class="drawer-backdrop" id="reflect-backdrop" onclick="closeDrawer('reflect')"></div>
+
+    <div class="journal-header">
+      <div class="journal-phase-label">Evening · Reflect</div>
+      <div class="journal-title">How did <em>today</em> actually go?</div>
+    </div>
+
+    <div class="journal-meta-row">
+      <div class="mood-inline" id="reflect-mood-row">
+        <div class="mood-pill" onclick="setMood('reflect',1,this)" title="flat">😶</div>
+        <div class="mood-pill" onclick="setMood('reflect',2,this)" title="ok">😐</div>
+        <div class="mood-pill" onclick="setMood('reflect',3,this)" title="good">🙂</div>
+        <div class="mood-pill" onclick="setMood('reflect',4,this)" title="great">😊</div>
+        <div class="mood-pill" onclick="setMood('reflect',5,this)" title="fired up">🔥</div>
+      </div>
+      <button class="prompts-toggle" id="reflect-prompts-btn" onclick="toggleDrawer('reflect')">
+        <div class="prompts-toggle-dot"></div>
+        prompts
+      </button>
+    </div>
+
+    <div class="journal-body">
+      <textarea
+        class="journal-textarea"
+        id="reflect-textarea"
+        placeholder="Write freely about your day — what happened, what you felt, what surprised you, what you'd do differently…"
+        oninput="onJournalInput('reflect')"
+        spellcheck="true"
+      ></textarea>
+      <div class="journal-wordcount" id="reflect-wordcount">0 words</div>
+    </div>
+
+    <div class="journal-footer">
+      <button class="btn-ghost" onclick="nav('home')">← Back</button>
+      <button class="btn-primary" onclick="submitReflect()">Generate improvement →</button>
+    </div>
+
+    <!-- Reflect prompts drawer -->
+    <div class="prompts-drawer" id="reflect-drawer">
+      <div class="prompts-drawer-header">
+        <div class="prompts-drawer-title">Prompts</div>
+        <button class="prompts-drawer-close" onclick="closeDrawer('reflect')">✕</button>
+      </div>
+      <div class="prompts-tabs">
+        <div class="prompts-tab active" onclick="switchTab('reflect','reflect-tab',this)">Reflect</div>
+        <div class="prompts-tab" onclick="switchTab('reflect','learn-tab',this)">Learn</div>
+        <div class="prompts-tab" onclick="switchTab('reflect','improve-tab',this)">Improve</div>
+      </div>
+      <div class="prompts-list" id="reflect-prompts-list"></div>
+      <div class="prompts-hint">Tap a prompt to append it to your journal</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ IMPROVE ══ -->
+<div class="screen" id="screen-improve">
+  <div class="improve-wrap">
+    <div style="text-align:center">
+      <div class="improve-eyebrow">Daily improve</div>
+      <div class="improve-title" style="margin-top:8px">Tomorrow's<br><em>adjustments</em></div>
+      <div class="improve-sub" style="margin-top:6px">Based on today's plan vs. outcome</div>
+    </div>
+    <div class="improve-cards" id="improve-cards"></div>
+    <div class="improve-meta">Generated by rule engine · AI upgrade available</div>
+    <div class="improve-actions">
+      <button class="btn-primary" onclick="saveAndContinue()">Save &amp; start tomorrow →</button>
+      <button class="btn-ghost" onclick="nav('home')">Back to today</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ HABITS ══ -->
+<div class="screen" id="screen-habits">
+  <div class="habits-wrap">
+    <div class="habits-header">
+      <div class="habits-title">My <em>habits</em></div>
+      <button class="add-btn" onclick="openModal(null)">+ Add habit</button>
+    </div>
+    <div class="habit-list" id="habit-list"></div>
+    <div class="empty-state" id="habits-empty" style="display:none">
+      <div class="empty-icon">🌱</div>
+      <div class="empty-title">No habits yet</div>
+      <div class="empty-sub">Add your first habit to start tracking daily consistency.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ TRACKER ══ -->
+<div class="screen" id="screen-tracker">
+  <div class="tracker-wrap">
+    <div class="tracker-header">
+      <div class="tracker-title"><em>Tracker</em></div>
+      <div class="tracker-sub">Last 28 days</div>
+    </div>
+    <div id="tracker-content"></div>
+    <div class="empty-state" id="tracker-empty" style="display:none">
+      <div class="empty-icon">📊</div>
+      <div class="empty-title">Nothing to track yet</div>
+      <div class="empty-sub">Add habits and check them in daily to see your streaks.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ JOURNAL HISTORY ══ -->
+<div class="screen" id="screen-journal">
+  <div class="jlog-wrap">
+    <div class="jlog-header">
+      <div class="jlog-title">Last <em>7 days</em></div>
+      <div class="jlog-sub" id="jlog-date-range"></div>
+    </div>
+    <div id="jlog-list"></div>
+  </div>
+</div>
+
+<!-- ══ SETTINGS ══ -->
+<div class="screen" id="screen-settings">
+  <div class="settings-wrap">
+
+    <div class="settings-header">
+      <div class="settings-title">Connect <em>Notion</em></div>
+      <div class="settings-sub">Paste your integration token and database ID to sync your data.</div>
+    </div>
+
+    <!-- Connection status -->
+    <div class="conn-status disconnected" id="conn-status">
+      <div class="conn-dot"></div>
+      <div class="conn-label" id="conn-label">Using mock data</div>
+      <div class="conn-source" id="conn-source">no credentials</div>
+    </div>
+
+    <!-- Credentials card -->
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="settings-card-title">Notion credentials</div>
+        <div class="settings-card-sub">These are stored locally in your browser. Never sent anywhere except directly to Notion.</div>
+      </div>
+      <div class="settings-card-body">
+
+        <div>
+          <div class="sfield-label">Integration token</div>
+          <div class="sfield-input-wrap">
+            <input class="sfield-input" id="notion-token" type="password"
+              placeholder="secret_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              oninput="onCredentialInput()" autocomplete="off" spellcheck="false">
+            <button class="sfield-toggle" onclick="toggleTokenVis()" id="token-toggle" title="Show/hide">👁</button>
+          </div>
+          <div class="sfield-hint">Get this from <a href="#" onclick="return false">notion.so/my-integrations</a> → your integration → Show token</div>
+        </div>
+
+        <div>
+          <div class="sfield-label">Database ID</div>
+          <div class="sfield-input-wrap">
+            <input class="sfield-input" id="notion-db-id" type="text"
+              placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              oninput="onCredentialInput()" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="sfield-hint">From your Notion database URL: notion.so/workspace/<code>DATABASE_ID</code>?v=...</div>
+        </div>
+
+      </div>
+
+      <div class="test-result" id="test-result"></div>
+
+      <div class="settings-actions">
+        <button class="test-btn" id="test-btn" onclick="testConnection()" disabled>
+          <div class="spin"></div>
+          <span class="btn-text">Test connection</span>
+        </button>
+        <button class="disconnect-btn" id="disconnect-btn" onclick="disconnect()" style="display:none">Disconnect</button>
+      </div>
+    </div>
+
+    <!-- How-to accordion -->
+    <div class="howto" id="howto">
+      <div class="howto-header" onclick="document.getElementById('howto').classList.toggle('open')">
+        <div class="howto-title">How to set up Notion</div>
+        <div class="howto-chevron">▾</div>
+      </div>
+      <div class="howto-body">
+        <div class="howto-step">
+          <div class="howto-step-num">1</div>
+          <div class="howto-step-text">Go to <strong>notion.so/my-integrations</strong> and click <strong>New integration</strong>. Give it a name like "Loopd". Copy the integration token.</div>
+        </div>
+        <div class="howto-step">
+          <div class="howto-step-num">2</div>
+          <div class="howto-step-text">Create a Notion database with all the required properties (see the build plan). Or duplicate the Loopd template if you have a link.</div>
+        </div>
+        <div class="howto-step">
+          <div class="howto-step-num">3</div>
+          <div class="howto-step-text">Open your database → click <strong>Share</strong> in the top right → search for your integration name → click <strong>Invite</strong>.</div>
+        </div>
+        <div class="howto-step">
+          <div class="howto-step-num">4</div>
+          <div class="howto-step-text">Copy the database ID from the URL. It looks like: <code>notion.so/workspace/DATABASE_ID?v=...</code> — the part between the last <code>/</code> and the <code>?</code>.</div>
+        </div>
+        <div class="howto-step">
+          <div class="howto-step-num">5</div>
+          <div class="howto-step-text">Paste both values above and tap <strong>Test connection</strong>. A green status means you're connected.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Habit Modal -->
+<div class="modal-backdrop" id="modal-backdrop" onclick="backdropClick(event)">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modal-title">New habit</div>
+    <div class="mfield"><div class="mlabel">Name</div><input class="minput" id="h-name" type="text" placeholder="e.g. Morning run, Read 20 mins…"></div>
+    <div class="mfield">
+      <div class="mlabel">Color</div>
+      <div class="color-row">
+        <div class="cswatch sel" data-color="#4caf7d" style="background:#4caf7d" onclick="pickColor(this)"></div>
+        <div class="cswatch" data-color="#d4922a" style="background:#d4922a" onclick="pickColor(this)"></div>
+        <div class="cswatch" data-color="#5b8fe8" style="background:#5b8fe8" onclick="pickColor(this)"></div>
+        <div class="cswatch" data-color="#c46fd4" style="background:#c46fd4" onclick="pickColor(this)"></div>
+        <div class="cswatch" data-color="#e05555" style="background:#e05555" onclick="pickColor(this)"></div>
+        <div class="cswatch" data-color="#e8d5b0" style="background:#e8d5b0" onclick="pickColor(this)"></div>
+      </div>
+    </div>
+    <div class="mfield">
+      <div class="mlabel">Frequency</div>
+      <div class="freq-row">
+        <div class="freq-btn sel" data-f="daily" onclick="pickFreq(this)">Daily</div>
+        <div class="freq-btn" data-f="weekdays" onclick="pickFreq(this)">Weekdays</div>
+        <div class="freq-btn" data-f="3x/week" onclick="pickFreq(this)">3× / week</div>
+        <div class="freq-btn" data-f="weekly" onclick="pickFreq(this)">Weekly</div>
+      </div>
+    </div>
+    <div class="mfield"><div class="mlabel">Note (optional)</div><input class="minput" id="h-note" type="text" placeholder="e.g. Before breakfast…"></div>
+    <div class="modal-actions">
+      <button class="mcancel" onclick="closeModal()">Cancel</button>
+      <button class="msave" onclick="saveHabit()">Save habit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom nav -->
+<nav class="bottom-nav">
+  <button class="nav-item active" id="nav-home" onclick="nav('home')">
+    <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    <span class="nav-label">Today</span>
+  </button>
+  <button class="nav-item" id="nav-journal" onclick="nav('journal')">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    <span class="nav-label">Journal</span>
+  </button>
+  <button class="nav-item" id="nav-habits" onclick="nav('habits')">
+    <svg viewBox="0 0 24 24"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+    <span class="nav-label">Habits</span>
+  </button>
+  <button class="nav-item" id="nav-tracker" onclick="nav('tracker')">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    <span class="nav-label">Tracker</span>
+  </button>
+</nav>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// PROMPT DATA
+// ══════════════════════════════════════════
+const PROMPTS = {
+  'plan-tab': [
+    "What's the single most important thing I need to do today?",
+    "What are 2–3 things that would make today feel complete?",
+    "What did I leave unfinished yesterday that I'm carrying forward?",
+    "What does 'done' look like at the end of today?",
+    "What's the one thing I've been avoiding that I should tackle first?",
+    "What's the realistic version of today — not the ambitious version?",
+    "What's my energy level, and how should I plan around it?",
+    "What commitments do I have today that will shape my available time?",
+  ],
+  'intention-tab': [
+    "How do I want to show up today — at work, at home, for myself?",
+    "What mindset do I want to bring into this day?",
+    "What's one small thing I can do to take care of myself today?",
+    "If today goes well, what will have made it that way?",
+    "What am I most looking forward to today?",
+    "What habit am I actively working on, and how does today fit into that?",
+  ],
+  'mindset-tab': [
+    "What's weighing on me right now, and can I set it aside for now?",
+    "What's something I'm grateful for going into today?",
+    "What's one thing I learned yesterday that I want to apply today?",
+    "What's the best version of me that could show up today?",
+    "What would I tell a friend who had the same day ahead of them?",
+    "What's one fear or resistance I'm feeling about today?",
+  ],
+  'reflect-tab': [
+    "What actually happened today vs. what I planned?",
+    "What did I accomplish? What didn't get done?",
+    "What was the high point of the day?",
+    "What drained me most today?",
+    "Did I follow through on what I said I would do?",
+    "How did my mood shift throughout the day?",
+    "What interrupted or disrupted my focus today?",
+    "What surprised me today — good or bad?",
+  ],
+  'learn-tab': [
+    "What's one thing I learned about myself today?",
+    "What worked well today that I want to repeat?",
+    "What would I do differently if I could replay today?",
+    "What pattern am I noticing across recent days?",
+    "What did today teach me about how I work best?",
+    "What assumption got proven wrong today?",
+    "What was harder than I expected, and why?",
+  ],
+  'improve-tab': [
+    "What's one small adjustment that would make tomorrow better?",
+    "What's the one thing I keep not doing that I know I should?",
+    "What would a lighter, more focused version of tomorrow look like?",
+    "What time of day was I most productive, and how can I protect that tomorrow?",
+    "What do I want to carry into tomorrow vs. what should I let go?",
+    "What would 'done well' look like tomorrow?",
+    "Who or what needs my attention that I've been neglecting?",
+  ],
+};
+
+// Active tab per screen
+const activeTabs = { plan: 'plan-tab', reflect: 'reflect-tab' };
+
+function renderPrompts(screen) {
+  const tab = activeTabs[screen];
+  const list = document.getElementById(screen + '-prompts-list');
+  list.innerHTML = (PROMPTS[tab] || []).map(p => `
+    <div class="prompt-item" onclick="insertPrompt('${screen}', ${JSON.stringify(p)})">
+      <div class="prompt-text">${p}</div>
+      <div class="prompt-insert-icon">↓</div>
+    </div>`).join('');
+}
+
+function switchTab(screen, tabKey, el) {
+  activeTabs[screen] = tabKey;
+  el.closest('.prompts-tabs').querySelectorAll('.prompts-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  renderPrompts(screen);
+}
+
+function insertPrompt(screen, text) {
+  insertPromptToEditor(screen, text);
+}
+
+// ══════════════════════════════════════════
+// DRAWER
+// ══════════════════════════════════════════
+function toggleDrawer(screen) {
+  const drawer = document.getElementById(screen + '-drawer');
+  const btn = document.getElementById(screen + '-prompts-btn');
+  const backdrop = document.getElementById(screen + '-backdrop');
+  const isOpen = drawer.classList.contains('open');
+  if (isOpen) {
+    closeDrawer(screen);
+  } else {
+    drawer.classList.add('open');
+    btn && btn.classList.add('active');
+    backdrop && backdrop.classList.add('open');
+    renderPrompts(screen);
+  }
+}
+function closeDrawer(screen) {
+  document.getElementById(screen + '-drawer').classList.remove('open');
+  const btn = document.getElementById(screen + '-prompts-btn');
+  btn && btn.classList.remove('active');
+  const backdrop = document.getElementById(screen + '-backdrop');
+  backdrop && backdrop.classList.remove('open');
+}
+
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+const S = {
+  planText: '', planMood: null, planDone: false,
+  reflectText: '', reflectMood: null,
+  planTicks: {},
+};
+const MOOD_EMOJIS = ['','😶','😐','🙂','😊','🔥'];
+const MOOD_LABELS = ['','flat','ok','good','great','fired up'];
+
+let habits = [
+  { id:'h1', name:'Morning run',         color:'#4caf7d', freq:'daily',    note:'Before breakfast', streak:5, history:fakeHistory(0.8) },
+  { id:'h2', name:'Read 20 mins',        color:'#5b8fe8', freq:'daily',    note:'',                 streak:3, history:fakeHistory(0.6) },
+  { id:'h3', name:'No phone after 10pm', color:'#d4922a', freq:'daily',    note:'',                 streak:2, history:fakeHistory(0.5) },
+];
+let checkins = {}, editId = null, mColor = '#4caf7d', mFreq = 'daily';
+
+function fakeHistory(rate) {
+  const h = [];
+  for (let i=0; i<27; i++) h.push(Math.random()<rate?1:0);
+  h.push(0);
+  return h;
+}
+function calcStreak(h) { let s=0; for(let i=h.length-1;i>=0;i--){ if(h[i])s++; else break;} return s; }
+function calcBest(h)   { let b=0,c=0; for(const d of h){if(d){c++;b=Math.max(b,c);}else c=0;} return b; }
+
+// ══════════════════════════════════════════
+// DATE + GREETING
+// ══════════════════════════════════════════
+const now = new Date();
+const DAY=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'],
+      MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+document.getElementById('date-chip').textContent = DAY[now.getDay()]+' · '+MON[now.getMonth()]+' '+now.getDate();
+const hr = now.getHours();
+if(hr>=17){
+  document.getElementById('home-greeting').innerHTML='Good evening.<br><em>Time to reflect.</em>';
+  document.getElementById('home-sub').textContent='How did today go? Close the loop.';
+  document.getElementById('plan-card').classList.add('done');
+  const rc=document.getElementById('reflect-card');
+  rc.style.opacity='1'; rc.style.pointerEvents='auto'; rc.classList.add('cta');
+} else if(hr>=12){
+  document.getElementById('home-greeting').innerHTML='Good afternoon.<br><em>Stay on track.</em>';
+  document.getElementById('home-sub').textContent='Evening reflection unlocks at 5pm.';
+}
+
+// ══════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════
+function nav(screen) {
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('screen-'+screen).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  const ni = document.getElementById('nav-'+screen);
+  if(ni) ni.classList.add('active');
+  window.scrollTo(0,0);
+  if(screen==='habits') renderHabits();
+  if(screen==='tracker') renderTracker();
+  if(screen==='home') renderHomeHabits();
+  if(screen==='journal') renderJournal();
+  if(screen==='settings') { loadSavedCredentials(); }
+}
+
+function showJournal(screen) {
+  ['plan','reflect'].forEach(closeDrawer);
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('screen-'+screen).classList.add('active');
+  window.scrollTo(0,0);
+  setTimeout(() => {
+    const ta = document.getElementById(screen + '-textarea');
+    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  }, 100);
+}
+
+// ══════════════════════════════════════════
+// JOURNAL
+// ══════════════════════════════════════════
+function onJournalInput(screen) {
+  const ta = document.getElementById(screen + '-textarea');
+  const raw = ta.value;
+  if (screen === 'plan')    S.planText = raw;
+  if (screen === 'reflect') S.reflectText = raw;
+  const words = raw.trim().split(/\s+/).filter(Boolean).length;
+  const wc = document.getElementById(screen + '-wordcount');
+  if (wc) wc.textContent = (raw ? words : 0) + ' word' + (words !== 1 ? 's' : '');
+}
+
+function insertPromptToEditor(screen, text) {
+  const ta = document.getElementById(screen + '-textarea');
+  if (!ta) return;
+  const cur = ta.value;
+  const sep = cur && !cur.endsWith('\n') ? '\n\n' : cur ? '\n' : '';
+  ta.value = cur + sep + text + '\n';
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+  onJournalInput(screen);
+  if (window.innerWidth <= 480) closeDrawer(screen);
+}
+
+function wordCount(txt) {
+  return txt.trim().split(/\s+/).filter(Boolean).length;
+}
+
+// ══════════════════════════════════════════
+// MOOD
+// ══════════════════════════════════════════
+function setMood(screen, val, el) {
+  document.getElementById(screen+'-mood-row').querySelectorAll('.mood-pill').forEach(p=>p.classList.remove('sel'));
+  el.classList.add('sel');
+  if(screen==='plan') S.planMood = val;
+  if(screen==='reflect') S.reflectMood = val;
+}
+
+// ══════════════════════════════════════════
+// SUBMIT PLAN
+// ══════════════════════════════════════════
+function submitPlan() {
+  const ta = document.getElementById('plan-textarea');
+  if(ta) S.planText = ta.value;
+  const text = S.planText.trim();
+  if(!text){ alert('Write something about your plan first.'); return; }
+  S.planDone = true;
+  S.planTicks = {};
+
+  // Dot states
+  document.getElementById('dot-0').classList.add('done');
+  document.getElementById('dot-1').classList.add('active');
+
+  // Unlock reflect
+  const rc = document.getElementById('reflect-card');
+  rc.style.opacity='1'; rc.style.pointerEvents='auto';
+  rc.querySelector('.phase-card-hint').textContent='unlocked';
+
+  // Mark plan card done
+  document.getElementById('plan-card').classList.add('done');
+  document.getElementById('plan-card').classList.remove('cta');
+
+  // Render home summary
+  renderPlanSummary();
+  nav('home');
+}
+
+function renderPlanSummary() {
+  if(!S.planDone) return;
+  const card = document.getElementById('plan-home-card');
+  card.style.display = 'block';
+
+  // Prefer todo lines (- prefix) as priorities, fallback to first 3 non-question lines
+  const rawLines = (S.planText||'').split('\n');
+  const todoLines = rawLines.filter(l=>/^-\s/.test(l)).map(l=>l.replace(/^-\s*/,'').trim()).filter(Boolean).slice(0,3);
+  const textLines = rawLines.map(l=>l.trim()).filter(l=>l&&!l.startsWith('-')&&!l.endsWith('?'));
+  const display = todoLines.length ? todoLines : textLines.slice(0,3);
+
+  const list = document.getElementById('plan-priority-list');
+  list.innerHTML = display.map((txt, i) => {
+    const ticked = !!S.planTicks[i];
+    return `<div class="priority-row" id="prow-${i}">
+      <div class="priority-num">${i+1}</div>
+      <div class="priority-text${ticked?' done':''}" id="ptxt-${i}">${txt.length > 80 ? txt.slice(0,80)+'…' : txt}</div>
+      <div class="priority-check${ticked?' ticked':''}" onclick="tickPriority(${i})">✓</div>
+    </div>`;
+  }).join('');
+
+  updateHomePlanProgress();
+
+  // Mood
+  const m = S.planMood;
+  document.getElementById('plan-mood-chip').textContent = m ? MOOD_EMOJIS[m] : '—';
+  document.getElementById('plan-mood-label').textContent = m ? MOOD_LABELS[m] : '';
+
+  // Word count
+  const wc = wordCount(S.planText);
+  document.getElementById('plan-word-count-home').textContent = wc + ' words';
+}
+
+function tickPriority(i) {
+  S.planTicks[i] = !S.planTicks[i];
+  const check = document.querySelector('#prow-'+i+' .priority-check');
+  const text  = document.getElementById('ptxt-'+i);
+  if(check) check.classList.toggle('ticked', S.planTicks[i]);
+  if(text)  text.classList.toggle('done', S.planTicks[i]);
+  updateHomePlanProgress();
+}
+
+function updateHomePlanProgress() {
+  const list = document.getElementById('plan-priority-list');
+  const total = list ? list.querySelectorAll('.priority-row').length : 0;
+  const done  = Object.values(S.planTicks).filter(Boolean).length;
+  const pct   = total ? Math.round(done / total * 100) : 0;
+  document.getElementById('plan-home-prog').style.width = pct + '%';
+}
+
+// ══════════════════════════════════════════
+// SUBMIT REFLECT
+// ══════════════════════════════════════════
+function submitReflect() {
+  const ta = document.getElementById('reflect-textarea');
+  if(ta) S.reflectText = ta.value;
+  const text = S.reflectText.trim();
+  if(!text){ alert('Write something about your day first.'); return; }
+  document.getElementById('dot-2').classList.add('done');
+  buildImprove();
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById('screen-improve').classList.add('active');
+  window.scrollTo(0,0);
+}
+
+function saveAndContinue() {
+  document.getElementById('dot-3').classList.add('done');
+  const titles = document.querySelectorAll('.improve-card-title');
+  const ci = document.getElementById('carry-items');
+  if(ci && titles.length) {
+    ci.innerHTML = Array.from(titles).map(t=>`<div class="carry-item">${t.textContent}</div>`).join('');
+  }
+  nav('home');
+}
+
+// ══════════════════════════════════════════
+// IMPROVE ENGINE
+// ══════════════════════════════════════════
+function buildImprove() {
+  const cards = [];
+  const plan  = S.planText.toLowerCase();
+  const refl  = S.reflectText.toLowerCase();
+  const mm    = S.planMood || 3;
+  const em    = S.reflectMood || 3;
+  const wc    = wordCount(S.reflectText);
+
+  // Heuristics from free-form text
+  const completionSignals = ['didn\'t finish','didn\'t complete','ran out of time','too much','overplanned','too many'];
+  const positiveSignals   = ['great','accomplished','finished','productive','flow','on track','nailed'];
+  const lowEnergySignals  = ['tired','exhausted','drained','struggled','hard day','burned out'];
+
+  const didOverplan  = completionSignals.some(s=>refl.includes(s));
+  const hadGreatDay  = positiveSignals.some(s=>refl.includes(s)) && em >= 4;
+  const lowEnergy    = lowEnergySignals.some(s=>refl.includes(s));
+  const moodDipped   = em < mm;
+  const shortReflect = wc < 30;
+
+  if(didOverplan)   cards.push({icon:'✂️',title:'Trim tomorrow\'s scope',detail:'Your reflection suggests you overcommitted. Try planning 30% less and finishing strong.'});
+  if(moodDipped)    cards.push({icon:'🌿',title:'Protect your energy mid-day',detail:'Your mood dropped as the day went on. Build in a short reset before it crashes.'});
+  if(lowEnergy)     cards.push({icon:'⚡',title:'Schedule rest intentionally',detail:'You mentioned low energy. Block actual recovery time tomorrow — it\'s not wasted time.'});
+  if(hadGreatDay)   cards.push({icon:'✨',title:'Replicate what worked today',detail:'Today sounded solid. Note what structure or conditions made it work and protect that tomorrow.'});
+  if(shortReflect)  cards.push({icon:'💭',title:'Go deeper in tomorrow\'s reflection',detail:'Your reflection was brief. Even 2–3 more sentences often reveals the real pattern.'});
+
+  // Fallback
+  if(!cards.length) cards.push({icon:'🔁',title:'Keep the loop going',detail:'Good day. Show up the same way tomorrow and let the consistency compound.'});
+  if(cards.length < 2) cards.push({icon:'🎯',title:'Start with your hardest thing',detail:'Whatever you\'re avoiding — do it first tomorrow while your energy is fresh.'});
+
+  document.getElementById('improve-cards').innerHTML = cards.slice(0,2).map((c,i)=>`
+    <div class="improve-card" style="animation-delay:${i*0.12}s">
+      <div class="improve-card-icon">${c.icon}</div>
+      <div>
+        <div class="improve-card-title">${c.title}</div>
+        <div class="improve-card-detail">${c.detail}</div>
+      </div>
+    </div>`).join('');
+}
+
+// ══════════════════════════════════════════
+// HOME HABITS
+// ══════════════════════════════════════════
+function renderHomeHabits() {
+  const sec  = document.getElementById('home-habits-section');
+  const list = document.getElementById('home-habit-list');
+  if(!habits.length){ sec.style.display='none'; return; }
+  sec.style.display='block';
+  list.innerHTML = habits.map(h=>{
+    const ck = !!checkins[h.id];
+    return `<div class="habit-checkin-row${ck?' checked':''}" onclick="toggleCk('${h.id}',this)">
+      <div class="hcb" style="${ck?'background:'+h.color+';border-color:'+h.color:''}">✓</div>
+      <div class="habit-checkin-info">
+        <div class="habit-checkin-name">${h.name}</div>
+        <div class="habit-checkin-meta">${h.freq}${h.note?' · '+h.note:''}</div>
+      </div>
+      <div class="hstreak" id="hs-${h.id}">${h.streak}d 🔥</div>
+    </div>`;
+  }).join('');
+}
+function toggleCk(id, row) {
+  checkins[id] = !checkins[id];
+  const h = habits.find(x=>x.id===id);
+  const ck = checkins[id];
+  row.classList.toggle('checked', ck);
+  const box = row.querySelector('.hcb');
+  box.style.background = ck?h.color:'';
+  box.style.borderColor = ck?h.color:'';
+  h.history[h.history.length-1] = ck?1:0;
+  h.streak = calcStreak(h.history);
+  const badge = document.getElementById('hs-'+id);
+  if(badge) badge.textContent = h.streak+'d 🔥';
+}
+
+// ══════════════════════════════════════════
+// HABITS RENDER + CRUD
+// ══════════════════════════════════════════
+function renderHabits() {
+  const list=document.getElementById('habit-list'), empty=document.getElementById('habits-empty');
+  if(!habits.length){ list.innerHTML=''; empty.style.display='flex'; return; }
+  empty.style.display='none';
+  list.innerHTML = habits.map(h=>{
+    const mini = h.history.slice(-14).map((d,i)=>{
+      const isT=i===13;
+      return `<div class="hm-cell${d?' done':''}${isT?' today-ring':''}" style="${d?'background:'+h.color:''}"></div>`;
+    }).join('');
+    return `<div class="habit-row">
+      <div class="habit-color-dot" style="background:${h.color}"></div>
+      <div class="habit-info">
+        <div class="habit-name-text">${h.name}</div>
+        <div class="hm-mini">${mini}</div>
+        <div class="habit-sub-text" style="margin-top:4px">${h.freq}${h.note?' · '+h.note:''}</div>
+      </div>
+      <div class="habit-streak-badge">${h.streak}d 🔥</div>
+      <div class="habit-actions">
+        <div class="hab-btn" onclick="openModal('${h.id}')">✎</div>
+        <div class="hab-btn del" onclick="delHabit('${h.id}')">✕</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function delHabit(id) {
+  if(!confirm('Delete this habit?')) return;
+  habits=habits.filter(h=>h.id!==id);
+  delete checkins[id];
+  renderHabits(); renderHomeHabits(); renderTracker();
+}
+
+// ══════════════════════════════════════════
+// TRACKER
+// ══════════════════════════════════════════
+function renderTracker() {
+  const content=document.getElementById('tracker-content'), empty=document.getElementById('tracker-empty');
+  if(!habits.length){ content.innerHTML=''; empty.style.display='flex'; return; }
+  empty.style.display='none';
+  content.innerHTML = habits.map(h=>{
+    const done28=h.history.filter(Boolean).length, total=h.history.length;
+    const pct=Math.round(done28/total*100), cur=calcStreak(h.history), bst=calcBest(h.history);
+    const cells=h.history.map((d,i)=>{
+      const isT=i===h.history.length-1;
+      return `<div class="hm-full-cell${d?' done':''}${isT?' today-cell':''}" style="${d?'background:'+h.color:''}"></div>`;
+    }).join('');
+    return `<div class="tracker-habit-block">
+      <div class="tracker-habit-head">
+        <div class="tracker-dot" style="background:${h.color}"></div>
+        <div class="tracker-name">${h.name}</div>
+        <div class="tracker-pct">${done28}/${total} days</div>
+      </div>
+      <div class="hm-full">${cells}</div>
+      <div class="tracker-stats-row">
+        <div class="tstat"><div class="tstat-val">${cur}</div><div class="tstat-lbl">Current streak</div></div>
+        <div class="tstat"><div class="tstat-val">${bst}</div><div class="tstat-lbl">Best streak</div></div>
+        <div class="tstat"><div class="tstat-val">${pct}%</div><div class="tstat-lbl">Completion</div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════
+// MODAL
+// ══════════════════════════════════════════
+function openModal(id) {
+  editId=id;
+  const h=id?habits.find(x=>x.id===id):null;
+  document.getElementById('modal-title').textContent = id?'Edit habit':'New habit';
+  document.getElementById('h-name').value = h?h.name:'';
+  document.getElementById('h-note').value = h?h.note:'';
+  mColor=h?h.color:'#4caf7d'; mFreq=h?h.freq:'daily';
+  document.querySelectorAll('.cswatch').forEach(s=>s.classList.toggle('sel',s.dataset.color===mColor));
+  document.querySelectorAll('.freq-btn').forEach(b=>b.classList.toggle('sel',b.dataset.f===mFreq));
+  document.getElementById('modal-backdrop').classList.add('open');
+  setTimeout(()=>document.getElementById('h-name').focus(),100);
+}
+function closeModal() { document.getElementById('modal-backdrop').classList.remove('open'); editId=null; }
+function backdropClick(e) { if(e.target===document.getElementById('modal-backdrop')) closeModal(); }
+function pickColor(el) { document.querySelectorAll('.cswatch').forEach(s=>s.classList.remove('sel')); el.classList.add('sel'); mColor=el.dataset.color; }
+function pickFreq(el)  { document.querySelectorAll('.freq-btn').forEach(b=>b.classList.remove('sel')); el.classList.add('sel'); mFreq=el.dataset.f; }
+function saveHabit() {
+  const name=document.getElementById('h-name').value.trim();
+  if(!name){ document.getElementById('h-name').focus(); return; }
+  const note=document.getElementById('h-note').value.trim();
+  if(editId){ const h=habits.find(x=>x.id===editId); Object.assign(h,{name,color:mColor,freq:mFreq,note}); }
+  else habits.push({id:'h'+Date.now(),name,color:mColor,freq:mFreq,note,streak:0,history:fakeHistory(0.45)});
+  closeModal(); renderHabits(); renderHomeHabits(); renderTracker();
+}
+
+// ══════════════════════════════════════════
+// JOURNAL HISTORY
+// ══════════════════════════════════════════
+const MOOD_MAP = { 1:'😶', 2:'😐', 3:'🙂', 4:'😊', 5:'🔥' };
+const MOOD_NAME = { 1:'flat', 2:'ok', 3:'good', 4:'great', 5:'fired up' };
+
+// Seed realistic past entries (shown while no real DB)
+function seedJournalEntries() {
+  const entries = [];
+  const today = new Date();
+  const seeds = [
+    {
+      plan: "Feeling pretty clear-headed this morning. Want to make real progress on the API layer today — that's been blocking everything else.\n\nAlso need to send the project update before noon, can't keep pushing that.\n\nEnergy feels solid. Let's go.",
+      planMood: 4,
+      reflect: "Good day overall. Got the API layer mostly wired up — still needs error handling but the happy path works. Project update went out.\n\nLost about an hour to a weird Netlify config issue that turned out to be nothing. Frustrating but resolved.\n\nFelt a bit drained by 4pm. Should've taken a proper break instead of grinding through it.",
+      reflectMood: 3,
+      improve: ['Take a proper break at 3pm tomorrow', 'Don\'t skip lunch — it caught up with me']
+    },
+    {
+      plan: "Yesterday's API work paid off — need to build on it today. Main thing: get the Notion integration reading back correctly.\n\nAlso going to try starting with the hardest thing first instead of easing in.",
+      planMood: 3,
+      reflect: "Mixed. The Notion read works but write is still flaky — I think it's a rate limit issue. Spent longer than expected debugging.\n\nStarting with the hard thing first definitely helped though. Got more done before lunch than I usually do all day.",
+      reflectMood: 3,
+      improve: ['Add retry logic to the Notion write calls', 'Keep the hard-thing-first habit going']
+    },
+    {
+      plan: "Short day — have a call in the afternoon that'll eat 2 hours. Planning accordingly.\n\nOne thing: get the retry logic in. That's it. Everything else is a bonus.",
+      planMood: 3,
+      reflect: "Retry logic is in and working. The call ran long but that's fine.\n\nActually had one of those rare days where I finished the main thing and still had time to start the next one. Felt good.",
+      reflectMood: 5,
+      improve: ['Replicate this structure — one clear thing, start early', 'Protect mornings from meetings where possible']
+    },
+    {
+      plan: null,
+      planMood: null,
+      reflect: null,
+      reflectMood: null,
+      improve: []
+    },
+    {
+      plan: "Monday. Bit slow to get started but I know what needs doing.\n\nThis week: get the journal screen built, clean up the home summary card, and start thinking about the Notion schema properly.\n\nToday: just the journal screen.",
+      planMood: 2,
+      reflect: "Didn't finish the journal screen — got about 70% through and hit a CSS issue with the drawer on mobile that I couldn't shake. Left it for tomorrow.\n\nFrustrating but not a disaster. The structure is there.",
+      reflectMood: 2,
+      improve: ['Break the journal screen into smaller sub-tasks', 'Don\'t try to fix CSS issues after 5pm']
+    },
+    {
+      plan: "Pick up where yesterday left off. Fix the drawer CSS first — that's the blocker. Then finish and ship the journal screen.\n\nAlso going to take a proper lunch break today.",
+      planMood: 4,
+      reflect: "Drawer fixed — it was a z-index thing, obvious in hindsight. Journal screen is done and looking good.\n\nLunch break helped. Came back way sharper than yesterday afternoon.",
+      reflectMood: 4,
+      improve: ['Keep taking real breaks', 'Smaller tasks tomorrow — don\'t let things compound']
+    },
+    {
+      plan: "Today: write the plan history view and connect it to the rest of the app. Should be straightforward.\n\nAlso need to think about how this maps to the Notion schema — write those thoughts down.",
+      planMood: 4,
+      reflect: null,
+      reflectMood: null,
+      improve: []
+    },
+  ];
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const seed = seeds[6 - i];
+    entries.push({
+      date: new Date(d),
+      plan: seed.plan,
+      planMood: seed.planMood,
+      reflect: seed.reflect,
+      reflectMood: seed.reflectMood,
+      improve: seed.improve || [],
+      isToday: i === 0,
+    });
+  }
+  return entries;
+}
+
+const journalEntries = seedJournalEntries();
+
+function renderJournal() {
+  const list = document.getElementById('jlog-list');
+  const sub  = document.getElementById('jlog-date-range');
+  const DAY_LONG = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const today = new Date();
+  const sevenAgo = new Date(today); sevenAgo.setDate(today.getDate() - 6);
+
+  sub.textContent = fmtDate(sevenAgo) + ' – ' + fmtDate(today);
+
+  // Render newest first
+  const sorted = [...journalEntries].reverse();
+
+  list.innerHTML = sorted.map((entry, idx) => {
+    const dow   = DAY_LONG[entry.date.getDay()];
+    const label = entry.isToday ? 'Today' : dow + ', ' + fmtDate(entry.date);
+    const hasP  = !!entry.plan;
+    const hasR  = !!entry.reflect;
+    const hasBoth = hasP && hasR;
+    const hasNone = !hasP && !hasR;
+
+    const planPill    = `<div class="jlog-pill plan">plan</div>`;
+    const reflectPill = `<div class="jlog-pill reflect">reflected</div>`;
+    const emptyPill   = `<div class="jlog-pill empty">no entry</div>`;
+
+    const pills = hasNone ? emptyPill : (hasP ? planPill : '') + (hasR ? reflectPill : '');
+
+    const moodEmoji = entry.isToday
+      ? (S.planMood ? MOOD_MAP[S.planMood] : (entry.planMood ? MOOD_MAP[entry.planMood] : ''))
+      : (entry.planMood ? MOOD_MAP[entry.planMood] : '');
+
+    const planText  = entry.isToday && S.planText    ? S.planText    : (entry.plan    || '');
+    const reflText  = entry.isToday && S.reflectText ? S.reflectText : (entry.reflect || '');
+    const improveItems = entry.improve.length
+      ? entry.improve.map(t => `<div class="jlog-improve-item"><div class="jlog-improve-dot"></div><div class="jlog-improve-text">${t}</div></div>`).join('')
+      : '';
+
+    const planSection = planText ? `
+      <div class="jlog-section">
+        <div class="jlog-section-label plan-label">Morning plan ${entry.planMood ? '· ' + MOOD_MAP[entry.planMood] + ' ' + MOOD_NAME[entry.planMood] : ''}</div>
+        <div class="jlog-text">${escJlog(planText)}</div>
+      </div>` : '';
+
+    const reflSection = reflText ? `
+      <div class="jlog-section">
+        <div class="jlog-section-label reflect-label">Evening reflection ${entry.reflectMood ? '· ' + MOOD_MAP[entry.reflectMood] + ' ' + MOOD_NAME[entry.reflectMood] : ''}</div>
+        <div class="jlog-text">${escJlog(reflText)}</div>
+      </div>` : '';
+
+    const improveSection = improveItems ? `
+      <div class="jlog-section">
+        <div class="jlog-section-label improve-label">Improvement</div>
+        ${improveItems}
+      </div>` : '';
+
+    const bodyContent = hasNone
+      ? `<div class="jlog-empty-day">No entries logged this day</div>`
+      : planSection + reflSection + improveSection;
+
+    return `<div class="jlog-day${entry.isToday ? ' today' : ''}" id="jlog-${idx}">
+      <div class="jlog-day-header" onclick="toggleJlogDay(${idx})">
+        <div class="jlog-day-left">
+          <div class="jlog-date-label">${label}</div>
+          ${entry.isToday ? '<div class="jlog-today-chip">today</div>' : ''}
+        </div>
+        ${moodEmoji ? `<div class="jlog-mood-em">${moodEmoji}</div>` : ''}
+        <div class="jlog-day-pills">${pills}</div>
+        <div class="jlog-chevron">▾</div>
+      </div>
+      <div class="jlog-day-body">${bodyContent}</div>
+    </div>`;
+  }).join('');
+
+  // Auto-open today
+  const todayEl = list.querySelector('.jlog-day.today');
+  if (todayEl) todayEl.classList.add('open');
+}
+
+function toggleJlogDay(idx) {
+  const el = document.getElementById('jlog-' + idx);
+  if (el) el.classList.toggle('open');
+}
+
+function fmtDate(d) {
+  return MON[d.getMonth()] + ' ' + d.getDate();
+}
+
+function escJlog(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ══════════════════════════════════════════
+// SETTINGS — NOTION CREDENTIALS
+// ══════════════════════════════════════════
+
+const LS_TOKEN   = 'loopd_notion_token';
+const LS_DB_ID   = 'loopd_notion_db_id';
+const LS_CONNECTED = 'loopd_notion_connected';
+
+function loadSavedCredentials() {
+  const token = localStorage.getItem(LS_TOKEN) || '';
+  const dbId  = localStorage.getItem(LS_DB_ID) || '';
+  if (token) document.getElementById('notion-token').value = token;
+  if (dbId)  document.getElementById('notion-db-id').value = dbId;
+  updateConnectionStatus();
+  onCredentialInput();
+}
+
+function updateConnectionStatus() {
+  const connected = localStorage.getItem(LS_CONNECTED) === 'true';
+  const token     = localStorage.getItem(LS_TOKEN);
+  const statusEl  = document.getElementById('conn-status');
+  const labelEl   = document.getElementById('conn-label');
+  const sourceEl  = document.getElementById('conn-source');
+  const discBtn   = document.getElementById('disconnect-btn');
+  const settingsBtn = document.getElementById('settings-btn');
+
+  if (connected && token) {
+    statusEl.className = 'conn-status connected';
+    labelEl.textContent = 'Connected to Notion';
+    sourceEl.textContent = 'live data';
+    discBtn.style.display = 'block';
+    // Update topbar gear to accent color when connected
+    if (settingsBtn) settingsBtn.style.color = 'var(--green)';
+  } else {
+    statusEl.className = 'conn-status disconnected';
+    labelEl.textContent = 'Using mock data';
+    sourceEl.textContent = 'no credentials';
+    discBtn.style.display = 'none';
+    if (settingsBtn) settingsBtn.style.color = '';
+  }
+}
+
+function onCredentialInput() {
+  const token = document.getElementById('notion-token').value.trim();
+  const dbId  = document.getElementById('notion-db-id').value.trim();
+  const btn   = document.getElementById('test-btn');
+  btn.disabled = !(token && dbId);
+  // Clear previous result when user edits
+  const result = document.getElementById('test-result');
+  result.className = 'test-result';
+  result.textContent = '';
+}
+
+function toggleTokenVis() {
+  const input = document.getElementById('notion-token');
+  const btn   = document.getElementById('token-toggle');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+  }
+}
+
+function testConnection() {
+  const token = document.getElementById('notion-token').value.trim();
+  const dbId  = document.getElementById('notion-db-id').value.trim();
+  if (!token || !dbId) return;
+
+  const btn    = document.getElementById('test-btn');
+  const result = document.getElementById('test-result');
+
+  btn.classList.add('testing');
+  btn.disabled = true;
+  result.className = 'test-result';
+
+  // Simulate a connection test (in prod this calls /api/notion/test)
+  // We simulate: valid if token starts with "secret_" and dbId is 32 chars
+  setTimeout(() => {
+    btn.classList.remove('testing');
+    btn.disabled = false;
+
+    const looksValid = token.startsWith('secret_') && dbId.replace(/-/g,'').length >= 32;
+
+    if (looksValid) {
+      // Save to localStorage
+      localStorage.setItem(LS_TOKEN, token);
+      localStorage.setItem(LS_DB_ID, dbId);
+      localStorage.setItem(LS_CONNECTED, 'true');
+      result.className = 'test-result success';
+      result.textContent = '✓ Connected successfully. Loopd will now sync with your Notion database.';
+      updateConnectionStatus();
+    } else {
+      localStorage.removeItem(LS_CONNECTED);
+      result.className = 'test-result fail';
+      result.textContent = token.startsWith('secret_')
+        ? '✕ Database ID looks incorrect. Copy it from your Notion database URL.'
+        : '✕ Token should start with "secret_". Check your Notion integration page.';
+    }
+  }, 1400);
+}
+
+function disconnect() {
+  localStorage.removeItem(LS_TOKEN);
+  localStorage.removeItem(LS_DB_ID);
+  localStorage.removeItem(LS_CONNECTED);
+  document.getElementById('notion-token').value = '';
+  document.getElementById('notion-db-id').value = '';
+  const result = document.getElementById('test-result');
+  result.className = 'test-result';
+  result.textContent = '';
+  updateConnectionStatus();
+  onCredentialInput();
+}
+
+// ══════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════
+renderHomeHabits();
+renderPrompts('plan');
+renderPrompts('reflect');
+</script>
+</body>
+</html>
