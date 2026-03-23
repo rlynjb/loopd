@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { View, Text, Pressable, TextInput, Modal, ScrollView, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, Pressable, TextInput, Modal, ScrollView, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
@@ -25,8 +25,8 @@ type Props = {
 };
 
 export function CaptureSheet({ visible, initialType, habits, date, onClose, onSave }: Props) {
-  const [step, setStep] = useState<'type' | 'details'>(initialType ? 'details' : 'type');
-  const [captureType, setCaptureType] = useState<string | null>(initialType ?? null);
+  const [step, setStep] = useState<'type' | 'details'>('type');
+  const [captureType, setCaptureType] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [mood, setMood] = useState<string | null>(null);
   const [category, setCategory] = useState<string | null>(null);
@@ -34,10 +34,34 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
   const [habitNote, setHabitNote] = useState('');
   const [clipUri, setClipUri] = useState<string | null>(null);
   const [clipDurationMs, setClipDurationMs] = useState<number | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  // Sync state when sheet opens or initialType changes
+  useEffect(() => {
+    if (visible) {
+      setText('');
+      setMood(null);
+      setCategory(null);
+      setSelectedHabits([]);
+      setHabitNote('');
+      setClipUri(null);
+      setClipDurationMs(null);
+      setPickError(null);
+      setPicking(false);
+      if (initialType) {
+        setCaptureType(initialType);
+        setStep('details');
+      } else {
+        setCaptureType(null);
+        setStep('type');
+      }
+    }
+  }, [visible, initialType]);
 
   const reset = () => {
-    setStep(initialType ? 'details' : 'type');
-    setCaptureType(initialType ?? null);
+    setStep('type');
+    setCaptureType(null);
     setText('');
     setMood(null);
     setCategory(null);
@@ -45,6 +69,8 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
     setHabitNote('');
     setClipUri(null);
     setClipDurationMs(null);
+    setPickError(null);
+    setPicking(false);
   };
 
   const handleClose = () => {
@@ -59,17 +85,30 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
   };
 
   const handlePickClip = async () => {
-    const result = await pickAndCopyClip(date);
-    if (result) {
-      setClipUri(result.uri);
-      setClipDurationMs(result.durationMs);
+    setPicking(true);
+    setPickError(null);
+    try {
+      const result = await pickAndCopyClip(date);
+      if (result) {
+        console.log('[loopd] Clip picked:', result.uri, 'duration:', result.durationMs);
+        setClipUri(result.uri);
+        setClipDurationMs(result.durationMs);
+      } else {
+        console.log('[loopd] Clip pick cancelled');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[loopd] Clip pick error:', msg);
+      setPickError(msg);
+    } finally {
+      setPicking(false);
     }
   };
 
   const canSave = () => {
     if (captureType === 'habit') return selectedHabits.length > 0;
     if (captureType === 'moment') return !!mood || !!category;
-    if (captureType === 'video') return !!clipUri || text.trim().length > 0;
+    if (captureType === 'video') return !!clipUri;
     return text.trim().length > 0;
   };
 
@@ -89,16 +128,28 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
       createdAt: new Date().toISOString(),
     };
 
+    console.log('[loopd] Saving entry:', entry.type, 'clipUri:', entry.clipUri, 'duration:', entry.clipDurationMs);
     onSave(entry);
     reset();
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
-      <Pressable style={styles.overlay} onPress={handleClose}>
-        <Pressable style={styles.sheet} onPress={e => e.stopPropagation()}>
-          <View style={styles.handle} />
-          <ScrollView showsVerticalScrollIndicator={false}>
+    <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={handleClose}>
+      <KeyboardAvoidingView
+        style={styles.modalContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <View style={styles.modalHeader}>
+          <Pressable onPress={handleClose} style={styles.closeBtn}>
+            <Text style={styles.closeBtnText}>← Back</Text>
+          </Pressable>
+        </View>
+        <ScrollView
+          style={styles.modalScroll}
+          contentContainerStyle={styles.modalContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
 
             {step === 'type' && (
               <View>
@@ -127,11 +178,31 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                   {captureType === 'video' ? 'Import a clip from your camera roll' : 'Write freely — this is your space'}
                 </Text>
                 {captureType === 'video' && (
-                  <Pressable onPress={handlePickClip} style={styles.pickBtn}>
-                    <Text style={styles.pickBtnText}>
-                      {clipUri ? '✓ Clip selected' : 'Choose from camera roll'}
-                    </Text>
-                  </Pressable>
+                  <View>
+                    <Pressable
+                      onPress={!picking ? handlePickClip : undefined}
+                      style={[styles.pickBtn, clipUri ? styles.pickBtnDone : null]}
+                    >
+                      <Text style={[styles.pickBtnText, clipUri ? styles.pickBtnTextDone : null]}>
+                        {picking ? 'Opening gallery...' : clipUri ? '✓ Clip loaded — tap to change' : 'Choose from camera roll'}
+                      </Text>
+                    </Pressable>
+                    {clipUri && (
+                      <View style={styles.clipInfo}>
+                        <Text style={styles.clipInfoText} numberOfLines={1}>
+                          {clipUri.split('/').pop()}
+                        </Text>
+                        {clipDurationMs ? (
+                          <Text style={styles.clipInfoDuration}>
+                            {Math.round(clipDurationMs / 1000)}s
+                          </Text>
+                        ) : null}
+                      </View>
+                    )}
+                    {pickError && (
+                      <Text style={styles.pickErrorText}>{pickError}</Text>
+                    )}
+                  </View>
                 )}
                 <TextInput
                   value={text}
@@ -262,36 +333,37 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
               </View>
             )}
           </ScrollView>
-        </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
+  modalContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    justifyContent: 'flex-end',
+    backgroundColor: '#000000',
   },
-  sheet: {
-    backgroundColor: '#111111',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: 'rgba(255,255,255,0.08)',
+  modalHeader: {
+    paddingTop: 56,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  closeBtn: {
+    padding: 4,
+  },
+  closeBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  modalScroll: {
+    flex: 1,
+  },
+  modalContent: {
     padding: 24,
-    paddingBottom: 36,
-    maxHeight: '85%',
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 20,
+    paddingBottom: 48,
   },
   title: {
     fontFamily: fonts.heading,
@@ -378,6 +450,40 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.coral,
     letterSpacing: 0.5,
+  },
+  pickBtnDone: {
+    backgroundColor: 'rgba(0,217,163,0.1)',
+    borderColor: 'rgba(0,217,163,0.25)',
+    marginBottom: 6,
+  },
+  pickBtnTextDone: {
+    color: colors.teal,
+  },
+  clipInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    marginBottom: 14,
+  },
+  clipInfoText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    flex: 1,
+  },
+  clipInfoDuration: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.amber,
+    marginLeft: 8,
+  },
+  pickErrorText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.coral,
+    paddingHorizontal: 4,
+    marginBottom: 10,
   },
   fieldLabel: {
     fontFamily: fonts.mono,

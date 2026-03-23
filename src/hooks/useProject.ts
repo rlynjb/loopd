@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditorProject, ClipItem, TextOverlay, FilterOverlay } from '../types/project';
 import type { Entry } from '../types/entry';
 import { getProjectByDate, upsertProject } from '../services/database';
@@ -9,6 +9,8 @@ const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f4
 export function useProject(date: string, entries: Entry[]) {
   const [project, setProject] = useState<EditorProject | null>(null);
   const [loading, setLoading] = useState(true);
+  const projectRef = useRef(project);
+  projectRef.current = project;
 
   useEffect(() => {
     (async () => {
@@ -45,11 +47,12 @@ export function useProject(date: string, entries: Entry[]) {
   }, [date, entries]);
 
   const save = useCallback(async (updated?: Partial<EditorProject>) => {
-    if (!project) return;
-    const merged = { ...project, ...updated, updatedAt: new Date().toISOString() };
+    const current = projectRef.current;
+    if (!current) return;
+    const merged = { ...current, ...updated, updatedAt: new Date().toISOString() };
     await upsertProject(merged);
     setProject(merged);
-  }, [project]);
+  }, []);
 
   const updateClips = useCallback((clips: ClipItem[]) => {
     setProject(prev => prev ? { ...prev, clips } : null);

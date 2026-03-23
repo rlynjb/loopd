@@ -30,6 +30,16 @@ export type FilterOverlay = {
   saturate: number;
 };
 
+export type ExportStage = 'preparing' | 'encoding' | 'finalizing' | 'done' | 'error';
+
+export type ExportProgress = {
+  stage: ExportStage;
+  progress: number;
+  currentTimeMs: number;
+  totalDurationMs: number;
+  error?: string;
+};
+
 export type EditorProject = {
   id: string;
   date: string;

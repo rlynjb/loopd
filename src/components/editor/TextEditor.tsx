@@ -1,19 +1,17 @@
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import type { TextOverlay } from '../../types/project';
-import { formatDuration } from '../../utils/time';
 import Slider from '../ui/Slider';
 
 const TEXT_COLORS = ['#ffffff', '#fbbf24', '#00d9a3', '#fb7185', '#a78bfa', '#38bdf8'];
 
 type Props = {
   overlay: TextOverlay;
-  totalDurationSec: number;
   onUpdate: (updates: Partial<TextOverlay>) => void;
   onDelete: () => void;
 };
 
-export function TextEditor({ overlay, totalDurationSec, onUpdate, onDelete }: Props) {
+export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -95,22 +93,7 @@ export function TextEditor({ overlay, totalDurationSec, onUpdate, onDelete }: Pr
         ))}
       </View>
 
-      <View style={[styles.sizeRow, { marginTop: 14 }]}>
-        <Text style={styles.fieldLabel}>TIMING</Text>
-        <Text style={styles.timingInfo}>
-          {formatDuration(Math.round(totalDurationSec * overlay.startPct / 100))} → {formatDuration(Math.round(totalDurationSec * overlay.endPct / 100))}
-        </Text>
-      </View>
-      <View style={styles.sliderRow}>
-        <View style={styles.sliderCol}>
-          <Text style={styles.sliderLabel}>START</Text>
-          <Slider min={0} max={overlay.endPct - 5} value={overlay.startPct} onValueChange={v => onUpdate({ startPct: v })} color={colors.amber} />
-        </View>
-        <View style={styles.sliderCol}>
-          <Text style={styles.sliderLabel}>END</Text>
-          <Slider min={overlay.startPct + 5} max={100} value={overlay.endPct} onValueChange={v => onUpdate({ endPct: v })} color={colors.amber} />
-        </View>
-      </View>
+
 
       {/* Live preview */}
       <View style={styles.preview}>

@@ -1,47 +1,43 @@
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import type { ClipItem } from '../../types/project';
-import { formatDuration } from '../../utils/time';
-import Slider from '../../components/ui/Slider';
 
 type Props = {
   clip: ClipItem;
+  playheadPctInClip: number;
   onUpdate: (updates: Partial<ClipItem>) => void;
   onMoveLeft: () => void;
   onMoveRight: () => void;
   onDelete: () => void;
+  onSplit: () => void;
 };
 
-function getWaveform(clipId: string, bars: number): number[] {
-  const seed = clipId.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-  return Array.from({ length: bars }).map((_, i) => {
-    const v = Math.sin(i * 0.7 + seed * 0.1) * 0.4 + Math.cos(i * 1.3 + seed * 0.3) * 0.3 + 0.5;
-    return Math.max(0.15, Math.min(1, v));
-  });
-}
-
-export function ClipEditor({ clip, onUpdate, onMoveLeft, onMoveRight, onDelete }: Props) {
-  const durationSec = clip.durationMs / 1000;
-  const effectiveSec = Math.round(durationSec * (clip.trimEndPct - clip.trimStartPct) / 100);
-  const waveform = getWaveform(clip.id, 56);
+export function ClipEditor({ clip, playheadPctInClip, onUpdate, onMoveLeft, onMoveRight, onDelete, onSplit }: Props) {
+  // Can split if playhead is inside the clip (not at the very start or end)
+  const canSplit = playheadPctInClip > 5 && playheadPctInClip < 95;
 
   return (
     <View style={[styles.container, { backgroundColor: `${clip.color}08`, borderColor: `${clip.color}20` }]}>
-      <View style={styles.header}>
-        <Text style={[styles.headerLabel, { color: clip.color }]} numberOfLines={1}>
-          EDIT — 🎥 {clip.caption.slice(0, 24)}
-        </Text>
-        <View style={styles.headerActions}>
-          <Pressable onPress={onMoveLeft} style={styles.actionBtn}>
-            <Text style={styles.actionBtnText}>◀</Text>
-          </Pressable>
-          <Pressable onPress={onMoveRight} style={styles.actionBtn}>
-            <Text style={styles.actionBtnText}>▶</Text>
-          </Pressable>
-          <Pressable onPress={onDelete} style={[styles.actionBtn, styles.deleteBtn]}>
-            <Text style={styles.deleteBtnText}>✕</Text>
-          </Pressable>
-        </View>
+      <Text style={[styles.headerLabel, { color: clip.color }]} numberOfLines={1}>
+        EDIT — 🎥 {clip.caption.slice(0, 24)}
+      </Text>
+
+      <View style={styles.actionRow}>
+        <Pressable
+          onPress={canSplit ? onSplit : undefined}
+          style={[styles.splitBtn, !canSplit && styles.splitBtnDisabled]}
+        >
+          <Text style={[styles.splitBtnText, !canSplit && styles.splitBtnTextDisabled]}>✂ Split</Text>
+        </Pressable>
+        <Pressable onPress={onMoveLeft} style={styles.actionBtn}>
+          <Text style={styles.actionBtnText}>◀</Text>
+        </Pressable>
+        <Pressable onPress={onMoveRight} style={styles.actionBtn}>
+          <Text style={styles.actionBtnText}>▶</Text>
+        </Pressable>
+        <Pressable onPress={onDelete} style={[styles.actionBtn, styles.deleteBtn]}>
+          <Text style={styles.deleteBtnText}>✕</Text>
+        </Pressable>
       </View>
 
       <Text style={styles.fieldLabel}>CAPTION</Text>
@@ -51,59 +47,6 @@ export function ClipEditor({ clip, onUpdate, onMoveLeft, onMoveRight, onDelete }
         style={styles.textArea}
         multiline
       />
-
-      <View style={styles.trimHeader}>
-        <Text style={styles.fieldLabel}>TRIM</Text>
-        <Text style={styles.trimInfo}>
-          {formatDuration(Math.round(durationSec * clip.trimStartPct / 100))} → {formatDuration(Math.round(durationSec * clip.trimEndPct / 100))}
-        </Text>
-      </View>
-
-      {/* Waveform visualization */}
-      <View style={styles.waveformBox}>
-        <View style={styles.waveformBars}>
-          {waveform.map((h, i) => {
-            const pct = (i / 56) * 100;
-            const inRange = pct >= clip.trimStartPct && pct <= clip.trimEndPct;
-            return (
-              <View
-                key={i}
-                style={{
-                  flex: 1,
-                  height: `${h * 85}%`,
-                  backgroundColor: inRange ? `${clip.color}60` : 'rgba(255,255,255,0.06)',
-                  borderRadius: 0.5,
-                }}
-              />
-            );
-          })}
-        </View>
-      </View>
-
-      <View style={styles.sliderRow}>
-        <View style={styles.sliderCol}>
-          <Text style={styles.sliderLabel}>IN</Text>
-          <Slider
-            min={0}
-            max={clip.trimEndPct - 5}
-            value={clip.trimStartPct}
-            onValueChange={v => onUpdate({ trimStartPct: v })}
-            color={clip.color}
-          />
-        </View>
-        <View style={styles.sliderCol}>
-          <Text style={styles.sliderLabel}>OUT</Text>
-          <Slider
-            min={clip.trimStartPct + 5}
-            max={100}
-            value={clip.trimEndPct}
-            onValueChange={v => onUpdate({ trimEndPct: v })}
-            color={clip.color}
-          />
-        </View>
-      </View>
-
-      <Text style={styles.effectiveLabel}>{formatDuration(effectiveSec)} trimmed</Text>
     </View>
   );
 }
@@ -115,21 +58,16 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 14,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
   headerLabel: {
     fontFamily: fonts.mono,
     fontSize: 10,
     letterSpacing: 1,
-    flex: 1,
+    marginBottom: 10,
   },
-  headerActions: {
+  actionRow: {
     flexDirection: 'row',
     gap: 6,
+    marginBottom: 14,
   },
   actionBtn: {
     width: 28,
@@ -173,49 +111,27 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: 14,
   },
-  trimHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 6,
+  splitBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 7,
+    backgroundColor: 'rgba(251,191,36,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  trimInfo: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-  },
-  waveformBox: {
-    height: 32,
+  splitBtnDisabled: {
     backgroundColor: 'rgba(255,255,255,0.03)',
-    borderRadius: 8,
-    overflow: 'hidden',
-    marginBottom: 8,
+    borderColor: 'rgba(255,255,255,0.06)',
   },
-  waveformBars: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 4,
-    gap: 1,
-  },
-  sliderRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 8,
-  },
-  sliderCol: {
-    flex: 1,
-  },
-  sliderLabel: {
+  splitBtnText: {
     fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    marginBottom: 3,
+    fontSize: 11,
+    color: colors.amber,
+    letterSpacing: 0.5,
   },
-  effectiveLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    textAlign: 'center',
-    marginTop: 8,
+  splitBtnTextDisabled: {
+    color: colors.textDimmer,
   },
 });

@@ -196,6 +196,51 @@ export async function getVlogs(): Promise<Vlog[]> {
   }));
 }
 
+// Archive past days (before today) that have entries but no vlog record yet
+export async function archivePastDays(todayStr: string): Promise<void> {
+  const db = await getDatabase();
+
+  // Find dates with entries that are before today and don't have a vlog record
+  const rows = await db.getAllAsync<{ date: string }>(
+    `SELECT DISTINCT e.date FROM entries e
+     LEFT JOIN vlogs v ON e.date = v.date
+     WHERE v.id IS NULL AND e.date < ?`,
+    [todayStr]
+  );
+
+  for (const row of rows) {
+    const entries = await getEntriesByDate(row.date);
+    if (entries.length === 0) continue;
+
+    const clipCount = entries.filter(e => e.type === 'video').length;
+    const habitsLogged = [...new Set(entries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
+    const moods = entries.map(e => e.mood).filter(Boolean);
+    const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
+    const topMood = moods.length ? moods[moods.length - 1] : 'calm';
+
+    // Check if there's an exported project for this date
+    const project = await getProjectByDate(row.date);
+    const exportUri = project?.exportUri ?? null;
+    const durationSeconds = project?.clips
+      ? project.clips.reduce((sum, c) =>
+          sum + Math.round((c.durationMs / 1000) * (c.trimEndPct - c.trimStartPct) / 100), 0)
+      : clipCount * 10;
+
+    await insertVlog({
+      id: `vlog-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      date: row.date,
+      clipCount,
+      habitCount: habitsLogged.length,
+      mood: topMood,
+      caption: `${entries.length} moments captured.`,
+      categories: cats as string[],
+      durationSeconds,
+      exportUri,
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
 export async function insertVlog(vlog: Vlog): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(

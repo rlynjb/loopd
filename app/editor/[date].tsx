@@ -2,20 +2,18 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, Pressable, TextInput, ScrollView, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
-import { FILTERS } from '../../src/constants/filters';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useProject } from '../../src/hooks/useProject';
-import { insertVlog } from '../../src/services/database';
 import { generateId } from '../../src/utils/id';
 import { formatDuration } from '../../src/utils/time';
-import { MOODS } from '../../src/constants/moods';
 import { EditorTimeline } from '../../src/components/editor/EditorTimeline';
 import { PreviewPlayer } from '../../src/components/editor/PreviewPlayer';
 import { ClipEditor } from '../../src/components/editor/ClipEditor';
 import { TextEditor } from '../../src/components/editor/TextEditor';
 import { FilterEditor } from '../../src/components/editor/FilterEditor';
 import { ExportModal } from '../../src/components/editor/ExportModal';
+import { useExport } from '../../src/hooks/useExport';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../src/types/project';
 
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
@@ -38,10 +36,9 @@ export default function EditorScreen() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [addingClip, setAddingClip] = useState(false);
   const [addingText, setAddingText] = useState(false);
-  const [addingFilter, setAddingFilter] = useState(false);
   const [newCaption, setNewCaption] = useState('');
   const [newTextContent, setNewTextContent] = useState('');
-  const [exporting, setExporting] = useState(false);
+  const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
   const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
 
   const clips = project?.clips ?? [];
@@ -62,7 +59,7 @@ export default function EditorScreen() {
       const start = Date.now();
       const startPos = playheadPos;
       const remaining = 1 - startPos;
-      const durationMs = remaining * totalDurationSec * 200;
+      const durationMs = remaining * totalDurationSec * 1000;
       const tick = () => {
         const elapsed = Date.now() - start;
         const progress = startPos + remaining * Math.min(elapsed / durationMs, 1);
@@ -90,22 +87,28 @@ export default function EditorScreen() {
     }
   };
 
-  // Find current clip at playhead
-  const getCurrentClipAtPlayhead = (): ClipItem | null => {
-    if (totalDurationSec === 0) return null;
+  // Find current clip at playhead + compute seek position within clip
+  const getClipAtPlayhead = (): { clip: ClipItem | null; seekSec: number } => {
+    if (totalDurationSec === 0) return { clip: null, seekSec: 0 };
+    const playheadTimeSec = playheadPos * totalDurationSec;
     let acc = 0;
     for (const c of clips) {
-      const w = getEffective(c) / totalDurationSec;
-      if (playheadPos < acc + w) return c;
-      acc += w;
+      const effectiveSec = getEffective(c);
+      if (playheadTimeSec < acc + effectiveSec) {
+        const offsetInClip = playheadTimeSec - acc;
+        const trimStartSec = (c.durationMs / 1000) * c.trimStartPct / 100;
+        return { clip: c, seekSec: trimStartSec + offsetInClip };
+      }
+      acc += effectiveSec;
     }
-    return clips[clips.length - 1] ?? null;
+    const last = clips[clips.length - 1];
+    return { clip: last ?? null, seekSec: 0 };
   };
 
   const playheadPct = playheadPos * 100;
   const visibleTexts = textOverlays.filter(t => playheadPct >= t.startPct && playheadPct <= t.endPct);
   const visibleFilter = filterOverlays.find(f => playheadPct >= f.startPct && playheadPct <= f.endPct) ?? null;
-  const currentClip = getCurrentClipAtPlayhead();
+  const { clip: currentClip, seekSec: currentClipSeekSec } = getClipAtPlayhead();
 
   // Clip operations
   const selectClip = (id: string) => {
@@ -161,6 +164,112 @@ export default function EditorScreen() {
     setSelectedClipId(newClip.id);
   };
 
+  // Split clip at playhead
+  const splitClip = (id: string) => {
+    const clip = clips.find(c => c.id === id);
+    if (!clip) return;
+
+    // Figure out where the playhead is within this clip (0-100%)
+    let accSec = 0;
+    for (const c of clips) {
+      if (c.id === id) break;
+      accSec += getEffective(c);
+    }
+    const clipEffective = getEffective(clip);
+    const playheadTimeSec = playheadPos * totalDurationSec;
+    const offsetInClip = playheadTimeSec - accSec;
+    const splitRatio = clipEffective > 0 ? offsetInClip / clipEffective : 0.5;
+
+    // Convert split point to percentage of full clip duration
+    const trimRange = clip.trimEndPct - clip.trimStartPct;
+    const splitPct = clip.trimStartPct + trimRange * splitRatio;
+
+    if (splitPct - clip.trimStartPct < 3 || clip.trimEndPct - splitPct < 3) return;
+
+    const clipA: ClipItem = {
+      ...clip,
+      id: generateId('clip'),
+      trimEndPct: Math.round(splitPct),
+    };
+    const clipB: ClipItem = {
+      ...clip,
+      id: generateId('clip'),
+      trimStartPct: Math.round(splitPct),
+      caption: clip.caption,
+      color: CLIP_COLORS[(clips.indexOf(clip) + 1) % CLIP_COLORS.length],
+    };
+
+    const idx = clips.findIndex(c => c.id === id);
+    const next = [...clips];
+    next.splice(idx, 1, clipA, clipB);
+    updateClips(next);
+    setSelectedClipId(clipA.id);
+  };
+
+  // Trim clip via drag handle
+  const trimClip = (id: string, side: 'left' | 'right', deltaPct: number) => {
+    const clip = clips.find(c => c.id === id);
+    if (!clip) return;
+
+    // deltaPct is relative to track width — convert to clip's own duration percentage
+    const clipWidthPct = totalDurationSec > 0
+      ? (getEffective(clip) / totalDurationSec) * 100
+      : 100;
+    const clipDeltaPct = clipWidthPct > 0
+      ? (deltaPct / clipWidthPct) * (clip.trimEndPct - clip.trimStartPct)
+      : 0;
+
+    if (side === 'left') {
+      const newStart = Math.max(0, Math.min(clip.trimEndPct - 5, clip.trimStartPct + clipDeltaPct));
+      updateClip(id, { trimStartPct: Math.round(newStart) });
+    } else {
+      const newEnd = Math.min(100, Math.max(clip.trimStartPct + 5, clip.trimEndPct + clipDeltaPct));
+      updateClip(id, { trimEndPct: Math.round(newEnd) });
+    }
+  };
+
+  // Playhead position within selected clip (0-100)
+  const getPlayheadPctInClip = (): number => {
+    if (!selectedClipId || totalDurationSec === 0) return 0;
+    let accSec = 0;
+    for (const c of clips) {
+      if (c.id === selectedClipId) {
+        const eff = getEffective(c);
+        const playheadSec = playheadPos * totalDurationSec;
+        const offsetInClip = playheadSec - accSec;
+        return eff > 0 ? Math.max(0, Math.min(100, (offsetInClip / eff) * 100)) : 0;
+      }
+      accSec += getEffective(c);
+    }
+    return 0;
+  };
+
+  // Trim text overlay via drag handle
+  const trimText = (id: string, side: 'left' | 'right', deltaPct: number) => {
+    const overlay = textOverlays.find(t => t.id === id);
+    if (!overlay) return;
+    if (side === 'left') {
+      const newStart = Math.max(0, Math.min(overlay.endPct - 5, overlay.startPct + deltaPct));
+      updateText(id, { startPct: Math.round(newStart) });
+    } else {
+      const newEnd = Math.min(100, Math.max(overlay.startPct + 5, overlay.endPct + deltaPct));
+      updateText(id, { endPct: Math.round(newEnd) });
+    }
+  };
+
+  // Trim filter overlay via drag handle
+  const trimFilter = (id: string, side: 'left' | 'right', deltaPct: number) => {
+    const overlay = filterOverlays.find(f => f.id === id);
+    if (!overlay) return;
+    if (side === 'left') {
+      const newStart = Math.max(0, Math.min(overlay.endPct - 5, overlay.startPct + deltaPct));
+      updateFilter(id, { startPct: Math.round(newStart) });
+    } else {
+      const newEnd = Math.min(100, Math.max(overlay.startPct + 5, overlay.endPct + deltaPct));
+      updateFilter(id, { endPct: Math.round(newEnd) });
+    }
+  };
+
   // Text overlay operations
   const addTextOverlay = () => {
     if (!newTextContent.trim()) return;
@@ -190,19 +299,17 @@ export default function EditorScreen() {
   };
 
   // Filter overlay operations
-  const addFilterOverlay = (filterId: string) => {
-    const f = FILTERS.find(x => x.id === filterId) ?? FILTERS[0];
+  const addFilterOverlay = () => {
     const newF: FilterOverlay = {
       id: generateId('fx'),
-      filterId: f.id,
+      filterId: 'none',
       startPct: Math.round(playheadPos * 100),
       endPct: Math.min(100, Math.round(playheadPos * 100) + 30),
-      brightness: f.brightness,
-      contrast: f.contrast,
-      saturate: f.saturate,
+      brightness: 100,
+      contrast: 100,
+      saturate: 100,
     };
     updateFilterOverlays([...filterOverlays, newF]);
-    setAddingFilter(false);
     clearSelections();
     setSelectedFilterId(newF.id);
   };
@@ -221,31 +328,16 @@ export default function EditorScreen() {
     router.back();
   };
 
-  const handleExportComplete = useCallback(async () => {
-    // Create vlog entry
-    const videoEntries = entries.filter(e => e.type === 'video');
-    const habitsLogged = [...new Set(entries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
-    const moods = entries.map(e => e.mood).filter(Boolean);
-    const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
-    const topMood = moods.length ? moods[moods.length - 1] : 'calm';
+  const handleStartExport = useCallback(async () => {
+    if (clips.length === 0) return;
+    const exportUri = await startExport(date, clips, textOverlays, filterOverlays);
+    if (!exportUri) return; // failed or cancelled
 
-    await insertVlog({
-      id: generateId('vlog'),
-      date,
-      clipCount: clips.length,
-      habitCount: habitsLogged.length,
-      mood: topMood,
-      caption: `${entries.length} moments captured today.`,
-      categories: cats as string[],
-      durationSeconds: totalDurationSec,
-      exportUri: null,
-      createdAt: new Date().toISOString(),
-    });
+    await save({ clips, textOverlays, filterOverlays, status: 'exported', exportUri });
 
-    await save({ clips, textOverlays, filterOverlays, status: 'exported' });
-    setExporting(false);
-    router.replace('/');
-  }, [entries, clips, textOverlays, filterOverlays, date, totalDurationSec]);
+    // Wait a moment so user sees "done" state, then navigate back
+    setTimeout(() => router.back(), 1000);
+  }, [clips, textOverlays, filterOverlays, date, startExport, save]);
 
   const selectedClip = clips.find(c => c.id === selectedClipId);
   const selectedText = textOverlays.find(t => t.id === selectedTextId);
@@ -265,6 +357,8 @@ export default function EditorScreen() {
       {/* Preview */}
       <PreviewPlayer
         currentClip={currentClip}
+        currentClipSeekSec={currentClipSeekSec}
+        isPlaying={isPlaying}
         visibleTexts={visibleTexts}
         visibleFilter={visibleFilter}
         selectedTextId={selectedTextId}
@@ -299,8 +393,12 @@ export default function EditorScreen() {
         onSelectFilter={id => { clearSelections(); setSelectedFilterId(id === selectedFilterId ? null : id); }}
         onAddClip={() => setAddingClip(true)}
         onAddText={() => { setAddingText(true); clearSelections(); }}
-        onAddFilter={() => { setAddingFilter(true); clearSelections(); }}
+        onAddFilter={() => addFilterOverlay()}
         onTimelinePress={pct => setPlayheadPos(pct)}
+        onPlayheadDrag={pos => { if (isPlaying) { setIsPlaying(false); } setPlayheadPos(pos); }}
+        onTrimClip={trimClip}
+        onTrimText={trimText}
+        onTrimFilter={trimFilter}
       />
 
       {/* Editor panels */}
@@ -352,32 +450,18 @@ export default function EditorScreen() {
           </View>
         )}
 
-        {/* Add filter picker */}
-        {addingFilter && (
-          <View style={[styles.addPanel, { borderColor: 'rgba(167,139,250,0.2)', backgroundColor: 'rgba(167,139,250,0.06)' }]}>
-            <Text style={[styles.addLabel, { color: colors.purple }]}>ADD FILTER OVERLAY</Text>
-            <View style={styles.filterGrid}>
-              {FILTERS.filter(f => f.id !== 'none').map(f => (
-                <Pressable key={f.id} onPress={() => addFilterOverlay(f.id)} style={[styles.filterBtn, { backgroundColor: `${f.color}10`, borderColor: `${f.color}30` }]}>
-                  <View style={[styles.filterSwatch, { backgroundColor: `${f.color}40`, borderColor: `${f.color}40` }]} />
-                  <Text style={[styles.filterBtnLabel, { color: f.color }]}>{f.label}</Text>
-                </Pressable>
-              ))}
-            </View>
-            <Pressable onPress={() => setAddingFilter(false)} style={styles.cancelBtn}>
-              <Text style={styles.cancelBtnText}>CANCEL</Text>
-            </Pressable>
-          </View>
-        )}
+        {/* Filter picker removed — addFilterOverlay creates one directly */}
 
         {/* Selected clip editor */}
         {selectedClip && (
           <ClipEditor
             clip={selectedClip}
+            playheadPctInClip={getPlayheadPctInClip()}
             onUpdate={updates => updateClip(selectedClip.id, updates)}
             onMoveLeft={() => moveClip(selectedClip.id, -1)}
             onMoveRight={() => moveClip(selectedClip.id, 1)}
             onDelete={() => deleteClip(selectedClip.id)}
+            onSplit={() => splitClip(selectedClip.id)}
           />
         )}
 
@@ -385,7 +469,6 @@ export default function EditorScreen() {
         {selectedText && (
           <TextEditor
             overlay={selectedText}
-            totalDurationSec={totalDurationSec}
             onUpdate={updates => updateText(selectedText.id, updates)}
             onDelete={() => deleteText(selectedText.id)}
           />
@@ -395,7 +478,6 @@ export default function EditorScreen() {
         {selectedFilter && (
           <FilterEditor
             overlay={selectedFilter}
-            totalDurationSec={totalDurationSec}
             onUpdate={updates => updateFilter(selectedFilter.id, updates)}
             onDelete={() => deleteFilter(selectedFilter.id)}
           />
@@ -412,7 +494,7 @@ export default function EditorScreen() {
           <Text style={styles.draftBtnText}>SAVE DRAFT</Text>
         </Pressable>
         <Pressable
-          onPress={() => clips.length > 0 && setExporting(true)}
+          onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
           style={[styles.exportBtn, { backgroundColor: clips.length > 0 ? colors.teal : 'rgba(255,255,255,0.05)' }]}
         >
           <Text style={[styles.exportBtnText, { color: clips.length > 0 ? colors.bg : colors.textDimmer }]}>EXPORT & CLOSE</Text>
@@ -421,11 +503,11 @@ export default function EditorScreen() {
 
       {/* Export modal */}
       <ExportModal
-        visible={exporting}
+        progress={exportProgress}
         clipCount={clips.length}
         textCount={textOverlays.length}
         filterCount={filterOverlays.length}
-        onComplete={handleExportComplete}
+        onCancel={cancelExport}
       />
     </View>
   );
@@ -556,32 +638,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 11,
     fontWeight: '700',
-  },
-  filterGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 12,
-  },
-  filterBtn: {
-    flex: 1,
-    minWidth: '28%',
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    gap: 4,
-  },
-  filterSwatch: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    borderWidth: 1,
-  },
-  filterBtnLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    letterSpacing: 0.4,
   },
   emptyText: {
     textAlign: 'center',

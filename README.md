@@ -2,12 +2,54 @@
 
 A daily vlogging app that combines a story journal, habit tracking, and a lightweight video editor. Built with React Native + Expo.
 
+> **This is a native-only app.** It uses SQLite, video playback, and filesystem APIs that require a development build. It will not run in Expo Go or on web.
+
 ## Prerequisites
 
 - [Node.js](https://nodejs.org/) 18+
-- [Android Studio](https://developer.android.com/studio) (for emulator or building APK)
-- A physical Android phone with USB debugging enabled (for on-device development)
-- Java 17 (included with Android Studio)
+- Java 17
+- [Android Studio](https://developer.android.com/studio) with an emulator or a physical device
+- `ANDROID_HOME` environment variable pointing to your Android SDK
+
+### Install Java 17 (macOS)
+
+The Android build requires Java 17. Install via Homebrew:
+
+```bash
+brew install --cask zulu@17
+```
+
+This will prompt for your macOS password. After it completes, add to `~/.zshrc`:
+
+```bash
+export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
+```
+
+Reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+Verify:
+
+```bash
+java -version
+# openjdk version "17.0.x" ...
+```
+
+### Set up Android Studio
+
+If you haven't set up Android Studio yet:
+
+1. Install Android Studio
+2. Open it, go to **SDK Manager** and install **Android SDK** (API 34+)
+3. Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
+   ```bash
+   export ANDROID_HOME=$HOME/Library/Android/sdk
+   export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools
+   ```
+4. Create an emulator via **Virtual Device Manager** or connect a physical phone
 
 ## Local Development
 
@@ -17,82 +59,74 @@ A daily vlogging app that combines a story journal, habit tracking, and a lightw
 npm install
 ```
 
-### 2. Generate native project files
-
-Since the app uses native modules (`react-native-video`, `expo-sqlite`, etc.), it requires a **development build** — Expo Go won't work.
+### 2. Prebuild native project
 
 ```bash
 npx expo prebuild --platform android
 ```
 
-This creates the `android/` directory with native project files.
+This generates the `android/` directory. You only need to run this once (or again after adding new native modules).
 
-### 3. Start the dev server
+### 3. Run on emulator
 
-```bash
-npm start
-```
-
-### 4. Run on Android emulator
-
-Make sure you have an Android emulator running in Android Studio, then:
+Start an Android emulator from Android Studio, then:
 
 ```bash
 npm run android
 ```
 
-Or press `a` in the terminal after `npm start`.
+This compiles the native code, installs the app, and starts Metro bundler with hot reload.
 
-### 5. Run on a physical Android phone (USB)
+### 4. Run on physical phone (USB)
 
-1. Enable **Developer Options** on your phone (tap Build Number 7 times in Settings > About Phone)
-2. Enable **USB Debugging** in Developer Options
-3. Connect your phone via USB and accept the debugging prompt
+1. On your phone: **Settings > About Phone > tap Build Number 7 times** to enable Developer Options
+2. **Settings > Developer Options > enable USB Debugging**
+3. Plug in via USB, accept the debugging prompt on your phone
 4. Run:
 
 ```bash
 npx expo run:android --device
 ```
 
-This builds and installs the dev client directly on your phone.
+Pick your device from the list. The app installs and connects to Metro for live reload.
+
+### 5. Development workflow
+
+After the first build, you can just start Metro:
+
+```bash
+npm start
+```
+
+Then press `a` to open on a running Android emulator/device. Native rebuilds are only needed when you change native dependencies.
 
 ## Install on Android Phone (APK)
-
-To build a standalone APK you can share and install on any Android device:
 
 ### Option A: Local APK build
 
 ```bash
-npx expo prebuild --platform android
 cd android
 ./gradlew assembleRelease
 ```
 
-The APK will be at:
+Output APK:
 
 ```
 android/app/build/outputs/apk/release/app-release.apk
 ```
 
-Transfer it to your phone (USB, email, cloud drive) and install. You may need to allow "Install from unknown sources" in your phone settings.
+Transfer to your phone and install. Enable **Install from unknown sources** if prompted.
 
 ### Option B: EAS Build (cloud)
-
-Install the EAS CLI and log in:
 
 ```bash
 npm install -g eas-cli
 eas login
-```
-
-Configure and build:
-
-```bash
 eas build:configure
 eas build --platform android --profile preview
 ```
 
-This produces a downloadable APK link. Open the link on your phone to install.
+This gives you a download link. Open it on your phone to install.
 
 ## Project Structure
 
@@ -131,3 +165,13 @@ loopd/
 | Files       | expo-file-system                    |
 | Gestures    | react-native-gesture-handler        |
 | Animations  | react-native-reanimated             |
+
+## Troubleshooting
+
+**"Unable to resolve module react-native-web"** — You're running on web. This app is native-only. Use `npm run android` instead.
+
+**"Expo Go is not supported"** — This app uses native modules. You need a development build via `npx expo run:android`.
+
+**"Unable to locate a Java Runtime"** — Java 17 is not installed or not on your PATH. See the [Install Java 17](#install-java-17-macos) section above.
+
+**Build fails after adding a package** — Run `npx expo prebuild --clean --platform android` to regenerate native files.

@@ -1,8 +1,8 @@
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { useRef, useState } from 'react';
+import { View, Text, Pressable, PanResponder, StyleSheet, LayoutChangeEvent } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { FILTERS } from '../../constants/filters';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
-import { CATEGORIES } from '../../constants/categories';
 import { formatDuration } from '../../utils/time';
 
 type Props = {
@@ -21,6 +21,10 @@ type Props = {
   onAddText: () => void;
   onAddFilter: () => void;
   onTimelinePress: (pct: number) => void;
+  onPlayheadDrag: (pos: number) => void;
+  onTrimClip: (id: string, side: 'left' | 'right', deltaPct: number) => void;
+  onTrimText: (id: string, side: 'left' | 'right', deltaPct: number) => void;
+  onTrimFilter: (id: string, side: 'left' | 'right', deltaPct: number) => void;
 };
 
 function getEffectiveDuration(clip: ClipItem): number {
@@ -35,13 +39,88 @@ function getWaveform(clipId: string, bars: number): number[] {
   });
 }
 
+function TrimHandle({ side, color, itemId, onTrim, trackWidth }: {
+  side: 'left' | 'right';
+  color: string;
+  itemId: string;
+  onTrim: (id: string, side: 'left' | 'right', deltaPct: number) => void;
+  trackWidth: number;
+}) {
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, gs) => {
+        if (trackWidth <= 0) return;
+        const deltaPct = (gs.dx / trackWidth) * 100;
+        onTrim(itemId, side, deltaPct);
+      },
+    })
+  ).current;
+
+  return (
+    <View
+      {...panResponder.panHandlers}
+      style={[
+        styles.trimHandle,
+        side === 'left' ? styles.trimHandleLeft : styles.trimHandleRight,
+        { backgroundColor: color },
+      ]}
+    >
+      <View style={styles.trimHandleGrip}>
+        <View style={styles.trimHandleLine} />
+        <View style={styles.trimHandleLine} />
+      </View>
+    </View>
+  );
+}
+
 export function EditorTimeline({
   clips, textOverlays, filterOverlays,
   selectedClipId, selectedTextId, selectedFilterId,
   playheadPos, totalDurationSec,
   onSelectClip, onSelectText, onSelectFilter,
-  onAddClip, onAddText, onAddFilter, onTimelinePress,
+  onAddClip, onAddText, onAddFilter, onTimelinePress, onPlayheadDrag, onTrimClip, onTrimText, onTrimFilter,
 }: Props) {
+  const [trackWidth, setTrackWidth] = useState(0);
+  const trackLayoutRef = useRef({ x: 0, width: 0 });
+  const playheadStartRef = useRef(0);
+  const playheadPosRef = useRef(playheadPos);
+  playheadPosRef.current = playheadPos;
+
+  const handleTrackLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    setTrackWidth(w);
+    trackLayoutRef.current.width = w;
+    e.target.measureInWindow((x: number) => {
+      trackLayoutRef.current.x = x;
+    });
+  };
+
+  // Draggable playhead
+  const playheadPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        playheadStartRef.current = playheadPosRef.current;
+      },
+      onPanResponderMove: (_, gs) => {
+        if (trackLayoutRef.current.width <= 0) return;
+        const delta = gs.dx / trackLayoutRef.current.width;
+        const newPos = Math.max(0, Math.min(1, playheadStartRef.current + delta));
+        onPlayheadDrag(newPos);
+      },
+    })
+  ).current;
+
+  // Tap on ruler to seek
+  const handleRulerPress = (e: { nativeEvent: { locationX: number } }) => {
+    if (trackWidth <= 0) return;
+    const pct = Math.max(0, Math.min(1, e.nativeEvent.locationX / trackWidth));
+    onPlayheadDrag(pct);
+  };
+
   // Timecode markers
   const timeMarkers: { pos: number; label: string }[] = [];
   if (totalDurationSec > 0) {
@@ -53,15 +132,19 @@ export function EditorTimeline({
 
   return (
     <View style={styles.container}>
-      {/* Timecode ruler */}
-      <View style={styles.ruler}>
+      {/* Timecode ruler — tap to seek */}
+      <Pressable onPress={handleRulerPress} style={styles.ruler}>
         {timeMarkers.map((m, i) => (
           <View key={i} style={[styles.markerWrap, { left: `${m.pos * 100}%` }]}>
             <Text style={styles.markerText}>{m.label}</Text>
             <View style={styles.markerTick} />
           </View>
         ))}
-      </View>
+        {/* Playhead marker on ruler */}
+        {totalDurationSec > 0 && (
+          <View style={[styles.rulerPlayhead, { left: `${playheadPos * 100}%` }]} />
+        )}
+      </Pressable>
 
       {/* Text track */}
       <View style={styles.textTrack}>
@@ -85,6 +168,12 @@ export function EditorTimeline({
               <Text style={[styles.textBlockLabel, { color: isActive ? colors.amber : 'rgba(251,191,36,0.7)' }]} numberOfLines={1}>
                 {t.text}
               </Text>
+              {isActive && (
+                <>
+                  <TrimHandle side="left" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth} />
+                  <TrimHandle side="right" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth} />
+                </>
+              )}
             </Pressable>
           );
         })}
@@ -109,14 +198,20 @@ export function EditorTimeline({
                 {
                   left: `${f.startPct}%`,
                   width: `${f.endPct - f.startPct}%`,
-                  backgroundColor: isActive ? `${preset.color}20` : `${preset.color}0a`,
-                  borderColor: isActive ? preset.color : `${preset.color}30`,
+                  backgroundColor: isActive ? `${colors.purple}20` : `${colors.purple}0a`,
+                  borderColor: isActive ? colors.purple : `${colors.purple}30`,
                 },
               ]}
             >
-              <Text style={[styles.filterBlockLabel, { color: isActive ? preset.color : `${preset.color}90` }]} numberOfLines={1}>
-                {preset.label}
+              <Text style={[styles.filterBlockLabel, { color: isActive ? colors.purple : `${colors.purple}90` }]} numberOfLines={1}>
+                B/C/S
               </Text>
+              {isActive && (
+                <>
+                  <TrimHandle side="left" color={colors.purple} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth} />
+                  <TrimHandle side="right" color={colors.purple} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth} />
+                </>
+              )}
             </Pressable>
           );
         })}
@@ -127,17 +222,13 @@ export function EditorTimeline({
       </View>
 
       {/* Clip track */}
-      <Pressable
-        onPress={(e) => {
-          const { locationX, target } = e.nativeEvent as unknown as { locationX: number; target: number };
-          // We'll use a simpler approach - just use the nativeEvent
-        }}
+      <View
+        onLayout={handleTrackLayout}
         style={styles.clipTrack}
       >
         {clips.map((clip, i) => {
           const w = totalDurationSec > 0 ? (getEffectiveDuration(clip) / totalDurationSec) * 100 : 0;
           const isActive = clip.id === selectedClipId;
-          const cat = CATEGORIES.find(c => c.id === clip.caption);
           const barCount = Math.max(6, Math.round(w * 0.8));
           const waveform = getWaveform(clip.id, barCount);
 
@@ -178,19 +269,41 @@ export function EditorTimeline({
                   )}
                 </View>
               )}
+              {/* Duration label */}
+              {w > 6 && (
+                <Text style={[styles.clipDuration, { color: isActive ? clip.color : colors.textDimmer }]}>
+                  {formatDuration(getEffectiveDuration(clip))}
+                </Text>
+              )}
               {isActive && <View style={[styles.clipSelectionBorder, { borderColor: clip.color }]} />}
+
+              {/* Trim handles — only on selected clip */}
+              {isActive && (
+                <>
+                  <TrimHandle side="left" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth} />
+                  <TrimHandle side="right" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth} />
+                </>
+              )}
             </Pressable>
           );
         })}
+
+        {/* Add button */}
         <Pressable onPress={onAddClip} style={[styles.addClipBtn, { width: clips.length > 0 ? 32 : '100%' }]}>
           <Text style={styles.addClipBtnText}>+</Text>
         </Pressable>
+
+        {/* Playhead — draggable */}
         {totalDurationSec > 0 && (
-          <View style={[styles.playhead, { left: `${playheadPos * 100}%` }]}>
+          <View
+            {...playheadPanResponder.panHandlers}
+            style={[styles.playhead, { left: `${playheadPos * 100}%` }]}
+          >
             <View style={styles.playheadTop} />
+            <View style={styles.playheadHitArea} />
           </View>
         )}
-      </Pressable>
+      </View>
     </View>
   );
 }
@@ -234,7 +347,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
     borderColor: 'rgba(255,255,255,0.04)',
     position: 'relative',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   trackLabel: {
     position: 'absolute',
@@ -255,6 +368,7 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     paddingHorizontal: 6,
     justifyContent: 'center',
+    overflow: 'visible',
   },
   textBlockLabel: {
     fontFamily: fonts.mono,
@@ -268,7 +382,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0,
     borderColor: 'rgba(255,255,255,0.04)',
     position: 'relative',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   filterBlock: {
     position: 'absolute',
@@ -279,6 +393,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'visible',
   },
   filterBlockLabel: {
     fontFamily: fonts.mono,
@@ -303,7 +418,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   clipTrack: {
-    height: 64,
+    height: 72,
     backgroundColor: 'rgba(255,255,255,0.015)',
     borderBottomLeftRadius: 8,
     borderBottomRightRadius: 8,
@@ -311,13 +426,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     borderColor: 'rgba(255,255,255,0.06)',
     flexDirection: 'row',
-    overflow: 'hidden',
+    overflow: 'visible',
     position: 'relative',
   },
   clipBlock: {
     height: '100%',
     position: 'relative',
-    overflow: 'hidden',
+    overflow: 'visible',
   },
   clipColorBar: {
     position: 'absolute',
@@ -357,6 +472,15 @@ const styles = StyleSheet.create({
     fontSize: 7.5,
     letterSpacing: 0.2,
   },
+  clipDuration: {
+    position: 'absolute',
+    bottom: 2,
+    left: 0,
+    right: 0,
+    fontFamily: fonts.mono,
+    fontSize: 7,
+    textAlign: 'center',
+  },
   clipSelectionBorder: {
     position: 'absolute',
     top: 0,
@@ -365,6 +489,37 @@ const styles = StyleSheet.create({
     bottom: 0,
     borderWidth: 2,
     borderRadius: 2,
+  },
+  // Trim handles
+  trimHandle: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 14,
+    zIndex: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 3,
+  },
+  trimHandleLeft: {
+    left: -2,
+    borderTopLeftRadius: 4,
+    borderBottomLeftRadius: 4,
+  },
+  trimHandleRight: {
+    right: -2,
+    borderTopRightRadius: 4,
+    borderBottomRightRadius: 4,
+  },
+  trimHandleGrip: {
+    gap: 2,
+    alignItems: 'center',
+  },
+  trimHandleLine: {
+    width: 3,
+    height: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 0.5,
   },
   addClipBtn: {
     height: '100%',
@@ -394,12 +549,27 @@ const styles = StyleSheet.create({
   },
   playheadTop: {
     position: 'absolute',
-    top: -3,
-    left: -4,
-    width: 10,
-    height: 6,
-    borderTopLeftRadius: 2,
-    borderTopRightRadius: 2,
+    top: -6,
+    left: -6,
+    width: 14,
+    height: 8,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
     backgroundColor: '#ffffff',
+  },
+  playheadHitArea: {
+    position: 'absolute',
+    top: -10,
+    bottom: 0,
+    left: -16,
+    right: -16,
+    zIndex: 20,
+  },
+  rulerPlayhead: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.4)',
   },
 });

@@ -29,6 +29,7 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
             </Pressable>
           )}
           <Text style={styles.logo}>loopd</Text>
+          <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
         </View>
       </View>
 
@@ -95,6 +96,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '800',
     color: colors.teal,
+  },
+  slogan: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textDim,
+    letterSpacing: 0.5,
   },
   subRow: {
     flexDirection: 'row',

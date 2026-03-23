@@ -1,63 +1,33 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { useEffect, useRef, useState } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 import { colors, fonts } from '../../constants/theme';
+import type { ExportProgress } from '../../types/project';
+
+const STAGE_LABELS: Record<string, string> = {
+  preparing: 'Preparing clips...',
+  encoding: 'Encoding video...',
+  finalizing: 'Finalizing...',
+  done: 'Export Complete',
+  error: 'Export Failed',
+};
 
 type Props = {
-  visible: boolean;
+  progress: ExportProgress | null;
   clipCount: number;
   textCount: number;
   filterCount: number;
-  onComplete: () => void;
+  onCancel: () => void;
 };
 
-const STAGES = [
-  { at: 0, label: 'Preparing clips...' },
-  { at: 15, label: 'Applying filters...' },
-  { at: 30, label: 'Rendering text overlays...' },
-  { at: 50, label: 'Encoding video...' },
-  { at: 75, label: 'Compressing...' },
-  { at: 90, label: 'Finalizing...' },
-  { at: 100, label: 'Done' },
-];
+export function ExportModal({ progress, clipCount, textCount, filterCount, onCancel }: Props) {
+  if (!progress) return null;
 
-export function ExportModal({ visible, clipCount, textCount, filterCount, onComplete }: Props) {
-  const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState('Preparing clips...');
-  const startRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    if (visible) {
-      setProgress(0);
-      setStage('Preparing clips...');
-      startRef.current = Date.now();
-      const duration = 3500;
-
-      timerRef.current = setInterval(() => {
-        const elapsed = Date.now() - startRef.current;
-        const pct = Math.min(100, Math.round((elapsed / duration) * 100));
-        setProgress(pct);
-        const s = [...STAGES].reverse().find(s => pct >= s.at);
-        if (s) setStage(s.label);
-        if (pct >= 100) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          setTimeout(onComplete, 800);
-        }
-      }, 50);
-
-      return () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-      };
-    }
-  }, [visible, onComplete]);
-
-  if (!visible) return null;
-
+  const pct = progress.progress;
+  const isDone = progress.stage === 'done';
+  const isError = progress.stage === 'error';
   const radius = 42;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - progress / 100);
-  const isDone = progress >= 100;
+  const offset = circumference * (1 - pct / 100);
 
   return (
     <View style={styles.overlay}>
@@ -66,23 +36,32 @@ export function ExportModal({ visible, clipCount, textCount, filterCount, onComp
           <Circle cx={50} cy={50} r={radius} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth={4} />
           <Circle
             cx={50} cy={50} r={radius} fill="none"
-            stroke={isDone ? colors.teal : colors.purple}
+            stroke={isError ? colors.coral : isDone ? colors.teal : colors.purple}
             strokeWidth={4} strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
           />
         </Svg>
         <View style={styles.ringCenter}>
-          <Text style={[styles.pctText, { color: isDone ? colors.teal : colors.text }]}>
-            {isDone ? '✓' : `${progress}%`}
+          <Text style={[styles.pctText, { color: isError ? colors.coral : isDone ? colors.teal : colors.text }]}>
+            {isDone ? '✓' : isError ? '!' : `${pct}%`}
           </Text>
         </View>
       </View>
 
-      <Text style={[styles.title, { color: isDone ? colors.teal : colors.text }]}>
-        {isDone ? 'Export Complete' : 'Exporting Vlog'}
+      <Text style={[styles.title, { color: isError ? colors.coral : isDone ? colors.teal : colors.text }]}>
+        {STAGE_LABELS[progress.stage] ?? progress.stage}
       </Text>
-      <Text style={styles.stageText}>{stage}</Text>
+
+      {isError && progress.error && (
+        <Text style={styles.errorText} numberOfLines={4}>{progress.error}</Text>
+      )}
+
+      {!isError && !isDone && (
+        <Text style={styles.stageText}>
+          {Math.round(progress.currentTimeMs / 1000)}s / {Math.round(progress.totalDurationMs / 1000)}s
+        </Text>
+      )}
 
       <View style={styles.stats}>
         {[
@@ -96,6 +75,12 @@ export function ExportModal({ visible, clipCount, textCount, filterCount, onComp
           </View>
         ))}
       </View>
+
+      {!isDone && (
+        <Pressable onPress={onCancel} style={styles.cancelBtn}>
+          <Text style={styles.cancelBtnText}>{isError ? 'DISMISS' : 'CANCEL'}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -136,6 +121,14 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 0.4,
   },
+  errorText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: 32,
+    marginBottom: 8,
+  },
   stats: {
     flexDirection: 'row',
     gap: 16,
@@ -154,5 +147,20 @@ const styles = StyleSheet.create({
     fontSize: 8,
     color: colors.textDim,
     letterSpacing: 0.8,
+  },
+  cancelBtn: {
+    marginTop: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 10,
+  },
+  cancelBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.textMuted,
+    letterSpacing: 0.5,
   },
 });

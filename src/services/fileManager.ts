@@ -1,18 +1,26 @@
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 
-function getBaseDir(): Directory {
-  return new Directory(Paths.document, 'loopd');
+export function uriToPath(uri: string): string {
+  return uri.replace(/^file:\/\//, '');
+}
+
+async function ensureDir(dir: Directory): Promise<void> {
+  if (!dir.exists) {
+    // Parent must exist first
+    const parentUri = dir.uri.replace(/\/[^/]+\/?$/, '');
+    if (parentUri && parentUri !== dir.uri) {
+      const parent = new Directory(parentUri);
+      await ensureDir(parent);
+    }
+    await dir.create();
+  }
 }
 
 export async function ensureDirectories(date: string): Promise<void> {
-  const clipsDir = new Directory(Paths.document, 'loopd', 'clips', date);
-  const exportsDir = new Directory(Paths.document, 'loopd', 'exports', date);
-  const tempDir = new Directory(Paths.document, 'loopd', 'temp');
-
-  if (!clipsDir.exists) await clipsDir.create();
-  if (!exportsDir.exists) await exportsDir.create();
-  if (!tempDir.exists) await tempDir.create();
+  await ensureDir(new Directory(Paths.document, 'loopd', 'clips', date));
+  await ensureDir(new Directory(Paths.document, 'loopd', 'exports', date));
+  await ensureDir(new Directory(Paths.document, 'loopd', 'temp'));
 }
 
 export async function pickAndCopyClip(
@@ -26,24 +34,35 @@ export async function pickAndCopyClip(
   if (result.canceled || result.assets.length === 0) return null;
 
   const asset = result.assets[0];
+
+  // expo-image-picker duration: ms on Android, seconds on iOS — normalize
+  const rawDuration = asset.duration ?? 0;
+  const durationMs = rawDuration > 0 && rawDuration < 1000
+    ? rawDuration * 1000
+    : rawDuration;
+
   await ensureDirectories(date);
 
   const filename = `clip-${Date.now()}.mp4`;
   const destDir = new Directory(Paths.document, 'loopd', 'clips', date);
   const destFile = new File(destDir, filename);
 
-  const sourceFile = new File(asset.uri);
-  await sourceFile.copy(destFile);
+  try {
+    const sourceFile = new File(asset.uri);
+    await sourceFile.copy(destFile);
+    if (destFile.exists) {
+      return { uri: destFile.uri, durationMs };
+    }
+  } catch (e) {
+    console.warn('[loopd] File copy failed, using picker URI directly:', e);
+  }
 
-  return {
-    uri: destFile.uri,
-    durationMs: (asset.duration ?? 0) * 1000,
-  };
+  // Fallback: use the picker URI directly
+  return { uri: asset.uri, durationMs };
 }
 
 export function getExportPath(date: string): string {
-  const file = new File(Paths.document, 'loopd', 'exports', date, `vlog-${date}.mp4`);
-  return file.uri;
+  return new File(Paths.document, 'loopd', 'exports', date, `vlog-${date}.mp4`).uri;
 }
 
 export function getTempDir(): string {
