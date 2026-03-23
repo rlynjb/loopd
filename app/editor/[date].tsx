@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, Pressable, TextInput, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
+import { File as FSFile, Directory, Paths } from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
 import { useEntries } from '../../src/hooks/useEntries';
@@ -335,8 +338,52 @@ export default function EditorScreen() {
 
     await save({ clips, textOverlays, filterOverlays, status: 'exported', exportUri });
 
-    // Wait a moment so user sees "done" state, then navigate back
-    setTimeout(() => router.back(), 1000);
+    // Save to DCIM/loopd_vlogs on device
+    try {
+      const { status } = await MediaLibrary.requestPermissionsAsync();
+      if (status === 'granted') {
+        // Copy to DCIM/loopd_vlogs/
+        const dcimDir = new Directory('/storage/emulated/0/DCIM/loopd_vlogs');
+        if (!dcimDir.exists) await dcimDir.create();
+        const filename = `loopd-${date}.mp4`;
+        const destFile = new FSFile(dcimDir, filename);
+        const srcFile = new FSFile(exportUri);
+        try {
+          if (destFile.exists) destFile.delete();
+        } catch { /* ignore */ }
+        await srcFile.copy(destFile);
+        // Notify media scanner so it shows up in gallery
+        await MediaLibrary.createAssetAsync(destFile.uri);
+        console.log('[loopd] Saved to DCIM/loopd_vlogs/' + filename);
+      }
+    } catch (e) {
+      console.warn('[loopd] Could not save to DCIM:', e);
+      // Fallback: save via MediaLibrary directly
+      try {
+        const asset = await MediaLibrary.createAssetAsync(exportUri);
+        let album = await MediaLibrary.getAlbumAsync('loopd_vlogs');
+        if (album) {
+          await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+        } else {
+          await MediaLibrary.createAlbumAsync('loopd_vlogs', asset, false);
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Open share dialog
+    try {
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(exportUri, {
+          mimeType: 'video/mp4',
+          dialogTitle: 'Share your vlog',
+        });
+      }
+    } catch {
+      // User dismissed share sheet
+    }
+
+    router.back();
   }, [clips, textOverlays, filterOverlays, date, startExport, save]);
 
   const selectedClip = clips.find(c => c.id === selectedClipId);

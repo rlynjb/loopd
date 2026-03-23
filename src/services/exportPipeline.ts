@@ -1,6 +1,13 @@
 import { FFmpegKit, ReturnCode, FFmpegKitConfig } from '@wokcito/ffmpeg-kit-react-native';
+import { File as FSFile } from 'expo-file-system';
 import { getExportPath, getTempDir, cleanTemp, ensureDirectories, uriToPath } from './fileManager';
 import type { ClipItem, TextOverlay, FilterOverlay, ExportProgress } from '../types/project';
+
+function writeFileList(path: string, files: string[]): void {
+  const content = files.map(f => `file '${f}'`).join('\n');
+  const file = new FSFile(`file://${path}`);
+  file.write(content);
+}
 
 function getEffectiveSec(clip: ClipItem): number {
   return (clip.durationMs / 1000) * (clip.trimEndPct - clip.trimStartPct) / 100;
@@ -67,8 +74,9 @@ export async function runExport(
 
     await runCommand(
       `-y -i ${inputPath} -ss ${startSec.toFixed(3)} -to ${endSec.toFixed(3)} ` +
-      `-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1 ` +
-      `-c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -ac 2 ` +
+      `-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p ` +
+      `-c:v libx264 -preset fast -crf 23 -profile:v baseline -level 3.1 ` +
+      `-c:a aac -b:a 128k -ar 44100 -ac 2 ` +
       outFile,
       `Trim clip ${i + 1}`
     );
@@ -85,18 +93,13 @@ export async function runExport(
   if (trimmedFiles.length === 1) {
     await runCommand(`-y -i ${trimmedFiles[0]} -c copy ${concatFile}`, 'Copy single clip');
   } else {
-    // Write concat file list
+    // Write file list for concat demuxer
     const listPath = `${tempDir}/filelist.txt`;
-    const listContent = trimmedFiles.map(f => `file '${f}'`).join('\n');
-    // Use FFmpeg to create a text file via a dummy command won't work — use the concat demuxer with inputs instead
-    const concatInputs = trimmedFiles.map(f => `-i ${f}`).join(' ');
-    const n = trimmedFiles.length;
-    const filterInputs = Array.from({ length: n }, (_, i) => `[${i}:v][${i}:a]`).join('');
+    await writeFileList(listPath, trimmedFiles);
 
+    // Concat demuxer — no re-encoding needed since all clips are normalized
     await runCommand(
-      `-y ${concatInputs} -filter_complex "${filterInputs}concat=n=${n}:v=1:a=1[v][a]" ` +
-      `-map [v] -map [a] -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k ` +
-      concatFile,
+      `-y -f concat -safe 0 -i ${listPath} -c copy ${concatFile}`,
       'Concatenate'
     );
   }
