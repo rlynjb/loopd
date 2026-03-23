@@ -1,0 +1,2093 @@
+---
+title: theme1
+category: plans
+scope: project
+---
+import { useState, useEffect, useRef } from "react";
+
+// ── Constants ──
+
+const MOODS = [
+  { id: "calm", label: "Calm", emoji: "🧘", color: "#4caf7d" },
+  { id: "chaotic", label: "Chaotic", emoji: "🌀", color: "#e05555" },
+  { id: "focused", label: "Focused", emoji: "🎯", color: "#c4a96a" },
+  { id: "energized", label: "Energized", emoji: "⚡", color: "#d4922a" },
+];
+
+const CATEGORIES = [
+  { id: "coding", label: "Coding", emoji: "💻" },
+  { id: "gym", label: "Gym", emoji: "🏋️" },
+  { id: "food", label: "Food", emoji: "🍱" },
+  { id: "social", label: "Social", emoji: "👥" },
+  { id: "solo", label: "Solo", emoji: "🧠" },
+  { id: "errand", label: "Errand", emoji: "🛒" },
+];
+
+const DEFAULT_HABITS = [
+  { id: "workout", label: "Workout", emoji: "💪" },
+  { id: "study", label: "Study", emoji: "📚" },
+  { id: "vlog", label: "Vlog", emoji: "🎬" },
+  { id: "meditate", label: "Meditate", emoji: "🕊️" },
+  { id: "read", label: "Read", emoji: "📖" },
+];
+
+const CAPTURE_TYPES = [
+  { id: "video", label: "Clip", icon: "🎥", color: "#e05555" },
+  { id: "journal", label: "Journal", icon: "✍️", color: "#4caf7d" },
+  { id: "habit", label: "Habit", icon: "💪", color: "#c46fd4" },
+  { id: "moment", label: "Moment", icon: "📍", color: "#d4922a" },
+];
+
+const CLIP_COLORS = ["#e05555", "#c46fd4", "#4caf7d", "#d4922a", "#5b8fe8", "#c4a96a", "#4caf7d", "#e8d5b0"];
+
+const FILTERS = [
+  { id: "none", label: "None", brightness: 100, contrast: 100, saturate: 100, color: "#8a8880" },
+  { id: "vivid", label: "Vivid", brightness: 105, contrast: 115, saturate: 140, color: "#e05555" },
+  { id: "moody", label: "Moody", brightness: 85, contrast: 120, saturate: 70, color: "#c46fd4" },
+  { id: "warm", label: "Warm", brightness: 105, contrast: 105, saturate: 120, color: "#d4922a" },
+  { id: "cool", label: "Cool", brightness: 100, contrast: 110, saturate: 80, color: "#5b8fe8" },
+  { id: "noir", label: "Noir", brightness: 110, contrast: 130, saturate: 0, color: "#e8d5b0" },
+];
+
+
+function formatTime(date) {
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+function formatDate(date) {
+  return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+// ── Seed Data ──
+function getSeedEntries() {
+  const today = new Date();
+  const make = (h, m, type, text, mood, cat, habits = []) => ({
+    id: `seed-${h}-${m}`,
+    type, text, mood, category: cat, habits,
+    timestamp: new Date(today.getFullYear(), today.getMonth(), today.getDate(), h, m),
+  });
+  return [
+    make(8, 30, "video", "Morning grocery run — farmers market was alive today", "energized", "errand", []),
+    make(10, 0, "journal", "Coffee shop flow state. Had an idea for the capture UX — one-tap should feel like breathing.", "focused", "coding", []),
+    make(12, 30, "video", "Sushi lunch at the new omakase spot. Chef's toro was unreal.", "calm", "food", []),
+    make(15, 0, "journal", "Deep work session. Refactored the timeline component, feels clean now.", "focused", "coding", []),
+    make(15, 45, "habit", "Felt strong today — pushed through the last set.", "energized", "gym", ["workout", "study"]),
+    make(18, 0, "video", "Push day at the gym. Hit a new PR on bench — 185 for 5.", "energized", "gym", []),
+  ];
+}
+
+// ── Shared Styles ──
+
+const S = {
+  mono: "'DM Mono', monospace",
+  heading: "'DM Serif Display', Georgia, serif",
+  body: "'Instrument Sans', system-ui, sans-serif",
+  navy: "#0c0c0e",
+  bg2: "#141416",
+  bg3: "#1c1c1f",
+  teal: "#4caf7d",
+  tealDark: "#3d9a6a",
+  purple: "#c46fd4",
+  coral: "#e05555",
+  amber: "#d4922a",
+  accent: "#e8d5b0",
+  accent2: "#c4a96a",
+  text: "#f0ede8",
+  textMuted: "#8a8880",
+  textDim: "#525150",
+  textDimmer: "#3a3938",
+  cardBg: "#141416",
+  cardBorder: "rgba(255,255,255,0.08)",
+  border2: "rgba(255,255,255,0.14)",
+  green: "#4caf7d",
+  greenBg: "rgba(76,175,125,0.1)",
+  radius: 10,
+  radiusLg: 16,
+};
+
+const sheetOverlay = {
+  position: "fixed", inset: 0, zIndex: 100,
+  background: "rgba(0,0,0,0.85)", backdropFilter: "blur(20px)",
+  display: "flex", flexDirection: "column", justifyContent: "flex-end",
+  animation: "fadeIn 0.2s ease",
+  maxWidth: 480, margin: "0 auto",
+};
+const sheetPanel = {
+  background: "linear-gradient(180deg, #1c1c1f 0%, #0c0c0e 100%)",
+  borderRadius: "24px 24px 0 0",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderBottom: "none",
+  padding: "24px 24px 36px",
+  maxHeight: "85vh", overflowY: "auto",
+  animation: "slideUp 0.35s cubic-bezier(0.16,1,0.3,1)",
+};
+const sheetHandle = {
+  width: 36, height: 4, background: "rgba(255,255,255,0.15)",
+  borderRadius: 2, margin: "0 auto 20px",
+};
+const sheetTitle = {
+  fontFamily: "'Syne', sans-serif", fontSize: 20, fontWeight: 700,
+  color: "#e2e8f0", marginBottom: 20, textAlign: "center",
+};
+const labelStyle = {
+  fontFamily: "'JetBrains Mono', monospace", fontSize: 10,
+  color: "#64748b", marginBottom: 8, letterSpacing: "0.1em",
+};
+const chipBase = (selected, selColor) => ({
+  padding: "7px 13px", borderRadius: 20,
+  background: selected ? `${selColor}15` : "#141416",
+  border: `1px solid ${selected ? selColor : "rgba(255,255,255,0.08)"}`,
+  color: selected ? selColor : "#8a8880",
+  fontFamily: "'Instrument Sans', system-ui, sans-serif", fontSize: 13,
+  cursor: "pointer", transition: "all 0.15s",
+});
+const primaryBtn = (enabled = true) => ({
+  width: "100%", padding: "14px",
+  background: enabled ? "#e8d5b0" : "rgba(255,255,255,0.05)",
+  border: "none", borderRadius: 10,
+  color: enabled ? "#0c0c0e" : "#3a3938",
+  fontFamily: "'Instrument Sans', system-ui, sans-serif", fontSize: 14,
+  fontWeight: 600, cursor: enabled ? "pointer" : "default",
+  letterSpacing: "0.01em", transition: "all 0.2s",
+});
+
+// ── Components ──
+
+function GlowOrb({ color = "#00d9a3", size = 200, x = "50%", y = "50%", opacity = 0.12 }) {
+  return (
+    <div style={{
+      position: "absolute", left: x, top: y, width: size, height: size,
+      background: `radial-gradient(circle, ${color} 0%, transparent 70%)`,
+      opacity, borderRadius: "50%", transform: "translate(-50%, -50%)",
+      pointerEvents: "none", filter: "blur(40px)",
+    }} />
+  );
+}
+
+function Header({ dayStarted, onStartDay, onEndDay, entries, habits, onBack }) {
+  const habitsChecked = [...new Set(entries.filter(e => e.type === "habit").flatMap(e => e.habits))];
+  const totalHabits = habits.length;
+  const streakCount = habitsChecked.length;
+
+  return (
+    <div style={{ padding: "16px 20px 12px", position: "relative", zIndex: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {dayStarted && onBack && (
+            <button onClick={onBack} style={{
+              background: "none", border: "none", color: S.textDim,
+              fontFamily: S.mono, fontSize: 14, cursor: "pointer", padding: "4px 0",
+            }}>←</button>
+          )}
+          <div>
+            <div style={{
+              fontFamily: S.heading, fontSize: 22,
+              letterSpacing: "-0.02em",
+              color: S.accent,
+            }}>loopd</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        </div>
+      </div>
+
+      {dayStarted && (
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginTop: 12, animation: "fadeSlideIn 0.3s ease",
+        }}>
+          <div style={{ fontFamily: S.mono, fontSize: 11, color: S.textDim }}>
+            {formatDate(new Date())}
+          </div>
+
+          {/* Habit streak */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: S.cardBg, border: `1px solid ${S.cardBorder}`,
+            borderRadius: 10, padding: "6px 12px",
+          }}>
+            <div style={{ display: "flex", gap: 3 }}>
+              {habits.map((h, i) => {
+                const done = habitsChecked.includes(h.id);
+                return (
+                  <div key={h.id} style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: done ? S.green : "rgba(255,255,255,0.08)",
+                    transition: "all 0.2s",
+                    boxShadow: done ? `0 0 6px ${S.green}40` : "none",
+                  }} />
+                );
+              })}
+            </div>
+            <span style={{
+              fontFamily: S.mono, fontSize: 9, color: streakCount > 0 ? S.green : S.textDim,
+              letterSpacing: "0.04em",
+            }}>{streakCount}/{totalHabits}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimelineEntry({ entry, index, habits }) {
+  const mood = MOODS.find(m => m.id === entry.mood);
+  const cat = CATEGORIES.find(c => c.id === entry.category);
+  const captureType = CAPTURE_TYPES.find(c => c.id === entry.type);
+  const isHabit = entry.type === "habit";
+
+  return (
+    <div style={{
+      padding: "0 20px", marginBottom: 10,
+      animation: `fadeSlideIn 0.5s ease ${index * 0.07}s both`,
+    }}>
+      {/* Time above card */}
+      <div style={{
+        fontFamily: S.mono, fontSize: 11, color: S.textDim,
+        marginBottom: 6, paddingLeft: 2,
+      }}>
+        {formatTime(entry.timestamp)}
+      </div>
+
+      {/* Full-width card */}
+      <div style={{
+        background: S.bg2, border: `1px solid ${S.cardBorder}`,
+        borderRadius: S.radiusLg, padding: "14px 16px",
+        transition: "border-color 0.2s",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{
+            background: `${captureType?.color}18`, borderRadius: 6, padding: "2px 8px",
+            fontFamily: S.mono, fontSize: 10,
+            color: captureType?.color, border: `1px solid ${captureType?.color}30`,
+          }}>
+            {captureType?.icon} {captureType?.label}
+          </span>
+          {mood && <span style={{ fontSize: 10, fontFamily: S.mono, color: mood.color, opacity: 0.8 }}>{mood.emoji} {mood.label}</span>}
+          {cat && <span style={{ fontSize: 10, fontFamily: S.mono, color: S.textDim }}>{cat.emoji} {cat.label}</span>}
+        </div>
+
+        {isHabit && entry.habits.length > 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {entry.habits.map(hId => {
+              const h = habits.find(x => x.id === hId);
+              return h ? (
+                <div key={hId} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 5,
+                    background: `${S.green}25`, border: `1.5px solid ${S.green}`,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, color: S.green,
+                  }}>✓</div>
+                  <span style={{ fontFamily: S.body, fontSize: 13, color: S.text }}>
+                    {h.emoji} {h.label}
+                  </span>
+                </div>
+              ) : null;
+            })}
+            {entry.text && (
+              <div style={{ fontFamily: S.body, fontSize: 12, color: S.textMuted, marginTop: 4, fontStyle: "italic" }}>
+                {entry.text}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ fontFamily: S.body, fontSize: 14, color: S.text, lineHeight: 1.6 }}>
+            {entry.text}
+          </div>
+        )}
+
+        {!isHabit && entry.habits.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+            {entry.habits.map(hId => {
+              const h = habits.find(x => x.id === hId);
+              return h ? (
+                <span key={hId} style={{
+                  background: "rgba(196,111,212,0.1)", border: "1px solid rgba(196,111,212,0.2)",
+                  borderRadius: 6, padding: "2px 8px",
+                  fontFamily: S.mono, fontSize: 9, color: S.purple, letterSpacing: "0.04em",
+                }}>{h.emoji} {h.label}</span>
+              ) : null;
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Timeline({ entries, habits, onCapture }) {
+  const sorted = [...entries].sort((a, b) => a.timestamp - b.timestamp);
+  const lastTime = sorted.length > 0 ? sorted[sorted.length - 1].timestamp : new Date();
+
+  return (
+    <div style={{ paddingTop: 8, paddingBottom: 160 }}>
+      {sorted.length === 0 && (
+        <div style={{ textAlign: "center", padding: "24px 24px 16px", color: S.textDimmer, fontFamily: S.body, fontSize: 13 }}>
+          Your timeline is empty. Capture your first moment.
+        </div>
+      )}
+      {sorted.map((entry, i) => (
+        <TimelineEntry key={entry.id} entry={entry} index={i} habits={habits} />
+      ))}
+
+      {/* Inline capture — last entry */}
+      <div style={{
+        padding: "0 20px", marginBottom: 10,
+        animation: `fadeSlideIn 0.5s ease ${sorted.length * 0.07}s both`,
+      }}>
+        <div style={{
+          fontFamily: S.mono, fontSize: 11, color: S.textDim,
+          marginBottom: 6, paddingLeft: 2,
+        }}>now</div>
+        <div style={{
+          borderRadius: S.radiusLg, padding: "14px 16px",
+          border: "1.5px dashed rgba(255,255,255,0.08)",
+          background: S.bg2,
+        }}>
+          <div style={{
+            fontFamily: S.mono, fontSize: 10, color: S.textDim,
+            letterSpacing: "0.08em", marginBottom: 12,
+          }}>CAPTURE</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            {CAPTURE_TYPES.map(ct => (
+              <button key={ct.id} onClick={() => onCapture(ct.id)} style={{
+                flex: 1, padding: "12px 0", borderRadius: S.radius,
+                background: S.bg3,
+                border: `1px solid ${S.cardBorder}`,
+                display: "flex", flexDirection: "column", alignItems: "center",
+                gap: 5, cursor: "pointer", transition: "all 0.15s",
+              }}>
+                <span style={{ fontSize: 20 }}>{ct.icon}</span>
+                <span style={{
+                  fontFamily: S.mono, fontSize: 9, color: S.textMuted,
+                }}>{ct.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Capture Sheet ──
+
+function CaptureSheet({ onClose, onSave, habits, initialType }) {
+  const [step, setStep] = useState(initialType ? "details" : "type");
+  const [captureType, setCaptureType] = useState(initialType || null);
+  const [text, setText] = useState("");
+  const [mood, setMood] = useState(null);
+  const [category, setCategory] = useState(null);
+  const [selectedHabits, setSelectedHabits] = useState([]);
+  const [habitNote, setHabitNote] = useState("");
+
+  const toggleHabit = (id) => {
+    setSelectedHabits(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const canProceed = captureType === "habit" ? selectedHabits.length > 0 : text.trim().length > 0;
+
+  const handleSave = () => {
+    if (captureType === "habit") {
+      if (selectedHabits.length === 0) return;
+      onSave({
+        id: `entry-${Date.now()}`, type: "habit",
+        text: habitNote.trim(),
+        mood: null, category: null, habits: selectedHabits,
+        timestamp: new Date(),
+      });
+    } else if (captureType === "moment") {
+      onSave({
+        id: `entry-${Date.now()}`, type: "moment",
+        text: text.trim(),
+        mood, category, habits: [],
+        timestamp: new Date(),
+      });
+    } else {
+      if (!text.trim()) return;
+      onSave({
+        id: `entry-${Date.now()}`, type: captureType,
+        text: text.trim(), mood: null, category: null, habits: [],
+        timestamp: new Date(),
+      });
+    }
+  };
+
+  return (
+    <div style={sheetOverlay} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={sheetPanel}>
+        <div style={sheetHandle} />
+
+        {/* Step 1: Choose type */}
+        {step === "type" && (
+          <div>
+            <div style={sheetTitle}>Quick Capture</div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+              {CAPTURE_TYPES.map(ct => (
+                <button key={ct.id} onClick={() => { setCaptureType(ct.id); setStep("details"); }}
+                  style={{
+                    width: 90, height: 90, borderRadius: S.radiusLg,
+                    background: S.bg3, border: `1px solid ${S.cardBorder}`,
+                    display: "flex", flexDirection: "column", alignItems: "center",
+                    justifyContent: "center", gap: 6, cursor: "pointer", transition: "all 0.2s",
+                  }}>
+                  <span style={{ fontSize: 28 }}>{ct.icon}</span>
+                  <span style={{ fontFamily: S.mono, fontSize: 10, color: S.textMuted }}>
+                    {ct.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Step 2a: Clip / Journal details */}
+        {step === "details" && (captureType === "video" || captureType === "journal") && (
+          <div>
+            <div style={{ fontFamily: S.heading, fontSize: 18, fontWeight: 700, color: S.text, marginBottom: 4, textAlign: "center" }}>
+              {captureType === "video" ? "🎥 Describe your clip" : "✍️ Journal entry"}
+            </div>
+            <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim, textAlign: "center", marginBottom: 16, letterSpacing: "0.06em" }}>
+              {captureType === "video" ? "In a real app, the camera opens here" : "Write freely — this is your space"}
+            </div>
+            <textarea value={text} onChange={e => setText(e.target.value)}
+              placeholder={captureType === "video" ? "What happened in this clip?" : "What's on your mind?"}
+              autoFocus
+              style={{
+                width: "100%", height: 100, background: S.bg3,
+                border: "1px solid rgba(255,255,255,0.08)", borderRadius: 14,
+                padding: 16, color: S.text, fontSize: 14,
+                fontFamily: S.body, resize: "none", outline: "none", lineHeight: 1.5, boxSizing: "border-box",
+              }}
+            />
+            <button onClick={() => canProceed && handleSave()} style={{ ...primaryBtn(canProceed), marginTop: 14 }}>
+              SAVE ✓
+            </button>
+          </div>
+        )}
+
+        {/* Step 2b: Habit checkboxes */}
+        {step === "details" && captureType === "habit" && (
+          <div>
+            <div style={{ fontFamily: S.heading, fontSize: 18, fontWeight: 700, color: S.text, marginBottom: 4, textAlign: "center" }}>
+              💪 Log Habits
+            </div>
+            <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim, textAlign: "center", marginBottom: 20, letterSpacing: "0.06em" }}>
+              Check off what you did today
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
+              {habits.map(h => {
+                const checked = selectedHabits.includes(h.id);
+                return (
+                  <button key={h.id} onClick={() => toggleHabit(h.id)} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "8px 14px", borderRadius: 10,
+                    background: checked ? "rgba(196,111,212,0.12)" : S.cardBg,
+                    border: `1.5px solid ${checked ? S.purple : S.cardBorder}`,
+                    cursor: "pointer", transition: "all 0.15s",
+                  }}>
+                    {checked && <span style={{ color: S.purple, fontSize: 11, fontWeight: 700 }}>✓</span>}
+                    <span style={{ fontSize: 14 }}>{h.emoji}</span>
+                    <span style={{
+                      fontFamily: S.mono, fontSize: 11,
+                      color: checked ? S.purple : S.textMuted,
+                      fontWeight: checked ? 600 : 400,
+                    }}>{h.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={labelStyle}>NOTE (optional)</div>
+              <textarea value={habitNote} onChange={e => setHabitNote(e.target.value)}
+                placeholder="How did it feel? Any details..."
+                style={{
+                  width: "100%", height: 60, background: S.bg3,
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12,
+                  padding: 12, color: S.text, fontSize: 13,
+                  fontFamily: S.body, resize: "none", outline: "none", lineHeight: 1.4, boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            <button onClick={() => canProceed && handleSave()} style={primaryBtn(canProceed)}>
+              SAVE HABITS ✓
+            </button>
+          </div>
+        )}
+
+        {/* Step 2c: Moment — mood + category */}
+        {step === "details" && captureType === "moment" && (
+          <div>
+            <div style={{ fontFamily: S.heading, fontSize: 18, fontWeight: 700, color: S.text, marginBottom: 4, textAlign: "center" }}>
+              📍 Log a Moment
+            </div>
+            <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim, textAlign: "center", marginBottom: 18, letterSpacing: "0.06em" }}>
+              Tag what's happening right now
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={labelStyle}>MOOD</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {MOODS.map(m => (
+                  <button key={m.id} onClick={() => setMood(m.id)} style={chipBase(mood === m.id, m.color)}>
+                    {m.emoji} {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={labelStyle}>CATEGORY</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {CATEGORIES.map(c => (
+                  <button key={c.id} onClick={() => setCategory(c.id)} style={chipBase(category === c.id, S.teal)}>
+                    {c.emoji} {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <div style={labelStyle}>NOTE (optional)</div>
+              <textarea value={text} onChange={e => setText(e.target.value)}
+                placeholder="What are you up to?"
+                style={{
+                  width: "100%", height: 50, background: S.bg3,
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10,
+                  padding: 12, color: S.text, fontSize: 13,
+                  fontFamily: S.body, resize: "none", outline: "none", lineHeight: 1.4, boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            <button onClick={() => (mood || category) && handleSave()} style={primaryBtn(!!mood || !!category)}>
+              SAVE MOMENT ✓
+            </button>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+
+
+// ── Video Editor Sheet (Close Day) ──
+
+function VideoEditorSheet({ entries, onClose, onDone, onSave }) {
+  const initialClips = entries
+    .filter(e => e.type === "video")
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .map((e, i) => ({
+      id: e.id,
+      caption: e.text,
+      timestamp: e.timestamp,
+      category: e.category,
+      mood: e.mood,
+      trimStart: 0,
+      trimEnd: 100,
+      duration: [8, 14, 22, 11, 18, 26, 9, 15][i % 8],
+      color: CLIP_COLORS[i % CLIP_COLORS.length],
+    }));
+
+  const [clips, setClips] = useState(initialClips);
+  const [selectedId, setSelectedId] = useState(null);
+  const [addingClip, setAddingClip] = useState(false);
+  const [newCaption, setNewCaption] = useState("");
+  const [playheadPos, setPlayheadPos] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const timelineRef = useRef(null);
+  const textTrackRef = useRef(null);
+  const playRef = useRef(null);
+
+  // Text overlays
+  const [textOverlays, setTextOverlays] = useState([
+    { id: "txt-1", text: "A day in the life", startPct: 0, endPct: 25, fontSize: 24, fontWeight: 700, color: "#ffffff" },
+    { id: "txt-2", text: "food adventures", startPct: 38, endPct: 62, fontSize: 18, fontWeight: 400, color: "#fbbf24" },
+  ]);
+  const [selectedTextId, setSelectedTextId] = useState(null);
+  const [addingText, setAddingText] = useState(false);
+  const [newTextContent, setNewTextContent] = useState("");
+
+  const selectedText = textOverlays.find(t => t.id === selectedTextId);
+
+  // Filter overlays
+  const [filterOverlays, setFilterOverlays] = useState([
+    { id: "fx-1", filterId: "moody", startPct: 0, endPct: 35, brightness: 85, contrast: 120, saturate: 70 },
+  ]);
+  const [selectedFilterId, setSelectedFilterId] = useState(null);
+  const [addingFilter, setAddingFilter] = useState(false);
+
+  const selectedFilter = filterOverlays.find(f => f.id === selectedFilterId);
+
+  // Export state
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportStage, setExportStage] = useState("");
+  const exportRef = useRef(null);
+
+  const startExport = () => {
+    if (clips.length === 0) return;
+    setExporting(true);
+    setExportProgress(0);
+    setExportStage("Preparing clips...");
+
+    const stages = [
+      { at: 0, label: "Preparing clips..." },
+      { at: 15, label: "Applying filters..." },
+      { at: 30, label: "Rendering text overlays..." },
+      { at: 50, label: "Encoding video..." },
+      { at: 75, label: "Compressing..." },
+      { at: 90, label: "Finalizing..." },
+      { at: 100, label: "Done" },
+    ];
+
+    const start = Date.now();
+    const duration = 3500;
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(100, Math.round((elapsed / duration) * 100));
+      setExportProgress(pct);
+      const stage = [...stages].reverse().find(s => pct >= s.at);
+      if (stage) setExportStage(stage.label);
+      if (pct < 100) {
+        exportRef.current = requestAnimationFrame(tick);
+      } else {
+        setTimeout(() => onDone(), 800);
+      }
+    };
+    exportRef.current = requestAnimationFrame(tick);
+  };
+
+  useEffect(() => {
+    return () => { if (exportRef.current) cancelAnimationFrame(exportRef.current); };
+  }, []);
+
+  const selected = clips.find(c => c.id === selectedId);
+
+  const getEffective = (c) => Math.round(c.duration * (c.trimEnd - c.trimStart) / 100);
+  const totalDuration = clips.reduce((sum, c) => sum + getEffective(c), 0);
+
+  const formatDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+  // Playhead animation
+  useEffect(() => {
+    if (isPlaying && totalDuration > 0) {
+      const start = Date.now();
+      const startPos = playheadPos;
+      const remaining = 1 - startPos;
+      const durationMs = remaining * totalDuration * 200; // 200ms per real second for demo speed
+      const tick = () => {
+        const elapsed = Date.now() - start;
+        const progress = startPos + remaining * Math.min(elapsed / durationMs, 1);
+        setPlayheadPos(Math.min(progress, 1));
+        if (elapsed < durationMs) playRef.current = requestAnimationFrame(tick);
+        else setIsPlaying(false);
+      };
+      playRef.current = requestAnimationFrame(tick);
+      return () => cancelAnimationFrame(playRef.current);
+    }
+  }, [isPlaying]);
+
+  const togglePlay = () => {
+    if (isPlaying) { setIsPlaying(false); cancelAnimationFrame(playRef.current); }
+    else { if (playheadPos >= 0.99) setPlayheadPos(0); setIsPlaying(true); }
+  };
+
+  // Click on timeline to set playhead
+  const handleTimelineClick = (e) => {
+    if (!timelineRef.current || totalDuration === 0) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    setPlayheadPos(Math.max(0, Math.min(1, x)));
+    // Figure out which clip this lands on
+    let acc = 0;
+    for (const c of clips) {
+      const w = getEffective(c) / totalDuration;
+      if (x < acc + w) { selectClip(c.id); break; }
+      acc += w;
+    }
+  };
+
+  const moveClip = (id, dir) => {
+    setClips(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const ni = idx + dir;
+      if (ni < 0 || ni >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[ni]] = [next[ni], next[idx]];
+      return next;
+    });
+  };
+
+  const deleteClip = (id) => {
+    setClips(prev => prev.filter(c => c.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  const updateClip = (id, updates) => {
+    setClips(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+  };
+
+  const addClip = () => {
+    if (!newCaption.trim()) return;
+    const newClip = {
+      id: `clip-${Date.now()}`,
+      caption: newCaption.trim(),
+      timestamp: new Date(),
+      category: null, mood: null,
+      trimStart: 0, trimEnd: 100,
+      duration: Math.floor(Math.random() * 20 + 5),
+      color: CLIP_COLORS[clips.length % CLIP_COLORS.length],
+    };
+    setClips(prev => [...prev, newClip]);
+    setNewCaption(""); setAddingClip(false); setSelectedId(newClip.id);
+  };
+
+  // ── Text overlay functions ──
+  const addTextOverlay = () => {
+    if (!newTextContent.trim()) return;
+    const newT = {
+      id: `txt-${Date.now()}`,
+      text: newTextContent.trim(),
+      startPct: Math.round(playheadPos * 100),
+      endPct: Math.min(100, Math.round(playheadPos * 100) + 25),
+      fontSize: 20,
+      fontWeight: 400,
+      color: "#ffffff",
+    };
+    setTextOverlays(prev => [...prev, newT]);
+    setNewTextContent(""); setAddingText(false); setSelectedTextId(newT.id); setSelectedId(null);
+  };
+
+  const updateText = (id, updates) => {
+    setTextOverlays(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+  };
+
+  const deleteText = (id) => {
+    setTextOverlays(prev => prev.filter(t => t.id !== id));
+    if (selectedTextId === id) setSelectedTextId(null);
+  };
+
+  // Deselect others when selecting any item
+  const clearSelections = () => { setSelectedId(null); setSelectedTextId(null); setSelectedFilterId(null); };
+
+  const selectClip = (id) => {
+    const newId = id === selectedId ? null : id;
+    clearSelections();
+    setSelectedId(newId);
+    if (newId && totalDuration > 0) {
+      let offset = 0;
+      for (const c of clips) {
+        if (c.id === newId) break;
+        offset += getEffective(c);
+      }
+      setPlayheadPos(offset / totalDuration);
+    }
+  };
+  const selectText = (id) => { clearSelections(); setSelectedTextId(id === selectedTextId ? null : id); };
+  const selectFilter = (id) => { clearSelections(); setSelectedFilterId(id === selectedFilterId ? null : id); };
+
+  // Filter overlay CRUD
+  const addFilterOverlay = (filterId) => {
+    const f = FILTERS.find(x => x.id === filterId) || FILTERS[0];
+    const newF = {
+      id: `fx-${Date.now()}`,
+      filterId: f.id,
+      startPct: Math.round(playheadPos * 100),
+      endPct: Math.min(100, Math.round(playheadPos * 100) + 30),
+      brightness: f.brightness,
+      contrast: f.contrast,
+      saturate: f.saturate,
+    };
+    setFilterOverlays(prev => [...prev, newF]);
+    setAddingFilter(false);
+    selectFilter(newF.id);
+  };
+
+  const updateFilter = (id, updates) => {
+    setFilterOverlays(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+  };
+
+  const deleteFilter = (id) => {
+    setFilterOverlays(prev => prev.filter(f => f.id !== id));
+    if (selectedFilterId === id) setSelectedFilterId(null);
+  };
+
+  // Which text/filter overlays are visible at current playhead position
+  const playheadPct = playheadPos * 100;
+  const visibleTexts = textOverlays.filter(t => playheadPct >= t.startPct && playheadPct <= t.endPct);
+  const visibleFilter = filterOverlays.find(f => playheadPct >= f.startPct && playheadPct <= f.endPct);
+
+  const TEXT_COLORS = ["#ffffff", "#e8d5b0", "#4caf7d", "#e05555", "#c46fd4", "#5b8fe8"];
+
+  // Generate pseudo-random waveform per clip (deterministic from id)
+  const getWaveform = (clip, bars) => {
+    const seed = clip.id.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+    return Array.from({ length: bars }).map((_, i) => {
+      const v = Math.sin(i * 0.7 + seed * 0.1) * 0.4 + Math.cos(i * 1.3 + seed * 0.3) * 0.3 + 0.5;
+      return Math.max(0.15, Math.min(1, v));
+    });
+  };
+
+  // Timecode markers
+  const timeMarkers = [];
+  if (totalDuration > 0) {
+    const step = totalDuration <= 30 ? 5 : totalDuration <= 60 ? 10 : 15;
+    for (let t = 0; t <= totalDuration; t += step) {
+      timeMarkers.push({ pos: t / totalDuration, label: formatDuration(t) });
+    }
+  }
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 100,
+      background: "#0c0c0e",
+      display: "flex", flexDirection: "column",
+      animation: "fadeIn 0.25s ease",
+      maxWidth: 480, margin: "0 auto",
+    }}>
+      {/* Top bar */}
+      <div style={{
+        padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center",
+        borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0,
+      }}>
+        <button onClick={onClose} style={{
+          background: "none", border: "none", color: S.textMuted,
+          fontFamily: S.mono, fontSize: 12, cursor: "pointer", padding: "4px 0",
+        }}>← BACK</button>
+        <div style={{ fontFamily: S.heading, fontSize: 16, fontWeight: 700, color: S.text }}>
+          Vlog Editor
+        </div>
+        <div style={{ width: 48 }} />
+      </div>
+
+      {/* Preview area — 9:16 vertical (TikTok) */}
+      <div style={{
+        flexShrink: 0, margin: "12px auto",
+        width: 135, height: 240,
+        background: "rgba(255,255,255,0.02)", borderRadius: 12,
+        border: "1px solid rgba(255,255,255,0.06)",
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        position: "relative", overflow: "hidden",
+      }}>
+        {/* Filter overlay from timeline */}
+        {visibleFilter && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 0, pointerEvents: "none",
+            filter: `brightness(${visibleFilter.brightness}%) contrast(${visibleFilter.contrast}%) saturate(${visibleFilter.saturate}%)`,
+            transition: "filter 0.3s ease",
+          }}>
+            <div style={{
+              position: "absolute", inset: 0, opacity: 0.2,
+              background: `radial-gradient(ellipse at center, ${FILTERS.find(x => x.id === visibleFilter.filterId)?.color || "#a78bfa"}, transparent 70%)`,
+            }} />
+            <div style={{
+              position: "absolute", inset: 0,
+              background: `linear-gradient(135deg, ${FILTERS.find(x => x.id === visibleFilter.filterId)?.color || "#a78bfa"}15 0%, transparent 50%)`,
+            }} />
+          </div>
+        )}
+        {/* Clip color bg */}
+        {selected && (
+          <div style={{
+            position: "absolute", inset: 0, opacity: 0.1, pointerEvents: "none",
+            background: `radial-gradient(ellipse at center, ${selected.color}, transparent 70%)`,
+          }} />
+        )}
+        {selected ? (
+          <>
+            <div style={{
+              fontFamily: S.body, fontSize: 11, color: "#cbd5e1",
+              textAlign: "center", padding: "0 12px",
+              position: "relative", zIndex: 1, lineHeight: 1.4,
+              maxHeight: 48, overflow: "hidden",
+            }}>{selected.caption}</div>
+            <div style={{
+              fontFamily: S.mono, fontSize: 9, color: S.textDim,
+              position: "relative", zIndex: 1, marginTop: 4,
+            }}>{formatDuration(getEffective(selected))}</div>
+            {/* Filter badge */}
+            {visibleFilter && (
+              <div style={{
+                position: "absolute", top: 8, right: 8, zIndex: 3,
+                fontFamily: S.mono, fontSize: 7, letterSpacing: "0.06em",
+                color: FILTERS.find(f => f.id === visibleFilter.filterId)?.color || S.textDim,
+                background: "rgba(0,0,0,0.5)", borderRadius: 4, padding: "2px 5px",
+              }}>{FILTERS.find(f => f.id === visibleFilter.filterId)?.label.toUpperCase()}</div>
+            )}
+          </>
+        ) : null}
+        {/* Text overlays in preview */}
+        {visibleTexts.map(t => {
+          const scaledSize = Math.max(10, Math.round(t.fontSize * 0.55));
+          return (
+            <div key={t.id} onClick={(e) => { e.stopPropagation(); selectText(t.id); }}
+              style={{
+                position: "absolute", bottom: 12, left: 8, right: 8,
+                textAlign: "center", zIndex: 5, cursor: "pointer",
+                pointerEvents: "auto",
+              }}>
+              <span style={{
+                fontFamily: S.heading, fontSize: scaledSize, fontWeight: t.fontWeight,
+                color: t.color, textShadow: "0 1px 6px rgba(0,0,0,0.6)",
+                border: selectedTextId === t.id ? "1px dashed rgba(255,255,255,0.4)" : "1px solid transparent",
+                padding: "1px 6px", borderRadius: 3, transition: "border 0.15s",
+                lineHeight: 1.3,
+              }}>{t.text}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 14, padding: "0 20px 8px",
+        flexShrink: 0,
+      }}>
+        <button onClick={togglePlay} style={{
+          width: 36, height: 36, borderRadius: "50%",
+          background: isPlaying ? "rgba(224,85,85,0.15)" : "rgba(76,175,125,0.15)",
+          border: `1.5px solid ${isPlaying ? S.coral + "40" : S.teal + "40"}`,
+          color: isPlaying ? S.coral : S.teal,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer", fontSize: 14, fontWeight: 700, transition: "all 0.15s",
+        }}>{isPlaying ? "■" : "▶"}</button>
+        <div style={{ fontFamily: S.mono, fontSize: 12, color: S.text, minWidth: 48 }}>
+          {formatDuration(Math.round(playheadPos * totalDuration))}
+        </div>
+        <div style={{
+          flex: 1, height: 1, background: S.bg3,
+        }} />
+        <div style={{ fontFamily: S.mono, fontSize: 11, color: S.textDim }}>
+          {formatDuration(totalDuration)}
+        </div>
+        <div style={{ fontFamily: S.mono, fontSize: 10, color: S.amber }}>
+          {clips.length} clips
+        </div>
+      </div>
+
+      {/* ═══ NLE TIMELINE ═══ */}
+      <div style={{
+        flexShrink: 0, padding: "0 16px", marginBottom: 10,
+      }}>
+        {/* Timecode ruler */}
+        <div style={{
+          position: "relative", height: 18, marginBottom: 2,
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+        }}>
+          {timeMarkers.map((m, i) => (
+            <div key={i} style={{
+              position: "absolute", left: `${m.pos * 100}%`, top: 0, bottom: 0,
+              display: "flex", flexDirection: "column", alignItems: "center",
+              transform: "translateX(-50%)",
+            }}>
+              <div style={{
+                fontFamily: S.mono, fontSize: 8, color: S.textDim,
+                letterSpacing: "0.02em", whiteSpace: "nowrap",
+              }}>{m.label}</div>
+              <div style={{
+                width: 1, flex: 1, background: "rgba(255,255,255,0.08)",
+              }} />
+            </div>
+          ))}
+        </div>
+
+        {/* ── Text overlay track ── */}
+        <div style={{
+          position: "relative", height: 28, marginBottom: 3,
+          background: "rgba(255,255,255,0.01)",
+          borderRadius: "8px 8px 0 0",
+          border: "1px solid rgba(255,255,255,0.04)",
+          borderBottom: "none",
+          overflow: "hidden",
+        }}>
+          {/* Track label */}
+          <div style={{
+            position: "absolute", left: 4, top: 3, zIndex: 2,
+            fontFamily: S.mono, fontSize: 7, color: S.textDim,
+            letterSpacing: "0.08em", opacity: 0.6,
+          }}>T</div>
+
+          {/* Text blocks */}
+          {textOverlays.map(t => {
+            const isActive = t.id === selectedTextId;
+            return (
+              <div key={t.id}
+                onClick={(e) => { e.stopPropagation(); selectText(t.id); }}
+                style={{
+                  position: "absolute",
+                  left: `${t.startPct}%`,
+                  width: `${t.endPct - t.startPct}%`,
+                  top: 3, bottom: 3,
+                  background: isActive ? "rgba(212,146,42,0.2)" : "rgba(212,146,42,0.08)",
+                  border: `1.5px solid ${isActive ? S.amber : "rgba(212,146,42,0.25)"}`,
+                  borderRadius: 5,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center",
+                  padding: "0 6px", overflow: "hidden",
+                  transition: "all 0.15s",
+                }}>
+                <span style={{
+                  fontFamily: S.mono, fontSize: 8, color: isActive ? S.amber : "rgba(212,146,42,0.7)",
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  fontWeight: isActive ? 600 : 400,
+                }}>
+                  {t.text}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* Add text button */}
+          <div onClick={() => { setAddingText(true); setSelectedTextId(null); setSelectedId(null); }}
+            style={{
+              position: "absolute", right: 4, top: 4, bottom: 4,
+              width: 20, borderRadius: 4,
+              background: "rgba(212,146,42,0.06)", border: "1px dashed rgba(212,146,42,0.2)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", color: "rgba(212,146,42,0.5)", fontSize: 12,
+              transition: "all 0.15s",
+            }}>+</div>
+
+          {/* Playhead on text track */}
+          {totalDuration > 0 && (
+            <div style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: `${playheadPos * 100}%`,
+              width: 1.5, background: "rgba(255,255,255,0.5)",
+              pointerEvents: "none", zIndex: 10,
+            }} />
+          )}
+        </div>
+
+        {/* ── Filter overlay track ── */}
+        <div style={{
+          position: "relative", height: 24, 
+          background: "rgba(255,255,255,0.01)",
+          border: "1px solid rgba(255,255,255,0.04)",
+          borderTop: "none", borderBottom: "none",
+          overflow: "hidden",
+        }}>
+          <div style={{
+            position: "absolute", left: 4, top: 4, zIndex: 2,
+            fontFamily: S.mono, fontSize: 6, color: S.textDim,
+            letterSpacing: "0.08em", opacity: 0.5,
+          }}>FX</div>
+
+          {filterOverlays.map(f => {
+            const isActive = f.id === selectedFilterId;
+            const preset = FILTERS.find(x => x.id === f.filterId) || FILTERS[0];
+            return (
+              <div key={f.id}
+                onClick={(e) => { e.stopPropagation(); selectFilter(f.id); }}
+                style={{
+                  position: "absolute",
+                  left: `${f.startPct}%`,
+                  width: `${f.endPct - f.startPct}%`,
+                  top: 3, bottom: 3,
+                  background: isActive ? `${preset.color}20` : `${preset.color}0a`,
+                  border: `1.5px solid ${isActive ? preset.color : `${preset.color}30`}`,
+                  borderRadius: 4,
+                  cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  gap: 4, padding: "0 6px", overflow: "hidden",
+                  transition: "all 0.15s",
+                }}>
+                <div style={{
+                  width: 10, height: 10, borderRadius: 3, flexShrink: 0,
+                  background: `linear-gradient(135deg, ${preset.color}40, ${preset.color}15)`,
+                  border: `1px solid ${preset.color}50`,
+                  filter: f.filterId === "noir" ? "saturate(0)" : "none",
+                }} />
+                <span style={{
+                  fontFamily: S.mono, fontSize: 7.5,
+                  color: isActive ? preset.color : `${preset.color}90`,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  fontWeight: isActive ? 600 : 400,
+                }}>{preset.label}</span>
+              </div>
+            );
+          })}
+
+          {/* Add filter button */}
+          <div onClick={() => { setAddingFilter(true); clearSelections(); }}
+            style={{
+              position: "absolute", right: 4, top: 4, bottom: 4,
+              width: 20, borderRadius: 4,
+              background: "rgba(196,111,212,0.06)", border: "1px dashed rgba(196,111,212,0.2)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", color: "rgba(196,111,212,0.5)", fontSize: 12,
+              transition: "all 0.15s",
+            }}>+</div>
+
+          {/* Playhead */}
+          {totalDuration > 0 && (
+            <div style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: `${playheadPos * 100}%`,
+              width: 1.5, background: "rgba(255,255,255,0.5)",
+              pointerEvents: "none", zIndex: 10,
+            }} />
+          )}
+        </div>
+
+        {/* Track area */}
+        <div
+          ref={timelineRef}
+          onClick={handleTimelineClick}
+          style={{
+            position: "relative",
+            height: 64,
+            background: "rgba(255,255,255,0.015)",
+            borderRadius: "0 0 8px 8px",
+            border: "1px solid rgba(255,255,255,0.06)",
+            borderTop: "none",
+            display: "flex",
+            overflow: "hidden",
+            cursor: "pointer",
+          }}
+        >
+          {/* Clips as proportional blocks */}
+          {clips.map((clip, i) => {
+            const w = totalDuration > 0 ? (getEffective(clip) / totalDuration) * 100 : 0;
+            const isActive = clip.id === selectedId;
+            const cat = CATEGORIES.find(c => c.id === clip.category);
+            const barCount = Math.max(6, Math.round(w * 0.8));
+            const waveform = getWaveform(clip, barCount);
+
+            return (
+              <div key={clip.id}
+                onClick={(e) => { e.stopPropagation(); selectClip(clip.id); }}
+                style={{
+                  width: `${w}%`, height: "100%",
+                  background: isActive ? `${clip.color}18` : `${clip.color}0a`,
+                  borderRight: i < clips.length - 1 ? "1px solid rgba(0,0,0,0.4)" : "none",
+                  position: "relative", overflow: "hidden",
+                  transition: "background 0.15s",
+                  flexShrink: 0,
+                }}
+              >
+                {/* Top color bar */}
+                <div style={{
+                  position: "absolute", top: 0, left: 0, right: 0, height: 3,
+                  background: clip.color,
+                  opacity: isActive ? 1 : 0.5,
+                  transition: "opacity 0.15s",
+                }} />
+
+                {/* Waveform */}
+                <div style={{
+                  position: "absolute", bottom: 4, left: 3, right: 3, top: 16,
+                  display: "flex", alignItems: "flex-end", gap: 1,
+                }}>
+                  {waveform.map((h, j) => (
+                    <div key={j} style={{
+                      flex: 1,
+                      height: `${h * 100}%`,
+                      background: isActive ? `${clip.color}80` : `${clip.color}30`,
+                      borderRadius: 0.5,
+                      transition: "background 0.15s",
+                    }} />
+                  ))}
+                </div>
+
+                {/* Clip label */}
+                {w > 8 && (
+                  <div style={{
+                    position: "absolute", top: 5, left: 5, right: 5,
+                    display: "flex", alignItems: "center", gap: 3,
+                    overflow: "hidden",
+                  }}>
+                    <span style={{ fontSize: 9, flexShrink: 0 }}>{cat?.emoji || "🎥"}</span>
+                    {w > 15 && (
+                      <span style={{
+                        fontFamily: S.mono, fontSize: 7.5,
+                        color: isActive ? S.text : S.textMuted,
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                        letterSpacing: "0.02em",
+                      }}>
+                        {clip.caption.slice(0, 20)}{clip.caption.length > 20 ? "…" : ""}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Selection border */}
+                {isActive && (
+                  <div style={{
+                    position: "absolute", inset: 0,
+                    border: `2px solid ${clip.color}`,
+                    borderRadius: 2, pointerEvents: "none",
+                  }} />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Add button at end */}
+          <div
+            onClick={(e) => { e.stopPropagation(); setAddingClip(true); }}
+            style={{
+              width: clips.length > 0 ? 32 : "100%", height: "100%",
+              flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: S.textDim, fontSize: 16, cursor: "pointer",
+              background: "rgba(255,255,255,0.02)",
+              transition: "background 0.15s",
+            }}
+          >+</div>
+
+          {/* Playhead */}
+          {totalDuration > 0 && (
+            <div style={{
+              position: "absolute", top: 0, bottom: 0,
+              left: `${playheadPos * (clips.length > 0 ? (totalDuration / (totalDuration + 1)) * 100 : 0)}%`,
+              width: 2, background: "#fff",
+              boxShadow: "0 0 8px rgba(255,255,255,0.4)",
+              pointerEvents: "none", zIndex: 10,
+              transition: isPlaying ? "none" : "left 0.1s ease",
+            }}>
+              {/* Playhead top marker */}
+              <div style={{
+                position: "absolute", top: -3, left: -4,
+                width: 10, height: 6, borderRadius: "2px 2px 0 0",
+                background: "#fff",
+              }} />
+            </div>
+          )}
+        </div>
+
+        {/* Trim indicators for selected clip */}
+        {selected && (() => {
+          let offsetPct = 0;
+          for (const c of clips) {
+            if (c.id === selected.id) break;
+            offsetPct += totalDuration > 0 ? (getEffective(c) / totalDuration) * 100 : 0;
+          }
+          const clipWidthPct = totalDuration > 0 ? (getEffective(selected) / totalDuration) * 100 : 0;
+          const trimInPct = offsetPct + (selected.trimStart / 100) * (selected.duration / totalDuration) * 100;
+          const trimOutPct = offsetPct + (selected.trimEnd / 100) * (selected.duration / totalDuration) * 100;
+          return (
+            <div style={{
+              display: "flex", justifyContent: "space-between", marginTop: 6,
+              padding: "0 2px",
+            }}>
+              <div style={{ fontFamily: S.mono, fontSize: 9, color: selected.color }}>
+                IN {formatDuration(Math.round(selected.duration * selected.trimStart / 100))}
+              </div>
+              <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim }}>
+                {formatDuration(getEffective(selected))} trimmed
+              </div>
+              <div style={{ fontFamily: S.mono, fontSize: 9, color: selected.color }}>
+                OUT {formatDuration(Math.round(selected.duration * selected.trimEnd / 100))}
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Scrollable bottom: editor panel */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 16px 24px" }}>
+
+        {/* Add clip form */}
+        {addingClip && (
+          <div style={{
+            background: "rgba(76,175,125,0.06)", border: "1.5px solid rgba(76,175,125,0.2)",
+            borderRadius: 14, padding: 16, marginBottom: 14,
+            animation: "fadeSlideIn 0.2s ease",
+          }}>
+            <div style={{ ...labelStyle, marginBottom: 10 }}>ADD NEW CLIP</div>
+            <textarea value={newCaption} onChange={e => setNewCaption(e.target.value)}
+              placeholder="What's in this clip?" autoFocus
+              style={{
+                width: "100%", height: 56, background: S.bg3,
+                border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10,
+                padding: 12, color: S.text, fontSize: 13,
+                fontFamily: S.body, resize: "none", outline: "none",
+                lineHeight: 1.4, boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={() => { setAddingClip(false); setNewCaption(""); }} style={{
+                flex: 1, padding: 10, background: S.bg3,
+                border: `1px solid ${S.cardBorder}`, borderRadius: 10,
+                color: S.textMuted, fontFamily: S.mono, fontSize: 11, cursor: "pointer",
+              }}>CANCEL</button>
+              <button onClick={addClip} style={{
+                flex: 1, padding: 10,
+                background: newCaption.trim() ? "linear-gradient(135deg, #00d9a3, #00b88a)" : "rgba(255,255,255,0.05)",
+                border: "none", borderRadius: 10,
+                color: newCaption.trim() ? S.navy : S.textDimmer,
+                fontFamily: S.mono, fontSize: 11, fontWeight: 700,
+                cursor: newCaption.trim() ? "pointer" : "default",
+              }}>ADD CLIP</button>
+            </div>
+          </div>
+        )}
+
+        {/* Selected clip editor */}
+        {selected && (
+          <div style={{
+            background: `${selected.color}08`, border: `1px solid ${selected.color}20`,
+            borderRadius: 14, padding: 16, marginBottom: 14,
+            animation: "fadeSlideIn 0.2s ease",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ ...labelStyle, marginBottom: 0, color: selected.color }}>
+                EDIT — {CATEGORIES.find(c => c.id === selected.category)?.emoji || "🎥"} {selected.caption.slice(0, 24)}{selected.caption.length > 24 ? "…" : ""}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => moveClip(selected.id, -1)} title="Move left" style={{
+                  width: 28, height: 28, borderRadius: 7,
+                  background: S.bg3, border: `1px solid ${S.cardBorder}`,
+                  color: S.textMuted, cursor: "pointer", fontSize: 11,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>◀</button>
+                <button onClick={() => moveClip(selected.id, 1)} title="Move right" style={{
+                  width: 28, height: 28, borderRadius: 7,
+                  background: S.bg3, border: `1px solid ${S.cardBorder}`,
+                  color: S.textMuted, cursor: "pointer", fontSize: 11,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>▶</button>
+                <button onClick={() => deleteClip(selected.id)} title="Delete" style={{
+                  width: 28, height: 28, borderRadius: 7,
+                  background: "rgba(224,85,85,0.1)", border: "1px solid rgba(224,85,85,0.2)",
+                  color: S.coral, cursor: "pointer", fontSize: 11,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>✕</button>
+              </div>
+            </div>
+
+            {/* Caption */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={labelStyle}>CAPTION</div>
+              <textarea value={selected.caption}
+                onChange={e => updateClip(selected.id, { caption: e.target.value })}
+                style={{
+                  width: "100%", height: 56, background: S.bg3,
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10,
+                  padding: 12, color: S.text, fontSize: 13,
+                  fontFamily: S.body, resize: "none", outline: "none",
+                  lineHeight: 1.4, boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {/* Trim */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <div style={labelStyle}>TRIM</div>
+                <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim }}>
+                  {formatDuration(Math.round(selected.duration * selected.trimStart / 100))} → {formatDuration(Math.round(selected.duration * selected.trimEnd / 100))}
+                </div>
+              </div>
+              {/* Waveform trim visualization */}
+              <div style={{
+                position: "relative", height: 32, background: S.bg3,
+                borderRadius: 8, overflow: "hidden",
+              }}>
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", padding: "0 4px", gap: 1 }}>
+                  {getWaveform(selected, 56).map((h, i) => {
+                    const pct = (i / 56) * 100;
+                    const inRange = pct >= selected.trimStart && pct <= selected.trimEnd;
+                    return (
+                      <div key={i} style={{
+                        flex: 1, height: `${h * 85}%`,
+                        background: inRange ? `${selected.color}60` : "rgba(255,255,255,0.06)",
+                        borderRadius: 0.5, transition: "all 0.1s",
+                      }} />
+                    );
+                  })}
+                </div>
+                <div style={{
+                  position: "absolute", top: 0, bottom: 0,
+                  left: `${selected.trimStart}%`, width: `${selected.trimEnd - selected.trimStart}%`,
+                  border: `2px solid ${selected.color}`, borderRadius: 5,
+                  pointerEvents: "none", boxShadow: `0 0 10px ${selected.color}15`,
+                }} />
+              </div>
+              <div style={{ display: "flex", gap: 12, marginTop: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>IN</div>
+                  <input type="range" min={0} max={selected.trimEnd - 5}
+                    value={selected.trimStart}
+                    onChange={e => updateClip(selected.id, { trimStart: Number(e.target.value) })}
+                    style={{ width: "100%", accentColor: selected.color }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>OUT</div>
+                  <input type="range" min={selected.trimStart + 5} max={100}
+                    value={selected.trimEnd}
+                    onChange={e => updateClip(selected.id, { trimEnd: Number(e.target.value) })}
+                    style={{ width: "100%", accentColor: selected.color }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add filter overlay picker */}
+        {addingFilter && (
+          <div style={{
+            background: "rgba(196,111,212,0.06)", border: "1.5px solid rgba(196,111,212,0.2)",
+            borderRadius: 14, padding: 16, marginBottom: 14,
+            animation: "fadeSlideIn 0.2s ease",
+          }}>
+            <div style={{ ...labelStyle, marginBottom: 12, color: S.purple }}>ADD FILTER OVERLAY</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {FILTERS.filter(f => f.id !== "none").map(f => (
+                <button key={f.id} onClick={() => addFilterOverlay(f.id)} style={{
+                  flex: "1 0 28%", padding: "10px 0", borderRadius: 10,
+                  background: `${f.color}10`, border: `1.5px solid ${f.color}30`,
+                  cursor: "pointer", transition: "all 0.15s",
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 7,
+                    background: `linear-gradient(135deg, ${f.color}40, ${f.color}10)`,
+                    filter: f.id === "noir" ? "saturate(0)" : "none",
+                    border: `1px solid ${f.color}40`,
+                  }} />
+                  <span style={{
+                    fontFamily: S.mono, fontSize: 9, color: f.color, letterSpacing: "0.04em",
+                  }}>{f.label}</span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setAddingFilter(false)} style={{
+              width: "100%", marginTop: 12, padding: 10,
+              background: S.bg3, border: `1px solid ${S.cardBorder}`,
+              borderRadius: 10, color: S.textMuted, fontFamily: S.mono, fontSize: 11, cursor: "pointer",
+            }}>CANCEL</button>
+          </div>
+        )}
+
+        {/* Selected filter overlay editor */}
+        {selectedFilter && (() => {
+          const preset = FILTERS.find(x => x.id === selectedFilter.filterId) || FILTERS[0];
+          return (
+            <div style={{
+              background: `${preset.color}08`, border: `1px solid ${preset.color}20`,
+              borderRadius: 14, padding: 16, marginBottom: 14,
+              animation: "fadeSlideIn 0.2s ease",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div style={{ ...labelStyle, marginBottom: 0, color: preset.color }}>
+                  EDIT FILTER — {preset.label}
+                </div>
+                <button onClick={() => deleteFilter(selectedFilter.id)} title="Delete" style={{
+                  width: 28, height: 28, borderRadius: 7,
+                  background: "rgba(224,85,85,0.1)", border: "1px solid rgba(224,85,85,0.2)",
+                  color: S.coral, cursor: "pointer", fontSize: 11,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>✕</button>
+              </div>
+
+              {/* Switch filter type */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ ...labelStyle, marginBottom: 8 }}>TYPE</div>
+                <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
+                  {FILTERS.filter(f => f.id !== "none").map(f => {
+                    const isActive = selectedFilter.filterId === f.id;
+                    return (
+                      <button key={f.id} onClick={() => updateFilter(selectedFilter.id, {
+                        filterId: f.id, brightness: f.brightness, contrast: f.contrast, saturate: f.saturate,
+                      })} style={{
+                        flexShrink: 0, width: 48, padding: "6px 0", borderRadius: 7,
+                        background: isActive ? `${f.color}18` : "rgba(255,255,255,0.03)",
+                        border: `1.5px solid ${isActive ? f.color : S.cardBorder}`,
+                        cursor: "pointer", transition: "all 0.15s",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                      }}>
+                        <div style={{
+                          width: 18, height: 18, borderRadius: 5,
+                          background: `linear-gradient(135deg, ${f.color}35, ${f.color}10)`,
+                          filter: f.id === "noir" ? "saturate(0)" : "none",
+                          border: `1px solid ${f.color}30`,
+                        }} />
+                        <span style={{
+                          fontFamily: S.mono, fontSize: 7,
+                          color: isActive ? f.color : S.textDim,
+                        }}>{f.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Manual adjustments */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={labelStyle}>ADJUST</div>
+                {[
+                  { key: "brightness", label: "Brightness", icon: "☀", min: 50, max: 150 },
+                  { key: "contrast", label: "Contrast", icon: "◐", min: 50, max: 150 },
+                  { key: "saturate", label: "Saturation", icon: "◉", min: 0, max: 200 },
+                ].map(ctrl => (
+                  <div key={ctrl.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, width: 16, textAlign: "center" }}>{ctrl.icon}</span>
+                    <span style={{ fontFamily: S.mono, fontSize: 8, color: S.textDim, width: 52 }}>{ctrl.label}</span>
+                    <input type="range" min={ctrl.min} max={ctrl.max}
+                      value={selectedFilter[ctrl.key]}
+                      onChange={e => updateFilter(selectedFilter.id, { [ctrl.key]: Number(e.target.value) })}
+                      style={{ flex: 1, accentColor: preset.color }}
+                    />
+                    <span style={{
+                      fontFamily: S.mono, fontSize: 9, color: S.textMuted,
+                      width: 30, textAlign: "right",
+                    }}>{selectedFilter[ctrl.key]}%</span>
+                  </div>
+                ))}
+                <button onClick={() => {
+                  const p = FILTERS.find(x => x.id === selectedFilter.filterId) || FILTERS[0];
+                  updateFilter(selectedFilter.id, { brightness: p.brightness, contrast: p.contrast, saturate: p.saturate });
+                }} style={{
+                  marginTop: 4, padding: "6px 12px",
+                  background: S.bg3, border: `1px solid ${S.cardBorder}`,
+                  borderRadius: 8, color: S.textDim, fontFamily: S.mono, fontSize: 9,
+                  cursor: "pointer", letterSpacing: "0.04em",
+                }}>RESET TO PRESET</button>
+              </div>
+
+              {/* Timing */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                  <div style={labelStyle}>TIMING</div>
+                  <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim }}>
+                    {formatDuration(Math.round(totalDuration * selectedFilter.startPct / 100))} → {formatDuration(Math.round(totalDuration * selectedFilter.endPct / 100))}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>START</div>
+                    <input type="range" min={0} max={selectedFilter.endPct - 5}
+                      value={selectedFilter.startPct}
+                      onChange={e => updateFilter(selectedFilter.id, { startPct: Number(e.target.value) })}
+                      style={{ width: "100%", accentColor: preset.color }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>END</div>
+                    <input type="range" min={selectedFilter.startPct + 5} max={100}
+                      value={selectedFilter.endPct}
+                      onChange={e => updateFilter(selectedFilter.id, { endPct: Number(e.target.value) })}
+                      style={{ width: "100%", accentColor: preset.color }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {addingText && (
+          <div style={{
+            background: "rgba(212,146,42,0.06)", border: "1.5px solid rgba(212,146,42,0.2)",
+            borderRadius: 14, padding: 16, marginBottom: 14,
+            animation: "fadeSlideIn 0.2s ease",
+          }}>
+            <div style={{ ...labelStyle, marginBottom: 10, color: S.amber }}>ADD TEXT OVERLAY</div>
+            <input value={newTextContent} onChange={e => setNewTextContent(e.target.value)}
+              placeholder="Your text..." autoFocus
+              style={{
+                width: "100%", background: S.bg3,
+                border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10,
+                padding: "10px 12px", color: S.text, fontSize: 14,
+                fontFamily: S.heading, outline: "none", boxSizing: "border-box",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button onClick={() => { setAddingText(false); setNewTextContent(""); }} style={{
+                flex: 1, padding: 10, background: S.bg3,
+                border: `1px solid ${S.cardBorder}`, borderRadius: 10,
+                color: S.textMuted, fontFamily: S.mono, fontSize: 11, cursor: "pointer",
+              }}>CANCEL</button>
+              <button onClick={addTextOverlay} style={{
+                flex: 1, padding: 10,
+                background: newTextContent.trim() ? "linear-gradient(135deg, #fbbf24, #f59e0b)" : "rgba(255,255,255,0.05)",
+                border: "none", borderRadius: 10,
+                color: newTextContent.trim() ? S.navy : S.textDimmer,
+                fontFamily: S.mono, fontSize: 11, fontWeight: 700,
+                cursor: newTextContent.trim() ? "pointer" : "default",
+              }}>ADD TEXT</button>
+            </div>
+          </div>
+        )}
+
+        {/* Selected text overlay editor */}
+        {selectedText && (
+          <div style={{
+            background: "rgba(212,146,42,0.06)", border: "1px solid rgba(212,146,42,0.18)",
+            borderRadius: 14, padding: 16, marginBottom: 14,
+            animation: "fadeSlideIn 0.2s ease",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div style={{ ...labelStyle, marginBottom: 0, color: S.amber }}>EDIT TEXT</div>
+              <button onClick={() => deleteText(selectedText.id)} title="Delete text" style={{
+                width: 28, height: 28, borderRadius: 7,
+                background: "rgba(224,85,85,0.1)", border: "1px solid rgba(224,85,85,0.2)",
+                color: S.coral, cursor: "pointer", fontSize: 11,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>✕</button>
+            </div>
+
+            {/* Text content */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={labelStyle}>CONTENT</div>
+              <input value={selectedText.text}
+                onChange={e => updateText(selectedText.id, { text: e.target.value })}
+                style={{
+                  width: "100%", background: S.bg3,
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10,
+                  padding: "10px 12px", color: S.text,
+                  fontSize: selectedText.fontSize > 28 ? 18 : selectedText.fontSize,
+                  fontFamily: S.heading, fontWeight: selectedText.fontWeight,
+                  outline: "none", boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {/* Font size */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <div style={labelStyle}>SIZE</div>
+                <div style={{ fontFamily: S.mono, fontSize: 10, color: S.amber }}>{selectedText.fontSize}px</div>
+              </div>
+              <input type="range" min={12} max={48} value={selectedText.fontSize}
+                onChange={e => updateText(selectedText.id, { fontSize: Number(e.target.value) })}
+                style={{ width: "100%", accentColor: S.amber }}
+              />
+            </div>
+
+            {/* Font weight */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ ...labelStyle, marginBottom: 8 }}>WEIGHT</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {[
+                  { value: 300, label: "Thin" },
+                  { value: 400, label: "Normal" },
+                  { value: 700, label: "Bold" },
+                ].map(w => {
+                  const isActive = selectedText.fontWeight === w.value;
+                  return (
+                    <button key={w.value} onClick={() => updateText(selectedText.id, { fontWeight: w.value })}
+                      style={{
+                        flex: 1, padding: "8px 0", borderRadius: 8,
+                        background: isActive ? "rgba(212,146,42,0.15)" : "rgba(255,255,255,0.03)",
+                        border: `1.5px solid ${isActive ? S.amber : S.cardBorder}`,
+                        color: isActive ? S.amber : S.textMuted,
+                        fontFamily: S.heading, fontSize: 12, fontWeight: w.value,
+                        cursor: "pointer", transition: "all 0.15s",
+                      }}>
+                      {w.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Text color */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ ...labelStyle, marginBottom: 8 }}>COLOR</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {TEXT_COLORS.map(c => (
+                  <button key={c} onClick={() => updateText(selectedText.id, { color: c })}
+                    style={{
+                      width: 30, height: 30, borderRadius: 8,
+                      background: c, border: `2px solid ${selectedText.color === c ? "#fff" : "transparent"}`,
+                      cursor: "pointer", transition: "all 0.15s",
+                      boxShadow: selectedText.color === c ? "0 0 8px rgba(255,255,255,0.3)" : "none",
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Timing */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <div style={labelStyle}>TIMING</div>
+                <div style={{ fontFamily: S.mono, fontSize: 10, color: S.textDim }}>
+                  {formatDuration(Math.round(totalDuration * selectedText.startPct / 100))} → {formatDuration(Math.round(totalDuration * selectedText.endPct / 100))}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>START</div>
+                  <input type="range" min={0} max={selectedText.endPct - 5}
+                    value={selectedText.startPct}
+                    onChange={e => updateText(selectedText.id, { startPct: Number(e.target.value) })}
+                    style={{ width: "100%", accentColor: S.amber }}
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim, marginBottom: 3 }}>END</div>
+                  <input type="range" min={selectedText.startPct + 5} max={100}
+                    value={selectedText.endPct}
+                    onChange={e => updateText(selectedText.id, { endPct: Number(e.target.value) })}
+                    style={{ width: "100%", accentColor: S.amber }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Live preview */}
+            <div style={{
+              marginTop: 14, padding: 16,
+              background: "rgba(0,0,0,0.3)", borderRadius: 10,
+              textAlign: "center",
+            }}>
+              <span style={{
+                fontFamily: S.heading, fontSize: selectedText.fontSize,
+                fontWeight: selectedText.fontWeight, color: selectedText.color,
+                textShadow: "0 2px 8px rgba(0,0,0,0.5)",
+              }}>{selectedText.text}</span>
+            </div>
+          </div>
+        )}
+
+        {clips.length === 0 && !addingClip && !addingText && !selectedText && (
+          <div style={{
+            textAlign: "center", padding: "28px 16px", color: S.textDim,
+            fontFamily: S.body, fontSize: 13,
+          }}>
+            No clips in your vlog yet. Tap + on the timeline to add.
+          </div>
+        )}
+      </div>
+
+      {/* Bottom bar */}
+      <div style={{
+        padding: "12px 16px 40px", flexShrink: 0,
+        borderTop: "1px solid rgba(255,255,255,0.06)",
+        background: "rgba(12,12,14,0.95)",
+        display: "flex", gap: 10,
+      }}>
+        <button onClick={onSave} style={{
+          flex: 1, padding: "13px",
+          background: S.bg2,
+          border: `1px solid ${S.cardBorder}`,
+          borderRadius: S.radius, color: S.textMuted,
+          fontFamily: S.body, fontSize: 13, cursor: "pointer",
+          transition: "all 0.2s",
+        }}>Save draft</button>
+        <button onClick={startExport} style={{
+          flex: 1, padding: "13px",
+          background: clips.length > 0 ? S.accent : "rgba(255,255,255,0.05)",
+          border: "none", borderRadius: S.radius,
+          color: clips.length > 0 ? S.navy : S.textDimmer,
+          fontFamily: S.body, fontSize: 13, fontWeight: 600,
+          cursor: clips.length > 0 ? "pointer" : "default",
+          transition: "all 0.2s",
+        }}>Export & close</button>
+      </div>
+
+      {/* Export progress modal */}
+      {exporting && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 200,
+          background: "rgba(12,12,14,0.94)", backdropFilter: "blur(20px)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          animation: "fadeIn 0.3s ease",
+        }}>
+          {/* Progress ring */}
+          <div style={{ position: "relative", width: 100, height: 100, marginBottom: 24 }}>
+            <svg width="100" height="100" style={{ transform: "rotate(-90deg)" }}>
+              <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
+              <circle cx="50" cy="50" r="42" fill="none"
+                stroke={exportProgress >= 100 ? S.green : S.accent2}
+                strokeWidth="4" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 42}`}
+                strokeDashoffset={`${2 * Math.PI * 42 * (1 - exportProgress / 100)}`}
+                style={{ transition: "stroke-dashoffset 0.15s ease, stroke 0.3s ease" }}
+              />
+            </svg>
+            <div style={{
+              position: "absolute", inset: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: S.heading, fontSize: 24,
+              color: exportProgress >= 100 ? S.green : S.accent,
+              transition: "color 0.3s ease",
+            }}>
+              {exportProgress >= 100 ? "✓" : `${exportProgress}%`}
+            </div>
+          </div>
+
+          <div style={{
+            fontFamily: S.heading, fontSize: 18, fontStyle: "italic",
+            color: exportProgress >= 100 ? S.green : S.text,
+            marginBottom: 8, transition: "color 0.3s ease",
+          }}>
+            {exportProgress >= 100 ? "Export complete" : "Exporting vlog…"}
+          </div>
+
+          <div style={{
+            fontFamily: S.mono, fontSize: 11, color: S.textDim,
+            letterSpacing: "0.04em",
+          }}>
+            {exportStage}
+          </div>
+
+          <div style={{
+            marginTop: 20, display: "flex", gap: 16,
+          }}>
+            {[
+              { label: "clips", value: clips.length, color: S.accent2 },
+              { label: "texts", value: textOverlays.length, color: S.amber },
+              { label: "filters", value: filterOverlays.length, color: S.green },
+            ].map(s => (
+              <div key={s.label} style={{ textAlign: "center" }}>
+                <div style={{ fontFamily: S.heading, fontSize: 18, color: s.color }}>{s.value}</div>
+                <div style={{ fontFamily: S.mono, fontSize: 8, color: S.textDim, letterSpacing: "0.08em" }}>{s.label.toUpperCase()}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── FAB + Welcome ──
+
+function FAB({ onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      position: "fixed", bottom: 28, right: 28, zIndex: 50,
+      width: 60, height: 60, borderRadius: "50%",
+      background: S.accent,
+      border: "none", color: S.navy, fontSize: 28,
+      cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+      boxShadow: "0 4px 24px rgba(76,175,125,0.35), 0 0 60px rgba(76,175,125,0.1)",
+      transition: "transform 0.2s, box-shadow 0.2s",
+    }}
+      onMouseEnter={e => e.target.style.transform = "scale(1.08)"}
+      onMouseLeave={e => e.target.style.transform = "scale(1)"}
+    >+</button>
+  );
+}
+
+// ── Past Vlogs seed data ──
+function getPastVlogs() {
+  const today = new Date();
+  const d = (daysAgo) => {
+    const dt = new Date(today);
+    dt.setDate(dt.getDate() - daysAgo);
+    return dt;
+  };
+  return [
+    { id: "v-1", date: d(1), clips: 5, habits: 3, mood: "focused", caption: "A focused day of coding and gym. 5 moments captured. Shipped the new capture flow.", categories: ["coding", "gym", "food"], duration: 47 },
+    { id: "v-2", date: d(2), clips: 7, habits: 4, mood: "energized", caption: "An energized day of social and food. 7 moments captured. Brunch with the crew, then deep work.", categories: ["social", "food", "coding", "gym"], duration: 62 },
+    { id: "v-3", date: d(4), clips: 3, habits: 2, mood: "calm", caption: "A calm day of solo and errand. 3 moments captured. Slow morning, farmers market run.", categories: ["solo", "errand", "food"], duration: 28 },
+    { id: "v-4", date: d(6), clips: 6, habits: 5, mood: "energized", caption: "An energized day of gym and coding. 6 moments captured. PR on deadlift, then built the timeline.", categories: ["gym", "coding", "food", "solo"], duration: 55 },
+    { id: "v-5", date: d(9), clips: 4, habits: 2, mood: "chaotic", caption: "A chaotic day of errand and social. 4 moments captured. Everything went sideways but ended well.", categories: ["errand", "social", "food"], duration: 34 },
+  ];
+}
+
+function HomeScreen({ onStart, pastVlogs }) {
+  const formatVlogDate = (date) => {
+    const now = new Date();
+    const diff = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+    if (diff === 0) return "Today";
+    if (diff === 1) return "Yesterday";
+    if (diff < 7) return `${diff} days ago`;
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const moodColors = { focused: S.accent2, energized: S.amber, calm: S.green, chaotic: S.coral };
+
+  return (
+    <div style={{ padding: "0 24px 100px", animation: "fadeSlideIn 0.5s ease" }}>
+      {/* Slogan + CTA */}
+      <div style={{ textAlign: "center", padding: "32px 0 28px" }}>
+        <div style={{
+          fontFamily: S.heading, fontSize: 20, fontStyle: "italic",
+          color: S.accent2, lineHeight: 1.5, marginBottom: 24,
+        }}>
+          Plan. Capture. Reflect. Think.
+        </div>
+        <button onClick={onStart} style={{
+          background: S.accent, border: "none", borderRadius: S.radiusLg, padding: "15px 40px",
+          color: S.navy, fontFamily: S.body, fontSize: 15, fontWeight: 600, cursor: "pointer",
+          transition: "all 0.2s",
+        }}
+          onMouseEnter={e => { e.target.style.opacity = "0.88"; e.target.style.transform = "translateY(-1px)"; }}
+          onMouseLeave={e => { e.target.style.opacity = "1"; e.target.style.transform = "translateY(0)"; }}
+        >Start Today's Vlog</button>
+      </div>
+
+      {/* Past vlogs */}
+      {pastVlogs.length > 0 && (
+        <div>
+          <div style={{
+            fontFamily: S.mono, fontSize: 10, color: S.textDim,
+            letterSpacing: "0.1em", marginBottom: 14,
+          }}>PREVIOUS VLOGS</div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {pastVlogs.map((vlog, i) => {
+              const mc = moodColors[vlog.mood] || S.textDim;
+              return (
+                <div key={vlog.id} style={{
+                  background: S.bg2, border: `1px solid ${S.cardBorder}`,
+                  borderRadius: S.radiusLg, padding: "15px 16px",
+                  animation: `fadeSlideIn 0.4s ease ${i * 0.06}s both`,
+                  cursor: "pointer", transition: "border-color 0.2s",
+                }}>
+                  {/* Top row: date + stats */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{
+                        width: 8, height: 8, borderRadius: "50%",
+                        background: mc, boxShadow: `0 0 8px ${mc}40`,
+                      }} />
+                      <span style={{
+                        fontFamily: S.body, fontSize: 14, fontWeight: 500, color: S.text,
+                      }}>{formatVlogDate(vlog.date)}</span>
+                      <span style={{
+                        fontFamily: S.mono, fontSize: 10, color: mc, opacity: 0.8,
+                      }}>{vlog.mood}</span>
+                    </div>
+                    <span style={{
+                      fontFamily: S.mono, fontSize: 10, color: S.textDim,
+                    }}>{Math.floor(vlog.duration / 60)}:{String(vlog.duration % 60).padStart(2, "0")}</span>
+                  </div>
+
+                  {/* Caption */}
+                  <div style={{
+                    fontFamily: S.body, fontSize: 13, color: S.textMuted,
+                    lineHeight: 1.5, marginBottom: 10,
+                    display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                    overflow: "hidden",
+                  }}>{vlog.caption}</div>
+
+                  {/* Bottom: clips/habits + categories */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <span style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim }}>
+                        {vlog.clips} clips
+                      </span>
+                      <span style={{ fontFamily: S.mono, fontSize: 9, color: S.textDim }}>
+                        {vlog.habits} habits
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {vlog.categories.slice(0, 4).map(catId => {
+                        const cat = CATEGORIES.find(c => c.id === catId);
+                        return cat ? (
+                          <span key={catId} style={{ fontSize: 11 }}>{cat.emoji}</span>
+                        ) : null;
+                      })}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──
+
+export default function LoopdApp() {
+  const [dayStarted, setDayStarted] = useState(false);
+  const [entries, setEntries] = useState([]);
+  const [habits, setHabits] = useState(DEFAULT_HABITS);
+  const [showCapture, setShowCapture] = useState(false);
+  const [captureType, setCaptureType] = useState(null);
+  const [showEditor, setShowEditor] = useState(false);
+  const [dayClosed, setDayClosed] = useState(false);
+  const [pastVlogs, setPastVlogs] = useState(getPastVlogs());
+
+  const startDay = () => { setDayStarted(true); setEntries(getSeedEntries()); setDayClosed(false); };
+  const handleSaveEntry = (entry) => { setEntries(prev => [...prev, entry]); setShowCapture(false); };
+  const handleCloseDay = () => {
+    // Save today to history
+    const clips = entries.filter(e => e.type === "video");
+    const habitsLogged = [...new Set(entries.filter(e => e.type === "habit").flatMap(e => e.habits))];
+    const moods = entries.map(e => MOODS.find(m => m.id === e.mood)?.id).filter(Boolean);
+    const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
+    const topMood = moods.length ? moods[moods.length - 1] : "calm";
+    const newVlog = {
+      id: `v-${Date.now()}`,
+      date: new Date(),
+      clips: clips.length,
+      habits: habitsLogged.length,
+      mood: topMood,
+      caption: `${entries.length} moments captured today.`,
+      categories: cats,
+      duration: clips.length * 12,
+    };
+    setPastVlogs(prev => [newVlog, ...prev]);
+    setShowEditor(false);
+    setDayStarted(false);
+    setDayClosed(false);
+    setEntries([]);
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: S.navy,
+      position: "relative", overflow: "hidden",
+      maxWidth: 480, margin: "0 auto", fontFamily: S.body,
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap');
+        html, body { background: #0c0c0e !important; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
+        textarea::placeholder, input::placeholder { color: #525150; }
+      `}</style>
+
+      <GlowOrb color="#c4a96a" size={300} x="10%" y="15%" opacity={0.05} />
+      <GlowOrb color="#4caf7d" size={250} x="85%" y="40%" opacity={0.04} />
+      <GlowOrb color="#d4922a" size={200} x="20%" y="75%" opacity={0.03} />
+
+      <div style={{
+        position: "fixed", inset: 0, pointerEvents: "none", zIndex: 1, opacity: 0.03,
+        backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+      }} />
+
+      <div style={{ position: "relative", zIndex: 2 }}>
+        <Header dayStarted={dayStarted} onStartDay={startDay} onEndDay={() => setShowEditor(true)}
+          entries={entries} habits={habits}
+          onBack={dayStarted ? () => { setDayStarted(false); setEntries([]); } : null} />
+
+        {!dayStarted && <HomeScreen onStart={startDay} pastVlogs={pastVlogs} />}
+        {dayStarted && <Timeline entries={entries} habits={habits} onCapture={(type) => { setCaptureType(type); setShowCapture(true); }} />}
+      </div>
+
+      {dayStarted && (
+          <div style={{
+            position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40,
+            maxWidth: 480, margin: "0 auto",
+            padding: "12px 20px 40px",
+            background: "linear-gradient(0deg, rgba(12,12,14,0.95) 60%, transparent)",
+          }}>
+            <button onClick={() => setShowEditor(true)} style={{
+              width: "100%", padding: "14px",
+              background: "transparent", border: `1px solid ${S.accent2}`,
+              borderRadius: S.radius, color: S.accent,
+              fontFamily: S.body, fontSize: 14, fontWeight: 500, cursor: "pointer",
+              transition: "all 0.2s",
+            }}>Close day →</button>
+          </div>
+      )}
+      {showCapture && <CaptureSheet habits={habits} initialType={captureType} onClose={() => { setShowCapture(false); setCaptureType(null); }} onSave={(entry) => { handleSaveEntry(entry); setCaptureType(null); }} />}
+      {showEditor && <VideoEditorSheet entries={entries} onClose={() => setShowEditor(false)} onDone={handleCloseDay} onSave={() => setShowEditor(false)} />}
+    </div>
+  );
+}
