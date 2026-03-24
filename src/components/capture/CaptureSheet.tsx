@@ -1,75 +1,98 @@
 import { useState, useEffect } from 'react';
-import { View, Text, Pressable, TextInput, Modal, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, TextInput, Modal, ScrollView, Image, StyleSheet } from 'react-native';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { colors, fonts } from '../../constants/theme';
-import { MOODS } from '../../constants/moods';
-import { CATEGORIES } from '../../constants/categories';
 import { CAPTURE_TYPES } from '../../constants/captureTypes';
 import { Icon } from '../ui/Icon';
-import type { Habit, Entry } from '../../types/entry';
+import type { Habit, Entry, ClipRef } from '../../types/entry';
 import { generateId } from '../../utils/id';
-import { getTodayString } from '../../utils/time';
 import { pickAndCopyClip } from '../../services/fileManager';
+
+type PickedClip = {
+  uri: string;
+  durationMs: number;
+  thumbnail: string | null;
+};
 
 type Props = {
   visible: boolean;
   initialType?: string | null;
+  editEntry?: Entry | null;
   habits: Habit[];
   date: string;
   onClose: () => void;
   onSave: (entry: Entry) => void;
+  onDelete?: (id: string) => void;
 };
 
-export function CaptureSheet({ visible, initialType, habits, date, onClose, onSave }: Props) {
+export function CaptureSheet({ visible, initialType, editEntry, habits, date, onClose, onSave, onDelete }: Props) {
+  const isEdit = !!editEntry;
   const [step, setStep] = useState<'type' | 'details'>('type');
   const [captureType, setCaptureType] = useState<string | null>(null);
   const [text, setText] = useState('');
-  const [mood, setMood] = useState<string | null>(null);
-  const [category, setCategory] = useState<string | null>(null);
   const [selectedHabits, setSelectedHabits] = useState<string[]>([]);
   const [habitNote, setHabitNote] = useState('');
-  const [clipUri, setClipUri] = useState<string | null>(null);
-  const [clipDurationMs, setClipDurationMs] = useState<number | null>(null);
+  const [clips, setClips] = useState<PickedClip[]>([]);
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
 
-  // Sync state when sheet opens or initialType changes
+  // Sync state when sheet opens
   useEffect(() => {
-    if (visible) {
-      setText('');
-      setMood(null);
-      setCategory(null);
-      setSelectedHabits([]);
-      setHabitNote('');
-      setClipUri(null);
-      setClipDurationMs(null);
-      setPickError(null);
-      setPicking(false);
-      if (initialType) {
-        setCaptureType(initialType);
-        setStep('details');
-      } else {
-        setCaptureType(null);
-        setStep('type');
-      }
-    }
-  }, [visible, initialType]);
+    if (!visible) return;
 
-  const reset = () => {
-    setStep('type');
-    setCaptureType(null);
-    setText('');
-    setMood(null);
-    setCategory(null);
-    setSelectedHabits([]);
-    setHabitNote('');
-    setClipUri(null);
-    setClipDurationMs(null);
     setPickError(null);
     setPicking(false);
+
+    if (editEntry) {
+      // Edit mode — pre-populate from entry
+      setCaptureType(editEntry.type);
+      setStep('details');
+      setText(editEntry.text ?? '');
+      setSelectedHabits(editEntry.habits);
+      setHabitNote(editEntry.type === 'habit' ? (editEntry.text ?? '') : '');
+
+      // Load clip thumbnails
+      if (editEntry.type === 'video') {
+        const entryClips = editEntry.clips.length > 0
+          ? editEntry.clips
+          : editEntry.clipUri ? [{ uri: editEntry.clipUri, durationMs: editEntry.clipDurationMs ?? 0 }] : [];
+        loadThumbnails(entryClips);
+      } else {
+        setClips([]);
+      }
+    } else if (initialType) {
+      // Add mode with pre-selected type
+      setCaptureType(initialType);
+      setStep('details');
+      setText('');
+      setSelectedHabits([]);
+      setHabitNote('');
+      setClips([]);
+    } else {
+      // Add mode — show type picker
+      setCaptureType(null);
+      setStep('type');
+      setText('');
+      setSelectedHabits([]);
+      setHabitNote('');
+      setClips([]);
+    }
+  }, [visible, editEntry, initialType]);
+
+  const loadThumbnails = async (refs: ClipRef[]) => {
+    const result: PickedClip[] = [];
+    for (const c of refs) {
+      let thumbnail: string | null = null;
+      try {
+        const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.5 });
+        thumbnail = t.uri;
+      } catch { /* ignore */ }
+      result.push({ uri: c.uri, durationMs: c.durationMs, thumbnail });
+    }
+    setClips(result);
   };
 
   const handleClose = () => {
-    reset();
     onClose();
   };
 
@@ -85,54 +108,98 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
     try {
       const result = await pickAndCopyClip(date);
       if (result) {
-        console.log('[loopd] Clip picked:', result.uri, 'duration:', result.durationMs);
-        setClipUri(result.uri);
-        setClipDurationMs(result.durationMs);
-      } else {
-        console.log('[loopd] Clip pick cancelled');
+        let thumbnail: string | null = null;
+        try {
+          const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
+          thumbnail = t.uri;
+        } catch { /* ignore */ }
+        setClips(prev => [...prev, { uri: result.uri, durationMs: result.durationMs, thumbnail }]);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[loopd] Clip pick error:', msg);
       setPickError(msg);
     } finally {
       setPicking(false);
     }
   };
 
+  const removeClip = (index: number) => {
+    setClips(prev => prev.filter((_, i) => i !== index));
+  };
+
   const canSave = () => {
     if (captureType === 'habit') return selectedHabits.length > 0;
-    if (captureType === 'moment') return !!mood || !!category;
-    if (captureType === 'video') return !!clipUri;
+    if (captureType === 'video') return clips.length > 0;
     return text.trim().length > 0;
   };
 
   const handleSave = () => {
     if (!canSave()) return;
 
-    const entry: Entry = {
-      id: generateId('entry'),
-      date,
-      type: captureType as Entry['type'],
-      text: captureType === 'habit' ? habitNote.trim() || null : text.trim() || null,
-      mood: captureType === 'moment' ? mood : null,
-      category: captureType === 'moment' ? category : null,
-      habits: captureType === 'habit' ? selectedHabits : [],
-      clipUri: captureType === 'video' ? clipUri : null,
-      clipDurationMs: captureType === 'video' ? clipDurationMs : null,
-      createdAt: new Date().toISOString(),
-    };
-
-    console.log('[loopd] Saving entry:', entry.type, 'clipUri:', entry.clipUri, 'duration:', entry.clipDurationMs);
-    onSave(entry);
-    reset();
+    if (captureType === 'video') {
+      const clipRefs: ClipRef[] = clips.map(c => ({ uri: c.uri, durationMs: c.durationMs }));
+      const entry: Entry = {
+        ...(editEntry ?? {
+          id: generateId('entry'),
+          date,
+          mood: null,
+          category: null,
+          createdAt: new Date().toISOString(),
+        }),
+        type: 'video',
+        text: text.trim() || null,
+        habits: [],
+        clipUri: clipRefs[0]?.uri ?? null,
+        clipDurationMs: clipRefs[0]?.durationMs ?? null,
+        clips: clipRefs,
+      } as Entry;
+      onSave(entry);
+    } else if (captureType === 'habit') {
+      const entry: Entry = {
+        ...(editEntry ?? {
+          id: generateId('entry'),
+          date,
+          mood: null,
+          category: null,
+          clipUri: null,
+          clipDurationMs: null,
+          clips: [],
+          createdAt: new Date().toISOString(),
+        }),
+        type: 'habit',
+        text: habitNote.trim() || null,
+        habits: selectedHabits,
+      } as Entry;
+      onSave(entry);
+    } else {
+      const entry: Entry = {
+        ...(editEntry ?? {
+          id: generateId('entry'),
+          date,
+          mood: null,
+          category: null,
+          habits: [],
+          clipUri: null,
+          clipDurationMs: null,
+          clips: [],
+          createdAt: new Date().toISOString(),
+        }),
+        type: (captureType ?? 'journal') as Entry['type'],
+        text: text.trim() || null,
+      } as Entry;
+      onSave(entry);
+    }
   };
+
+  const title = isEdit
+    ? captureType === 'video' ? 'Edit Clips' : captureType === 'habit' ? 'Edit Habits' : 'Edit Journal'
+    : captureType === 'video' ? 'Add Clips' : captureType === 'habit' ? 'Log Habits' : 'Journal entry';
 
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={handleClose}>
       <View style={styles.modalContainer}>
         <View style={styles.modalHeader}>
-          <Pressable onPress={handleClose} style={styles.closeBtn}>
+          <Pressable onPress={handleClose}>
             <Text style={styles.closeBtnText}>← Back</Text>
           </Pressable>
         </View>
@@ -143,189 +210,179 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
           showsVerticalScrollIndicator={false}
         >
 
-            {step === 'type' && (
-              <View>
-                <Text style={styles.title}>Quick Capture</Text>
-                <View style={styles.typeGrid}>
-                  {CAPTURE_TYPES.map(ct => (
-                    <Pressable
-                      key={ct.id}
-                      onPress={() => { setCaptureType(ct.id); setStep('details'); }}
-                      style={[styles.typeBtn, { backgroundColor: `${ct.color}10`, borderColor: `${ct.color}30` }]}
-                    >
-                      <Icon name={ct.icon} size={28} color={ct.color} />
-                      <Text style={[styles.typeLabel, { color: ct.color }]}>{ct.label.toUpperCase()}</Text>
-                    </Pressable>
+          {/* Type picker — only in add mode with no pre-selected type */}
+          {step === 'type' && (
+            <View>
+              <Text style={styles.title}>Quick Capture</Text>
+              <View style={styles.typeGrid}>
+                {CAPTURE_TYPES.map(ct => (
+                  <Pressable
+                    key={ct.id}
+                    onPress={() => { setCaptureType(ct.id); setStep('details'); }}
+                    style={[styles.typeBtn, { backgroundColor: `${ct.color}10`, borderColor: `${ct.color}30` }]}
+                  >
+                    <Icon name={ct.icon} size={28} color={ct.color} />
+                    <Text style={[styles.typeLabel, { color: ct.color }]}>{ct.label.toUpperCase()}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Video / Clip */}
+          {step === 'details' && captureType === 'video' && (
+            <View>
+              <Text style={styles.subtitle}>{title}</Text>
+              <Text style={styles.hint}>
+                {clips.length > 0 ? `${clips.length} clip${clips.length > 1 ? 's' : ''}` : 'Import clips from your camera roll'}
+              </Text>
+
+              {/* Clip thumbnails grid */}
+              {clips.length > 0 && (
+                <View style={styles.clipGrid}>
+                  {clips.map((clip, i) => (
+                    <View key={i} style={styles.clipCard}>
+                      {clip.thumbnail ? (
+                        <Image source={{ uri: clip.thumbnail }} style={styles.clipThumb} />
+                      ) : (
+                        <View style={[styles.clipThumb, styles.clipThumbPlaceholder]}>
+                          <Icon name="video" size={20} color={colors.textDim} />
+                        </View>
+                      )}
+                      <View style={styles.clipDurationBadge}>
+                        <Text style={styles.clipDurationText}>{Math.round(clip.durationMs / 1000)}s</Text>
+                      </View>
+                      <Pressable onPress={() => removeClip(i)} style={styles.clipRemoveBtn}>
+                        <Icon name="x" size={14} color="#fff" />
+                      </Pressable>
+                      <View style={styles.clipNameBar}>
+                        <Text style={styles.clipNameText} numberOfLines={1}>{clip.uri.split('/').pop()}</Text>
+                      </View>
+                    </View>
                   ))}
                 </View>
-              </View>
-            )}
+              )}
 
-            {step === 'details' && (captureType === 'video' || captureType === 'journal') && (
-              <View>
-                <Text style={styles.subtitle}>
-                  {captureType === 'video' ? 'Add Clip' : 'Journal entry'}
-                </Text>
-                <Text style={styles.hint}>
-                  {captureType === 'video' ? 'Import a clip from your camera roll' : 'Write freely — this is your space'}
-                </Text>
-                {captureType === 'video' && (
-                  <View>
-                    <Pressable
-                      onPress={!picking ? handlePickClip : undefined}
-                      style={[styles.pickBtn, clipUri ? styles.pickBtnDone : null]}
-                    >
-                      <Text style={[styles.pickBtnText, clipUri ? styles.pickBtnTextDone : null]}>
-                        {picking ? 'Opening gallery...' : clipUri ? '✓ Clip loaded — tap to change' : 'Choose from camera roll'}
-                      </Text>
-                    </Pressable>
-                    {clipUri && (
-                      <View style={styles.clipInfo}>
-                        <Text style={styles.clipInfoText} numberOfLines={1}>
-                          {clipUri.split('/').pop()}
-                        </Text>
-                        {clipDurationMs ? (
-                          <Text style={styles.clipInfoDuration}>
-                            {Math.round(clipDurationMs / 1000)}s
-                          </Text>
-                        ) : null}
-                      </View>
-                    )}
-                    {pickError && (
-                      <Text style={styles.pickErrorText}>{pickError}</Text>
-                    )}
+              {/* Add more */}
+              <Pressable
+                onPress={!picking ? handlePickClip : undefined}
+                style={styles.addClipBtn}
+              >
+                {picking ? (
+                  <Text style={styles.addClipBtnText}>Opening gallery...</Text>
+                ) : (
+                  <View style={styles.addClipBtnContent}>
+                    <Icon name="plus" size={16} color={colors.textMuted} />
+                    <Text style={styles.addClipBtnText}>
+                      {clips.length === 0 ? 'Choose from camera roll' : 'Add another clip'}
+                    </Text>
                   </View>
                 )}
-                <TextInput
-                  value={text}
-                  onChangeText={setText}
-                  placeholder={captureType === 'video' ? 'What happened in this clip?' : "What's on your mind?"}
-                  placeholderTextColor={colors.textDimmer}
-                  multiline
-                  autoFocus={captureType === 'journal'}
-                  style={styles.textArea}
-                />
-                <Pressable
-                  onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-                >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE</Text>
-                </Pressable>
-              </View>
-            )}
+              </Pressable>
 
-            {step === 'details' && captureType === 'habit' && (
-              <View>
-                <Text style={styles.subtitle}>Log Habits</Text>
-                <Text style={styles.hint}>Check off what you did today</Text>
-                <View style={styles.chipRow}>
-                  {habits.map(h => {
-                    const checked = selectedHabits.includes(h.id);
-                    return (
-                      <Pressable
-                        key={h.id}
-                        onPress={() => toggleHabit(h.id)}
-                        style={[
-                          styles.habitChip,
-                          {
-                            backgroundColor: checked ? 'rgba(167,139,250,0.12)' : colors.cardBg,
-                            borderColor: checked ? colors.purple : colors.cardBorder,
-                          },
-                        ]}
-                      >
-                        {checked && <Icon name="checkSquare" size={12} color={colors.purple} />}
-                                                <Text style={[styles.habitLabel, { color: checked ? colors.purple : colors.textMuted }]}>
-                          {h.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.fieldLabel}>NOTE (optional)</Text>
-                <TextInput
-                  value={habitNote}
-                  onChangeText={setHabitNote}
-                  placeholder="How did it feel? Any details..."
-                  placeholderTextColor={colors.textDimmer}
-                  multiline
-                  style={[styles.textArea, { height: 60 }]}
-                />
-                <Pressable
-                  onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-                >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE HABITS</Text>
-                </Pressable>
-              </View>
-            )}
+              {pickError && <Text style={styles.pickErrorText}>{pickError}</Text>}
 
-            {step === 'details' && captureType === 'moment' && (
-              <View>
-                <Text style={styles.subtitle}>Log a Moment</Text>
-                <Text style={styles.hint}>Tag what's happening right now</Text>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="What's in these clips? (optional)"
+                placeholderTextColor={colors.textDimmer}
+                multiline
+                style={styles.textArea}
+              />
 
-                <Text style={styles.fieldLabel}>MOOD</Text>
-                <View style={styles.chipRow}>
-                  {MOODS.map(m => (
+              <Pressable
+                onPress={canSave() ? handleSave : undefined}
+                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
+              >
+                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
+                  {isEdit ? 'SAVE CHANGES' : clips.length <= 1 ? 'SAVE' : `SAVE ${clips.length} CLIPS`}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Journal */}
+          {step === 'details' && captureType === 'journal' && (
+            <View>
+              <Text style={styles.subtitle}>{title}</Text>
+              <Text style={styles.hint}>Write freely — this is your space</Text>
+              <TextInput
+                value={text}
+                onChangeText={setText}
+                placeholder="What's on your mind?"
+                placeholderTextColor={colors.textDimmer}
+                multiline
+                autoFocus={!isEdit}
+                style={styles.textArea}
+              />
+              <Pressable
+                onPress={canSave() ? handleSave : undefined}
+                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
+              >
+                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
+                  {isEdit ? 'SAVE CHANGES' : 'SAVE'}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Habit */}
+          {step === 'details' && captureType === 'habit' && (
+            <View>
+              <Text style={styles.subtitle}>{title}</Text>
+              <Text style={styles.hint}>Check off what you did today</Text>
+              <View style={styles.chipRow}>
+                {habits.map(h => {
+                  const checked = selectedHabits.includes(h.id);
+                  return (
                     <Pressable
-                      key={m.id}
-                      onPress={() => setMood(m.id)}
+                      key={h.id}
+                      onPress={() => toggleHabit(h.id)}
                       style={[
-                        styles.moodChip,
+                        styles.habitChip,
                         {
-                          backgroundColor: mood === m.id ? `${m.color}15` : 'rgba(255,255,255,0.03)',
-                          borderColor: mood === m.id ? m.color : 'rgba(255,255,255,0.06)',
+                          backgroundColor: checked ? `${colors.purple}18` : colors.bg,
+                          borderColor: checked ? colors.purple : colors.cardBorder,
                         },
                       ]}
                     >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                        <Icon name={m.icon} size={14} color={mood === m.id ? m.color : colors.textMuted} />
-                        <Text style={[styles.chipText, { color: mood === m.id ? m.color : colors.textMuted }]}>{m.label}</Text>
-                      </View>
+                      {checked && <Icon name="checkSquare" size={12} color={colors.purple} />}
+                      <Text style={[styles.habitLabel, { color: checked ? colors.purple : colors.textMuted }]}>
+                        {h.label}
+                      </Text>
                     </Pressable>
-                  ))}
-                </View>
-
-                <Text style={styles.fieldLabel}>CATEGORY</Text>
-                <View style={styles.chipRow}>
-                  {CATEGORIES.map(c => (
-                    <Pressable
-                      key={c.id}
-                      onPress={() => setCategory(c.id)}
-                      style={[
-                        styles.moodChip,
-                        {
-                          backgroundColor: category === c.id ? `${colors.accent2}15` : 'rgba(255,255,255,0.03)',
-                          borderColor: category === c.id ? colors.accent2 : 'rgba(255,255,255,0.06)',
-                        },
-                      ]}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                        <Icon name={c.icon} size={14} color={category === c.id ? colors.accent2 : colors.textMuted} />
-                        <Text style={[styles.chipText, { color: category === c.id ? colors.accent2 : colors.textMuted }]}>{c.label}</Text>
-                      </View>
-                    </Pressable>
-                  ))}
-                </View>
-
-                <Text style={styles.fieldLabel}>NOTE (optional)</Text>
-                <TextInput
-                  value={text}
-                  onChangeText={setText}
-                  placeholder="What are you up to?"
-                  placeholderTextColor={colors.textDimmer}
-                  multiline
-                  style={[styles.textArea, { height: 50 }]}
-                />
-                <Pressable
-                  onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-                >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE MOMENT</Text>
-                </Pressable>
+                  );
+                })}
               </View>
-            )}
-          </ScrollView>
+              <Text style={styles.fieldLabel}>NOTE (optional)</Text>
+              <TextInput
+                value={habitNote}
+                onChangeText={setHabitNote}
+                placeholder="How did it feel? Any details..."
+                placeholderTextColor={colors.textDimmer}
+                multiline
+                style={[styles.textArea, { height: 60 }]}
+              />
+              <Pressable
+                onPress={canSave() ? handleSave : undefined}
+                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
+              >
+                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
+                  {isEdit ? 'SAVE CHANGES' : 'SAVE HABITS'}
+                </Text>
+              </Pressable>
+            </View>
+          )}
+
+          {/* Delete — only in edit mode */}
+          {isEdit && (
+            <Pressable onPress={() => onDelete?.(editEntry!.id)} style={styles.deleteBtn}>
+              <Icon name="trash" size={14} color={colors.coral} />
+              <Text style={styles.deleteBtnText}>Delete entry</Text>
+            </Pressable>
+          )}
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -341,10 +398,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
-  },
-  closeBtn: {
-    padding: 4,
+    borderBottomColor: colors.cardBorder,
   },
   closeBtnText: {
     fontFamily: fonts.mono,
@@ -361,7 +415,6 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: fonts.heading,
     fontSize: 20,
-    fontWeight: '700',
     color: colors.text,
     textAlign: 'center',
     marginBottom: 20,
@@ -369,7 +422,6 @@ const styles = StyleSheet.create({
   subtitle: {
     fontFamily: fonts.heading,
     fontSize: 18,
-    fontWeight: '700',
     color: colors.text,
     textAlign: 'center',
     marginBottom: 4,
@@ -396,20 +448,102 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  typeIcon: {
-    fontSize: 32,
-  },
   typeLabel: {
     fontFamily: fonts.mono,
     fontSize: 10,
     letterSpacing: 0.8,
   },
+  // Clip grid
+  clipGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  clipCard: {
+    position: 'relative',
+    width: '48%',
+    aspectRatio: 4 / 3,
+    backgroundColor: colors.bg3,
+    overflow: 'hidden',
+  },
+  clipThumb: {
+    width: '100%',
+    height: '100%',
+  },
+  clipThumbPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clipDurationBadge: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  clipDurationText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: '#fff',
+  },
+  clipRemoveBtn: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  clipNameBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  clipNameText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: '#fff',
+  },
+  addClipBtn: {
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: colors.cardBorder,
+    borderRadius: colors.radius,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  addClipBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  addClipBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  pickErrorText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.coral,
+    paddingHorizontal: 4,
+    marginBottom: 10,
+  },
   textArea: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: colors.bg3,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    padding: 16,
+    borderColor: colors.cardBorder,
+    borderRadius: colors.radius,
+    padding: 14,
     color: colors.text,
     fontSize: 14,
     fontFamily: fonts.body,
@@ -420,63 +554,13 @@ const styles = StyleSheet.create({
   saveBtn: {
     width: '100%',
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: colors.radius,
     alignItems: 'center',
   },
   saveBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-  },
-  pickBtn: {
-    backgroundColor: 'rgba(251,113,133,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(251,113,133,0.25)',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  pickBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 12,
-    color: colors.coral,
-    letterSpacing: 0.5,
-  },
-  pickBtnDone: {
-    backgroundColor: colors.greenBg,
-    borderColor: `${colors.green}40`,
-    marginBottom: 6,
-  },
-  pickBtnTextDone: {
-    color: colors.green,
-  },
-  clipInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-    marginBottom: 14,
-  },
-  clipInfoText: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    flex: 1,
-  },
-  clipInfoDuration: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.amber,
-    marginLeft: 8,
-  },
-  pickErrorText: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.coral,
-    paddingHorizontal: 4,
-    marginBottom: 10,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    fontWeight: '600',
   },
   fieldLabel: {
     fontFamily: fonts.mono,
@@ -500,26 +584,25 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     borderWidth: 1.5,
   },
-  checkMark: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.purple,
-  },
-  habitEmoji: {
-    fontSize: 14,
-  },
   habitLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 11,
+    fontFamily: fonts.body,
+    fontSize: 13,
   },
-  moodChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1.5,
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 24,
+    paddingVertical: 14,
+    borderRadius: colors.radius,
+    borderWidth: 1,
+    borderColor: `${colors.coral}30`,
+    backgroundColor: `${colors.coral}08`,
   },
-  chipText: {
-    fontFamily: fonts.mono,
-    fontSize: 11,
+  deleteBtnText: {
+    fontFamily: fonts.body,
+    fontSize: 14,
+    color: colors.coral,
   },
 });

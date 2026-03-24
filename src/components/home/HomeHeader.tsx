@@ -21,18 +21,14 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
 
   return (
     <View style={styles.container}>
-      <View style={styles.topRow}>
-        <View style={styles.leftGroup}>
-          {dayStarted && onBack && (
-            <Pressable onPress={onBack} style={styles.backBtn}>
-              <Text style={styles.backText}>{'<-'}</Text>
-            </Pressable>
-          )}
-          <View style={styles.logoRow}>
-            <Text style={styles.logo}>loopd</Text>
-            <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
-          </View>
-        </View>
+      {dayStarted && onBack && (
+        <Pressable onPress={onBack} style={styles.backBtn}>
+          <Text style={styles.backText}>{'<-'}</Text>
+        </Pressable>
+      )}
+      <View style={styles.logoBlock}>
+        <Text style={styles.logo}>loopd</Text>
+        <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
       </View>
 
       {dayStarted && (
@@ -77,32 +73,24 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.cardBorder,
   },
-  topRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  leftGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
   backBtn: {
+    position: 'absolute',
+    left: 20,
+    top: 60,
     padding: 4,
+    zIndex: 2,
   },
   backText: {
     fontFamily: fonts.mono,
     fontSize: 14,
     color: colors.textDim,
   },
-  logoRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 10,
+  logoBlock: {
+    alignItems: 'center',
   },
   logo: {
     fontFamily: fonts.heading,
-    fontSize: 22,
+    fontSize: 24,
     color: colors.accent,
     letterSpacing: -0.4,
   },
@@ -112,6 +100,7 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 0.3,
     fontStyle: 'italic',
+    marginTop: 2,
   },
   subRow: {
     flexDirection: 'row',

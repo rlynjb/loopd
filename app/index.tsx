@@ -3,7 +3,6 @@ import { useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
-import { GlowOrb } from '../src/components/ui/GlowOrb';
 import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
 import { getVlogs, getEntriesByDate, archivePastDays } from '../src/services/database';
@@ -40,7 +39,6 @@ export default function HomeScreen() {
   const todayClips = todayEntries.filter(e => e.type === 'video').length;
   const todayJournals = todayEntries.filter(e => e.type === 'journal').length;
   const todayHabits = [...new Set(todayEntries.filter(e => e.type === 'habit').flatMap(e => e.habits))].length;
-  const todayMoments = todayEntries.filter(e => e.type === 'moment').length;
   const todayCategories = [...new Set(todayEntries.map(e => e.category).filter(Boolean))];
   const todayMoods = todayEntries.map(e => e.mood).filter(Boolean);
   const latestMood = todayMoods.length > 0 ? todayMoods[todayMoods.length - 1] : null;
@@ -48,9 +46,6 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <GlowOrb color={colors.accent2} size={300} top={50} left={-80} opacity={0.05} />
-      <GlowOrb color={colors.green} size={250} top={300} left={250} opacity={0.04} />
-      <GlowOrb color={colors.amber} size={200} top={550} left={-40} opacity={0.03} />
 
       <HomeHeader
         dayStarted={false}
@@ -85,7 +80,6 @@ export default function HomeScreen() {
                 {todayClips > 0 && <Text style={styles.todayStat}>{todayClips} clips</Text>}
                 {todayJournals > 0 && <Text style={styles.todayStat}>{todayJournals} journals</Text>}
                 {todayHabits > 0 && <Text style={styles.todayStat}>{todayHabits} habits</Text>}
-                {todayMoments > 0 && <Text style={styles.todayStat}>{todayMoments} moments</Text>}
               </View>
 
               {todayCategories.length > 0 && (

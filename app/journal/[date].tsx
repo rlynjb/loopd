@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View, Pressable, Text, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
 import { CAPTURE_TYPES } from '../../src/constants/captureTypes';
@@ -7,8 +8,6 @@ import { Icon } from '../../src/components/ui/Icon';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { TimelineList } from '../../src/components/timeline/TimelineList';
 import { CaptureSheet } from '../../src/components/capture/CaptureSheet';
-import { EditEntrySheet } from '../../src/components/capture/EditEntrySheet';
-import { GlowOrb } from '../../src/components/ui/GlowOrb';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { formatDate } from '../../src/utils/time';
@@ -17,6 +16,7 @@ import type { Entry } from '../../src/types/entry';
 export default function JournalScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { entries, addEntry, editEntry, removeEntry } = useEntries(date);
   const habits = useHabits();
   const [showCapture, setShowCapture] = useState(false);
@@ -25,18 +25,38 @@ export default function JournalScreen() {
 
   const handleCapture = (type: string) => {
     setCaptureType(type);
+    setEditingEntry(null);
     setShowCapture(true);
   };
 
-  const handleCloseDay = () => {
-    router.push(`/editor/${date}`);
+  const handleEdit = (entry: Entry) => {
+    setEditingEntry(entry);
+    setCaptureType(null);
+    setShowCapture(true);
+  };
+
+  const handleCloseSheet = () => {
+    setShowCapture(false);
+    setCaptureType(null);
+    setEditingEntry(null);
+  };
+
+  const handleSave = (entry: Entry) => {
+    if (editingEntry) {
+      editEntry(entry);
+    } else {
+      addEntry(entry);
+    }
+    handleCloseSheet();
+  };
+
+  const handleDelete = (id: string) => {
+    removeEntry(id);
+    handleCloseSheet();
   };
 
   return (
     <View style={styles.container}>
-      <GlowOrb color={colors.accent2} size={300} top={50} left={-80} opacity={0.05} />
-      <GlowOrb color={colors.green} size={250} top={300} left={250} opacity={0.04} />
-
       <HomeHeader
         dayStarted
         dateLabel={formatDate(new Date(date + 'T12:00:00'))}
@@ -48,11 +68,10 @@ export default function JournalScreen() {
       <TimelineList
         entries={entries}
         habits={habits}
-        onEditEntry={entry => setEditingEntry(entry)}
+        onEditEntry={handleEdit}
       />
 
-      {/* Bottom capture bar */}
-      <View style={styles.bottomBar}>
+      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
         <View style={styles.captureRow}>
           {CAPTURE_TYPES.map(ct => (
             <Pressable
@@ -64,7 +83,7 @@ export default function JournalScreen() {
               <Text style={styles.captureLabel}>{ct.label}</Text>
             </Pressable>
           ))}
-          <Pressable onPress={handleCloseDay} style={styles.closeBtn}>
+          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.closeBtn}>
             <Icon name="moon" size={20} color={colors.accent2} />
             <Text style={styles.closeLabel}>Close</Text>
           </Pressable>
@@ -74,28 +93,12 @@ export default function JournalScreen() {
       <CaptureSheet
         visible={showCapture}
         initialType={captureType}
+        editEntry={editingEntry}
         habits={habits}
         date={date}
-        onClose={() => { setShowCapture(false); setCaptureType(null); }}
-        onSave={entry => {
-          addEntry(entry);
-          setShowCapture(false);
-          setCaptureType(null);
-        }}
-      />
-
-      <EditEntrySheet
-        entry={editingEntry}
-        habits={habits}
-        onClose={() => setEditingEntry(null)}
-        onSave={updated => {
-          editEntry(updated);
-          setEditingEntry(null);
-        }}
-        onDelete={id => {
-          removeEntry(id);
-          setEditingEntry(null);
-        }}
+        onClose={handleCloseSheet}
+        onSave={handleSave}
+        onDelete={handleDelete}
       />
     </View>
   );
@@ -113,7 +116,6 @@ const styles = StyleSheet.create({
     right: 0,
     paddingHorizontal: 20,
     paddingTop: 14,
-    paddingBottom: 40,
   },
   captureRow: {
     flexDirection: 'row',

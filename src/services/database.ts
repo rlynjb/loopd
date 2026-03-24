@@ -32,6 +32,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       habits_json TEXT,
       clip_uri TEXT,
       clip_duration_ms INTEGER,
+      clips_json TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -62,6 +63,13 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
     CREATE INDEX IF NOT EXISTS idx_projects_date ON projects(date);
   `);
+
+  // Migration: add clips_json column if missing
+  try {
+    await database.execAsync(`ALTER TABLE entries ADD COLUMN clips_json TEXT`);
+  } catch {
+    // Column already exists — ignore
+  }
 
   // Seed habits if empty
   const count = await database.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM habits');
@@ -94,7 +102,8 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
   const rows = await db.getAllAsync<{
     id: string; date: string; type: string; text: string | null;
     mood: string | null; category: string | null; habits_json: string | null;
-    clip_uri: string | null; clip_duration_ms: number | null; created_at: string;
+    clip_uri: string | null; clip_duration_ms: number | null;
+    clips_json: string | null; created_at: string;
   }>('SELECT * FROM entries WHERE date = ? ORDER BY created_at ASC', [date]);
 
   return rows.map(r => ({
@@ -107,6 +116,7 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
     clipUri: r.clip_uri,
     clipDurationMs: r.clip_duration_ms,
+    clips: r.clips_json ? JSON.parse(r.clips_json) : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []),
     createdAt: r.created_at,
   }));
 }
@@ -114,11 +124,12 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
 export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
-      JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs, entry.createdAt,
+      JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
+      JSON.stringify(entry.clips), entry.createdAt,
     ]
   );
 }
@@ -126,8 +137,8 @@ export async function insertEntry(entry: Entry): Promise<void> {
 export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ? WHERE id = ?`,
-    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), entry.id]
+    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, clips_json = ? WHERE id = ?`,
+    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.clips), entry.id]
   );
 }
 
@@ -240,7 +251,7 @@ export async function archivePastDays(todayStr: string): Promise<void> {
       clipCount,
       habitCount: habitsLogged.length,
       mood: topMood,
-      caption: `${entries.length} moments captured.`,
+      caption: `${entries.length} entries captured.`,
       categories: cats as string[],
       durationSeconds,
       exportUri,

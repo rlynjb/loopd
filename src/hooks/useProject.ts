@@ -18,17 +18,27 @@ export function useProject(date: string, entries: Entry[]) {
       let existing = await getProjectByDate(date);
       if (!existing) {
         const videoEntries = entries.filter(e => e.type === 'video');
-        const clips: ClipItem[] = videoEntries.map((e, i) => ({
-          id: generateId('clip'),
-          entryId: e.id,
-          clipUri: e.clipUri ?? '',
-          caption: e.text ?? '',
-          durationMs: e.clipDurationMs ?? 10000,
-          trimStartPct: 0,
-          trimEndPct: 100,
-          order: i,
-          color: CLIP_COLORS[i % CLIP_COLORS.length],
-        }));
+        const clips: ClipItem[] = [];
+        let clipIndex = 0;
+        for (const e of videoEntries) {
+          const entryClips = e.clips && e.clips.length > 0
+            ? e.clips
+            : e.clipUri ? [{ uri: e.clipUri, durationMs: e.clipDurationMs ?? 10000 }] : [];
+          for (const c of entryClips) {
+            clips.push({
+              id: generateId('clip'),
+              entryId: e.id,
+              clipUri: c.uri,
+              caption: e.text ?? '',
+              durationMs: c.durationMs,
+              trimStartPct: 0,
+              trimEndPct: 100,
+              order: clipIndex,
+              color: CLIP_COLORS[clipIndex % CLIP_COLORS.length],
+            });
+            clipIndex++;
+          }
+        }
 
         existing = {
           id: generateId('proj'),

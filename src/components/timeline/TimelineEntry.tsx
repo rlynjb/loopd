@@ -1,4 +1,6 @@
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, Pressable, Image, StyleSheet } from 'react-native';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
@@ -17,6 +19,31 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
   const cat = CATEGORIES.find(c => c.id === entry.category);
   const captureType = CAPTURE_TYPES.find(c => c.id === entry.type);
   const isHabit = entry.type === 'habit';
+  const isVideo = entry.type === 'video';
+
+  const clipRefs = entry.clips?.length > 0
+    ? entry.clips
+    : entry.clipUri ? [{ uri: entry.clipUri, durationMs: entry.clipDurationMs ?? 0 }] : [];
+
+  const [thumbnails, setThumbnails] = useState<(string | null)[]>([]);
+
+  useEffect(() => {
+    if (!isVideo || clipRefs.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const thumbs: (string | null)[] = [];
+      for (const c of clipRefs) {
+        try {
+          const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.3 });
+          if (!cancelled) thumbs.push(t.uri);
+        } catch {
+          if (!cancelled) thumbs.push(null);
+        }
+      }
+      if (!cancelled) setThumbnails(thumbs);
+    })();
+    return () => { cancelled = true; };
+  }, [entry.id]);
 
   const time = new Date(entry.createdAt);
   const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -56,6 +83,26 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
           <Text style={styles.editHint}>tap to edit</Text>
         </View>
 
+        {/* Clip thumbnails */}
+        {isVideo && clipRefs.length > 0 && (
+          <View style={styles.thumbRow}>
+            {clipRefs.map((c, i) => (
+              <View key={i} style={styles.thumbCard}>
+                {thumbnails[i] ? (
+                  <Image source={{ uri: thumbnails[i]! }} style={styles.thumbImage} />
+                ) : (
+                  <View style={[styles.thumbImage, styles.thumbPlaceholder]}>
+                    <Icon name="video" size={14} color={colors.textDim} />
+                  </View>
+                )}
+                <View style={styles.thumbDuration}>
+                  <Text style={styles.thumbDurationText}>{Math.round(c.durationMs / 1000)}s</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
         {isHabit && entry.habits.length > 0 ? (
           <View style={styles.habitList}>
             {entry.habits.map(hId => {
@@ -74,9 +121,9 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
               <Text style={styles.habitNote}>{entry.text}</Text>
             ) : null}
           </View>
-        ) : (
+        ) : entry.text ? (
           <Text style={styles.entryText}>{entry.text}</Text>
-        )}
+        ) : null}
       </Pressable>
     </View>
   );
@@ -152,6 +199,40 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.textDimmer,
     marginLeft: 'auto',
+  },
+  // Thumbnails
+  thumbRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+  },
+  thumbCard: {
+    position: 'relative',
+    width: 72,
+    height: 54,
+    backgroundColor: colors.bg3,
+    overflow: 'hidden',
+  },
+  thumbImage: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thumbDuration: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  thumbDurationText: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: '#fff',
   },
   entryText: {
     fontFamily: fonts.body,

@@ -4,7 +4,6 @@ export const CAPTURE_TYPES = [
   { id: 'video', label: 'Clip', icon: 'video' as IconName, color: '#e05555' },
   { id: 'journal', label: 'Journal', icon: 'penLine' as IconName, color: '#4caf7d' },
   { id: 'habit', label: 'Habit', icon: 'checkSquare' as IconName, color: '#c46fd4' },
-  { id: 'moment', label: 'Moment', icon: 'mapPin' as IconName, color: '#d4922a' },
 ] as const;
 
 export const DEFAULT_HABITS = [

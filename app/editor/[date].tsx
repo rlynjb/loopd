@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
 import { File as FSFile, Directory, Paths } from 'expo-file-system';
@@ -28,6 +29,7 @@ function getEffective(c: ClipItem): number {
 export default function EditorScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { entries } = useEntries(date);
   const habits = useHabits();
   const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries);
@@ -536,7 +538,7 @@ export default function EditorScreen() {
       </ScrollView>
 
       {/* Bottom bar */}
-      <View style={styles.bottomBar}>
+      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
         <Pressable onPress={handleSaveDraft} style={styles.draftBtn}>
           <Text style={styles.draftBtnText}>SAVE DRAFT</Text>
         </Pressable>
@@ -697,7 +699,6 @@ const styles = StyleSheet.create({
   bottomBar: {
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 36,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255,255,255,0.06)',
     backgroundColor: 'rgba(0,0,0,0.95)',

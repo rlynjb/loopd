@@ -17,7 +17,7 @@ export function TimelineList({ entries, habits, onEditEntry }: Props) {
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       {sorted.length === 0 && (
-        <Text style={styles.empty}>Your timeline is empty. Capture your first moment.</Text>
+        <Text style={styles.empty}>Your timeline is empty. Start capturing.</Text>
       )}
       {sorted.map(entry => (
         <TimelineEntry key={entry.id} entry={entry} habits={habits} onEdit={onEditEntry} />
