@@ -1,14 +1,17 @@
 ---
 name: Notion sync requirements
-description: Bidirectional Notion sync spec — no mood/category in Notion, no emoji in habits DB, video entries include clip filename
+description: Bidirectional Notion sync — two-table approach (Daily Log + Entries), habit checkboxes on daily log, entries table for captures
 type: project
 ---
 
-Notion sync is bidirectional (Notion ↔ loopd).
+Notion sync is bidirectional (Notion ↔ loopd) using **two related Notion tables**:
 
-**Journal Entries DB** — exclude Mood and Category properties. Include video entries with just the clip filename (no actual file sync).
+**Table 1: Daily Log** — one row per day, habit checkbox columns, daily summary. User's existing habit tracker format.
+**Table 2: Entries** — multiple rows per day, maps to loopd captures (clip/journal/habit).
 
-**Habits DB** — exclude Emoji property. Keep it simple: Title, Sort Order, loopd ID.
+Daily Log is auto-populated from Entries data on sync. Entries table is the primary sync target.
 
-**Why:** User wants Notion as a full sync partner, not just an import source. Mood/category are app-only concerns. Habits don't need emoji in Notion.
-**How to apply:** When implementing Notion sync, map mood/category locally only. Push entries to Notion without mood/category. Pull habits without expecting emoji (use a default). Include video entry type with clip filename in text.
+User plans to create a Notion template from this — use standard Notion template patterns (relational tables, checkbox habits on daily log).
+
+**Why:** User already has a Notion habit tracker with checkbox columns per habit. Two-table approach preserves that workflow while adding detailed entry tracking.
+**How to apply:** Sync entries bidirectionally with Table 2. Aggregate habit completions and summaries into Table 1 on push. Pull from both tables.

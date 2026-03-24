@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
+import { Icon } from '../ui/Icon';
 import type { Habit, Entry } from '../../types/entry';
 
 type Props = {
@@ -8,9 +9,10 @@ type Props = {
   entries: Entry[];
   habits: Habit[];
   onBack?: () => void;
+  onSettings?: () => void;
 };
 
-export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: Props) {
+export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack, onSettings }: Props) {
   const habitsChecked = [
     ...new Set(
       entries.filter(e => e.type === 'habit').flatMap(e => e.habits)
@@ -30,6 +32,11 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
         <Text style={styles.logo}>loopd</Text>
         <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
       </View>
+      {onSettings && (
+        <Pressable onPress={onSettings} style={styles.settingsBtn}>
+          <Icon name="target" size={18} color={colors.textDim} />
+        </Pressable>
+      )}
 
       {dayStarted && (
         <View style={styles.subRow}>
@@ -76,6 +83,13 @@ const styles = StyleSheet.create({
   backBtn: {
     position: 'absolute',
     left: 20,
+    top: 60,
+    padding: 4,
+    zIndex: 2,
+  },
+  settingsBtn: {
+    position: 'absolute',
+    right: 20,
     top: 60,
     padding: 4,
     zIndex: 2,

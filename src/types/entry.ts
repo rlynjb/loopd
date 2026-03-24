@@ -17,6 +17,8 @@ export type Entry = {
   clipDurationMs: number | null;
   clips: ClipRef[];
   createdAt: string;
+  notionPageId?: string | null;
+  updatedAt?: string | null;
 };
 
 export type Habit = {
@@ -24,6 +26,8 @@ export type Habit = {
   label: string;
   emoji: string;
   sortOrder: number;
+  notionPageId?: string | null;
+  updatedAt?: string | null;
 };
 
 export type Vlog = {

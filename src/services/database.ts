@@ -64,12 +64,37 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_projects_date ON projects(date);
   `);
 
-  // Migration: add clips_json column if missing
-  try {
-    await database.execAsync(`ALTER TABLE entries ADD COLUMN clips_json TEXT`);
-  } catch {
-    // Column already exists — ignore
-  }
+  // Migrations — add columns if missing (safe for existing installs)
+  const addColumn = async (table: string, col: string, type: string) => {
+    try { await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* exists */ }
+  };
+  await addColumn('entries', 'clips_json', 'TEXT');
+  await addColumn('entries', 'notion_page_id', 'TEXT');
+  await addColumn('entries', 'updated_at', 'TEXT');
+  await addColumn('habits', 'notion_page_id', 'TEXT');
+  await addColumn('habits', 'updated_at', 'TEXT');
+
+  // Sync deletions tracking table
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS sync_deletions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      notion_page_id TEXT NOT NULL,
+      deleted_at TEXT NOT NULL
+    );
+  `);
+
+  // Indexes for sync
+  await database.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_entries_notion ON entries(notion_page_id);
+    CREATE INDEX IF NOT EXISTS idx_entries_updated ON entries(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
+  `);
+
+  // Backfill updated_at
+  await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
+  await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
 
   // Seed habits if empty
   const count = await database.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM habits');
@@ -95,18 +120,18 @@ export async function getHabits(): Promise<Habit[]> {
   return rows.map(r => ({ id: r.id, label: r.label, emoji: r.emoji, sortOrder: r.sort_order }));
 }
 
-// ── Entries ──
+// ── Row mapper ──
 
-export async function getEntriesByDate(date: string): Promise<Entry[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<{
-    id: string; date: string; type: string; text: string | null;
-    mood: string | null; category: string | null; habits_json: string | null;
-    clip_uri: string | null; clip_duration_ms: number | null;
-    clips_json: string | null; created_at: string;
-  }>('SELECT * FROM entries WHERE date = ? ORDER BY created_at ASC', [date]);
+type EntryRow = {
+  id: string; date: string; type: string; text: string | null;
+  mood: string | null; category: string | null; habits_json: string | null;
+  clip_uri: string | null; clip_duration_ms: number | null;
+  clips_json: string | null; created_at: string;
+  notion_page_id: string | null; updated_at: string | null;
+};
 
-  return rows.map(r => ({
+function mapRowToEntry(r: EntryRow): Entry {
+  return {
     id: r.id,
     date: r.date,
     type: r.type as Entry['type'],
@@ -118,33 +143,146 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
     clipDurationMs: r.clip_duration_ms,
     clips: r.clips_json ? JSON.parse(r.clips_json) : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []),
     createdAt: r.created_at,
-  }));
+    notionPageId: r.notion_page_id,
+    updatedAt: r.updated_at,
+  };
+}
+
+// ── Entries ──
+
+export async function getEntriesByDate(date: string): Promise<Entry[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{
+    id: string; date: string; type: string; text: string | null;
+    mood: string | null; category: string | null; habits_json: string | null;
+    clip_uri: string | null; clip_duration_ms: number | null;
+    clips_json: string | null; created_at: string;
+    notion_page_id: string | null; updated_at: string | null;
+  }>('SELECT * FROM entries WHERE date = ? ORDER BY created_at ASC', [date]);
+
+  return rows.map(r => mapRowToEntry(r));
 }
 
 export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
+  const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
-      JSON.stringify(entry.clips), entry.createdAt,
+      JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
   );
 }
 
 export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
+  const now = new Date().toISOString();
   await db.runAsync(
-    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, clips_json = ? WHERE id = ?`,
-    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.clips), entry.id]
+    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
+    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.clips), now, entry.id]
   );
 }
 
 export async function deleteEntry(id: string): Promise<void> {
   const db = await getDatabase();
+  // Track deletion for sync if it had a notion_page_id
+  const row = await db.getFirstAsync<{ notion_page_id: string | null }>('SELECT notion_page_id FROM entries WHERE id = ?', [id]);
+  if (row?.notion_page_id) {
+    await db.runAsync(
+      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+      ['entry', id, row.notion_page_id, new Date().toISOString()]
+    );
+  }
   await db.runAsync('DELETE FROM entries WHERE id = ?', [id]);
+}
+
+// ── Sync queries ──
+
+export async function getAllEntries(): Promise<Entry[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<EntryRow>('SELECT * FROM entries ORDER BY created_at ASC');
+  return rows.map(mapRowToEntry);
+}
+
+export async function getUnsyncedEntries(lastSync: string | null): Promise<Entry[]> {
+  const db = await getDatabase();
+  const rows = lastSync
+    ? await db.getAllAsync<EntryRow>('SELECT * FROM entries WHERE updated_at > ? OR notion_page_id IS NULL', [lastSync])
+    : await db.getAllAsync<EntryRow>('SELECT * FROM entries');
+  return rows.map(mapRowToEntry);
+}
+
+export async function getEntryByNotionPageId(pageId: string): Promise<Entry | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE notion_page_id = ?', [pageId]);
+  return row ? mapRowToEntry(row) : null;
+}
+
+export async function getEntryById(id: string): Promise<Entry | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE id = ?', [id]);
+  return row ? mapRowToEntry(row) : null;
+}
+
+export async function setEntryNotionPageId(entryId: string, notionPageId: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE entries SET notion_page_id = ? WHERE id = ?', [notionPageId, entryId]);
+}
+
+export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       text = excluded.text, type = excluded.type, habits_json = excluded.habits_json,
+       clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
+    [
+      entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
+      JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
+      JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
+    ]
+  );
+}
+
+export async function getSyncDeletions(): Promise<{ entityType: string; entityId: string; notionPageId: string }[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
+    'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions'
+  );
+  return rows.map(r => ({ entityType: r.entity_type, entityId: r.entity_id, notionPageId: r.notion_page_id }));
+}
+
+export async function clearSyncDeletions(): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM sync_deletions');
+}
+
+// ── Habit CRUD ──
+
+export async function insertHabit(habit: Habit): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'INSERT INTO habits (id, label, emoji, sort_order, notion_page_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [habit.id, habit.label, habit.emoji, habit.sortOrder, habit.notionPageId ?? null, new Date().toISOString()]
+  );
+}
+
+export async function updateHabit(habit: Habit): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'UPDATE habits SET label = ?, sort_order = ?, updated_at = ? WHERE id = ?',
+    [habit.label, habit.sortOrder, new Date().toISOString(), habit.id]
+  );
+}
+
+export async function deleteHabit(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM habits WHERE id = ?', [id]);
 }
 
 // ── Projects ──
