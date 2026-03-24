@@ -8,15 +8,17 @@ import { formatRelativeDate, formatDuration } from '../../utils/time';
 
 type Props = {
   vlog: Vlog;
+  title?: string;
   onPress?: () => void;
 };
 
-export function PastVlogCard({ vlog, onPress }: Props) {
+export function PastVlogCard({ vlog, title, onPress }: Props) {
   const mood = MOODS.find(m => m.id === vlog.mood);
   const moodColor = mood?.color ?? colors.textDim;
 
   return (
     <Pressable onPress={onPress} style={styles.card}>
+      {title ? <Text style={styles.title}>{title}</Text> : null}
       <View style={styles.topRow}>
         <View style={styles.dateGroup}>
           <View style={[styles.moodDot, { backgroundColor: moodColor }]} />
@@ -54,6 +56,13 @@ const styles = StyleSheet.create({
     borderRadius: colors.radiusLg,
     padding: 15,
     marginBottom: 10,
+  },
+  title: {
+    fontFamily: fonts.heading,
+    fontSize: 16,
+    color: colors.text,
+    marginBottom: 8,
+    letterSpacing: -0.3,
   },
   topRow: {
     flexDirection: 'row',

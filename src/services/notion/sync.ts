@@ -1,11 +1,11 @@
-import { queryDatabase, createPage, updatePage, archivePage } from './api';
+import { queryDatabase, createPage, updatePage, archivePage, getDatabase as getNotionDatabase } from './api';
 import { getNotionToken, getEntriesDbId, getDailyLogDbId, getLastSyncTimestamp, setLastSyncTimestamp } from './config';
-import { notionPageToEntry, entryToNotionProperties, entriesToDailyLogProperties, parseDailyLogHabits } from './mapper';
+import { notionPageToEntry, entryToNotionProperties, entriesToDailyLogProperties, parseDailyLogHabits, getTitlePropertyKey } from './mapper';
 import {
   getUnsyncedEntries, upsertEntryFromNotion, setEntryNotionPageId,
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
   getSyncDeletions, clearSyncDeletions, getAllEntries,
-  insertEntry,
+  insertEntry, insertHabit, deleteHabit, getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
 } from '../database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
@@ -21,24 +21,28 @@ export async function syncAll(): Promise<SyncResult> {
   const lastSync = await getLastSyncTimestamp();
 
   try {
-    // 1. Pull entries from Notion
+    // 1. Sync habit list from Notion's Habits multi-select options
+    await syncHabitsFromNotionSchema(token, entriesDbId);
+
+    // 2. Pull entries from Notion
     const pullResult = await pullEntries(token, entriesDbId, lastSync);
     result.pulled += pullResult;
 
-    // 2. Push local entries to Notion
+    // 3. Push local entries to Notion
     const pushResult = await pushEntries(token, entriesDbId, lastSync);
-    result.pushed += pushResult;
+    result.pushed += pushResult.count;
+    result.errors.push(...pushResult.errors);
 
-    // 3. Process deletions
+    // 4. Process deletions
     await processDeletions(token);
 
-    // 4. Aggregate daily log (if configured)
+    // 5. Aggregate daily log (if configured)
     const dailyLogDbId = await getDailyLogDbId();
     if (dailyLogDbId) {
       await syncDailyLog(token, dailyLogDbId);
     }
 
-    // 5. Update last sync timestamp
+    // 6. Update last sync timestamp
     await setLastSyncTimestamp(new Date().toISOString());
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -59,12 +63,34 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
   // Track which notion page IDs we've seen (for detecting Notion-side deletions)
   const seenNotionIds = new Set<string>();
 
+  // Collect titles per date from Notion entries to sync day titles
+  const titlesByDate = new Map<string, string>();
+
   for (const page of pages) {
     if (page.archived) continue;
     seenNotionIds.add(page.id);
 
     try {
       const entry = notionPageToEntry(page);
+
+      // Extract day title from Notion row name: "Day Title — Type" → "Day Title"
+      const pageName = getTitleFromPage(page);
+      if (pageName && entry.date) {
+        const suffixes = [' — Clip', ' — Journal', ' — Habits', ' — video', ' — journal', ' — habit'];
+        let dayTitle = pageName;
+        for (const suffix of suffixes) {
+          if (dayTitle.endsWith(suffix)) {
+            dayTitle = dayTitle.slice(0, -suffix.length);
+            break;
+          }
+        }
+        // Only use as day title if it's not just a date or empty
+        if (dayTitle && dayTitle !== entry.date && !dayTitle.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          if (!titlesByDate.has(entry.date)) {
+            titlesByDate.set(entry.date, dayTitle);
+          }
+        }
+      }
 
       // Check if we already have this entry locally (by loopd ID or notion page ID)
       let existing = await getEntryById(entry.id);
@@ -77,7 +103,6 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
         const notionTime = new Date(page.last_edited_time).getTime();
         const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
         if (notionTime > localTime) {
-          // Update using the existing local ID to avoid duplicates
           await upsertEntryFromNotion({ ...entry, id: existing.id });
           count++;
         }
@@ -99,32 +124,75 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
     }
   }
 
+  // Sync day titles from Notion entry names — last-edit-wins
+  for (const [date, notionTitle] of titlesByDate) {
+    const local = await getDayTitleWithTimestamp(date);
+    if (local.title === notionTitle) continue; // already in sync
+
+    // Find the latest edit time for Notion entries on this date
+    const notionEditTimes = pages
+      .filter(p => !p.archived)
+      .filter(p => {
+        const d = getPropertyDate(p, 'Date');
+        return d === date;
+      })
+      .map(p => new Date(p.last_edited_time).getTime());
+    const latestNotionEdit = notionEditTimes.length > 0 ? Math.max(...notionEditTimes) : 0;
+    const localEditTime = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+
+    if (latestNotionEdit > localEditTime) {
+      // Notion is newer — pull title
+      await setDayTitleFromSync(date, notionTitle);
+      console.log('[loopd sync] Pulled day title:', date, notionTitle);
+    }
+    // else: local is newer — will be pushed in pushEntries
+  }
+
   return count;
 }
 
-async function pushEntries(token: string, dbId: string, lastSync: string | null): Promise<number> {
+async function pushEntries(token: string, dbId: string, lastSync: string | null): Promise<{ count: number; errors: string[] }> {
   const unsyncedEntries = await getUnsyncedEntries(lastSync);
   let count = 0;
+  const errors: string[] = [];
+
+  // Detect the title column name from the database schema
+  let titleColumn = 'Name';
+  try {
+    const dbSchema = await getNotionDatabase(token, dbId) as { properties: Record<string, unknown> };
+    titleColumn = getTitlePropertyKey(dbSchema.properties);
+  } catch { /* fallback to 'Name' */ }
+
+  // Cache day titles and build habit ID→label map
+  const dayTitleCache = new Map<string, string>();
+  const habits = await getHabits();
+  const habitIdToLabel = new Map(habits.map(h => [h.id, h.label]));
 
   for (const entry of unsyncedEntries) {
     try {
-      const properties = entryToNotionProperties(entry);
+      if (!dayTitleCache.has(entry.date)) {
+        dayTitleCache.set(entry.date, await getDayTitle(entry.date));
+      }
+      const dayTitle = dayTitleCache.get(entry.date) || undefined;
+      const properties = entryToNotionProperties(entry, titleColumn, dayTitle, habitIdToLabel);
 
       if (entry.notionPageId) {
-        // Update existing Notion page
+        console.log('[loopd sync] Updating entry:', entry.id, entry.type);
         await updatePage(token, entry.notionPageId, properties);
       } else {
-        // Create new Notion page
+        console.log('[loopd sync] Creating entry:', entry.id, entry.type, 'habits:', entry.habits);
         const page = await createPage(token, dbId, properties);
         await setEntryNotionPageId(entry.id, page.id);
       }
       count++;
     } catch (err) {
-      console.warn('[loopd sync] Push error for entry', entry.id, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[loopd sync] Push FAILED for entry', entry.id, entry.type, 'notionPageId:', entry.notionPageId, 'error:', msg);
+      errors.push(`Push ${entry.type}: ${msg.slice(0, 100)}`);
     }
   }
 
-  return count;
+  return { count, errors };
 }
 
 async function processDeletions(token: string): Promise<void> {
@@ -146,6 +214,13 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
   const habits = await getHabits();
   const habitLabels = habits.map(h => h.label);
 
+  // Detect the title column name
+  let titleColumn = 'Name';
+  try {
+    const dbSchema = await getNotionDatabase(token, dailyLogDbId) as { properties: Record<string, unknown> };
+    titleColumn = getTitlePropertyKey(dbSchema.properties);
+  } catch { /* fallback */ }
+
   // Get unique dates that have entries
   const dates = [...new Set(allEntries.map(e => e.date))];
 
@@ -159,7 +234,8 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
 
   for (const date of dates) {
     try {
-      const props = entriesToDailyLogProperties(date, allEntries, habitLabels);
+      const dayTitle = await getDayTitle(date);
+      const props = entriesToDailyLogProperties(date, allEntries, habitLabels, titleColumn, dayTitle);
       const existingPageId = pagesByDate.get(date);
 
       if (existingPageId) {
@@ -172,13 +248,27 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
     }
   }
 
-  // Pull habit checkbox changes from Daily Log back to entries
+  // Pull day titles and habit checkbox changes from Daily Log
   for (const page of existingPages) {
     if (page.archived) continue;
     const dateKey = getPropertyText(page, 'loopd Date') || getPropertyDate(page, 'Date');
     if (!dateKey) continue;
 
     try {
+      // Pull day title from Notion's title column — last-edit-wins
+      const notionTitle = getTitleFromPage(page);
+      if (notionTitle && notionTitle !== dateKey) {
+        const local = await getDayTitleWithTimestamp(dateKey);
+        if (local.title !== notionTitle) {
+          const notionEditTime = new Date(page.last_edited_time).getTime();
+          const localEditTime = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+          if (notionEditTime > localEditTime) {
+            await setDayTitleFromSync(dateKey, notionTitle);
+            console.log('[loopd sync] Pulled day title from daily log:', dateKey, notionTitle);
+          }
+        }
+      }
+
       const notionHabits = parseDailyLogHabits(page, habitLabels);
       const dayEntries = await getEntriesByDate(dateKey);
       const existingHabitEntry = dayEntries.find(e => e.type === 'habit');
@@ -219,7 +309,63 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
   }
 }
 
+// ── Sync habits from Notion schema ──
+
+async function syncHabitsFromNotionSchema(token: string, entriesDbId: string): Promise<void> {
+  try {
+    const dbSchema = await getNotionDatabase(token, entriesDbId) as {
+      properties: Record<string, { type: string; multi_select?: { options: { name: string; color: string }[] } }>;
+    };
+
+    // Find the Habits multi-select property
+    const habitsProperty = dbSchema.properties['Habits'];
+    if (!habitsProperty || habitsProperty.type !== 'multi_select' || !habitsProperty.multi_select) return;
+
+    const notionOptions = habitsProperty.multi_select.options;
+    if (notionOptions.length === 0) return;
+
+    const localHabits = await getHabits();
+    const localIds = new Set(localHabits.map(h => h.id));
+    const notionIds = new Set(notionOptions.map(o => o.name.toLowerCase().replace(/\s+/g, '-')));
+
+    // Add habits that exist in Notion but not locally
+    for (let i = 0; i < notionOptions.length; i++) {
+      const opt = notionOptions[i];
+      const id = opt.name.toLowerCase().replace(/\s+/g, '-');
+      if (!localIds.has(id)) {
+        await insertHabit({
+          id,
+          label: opt.name,
+          emoji: '',
+          sortOrder: i,
+        });
+        console.log('[loopd sync] Added habit from Notion:', opt.name);
+      }
+    }
+
+    // Remove local habits that no longer exist in Notion options
+    for (const local of localHabits) {
+      if (!notionIds.has(local.id)) {
+        await deleteHabit(local.id);
+        console.log('[loopd sync] Removed habit not in Notion:', local.label);
+      }
+    }
+  } catch (err) {
+    console.warn('[loopd sync] Habit schema sync error:', err);
+  }
+}
+
 // ── Helpers ──
+
+function getTitleFromPage(page: { properties: Record<string, unknown> }): string {
+  for (const [, val] of Object.entries(page.properties)) {
+    const p = val as { type?: string; title?: { plain_text: string }[] };
+    if (p?.type === 'title' && p.title) {
+      return p.title.map(t => t.plain_text).join('');
+    }
+  }
+  return '';
+}
 
 function getPropertyText(page: { properties: Record<string, unknown> }, key: string): string {
   const prop = page.properties[key] as { type: string; rich_text?: { plain_text: string }[]; title?: { plain_text: string }[] } | undefined;

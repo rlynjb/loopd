@@ -60,6 +60,12 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS day_meta (
+      date TEXT PRIMARY KEY,
+      title TEXT DEFAULT '',
+      updated_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
     CREATE INDEX IF NOT EXISTS idx_projects_date ON projects(date);
   `);
@@ -72,6 +78,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumn('entries', 'notion_page_id', 'TEXT');
   await addColumn('entries', 'updated_at', 'TEXT');
   await addColumn('habits', 'notion_page_id', 'TEXT');
+  await addColumn('day_meta', 'updated_at', 'TEXT');
   await addColumn('habits', 'updated_at', 'TEXT');
 
   // Sync deletions tracking table
@@ -199,6 +206,41 @@ export async function deleteEntry(id: string): Promise<void> {
   await db.runAsync('DELETE FROM entries WHERE id = ?', [id]);
 }
 
+// ── Day title ──
+
+export async function getDayTitle(date: string): Promise<string> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ title: string }>('SELECT title FROM day_meta WHERE date = ?', [date]);
+  return row?.title ?? '';
+}
+
+export async function getDayTitleWithTimestamp(date: string): Promise<{ title: string; updatedAt: string | null }> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ title: string; updated_at: string | null }>('SELECT title, updated_at FROM day_meta WHERE date = ?', [date]);
+  return { title: row?.title ?? '', updatedAt: row?.updated_at ?? null };
+}
+
+export async function setDayTitle(date: string, title: string): Promise<void> {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'INSERT INTO day_meta (date, title, updated_at) VALUES (?, ?, ?) ON CONFLICT(date) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at',
+    [date, title, now]
+  );
+  // Touch all entries for this date so they get re-synced with the new title
+  await db.runAsync('UPDATE entries SET updated_at = ? WHERE date = ?', [now, date]);
+}
+
+export async function setDayTitleFromSync(date: string, title: string): Promise<void> {
+  // Used by sync — sets title without touching entry updated_at (to avoid re-push loop)
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'INSERT INTO day_meta (date, title, updated_at) VALUES (?, ?, ?) ON CONFLICT(date) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at',
+    [date, title, now]
+  );
+}
+
 // ── Sync queries ──
 
 export async function getAllEntries(): Promise<Entry[]> {
@@ -209,9 +251,15 @@ export async function getAllEntries(): Promise<Entry[]> {
 
 export async function getUnsyncedEntries(lastSync: string | null): Promise<Entry[]> {
   const db = await getDatabase();
+  // Always include entries with no notion_page_id (never synced)
+  // and entries updated since last sync
   const rows = lastSync
-    ? await db.getAllAsync<EntryRow>('SELECT * FROM entries WHERE updated_at > ? OR notion_page_id IS NULL', [lastSync])
+    ? await db.getAllAsync<EntryRow>(
+        'SELECT * FROM entries WHERE notion_page_id IS NULL OR updated_at > ? OR updated_at IS NULL',
+        [lastSync]
+      )
     : await db.getAllAsync<EntryRow>('SELECT * FROM entries');
+  console.log('[loopd sync] Unsynced entries:', rows.length, 'lastSync:', lastSync);
   return rows.map(mapRowToEntry);
 }
 

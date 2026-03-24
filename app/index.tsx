@@ -5,7 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
 import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
-import { getVlogs, getEntriesByDate, archivePastDays } from '../src/services/database';
+import { getVlogs, getEntriesByDate, archivePastDays, getDayTitle } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { CATEGORIES } from '../src/constants/categories';
 import { MOODS } from '../src/constants/moods';
@@ -15,18 +15,28 @@ import type { Entry, Vlog } from '../src/types/entry';
 export default function HomeScreen() {
   const router = useRouter();
   const [vlogs, setVlogs] = useState<Vlog[]>([]);
+  const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
   const [todayEntries, setTodayEntries] = useState<Entry[]>([]);
+  const [todayTitle, setTodayTitle] = useState('');
 
   const hasToday = todayEntries.length > 0;
 
   useFocusEffect(
     useCallback(() => {
       const today = getTodayString();
-      // Archive any past days that haven't been recorded as vlogs yet
       archivePastDays(today).then(() => {
-        getVlogs().then(setVlogs);
+        getVlogs().then(async (v) => {
+          setVlogs(v);
+          // Load titles for all vlogs
+          const titles: Record<string, string> = {};
+          for (const vlog of v) {
+            titles[vlog.date] = await getDayTitle(vlog.date);
+          }
+          setVlogTitles(titles);
+        });
       });
       getEntriesByDate(today).then(setTodayEntries);
+      getDayTitle(today).then(setTodayTitle);
     }, [])
   );
 
@@ -68,6 +78,7 @@ export default function HomeScreen() {
           <View style={styles.todaySection}>
             <Text style={styles.sectionLabel}>TODAY</Text>
             <Pressable onPress={handleStart} style={styles.todayCard}>
+              {todayTitle ? <Text style={styles.dayTitle}>{todayTitle}</Text> : null}
               <View style={styles.todayTopRow}>
                 <View style={styles.todayDateGroup}>
                   {moodInfo && <View style={[styles.moodDot, { backgroundColor: moodInfo.color }]} />}
@@ -103,7 +114,7 @@ export default function HomeScreen() {
           <View style={styles.historySection}>
             <Text style={styles.sectionLabel}>PREVIOUS VLOGS</Text>
             {vlogs.map(vlog => (
-              <PastVlogCard key={vlog.id} vlog={vlog} onPress={() => router.push(`/journal/${vlog.date}`)} />
+              <PastVlogCard key={vlog.id} vlog={vlog} title={vlogTitles[vlog.date]} onPress={() => router.push(`/journal/${vlog.date}`)} />
             ))}
           </View>
         )}
@@ -152,6 +163,13 @@ const styles = StyleSheet.create({
   todaySection: {
     marginTop: 20,
     marginBottom: 20,
+  },
+  dayTitle: {
+    fontFamily: fonts.heading,
+    fontSize: 17,
+    color: colors.text,
+    marginBottom: 8,
+    letterSpacing: -0.3,
   },
   todayCard: {
     backgroundColor: colors.bg2,

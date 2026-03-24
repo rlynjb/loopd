@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Pressable, Text, StyleSheet } from 'react-native';
+import { View, Pressable, Text, TextInput, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
@@ -10,6 +10,7 @@ import { TimelineList } from '../../src/components/timeline/TimelineList';
 import { CaptureSheet } from '../../src/components/capture/CaptureSheet';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
+import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import type { Entry } from '../../src/types/entry';
 
@@ -19,6 +20,7 @@ export default function JournalScreen() {
   const insets = useSafeAreaInsets();
   const { entries, addEntry, editEntry, removeEntry } = useEntries(date);
   const habits = useHabits();
+  const { title: dayTitle, updateTitle: setDayTitle } = useDayTitle(date);
   const [showCapture, setShowCapture] = useState(false);
   const [captureType, setCaptureType] = useState<string | null>(null);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
@@ -65,6 +67,16 @@ export default function JournalScreen() {
         onBack={() => router.back()}
       />
 
+      <View style={styles.titleRow}>
+        <TextInput
+          value={dayTitle}
+          onChangeText={setDayTitle}
+          placeholder="Untitled day"
+          placeholderTextColor={colors.textDimmer}
+          style={styles.titleInput}
+        />
+      </View>
+
       <TimelineList
         entries={entries}
         habits={habits}
@@ -108,6 +120,18 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
+  },
+  titleRow: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  titleInput: {
+    fontFamily: fonts.heading,
+    fontSize: 22,
+    color: colors.text,
+    padding: 0,
+    letterSpacing: -0.3,
   },
   bottomBar: {
     position: 'absolute',

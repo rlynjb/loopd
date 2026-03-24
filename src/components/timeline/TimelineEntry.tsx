@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, Pressable, Image, StyleSheet } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
+import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
@@ -25,19 +26,24 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
     ? entry.clips
     : entry.clipUri ? [{ uri: entry.clipUri, durationMs: entry.clipDurationMs ?? 0 }] : [];
 
-  const [thumbnails, setThumbnails] = useState<(string | null)[]>([]);
+  const [thumbnails, setThumbnails] = useState<({ uri: string | null; missing: boolean })[]>([]);
 
   useEffect(() => {
     if (!isVideo || clipRefs.length === 0) return;
     let cancelled = false;
     (async () => {
-      const thumbs: (string | null)[] = [];
+      const thumbs: ({ uri: string | null; missing: boolean })[] = [];
       for (const c of clipRefs) {
         try {
-          const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.3 });
-          if (!cancelled) thumbs.push(t.uri);
+          const file = new FSFile(c.uri);
+          if (!file.exists) {
+            if (!cancelled) thumbs.push({ uri: null, missing: true });
+          } else {
+            const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.3 });
+            if (!cancelled) thumbs.push({ uri: t.uri, missing: false });
+          }
         } catch {
-          if (!cancelled) thumbs.push(null);
+          if (!cancelled) thumbs.push({ uri: null, missing: true });
         }
       }
       if (!cancelled) setThumbnails(thumbs);
@@ -86,20 +92,29 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
         {/* Clip thumbnails */}
         {isVideo && clipRefs.length > 0 && (
           <View style={styles.thumbRow}>
-            {clipRefs.map((c, i) => (
-              <View key={i} style={styles.thumbCard}>
-                {thumbnails[i] ? (
-                  <Image source={{ uri: thumbnails[i]! }} style={styles.thumbImage} />
-                ) : (
-                  <View style={[styles.thumbImage, styles.thumbPlaceholder]}>
-                    <Icon name="video" size={14} color={colors.textDim} />
+            {clipRefs.map((c, i) => {
+              const thumb = thumbnails[i];
+              const isMissing = thumb?.missing ?? false;
+              return (
+                <View key={i} style={[styles.thumbCard, isMissing && styles.thumbCardMissing]}>
+                  {isMissing ? (
+                    <View style={[styles.thumbImage, styles.thumbMissing]}>
+                      <Icon name="video" size={12} color={colors.coral} />
+                      <Text style={styles.thumbMissingText}>missing</Text>
+                    </View>
+                  ) : thumb?.uri ? (
+                    <Image source={{ uri: thumb.uri }} style={styles.thumbImage} />
+                  ) : (
+                    <View style={[styles.thumbImage, styles.thumbPlaceholder]}>
+                      <Icon name="video" size={14} color={colors.textDim} />
+                    </View>
+                  )}
+                  <View style={styles.thumbDuration}>
+                    <Text style={styles.thumbDurationText}>{Math.round(c.durationMs / 1000)}s</Text>
                   </View>
-                )}
-                <View style={styles.thumbDuration}>
-                  <Text style={styles.thumbDurationText}>{Math.round(c.durationMs / 1000)}s</Text>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
 
@@ -220,6 +235,21 @@ const styles = StyleSheet.create({
   thumbPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  thumbCardMissing: {
+    borderWidth: 1,
+    borderColor: `${colors.coral}30`,
+  },
+  thumbMissing: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${colors.coral}08`,
+    gap: 2,
+  },
+  thumbMissingText: {
+    fontFamily: fonts.mono,
+    fontSize: 7,
+    color: colors.coral,
   },
   thumbDuration: {
     position: 'absolute',

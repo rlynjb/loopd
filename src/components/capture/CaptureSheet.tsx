@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, Pressable, TextInput, Modal, ScrollView, Image, StyleSheet } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
+import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
 import { CAPTURE_TYPES } from '../../constants/captureTypes';
 import { Icon } from '../ui/Icon';
@@ -12,6 +13,7 @@ type PickedClip = {
   uri: string;
   durationMs: number;
   thumbnail: string | null;
+  missing?: boolean;
 };
 
 type Props = {
@@ -83,11 +85,19 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
     const result: PickedClip[] = [];
     for (const c of refs) {
       let thumbnail: string | null = null;
+      let missing = false;
       try {
-        const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.5 });
-        thumbnail = t.uri;
-      } catch { /* ignore */ }
-      result.push({ uri: c.uri, durationMs: c.durationMs, thumbnail });
+        const file = new FSFile(c.uri);
+        if (!file.exists) {
+          missing = true;
+        } else {
+          const t = await VideoThumbnails.getThumbnailAsync(c.uri, { time: 500, quality: 0.5 });
+          thumbnail = t.uri;
+        }
+      } catch {
+        missing = true;
+      }
+      result.push({ uri: c.uri, durationMs: c.durationMs, thumbnail, missing });
     }
     setClips(result);
   };
@@ -125,6 +135,26 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
 
   const removeClip = (index: number) => {
     setClips(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const reimportClip = async (index: number) => {
+    setPicking(true);
+    try {
+      const result = await pickAndCopyClip(date);
+      if (result) {
+        let thumbnail: string | null = null;
+        try {
+          const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
+          thumbnail = t.uri;
+        } catch { /* ignore */ }
+        setClips(prev => prev.map((c, i) => i === index
+          ? { uri: result.uri, durationMs: result.durationMs, thumbnail, missing: false }
+          : c
+        ));
+      }
+    } catch { /* ignore */ } finally {
+      setPicking(false);
+    }
   };
 
   const canSave = () => {
@@ -241,8 +271,13 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
               {clips.length > 0 && (
                 <View style={styles.clipGrid}>
                   {clips.map((clip, i) => (
-                    <View key={i} style={styles.clipCard}>
-                      {clip.thumbnail ? (
+                    <View key={i} style={[styles.clipCard, clip.missing && styles.clipCardMissing]}>
+                      {clip.missing ? (
+                        <Pressable onPress={() => reimportClip(i)} style={[styles.clipThumb, styles.clipThumbMissing]}>
+                          <Icon name="video" size={18} color={colors.coral} />
+                          <Text style={styles.reimportText}>Re-import</Text>
+                        </Pressable>
+                      ) : clip.thumbnail ? (
                         <Image source={{ uri: clip.thumbnail }} style={styles.clipThumb} />
                       ) : (
                         <View style={[styles.clipThumb, styles.clipThumbPlaceholder]}>
@@ -256,7 +291,9 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                         <Icon name="x" size={14} color="#fff" />
                       </Pressable>
                       <View style={styles.clipNameBar}>
-                        <Text style={styles.clipNameText} numberOfLines={1}>{clip.uri.split('/').pop()}</Text>
+                        <Text style={[styles.clipNameText, clip.missing && { color: colors.coral }]} numberOfLines={1}>
+                          {clip.missing ? 'File missing' : clip.uri.split('/').pop()}
+                        </Text>
                       </View>
                     </View>
                   ))}
@@ -474,6 +511,22 @@ const styles = StyleSheet.create({
   clipThumbPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  clipCardMissing: {
+    borderWidth: 1,
+    borderColor: `${colors.coral}40`,
+  },
+  clipThumbMissing: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: `${colors.coral}08`,
+    gap: 4,
+  },
+  reimportText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.coral,
+    letterSpacing: 0.3,
   },
   clipDurationBadge: {
     position: 'absolute',
