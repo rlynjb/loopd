@@ -1,16 +1,15 @@
 import { ScrollView, Text, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { TimelineEntry } from './TimelineEntry';
-import { CaptureCard } from './CaptureCard';
 import type { Entry, Habit } from '../../types/entry';
 
 type Props = {
   entries: Entry[];
   habits: Habit[];
-  onCapture: (type: string) => void;
+  onEditEntry?: (entry: Entry) => void;
 };
 
-export function TimelineList({ entries, habits, onCapture }: Props) {
+export function TimelineList({ entries, habits, onEditEntry }: Props) {
   const sorted = [...entries].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
@@ -21,9 +20,8 @@ export function TimelineList({ entries, habits, onCapture }: Props) {
         <Text style={styles.empty}>Your timeline is empty. Capture your first moment.</Text>
       )}
       {sorted.map(entry => (
-        <TimelineEntry key={entry.id} entry={entry} habits={habits} />
+        <TimelineEntry key={entry.id} entry={entry} habits={habits} onEdit={onEditEntry} />
       ))}
-      <CaptureCard onCapture={onCapture} />
     </ScrollView>
   );
 }
@@ -34,7 +32,7 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingTop: 8,
-    paddingBottom: 140,
+    paddingBottom: 180,
   },
   empty: {
     textAlign: 'center',

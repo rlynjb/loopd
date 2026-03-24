@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { View, Text, Pressable, PanResponder, StyleSheet, LayoutChangeEvent } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { FILTERS } from '../../constants/filters';
+import { Icon } from '../../components/ui/Icon';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
 import { formatDuration } from '../../utils/time';
 
@@ -261,7 +262,7 @@ export function EditorTimeline({
               </View>
               {w > 8 && (
                 <View style={styles.clipLabelRow}>
-                  <Text style={styles.clipEmoji}>🎥</Text>
+                  <Icon name="video" size={10} color={isActive ? colors.text : colors.textMuted} />
                   {w > 15 && (
                     <Text style={[styles.clipLabelText, { color: isActive ? colors.text : colors.textMuted }]} numberOfLines={1}>
                       {clip.caption.slice(0, 20)}

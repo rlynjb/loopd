@@ -3,19 +3,21 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useDatabase } from '../src/hooks/useDatabase';
+import { colors } from '../src/constants/theme';
 
 export default function RootLayout() {
   const { ready } = useDatabase();
   const [fontsLoaded] = useFonts({
-    Syne: require('../assets/fonts/Syne-Variable.ttf'),
-    JetBrainsMono: require('../assets/fonts/JetBrainsMono-Variable.ttf'),
-    Inter: require('../assets/fonts/Inter-Variable.ttf'),
+    DMSerifDisplay: require('../assets/fonts/DMSerifDisplay.ttf'),
+    DMMono: require('../assets/fonts/DMMono-Regular.ttf'),
+    DMMonoMedium: require('../assets/fonts/DMMono-Medium.ttf'),
+    InstrumentSans: require('../assets/fonts/InstrumentSans-Variable.ttf'),
   });
 
   if (!ready || !fontsLoaded) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color="#00d9a3" size="large" />
+        <ActivityIndicator color={colors.accent} size="large" />
         <StatusBar style="light" />
       </View>
     );
@@ -27,7 +29,7 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: '#000000' },
+          contentStyle: { backgroundColor: colors.bg },
           animation: 'fade',
         }}
       />
@@ -38,7 +40,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   loading: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -1,22 +1,18 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
+import { CAPTURE_TYPES } from '../../constants/captureTypes';
+import { Icon } from '../ui/Icon';
 import type { Entry, Habit } from '../../types/entry';
-
-const CAPTURE_TYPES = [
-  { id: 'video', label: 'Clip', icon: '🎥', color: '#fb7185' },
-  { id: 'journal', label: 'Journal', icon: '✍️', color: '#00d9a3' },
-  { id: 'habit', label: 'Habit', icon: '💪', color: '#a78bfa' },
-  { id: 'moment', label: 'Moment', icon: '📍', color: '#fbbf24' },
-] as const;
 
 type Props = {
   entry: Entry;
   habits: Habit[];
+  onEdit?: (entry: Entry) => void;
 };
 
-export function TimelineEntry({ entry, habits }: Props) {
+export function TimelineEntry({ entry, habits, onEdit }: Props) {
   const mood = MOODS.find(m => m.id === entry.mood);
   const cat = CATEGORIES.find(c => c.id === entry.category);
   const captureType = CAPTURE_TYPES.find(c => c.id === entry.type);
@@ -26,30 +22,38 @@ export function TimelineEntry({ entry, habits }: Props) {
   const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 
   return (
-    <View style={styles.row}>
-      <View style={styles.timeCol}>
-        <Text style={styles.timeText}>{timeStr}</Text>
-      </View>
+    <View style={styles.container}>
+      <Text style={styles.timeLabel}>{timeStr}</Text>
 
-      <View style={styles.lineCol}>
-        <View style={[styles.dot, { backgroundColor: captureType?.color ?? colors.teal }]} />
-      </View>
-
-      <View style={styles.card}>
+      <Pressable
+        onPress={() => onEdit?.(entry)}
+        style={({ pressed }) => [
+          styles.card,
+          pressed && styles.cardPressed,
+        ]}
+      >
         <View style={styles.badges}>
           <View style={[styles.typeBadge, { backgroundColor: `${captureType?.color}18`, borderColor: `${captureType?.color}30` }]}>
-            <Text style={[styles.typeText, { color: captureType?.color }]}>
-              {captureType?.icon} {captureType?.label}
-            </Text>
+            <View style={styles.typeBadgeContent}>
+              {captureType && <Icon name={captureType.icon} size={12} color={captureType.color} />}
+              <Text style={[styles.typeText, { color: captureType?.color }]}>
+                {captureType?.label}
+              </Text>
+            </View>
           </View>
           {mood && (
-            <Text style={[styles.moodText, { color: mood.color }]}>
-              {mood.emoji} {mood.label}
-            </Text>
+            <View style={styles.moodBadge}>
+              <Icon name={mood.icon} size={10} color={mood.color} />
+              <Text style={[styles.moodText, { color: mood.color }]}>{mood.label}</Text>
+            </View>
           )}
           {cat && (
-            <Text style={styles.catText}>{cat.emoji} {cat.label}</Text>
+            <View style={styles.catBadge}>
+              <Icon name={cat.icon} size={10} color={colors.textDim} />
+              <Text style={styles.catText}>{cat.label}</Text>
+            </View>
           )}
+          <Text style={styles.editHint}>tap to edit</Text>
         </View>
 
         {isHabit && entry.habits.length > 0 ? (
@@ -60,9 +64,9 @@ export function TimelineEntry({ entry, habits }: Props) {
               return (
                 <View key={hId} style={styles.habitRow}>
                   <View style={styles.checkBox}>
-                    <Text style={styles.checkMark}>✓</Text>
+                    <Icon name="checkSquare" size={12} color={colors.green} />
                   </View>
-                  <Text style={styles.habitLabel}>{h.emoji} {h.label}</Text>
+                  <Text style={styles.habitLabel}>{h.label}</Text>
                 </View>
               );
             })}
@@ -73,47 +77,33 @@ export function TimelineEntry({ entry, habits }: Props) {
         ) : (
           <Text style={styles.entryText}>{entry.text}</Text>
         )}
-      </View>
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    gap: 14,
-    paddingHorizontal: 24,
+  container: {
+    paddingHorizontal: 20,
+    marginBottom: 10,
   },
-  timeCol: {
-    width: 58,
-    alignItems: 'flex-end',
-    paddingTop: 14,
-  },
-  timeText: {
+  timeLabel: {
     fontFamily: fonts.mono,
     fontSize: 11,
     color: colors.textDim,
-  },
-  lineCol: {
-    width: 2,
-    backgroundColor: 'rgba(0,217,163,0.2)',
-    borderRadius: 2,
-    alignItems: 'center',
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginTop: 16,
+    marginBottom: 6,
+    paddingLeft: 2,
   },
   card: {
-    flex: 1,
-    backgroundColor: colors.cardBg,
+    backgroundColor: colors.bg2,
     borderWidth: 1,
     borderColor: colors.cardBorder,
-    borderRadius: 14,
+    borderRadius: colors.radiusLg,
     padding: 14,
-    marginBottom: 12,
+  },
+  cardPressed: {
+    borderColor: colors.border2,
+    backgroundColor: colors.bg3,
   },
   badges: {
     flexDirection: 'row',
@@ -125,28 +115,49 @@ const styles = StyleSheet.create({
   typeBadge: {
     borderRadius: 6,
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderWidth: 1,
+  },
+  typeBadgeContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   typeText: {
     fontFamily: fonts.mono,
     fontSize: 10,
+  },
+  moodBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
   },
   moodText: {
     fontFamily: fonts.mono,
     fontSize: 10,
     opacity: 0.8,
   },
+  catBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
   catText: {
     fontFamily: fonts.mono,
     fontSize: 10,
     color: colors.textDim,
   },
+  editHint: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDimmer,
+    marginLeft: 'auto',
+  },
   entryText: {
     fontFamily: fonts.body,
-    fontSize: 13.5,
-    color: '#cbd5e1',
-    lineHeight: 21,
+    fontSize: 14,
+    color: colors.text,
+    lineHeight: 22,
   },
   habitList: {
     gap: 6,
@@ -160,20 +171,16 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderRadius: 5,
-    backgroundColor: `${colors.purple}25`,
+    backgroundColor: `${colors.green}25`,
     borderWidth: 1.5,
-    borderColor: colors.purple,
+    borderColor: colors.green,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  checkMark: {
-    fontSize: 11,
-    color: colors.purple,
   },
   habitLabel: {
     fontFamily: fonts.body,
     fontSize: 13,
-    color: '#cbd5e1',
+    color: colors.text,
   },
   habitNote: {
     fontFamily: fonts.body,

@@ -1,19 +1,14 @@
 import { useState, useEffect } from 'react';
-import { View, Text, Pressable, TextInput, Modal, ScrollView, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
+import { View, Text, Pressable, TextInput, Modal, ScrollView, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
+import { CAPTURE_TYPES } from '../../constants/captureTypes';
+import { Icon } from '../ui/Icon';
 import type { Habit, Entry } from '../../types/entry';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
 import { pickAndCopyClip } from '../../services/fileManager';
-
-const CAPTURE_TYPES = [
-  { id: 'video', label: 'Clip', icon: '🎥', color: '#fb7185' },
-  { id: 'journal', label: 'Journal', icon: '✍️', color: '#00d9a3' },
-  { id: 'habit', label: 'Habit', icon: '💪', color: '#a78bfa' },
-  { id: 'moment', label: 'Moment', icon: '📍', color: '#fbbf24' },
-] as const;
 
 type Props = {
   visible: boolean;
@@ -135,10 +130,7 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
 
   return (
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={handleClose}>
-      <KeyboardAvoidingView
-        style={styles.modalContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
+      <View style={styles.modalContainer}>
         <View style={styles.modalHeader}>
           <Pressable onPress={handleClose} style={styles.closeBtn}>
             <Text style={styles.closeBtnText}>← Back</Text>
@@ -161,7 +153,7 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                       onPress={() => { setCaptureType(ct.id); setStep('details'); }}
                       style={[styles.typeBtn, { backgroundColor: `${ct.color}10`, borderColor: `${ct.color}30` }]}
                     >
-                      <Text style={styles.typeIcon}>{ct.icon}</Text>
+                      <Icon name={ct.icon} size={28} color={ct.color} />
                       <Text style={[styles.typeLabel, { color: ct.color }]}>{ct.label.toUpperCase()}</Text>
                     </Pressable>
                   ))}
@@ -172,7 +164,7 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
             {step === 'details' && (captureType === 'video' || captureType === 'journal') && (
               <View>
                 <Text style={styles.subtitle}>
-                  {captureType === 'video' ? '🎥 Add Clip' : '✍️ Journal entry'}
+                  {captureType === 'video' ? 'Add Clip' : 'Journal entry'}
                 </Text>
                 <Text style={styles.hint}>
                   {captureType === 'video' ? 'Import a clip from your camera roll' : 'Write freely — this is your space'}
@@ -215,16 +207,16 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                 />
                 <Pressable
                   onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.teal : 'rgba(255,255,255,0.05)' }]}
+                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
                 >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>SAVE ✓</Text>
+                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE</Text>
                 </Pressable>
               </View>
             )}
 
             {step === 'details' && captureType === 'habit' && (
               <View>
-                <Text style={styles.subtitle}>💪 Log Habits</Text>
+                <Text style={styles.subtitle}>Log Habits</Text>
                 <Text style={styles.hint}>Check off what you did today</Text>
                 <View style={styles.chipRow}>
                   {habits.map(h => {
@@ -241,9 +233,8 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                           },
                         ]}
                       >
-                        {checked && <Text style={styles.checkMark}>✓</Text>}
-                        <Text style={styles.habitEmoji}>{h.emoji}</Text>
-                        <Text style={[styles.habitLabel, { color: checked ? colors.purple : colors.textMuted }]}>
+                        {checked && <Icon name="checkSquare" size={12} color={colors.purple} />}
+                                                <Text style={[styles.habitLabel, { color: checked ? colors.purple : colors.textMuted }]}>
                           {h.label}
                         </Text>
                       </Pressable>
@@ -261,16 +252,16 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                 />
                 <Pressable
                   onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.teal : 'rgba(255,255,255,0.05)' }]}
+                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
                 >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>SAVE HABITS ✓</Text>
+                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE HABITS</Text>
                 </Pressable>
               </View>
             )}
 
             {step === 'details' && captureType === 'moment' && (
               <View>
-                <Text style={styles.subtitle}>📍 Log a Moment</Text>
+                <Text style={styles.subtitle}>Log a Moment</Text>
                 <Text style={styles.hint}>Tag what's happening right now</Text>
 
                 <Text style={styles.fieldLabel}>MOOD</Text>
@@ -287,9 +278,10 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                         },
                       ]}
                     >
-                      <Text style={[styles.chipText, { color: mood === m.id ? m.color : colors.textMuted }]}>
-                        {m.emoji} {m.label}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                        <Icon name={m.icon} size={14} color={mood === m.id ? m.color : colors.textMuted} />
+                        <Text style={[styles.chipText, { color: mood === m.id ? m.color : colors.textMuted }]}>{m.label}</Text>
+                      </View>
                     </Pressable>
                   ))}
                 </View>
@@ -303,14 +295,15 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                       style={[
                         styles.moodChip,
                         {
-                          backgroundColor: category === c.id ? `${colors.teal}15` : 'rgba(255,255,255,0.03)',
-                          borderColor: category === c.id ? colors.teal : 'rgba(255,255,255,0.06)',
+                          backgroundColor: category === c.id ? `${colors.accent2}15` : 'rgba(255,255,255,0.03)',
+                          borderColor: category === c.id ? colors.accent2 : 'rgba(255,255,255,0.06)',
                         },
                       ]}
                     >
-                      <Text style={[styles.chipText, { color: category === c.id ? colors.teal : colors.textMuted }]}>
-                        {c.emoji} {c.label}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                        <Icon name={c.icon} size={14} color={category === c.id ? colors.accent2 : colors.textMuted} />
+                        <Text style={[styles.chipText, { color: category === c.id ? colors.accent2 : colors.textMuted }]}>{c.label}</Text>
+                      </View>
                     </Pressable>
                   ))}
                 </View>
@@ -326,14 +319,14 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
                 />
                 <Pressable
                   onPress={canSave() ? handleSave : undefined}
-                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.teal : 'rgba(255,255,255,0.05)' }]}
+                  style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
                 >
-                  <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>SAVE MOMENT ✓</Text>
+                  <Text style={[styles.saveBtnText, { color: canSave() ? '#0c0c0e' : colors.textDimmer }]}>SAVE MOMENT</Text>
                 </Pressable>
               </View>
             )}
           </ScrollView>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -341,7 +334,7 @@ export function CaptureSheet({ visible, initialType, habits, date, onClose, onSa
 const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
-    backgroundColor: '#000000',
+    backgroundColor: colors.bg,
   },
   modalHeader: {
     paddingTop: 56,
@@ -452,12 +445,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   pickBtnDone: {
-    backgroundColor: 'rgba(0,217,163,0.1)',
-    borderColor: 'rgba(0,217,163,0.25)',
+    backgroundColor: colors.greenBg,
+    borderColor: `${colors.green}40`,
     marginBottom: 6,
   },
   pickBtnTextDone: {
-    color: colors.teal,
+    color: colors.green,
   },
   clipInfo: {
     flexDirection: 'row',

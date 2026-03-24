@@ -2,6 +2,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
+import { Icon } from '../ui/Icon';
 import type { Vlog } from '../../types/entry';
 import { formatRelativeDate, formatDuration } from '../../utils/time';
 
@@ -36,7 +37,7 @@ export function PastVlogCard({ vlog, onPress }: Props) {
           {vlog.categories.slice(0, 4).map(catId => {
             const cat = CATEGORIES.find(c => c.id === catId);
             return cat ? (
-              <Text key={catId} style={styles.catEmoji}>{cat.emoji}</Text>
+              <Icon key={catId} name={cat.icon} size={13} color={colors.textDim} />
             ) : null;
           })}
         </View>
@@ -47,11 +48,11 @@ export function PastVlogCard({ vlog, onPress }: Props) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.cardBg,
+    backgroundColor: colors.bg2,
     borderWidth: 1,
     borderColor: colors.cardBorder,
-    borderRadius: 14,
-    padding: 14,
+    borderRadius: colors.radiusLg,
+    padding: 15,
     marginBottom: 10,
   },
   topRow: {
@@ -71,26 +72,26 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   dateText: {
-    fontFamily: fonts.heading,
-    fontSize: 13,
-    fontWeight: '600',
+    fontFamily: fonts.body,
+    fontSize: 14,
+    fontWeight: '500',
     color: colors.text,
   },
   moodLabel: {
     fontFamily: fonts.mono,
-    fontSize: 9,
+    fontSize: 10,
     opacity: 0.8,
   },
   duration: {
     fontFamily: fonts.mono,
-    fontSize: 9,
+    fontSize: 10,
     color: colors.textDim,
   },
   caption: {
     fontFamily: fonts.body,
-    fontSize: 12,
+    fontSize: 13,
     color: colors.textMuted,
-    lineHeight: 18,
+    lineHeight: 19,
     marginBottom: 10,
   },
   bottomRow: {

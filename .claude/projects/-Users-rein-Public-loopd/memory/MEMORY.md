@@ -1,2 +1,3 @@
 - [feedback_no_filter_presets.md](feedback_no_filter_presets.md) — No named filter presets; keep only brightness/contrast/saturation sliders
 - [feedback_vlog_lifecycle.md](feedback_vlog_lifecycle.md) — Today's vlog stays open until midnight; previous vlogs show all past days and can be reopened for export
+- [project_notion_sync.md](project_notion_sync.md) — Notion sync: bidirectional, no mood/category in Notion, no emoji in habits, video entries include clip filename

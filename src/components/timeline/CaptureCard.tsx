@@ -2,10 +2,10 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 
 const CAPTURE_TYPES = [
-  { id: 'video', label: 'Clip', icon: '🎥', color: '#fb7185' },
-  { id: 'journal', label: 'Journal', icon: '✍️', color: '#00d9a3' },
-  { id: 'habit', label: 'Habit', icon: '💪', color: '#a78bfa' },
-  { id: 'moment', label: 'Moment', icon: '📍', color: '#fbbf24' },
+  { id: 'video', label: 'Clip', icon: '🎥', color: '#e05555' },
+  { id: 'journal', label: 'Journal', icon: '✍️', color: '#4caf7d' },
+  { id: 'habit', label: 'Habit', icon: '💪', color: '#c46fd4' },
+  { id: 'moment', label: 'Moment', icon: '📍', color: '#d4922a' },
 ] as const;
 
 type Props = {
@@ -14,14 +14,8 @@ type Props = {
 
 export function CaptureCard({ onCapture }: Props) {
   return (
-    <View style={styles.row}>
-      <View style={styles.timeCol}>
-        <Text style={styles.timeText}>now</Text>
-      </View>
-
-      <View style={styles.lineCol}>
-        <View style={styles.dot} />
-      </View>
+    <View style={styles.container}>
+      <Text style={styles.timeLabel}>now</Text>
 
       <View style={styles.card}>
         <Text style={styles.label}>CAPTURE</Text>
@@ -30,10 +24,10 @@ export function CaptureCard({ onCapture }: Props) {
             <Pressable
               key={ct.id}
               onPress={() => onCapture(ct.id)}
-              style={[styles.btn, { backgroundColor: `${ct.color}08`, borderColor: `${ct.color}20` }]}
+              style={styles.btn}
             >
               <Text style={styles.btnIcon}>{ct.icon}</Text>
-              <Text style={[styles.btnLabel, { color: ct.color }]}>{ct.label}</Text>
+              <Text style={styles.btnLabel}>{ct.label}</Text>
             </Pressable>
           ))}
         </View>
@@ -43,49 +37,28 @@ export function CaptureCard({ onCapture }: Props) {
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    gap: 14,
-    paddingHorizontal: 24,
+  container: {
+    paddingHorizontal: 20,
+    marginBottom: 10,
   },
-  timeCol: {
-    width: 58,
-    alignItems: 'flex-end',
-    paddingTop: 14,
-  },
-  timeText: {
+  timeLabel: {
     fontFamily: fonts.mono,
     fontSize: 11,
     color: colors.textDim,
-  },
-  lineCol: {
-    width: 2,
-    backgroundColor: 'rgba(0,217,163,0.15)',
-    borderRadius: 2,
-    alignItems: 'center',
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.15)',
-    marginTop: 16,
+    marginBottom: 6,
+    paddingLeft: 2,
   },
   card: {
-    flex: 1,
-    borderRadius: 14,
+    borderRadius: colors.radiusLg,
     padding: 14,
-    marginBottom: 12,
     borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: 'rgba(255,255,255,0.08)',
-    backgroundColor: 'rgba(255,255,255,0.015)',
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.bg2,
   },
   label: {
     fontFamily: fonts.mono,
-    fontSize: 9,
+    fontSize: 10,
     color: colors.textDim,
     letterSpacing: 0.8,
     marginBottom: 12,
@@ -97,8 +70,10 @@ const styles = StyleSheet.create({
   btn: {
     flex: 1,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: colors.radius,
     borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.bg3,
     alignItems: 'center',
     gap: 5,
   },
@@ -107,7 +82,7 @@ const styles = StyleSheet.create({
   },
   btnLabel: {
     fontFamily: fonts.mono,
-    fontSize: 8,
-    letterSpacing: 0.6,
+    fontSize: 9,
+    color: colors.textMuted,
   },
 });

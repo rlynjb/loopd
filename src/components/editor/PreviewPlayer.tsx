@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Video, { type VideoRef, type OnLoadData, type OnVideoErrorData } from 'react-native-video';
 import { colors, fonts } from '../../constants/theme';
+import { Icon } from '../ui/Icon';
 import { FILTERS } from '../../constants/filters';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
 
@@ -87,7 +88,7 @@ export function PreviewPlayer({
         <>
           <View style={[styles.colorBg, { backgroundColor: currentClip.color }]} />
           <View style={styles.centerContent}>
-            <Text style={styles.noVideoIcon}>🎥</Text>
+            <Icon name="video" size={24} color={colors.textDim} />
             <Text style={styles.captionText} numberOfLines={3}>{currentClip.caption}</Text>
           </View>
         </>

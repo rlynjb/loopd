@@ -10,6 +10,7 @@ import { getVlogs, getEntriesByDate, archivePastDays } from '../src/services/dat
 import { getTodayString, formatDate } from '../src/utils/time';
 import { CATEGORIES } from '../src/constants/categories';
 import { MOODS } from '../src/constants/moods';
+import { Icon } from '../src/components/ui/Icon';
 import type { Entry, Vlog } from '../src/types/entry';
 
 export default function HomeScreen() {
@@ -47,9 +48,9 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      <GlowOrb color={colors.teal} size={300} top={50} left={-80} opacity={0.07} />
-      <GlowOrb color={colors.purple} size={250} top={300} left={250} opacity={0.06} />
-      <GlowOrb color={colors.coral} size={200} top={550} left={-40} opacity={0.05} />
+      <GlowOrb color={colors.accent2} size={300} top={50} left={-80} opacity={0.05} />
+      <GlowOrb color={colors.green} size={250} top={300} left={250} opacity={0.04} />
+      <GlowOrb color={colors.amber} size={200} top={550} left={-40} opacity={0.03} />
 
       <HomeHeader
         dayStarted={false}
@@ -91,7 +92,7 @@ export default function HomeScreen() {
                 <View style={styles.todayCats}>
                   {todayCategories.slice(0, 6).map(catId => {
                     const cat = CATEGORIES.find(c => c.id === catId);
-                    return cat ? <Text key={catId} style={styles.catEmoji}>{cat.emoji}</Text> : null;
+                    return cat ? <Icon key={catId} name={cat.icon} size={13} color={colors.textDim} /> : null;
                   })}
                 </View>
               )}
@@ -142,15 +143,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   startBtn: {
-    backgroundColor: colors.teal,
-    borderRadius: 14,
-    paddingVertical: 14,
+    backgroundColor: colors.accent,
+    borderRadius: colors.radiusLg,
+    paddingVertical: 15,
     paddingHorizontal: 40,
   },
   startBtnText: {
-    fontFamily: fonts.heading,
+    fontFamily: fonts.body,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '600',
     color: colors.bg,
   },
   todaySection: {
@@ -158,11 +159,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   todayCard: {
-    backgroundColor: colors.cardBg,
+    backgroundColor: colors.bg2,
     borderWidth: 1,
-    borderColor: colors.teal + '30',
-    borderRadius: 14,
-    padding: 14,
+    borderColor: `${colors.accent2}35`,
+    borderRadius: colors.radiusLg,
+    padding: 15,
     marginBottom: 12,
   },
   todayTopRow: {
@@ -195,7 +196,7 @@ const styles = StyleSheet.create({
   todayCount: {
     fontFamily: fonts.mono,
     fontSize: 9,
-    color: colors.teal,
+    color: colors.accent2,
   },
   todayStats: {
     flexDirection: 'row',
@@ -215,15 +216,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   continueBtn: {
-    backgroundColor: colors.teal,
-    borderRadius: 14,
+    backgroundColor: colors.accent,
+    borderRadius: colors.radiusLg,
     paddingVertical: 14,
     alignItems: 'center',
   },
   continueBtnText: {
-    fontFamily: fonts.heading,
+    fontFamily: fonts.body,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '600',
     color: colors.bg,
   },
   historySection: {

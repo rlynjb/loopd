@@ -1,5 +1,6 @@
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
+import { Icon } from '../ui/Icon';
 import type { ClipItem } from '../../types/project';
 
 type Props = {
@@ -27,16 +28,19 @@ export function ClipEditor({ clip, playheadPctInClip, onUpdate, onMoveLeft, onMo
           onPress={canSplit ? onSplit : undefined}
           style={[styles.splitBtn, !canSplit && styles.splitBtnDisabled]}
         >
-          <Text style={[styles.splitBtnText, !canSplit && styles.splitBtnTextDisabled]}>✂ Split</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Icon name="scissors" size={12} color={canSplit ? colors.amber : colors.textDimmer} />
+            <Text style={[styles.splitBtnText, !canSplit && styles.splitBtnTextDisabled]}>Split</Text>
+          </View>
         </Pressable>
         <Pressable onPress={onMoveLeft} style={styles.actionBtn}>
-          <Text style={styles.actionBtnText}>◀</Text>
+          <Icon name="arrowLeft" size={14} color={colors.textMuted} />
         </Pressable>
         <Pressable onPress={onMoveRight} style={styles.actionBtn}>
-          <Text style={styles.actionBtnText}>▶</Text>
+          <Icon name="arrowRight" size={14} color={colors.textMuted} />
         </Pressable>
         <Pressable onPress={onDelete} style={[styles.actionBtn, styles.deleteBtn]}>
-          <Text style={styles.deleteBtnText}>✕</Text>
+          <Icon name="trash" size={14} color={colors.coral} />
         </Pressable>
       </View>
 

@@ -28,8 +28,10 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
               <Text style={styles.backText}>{'<-'}</Text>
             </Pressable>
           )}
-          <Text style={styles.logo}>loopd</Text>
-          <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
+          <View style={styles.logoRow}>
+            <Text style={styles.logo}>loopd</Text>
+            <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
+          </View>
         </View>
       </View>
 
@@ -45,7 +47,7 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
                     styles.dot,
                     {
                       backgroundColor: habitsChecked.includes(h.id)
-                        ? colors.purple
+                        ? colors.green
                         : 'rgba(255,255,255,0.08)',
                     },
                   ]}
@@ -55,7 +57,7 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
             <Text
               style={[
                 styles.streakText,
-                { color: streakCount > 0 ? colors.purple : colors.textDim },
+                { color: streakCount > 0 ? colors.green : colors.textDim },
               ]}
             >
               {streakCount}/{totalHabits}
@@ -72,6 +74,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 60,
     paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.cardBorder,
   },
   topRow: {
     flexDirection: 'row',
@@ -91,17 +95,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textDim,
   },
+  logoRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 10,
+  },
   logo: {
     fontFamily: fonts.heading,
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.teal,
+    fontSize: 22,
+    color: colors.accent,
+    letterSpacing: -0.4,
   },
   slogan: {
     fontFamily: fonts.mono,
-    fontSize: 8,
+    fontSize: 9,
     color: colors.textDim,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
+    fontStyle: 'italic',
   },
   subRow: {
     flexDirection: 'row',

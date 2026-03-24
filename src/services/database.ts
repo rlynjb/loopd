@@ -18,7 +18,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS habits (
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
-      emoji TEXT NOT NULL,
+      emoji TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0
     );
 
@@ -68,11 +68,11 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   if (count && count.c === 0) {
     await database.execAsync(`
       INSERT INTO habits (id, label, emoji, sort_order) VALUES
-        ('workout', 'Workout', '💪', 0),
-        ('study', 'Study', '📚', 1),
-        ('vlog', 'Vlog', '🎬', 2),
-        ('meditate', 'Meditate', '🕊️', 3),
-        ('read', 'Read', '📖', 4);
+        ('workout', 'Workout', '', 0),
+        ('study', 'Study', '', 1),
+        ('vlog', 'Vlog', '', 2),
+        ('meditate', 'Meditate', '', 3),
+        ('read', 'Read', '', 4);
     `);
   }
 }
@@ -120,6 +120,14 @@ export async function insertEntry(entry: Entry): Promise<void> {
       entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs, entry.createdAt,
     ]
+  );
+}
+
+export async function updateEntry(entry: Entry): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ? WHERE id = ?`,
+    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), entry.id]
   );
 }
 
