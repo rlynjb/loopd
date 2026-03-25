@@ -5,7 +5,7 @@ import {
   Smile, Frown, Target, Zap,
   Moon, ChevronLeft, Plus, Scissors, Trash2, ArrowLeft, ArrowRight,
   Play, Square, Sun, Circle, Contrast,
-  X,
+  X, RefreshCw, Settings,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -47,6 +47,8 @@ export const ICONS = {
   circle: Circle,
   contrast: Contrast,
   x: X,
+  refresh: RefreshCw,
+  settings: Settings,
 } as const;
 
 export type IconName = keyof typeof ICONS;

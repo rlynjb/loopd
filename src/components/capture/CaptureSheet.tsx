@@ -229,8 +229,8 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
     <Modal visible={visible} transparent={false} animationType="fade" onRequestClose={handleClose}>
       <View style={styles.modalContainer}>
         <View style={styles.modalHeader}>
-          <Pressable onPress={handleClose}>
-            <Text style={styles.closeBtnText}>← Back</Text>
+          <Pressable onPress={handleClose} hitSlop={12} style={styles.backBtn}>
+            <Icon name="chevronLeft" size={22} color={colors.textMuted} />
           </Pressable>
         </View>
         <ScrollView
@@ -437,10 +437,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.cardBorder,
   },
-  closeBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 12,
-    color: colors.textMuted,
+  backBtn: {
+    padding: 8,
   },
   modalScroll: {
     flex: 1,

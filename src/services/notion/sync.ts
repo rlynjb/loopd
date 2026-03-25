@@ -9,6 +9,7 @@ import {
 } from '../database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
+import { reimportMissingClips } from '../clipMatcher';
 import type { Entry } from '../../types/entry';
 import type { SyncResult } from '../../types/notion';
 
@@ -27,6 +28,18 @@ export async function syncAll(): Promise<SyncResult> {
     // 2. Pull entries from Notion
     const pullResult = await pullEntries(token, entriesDbId, lastSync);
     result.pulled += pullResult;
+
+    // 2b. Auto-reimport missing video clips from camera roll
+    try {
+      const allEntries = await getAllEntries();
+      const videoEntries = allEntries.filter(e => e.type === 'video');
+      const reimported = await reimportMissingClips(videoEntries);
+      if (reimported > 0) {
+        console.log(`[loopd sync] Auto-reimported ${reimported} clip(s) from camera roll`);
+      }
+    } catch (err) {
+      console.warn('[loopd sync] Clip reimport error:', err);
+    }
 
     // 3. Push local entries to Notion
     const pushResult = await pushEntries(token, entriesDbId, lastSync);

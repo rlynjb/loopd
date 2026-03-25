@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { View, Pressable, Text, TextInput, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
 import { CAPTURE_TYPES } from '../../src/constants/captureTypes';
@@ -18,8 +19,15 @@ export default function JournalScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { entries, addEntry, editEntry, removeEntry } = useEntries(date);
+  const { entries, addEntry, editEntry, removeEntry, reload } = useEntries(date);
   const habits = useHabits();
+
+  // Reload entries when screen regains focus (after sync, reimport, etc.)
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload])
+  );
   const { title: dayTitle, updateTitle: setDayTitle } = useDayTitle(date);
   const [showCapture, setShowCapture] = useState(false);
   const [captureType, setCaptureType] = useState<string | null>(null);

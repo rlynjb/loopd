@@ -6,6 +6,9 @@ import * as MediaLibrary from 'expo-media-library';
 import { File as FSFile, Directory, Paths } from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
+import { Icon } from '../../src/components/ui/Icon';
+import { SpinningIcon } from '../../src/components/ui/SpinningIcon';
+import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useProject } from '../../src/hooks/useProject';
@@ -30,6 +33,7 @@ export default function EditorScreen() {
   const { date } = useLocalSearchParams<{ date: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { status: syncStatus, configured: syncConfigured, syncNow } = useNotionSync();
   const { entries } = useEntries(date);
   const habits = useHabits();
   const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries);
@@ -396,11 +400,20 @@ export default function EditorScreen() {
     <View style={styles.container}>
       {/* Top bar */}
       <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={styles.backText}>← BACK</Text>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={{ padding: 8 }}>
+          <Icon name="chevronLeft" size={22} color={colors.textMuted} />
         </Pressable>
         <Text style={styles.title}>Vlog Editor</Text>
-        <View style={{ width: 48 }} />
+        <View style={styles.topBarRight}>
+          {syncConfigured && (
+            <Pressable onPress={syncStatus !== 'syncing' ? syncNow : undefined} hitSlop={8} style={{ padding: 8 }}>
+              <SpinningIcon name="refresh" size={18} color={syncStatus === 'syncing' ? colors.accent2 : colors.textDim} spinning={syncStatus === 'syncing'} />
+            </Pressable>
+          )}
+          <Pressable onPress={() => router.push('/settings')} hitSlop={8} style={{ padding: 8 }}>
+            <Icon name="settings" size={18} color={colors.textDim} />
+          </Pressable>
+        </View>
       </View>
 
       {/* Preview */}
@@ -587,6 +600,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.text,
+  },
+  topBarRight: {
+    flexDirection: 'row',
+    gap: 2,
   },
   transport: {
     flexDirection: 'row',

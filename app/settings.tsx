@@ -94,8 +94,8 @@ export default function SettingsScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()}>
-          <Text style={styles.backText}>← Back</Text>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={{ padding: 8 }}>
+          <Icon name="chevronLeft" size={22} color={colors.textMuted} />
         </Pressable>
       </View>
 
@@ -193,8 +193,8 @@ export default function SettingsScreen() {
           </View>
 
           <Pressable
-            onPress={configured ? syncNow : undefined}
-            style={[styles.syncBtn, !configured && { opacity: 0.4 }]}
+            onPress={configured && status !== 'syncing' ? syncNow : undefined}
+            style={[styles.syncBtn, (!configured || status === 'syncing') && { opacity: 0.4 }]}
           >
             {status === 'syncing' ? (
               <ActivityIndicator size="small" color={colors.bg} />

@@ -62,7 +62,6 @@ export default function HomeScreen() {
         dateLabel=""
         entries={[]}
         habits={[]}
-        onSettings={() => router.push('/settings')}
       />
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>

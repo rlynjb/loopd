@@ -1,6 +1,9 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
+import { SpinningIcon } from '../ui/SpinningIcon';
+import { useNotionSync } from '../../hooks/useNotionSync';
 import type { Habit, Entry } from '../../types/entry';
 
 type Props = {
@@ -9,10 +12,13 @@ type Props = {
   entries: Entry[];
   habits: Habit[];
   onBack?: () => void;
-  onSettings?: () => void;
 };
 
-export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack, onSettings }: Props) {
+export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: Props) {
+  const router = useRouter();
+  const { status: syncStatus, configured: syncConfigured, syncNow } = useNotionSync();
+  const syncing = syncStatus === 'syncing';
+
   const habitsChecked = [
     ...new Set(
       entries.filter(e => e.type === 'habit').flatMap(e => e.habits)
@@ -24,19 +30,24 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack, onS
   return (
     <View style={styles.container}>
       {dayStarted && onBack && (
-        <Pressable onPress={onBack} style={styles.backBtn}>
-          <Text style={styles.backText}>{'<-'}</Text>
+        <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
+          <Icon name="chevronLeft" size={22} color={colors.textMuted} />
         </Pressable>
       )}
       <View style={styles.logoBlock}>
         <Text style={styles.logo}>loopd</Text>
         <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
       </View>
-      {onSettings && (
-        <Pressable onPress={onSettings} style={styles.settingsBtn}>
-          <Icon name="target" size={18} color={colors.textDim} />
+      <View style={styles.headerRight}>
+        {syncConfigured && (
+          <Pressable onPress={!syncing ? syncNow : undefined} hitSlop={8} style={styles.headerIconBtn}>
+            <SpinningIcon name="refresh" size={18} color={syncing ? colors.accent2 : colors.textDim} spinning={syncing} />
+          </Pressable>
+        )}
+        <Pressable onPress={() => router.push('/settings')} hitSlop={8} style={styles.headerIconBtn}>
+          <Icon name="settings" size={18} color={colors.textDim} />
         </Pressable>
-      )}
+      </View>
 
       {dayStarted && (
         <View style={styles.subRow}>
@@ -82,22 +93,21 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     position: 'absolute',
-    left: 20,
-    top: 60,
-    padding: 4,
+    left: 12,
+    top: 54,
+    padding: 12,
     zIndex: 2,
   },
-  settingsBtn: {
+  headerRight: {
     position: 'absolute',
-    right: 20,
-    top: 60,
-    padding: 4,
+    right: 12,
+    top: 54,
+    flexDirection: 'row',
+    gap: 4,
     zIndex: 2,
   },
-  backText: {
-    fontFamily: fonts.mono,
-    fontSize: 14,
-    color: colors.textDim,
+  headerIconBtn: {
+    padding: 10,
   },
   logoBlock: {
     alignItems: 'center',

@@ -43,9 +43,10 @@ export async function pickAndCopyClip(
 
   await ensureDirectories(date);
 
-  const filename = `clip-${Date.now()}.mp4`;
+  // Use the original filename from the device
+  const originalName = asset.uri.split('/').pop() ?? `clip-${Date.now()}.mp4`;
   const destDir = new Directory(Paths.document, 'loopd', 'clips', date);
-  const destFile = new File(destDir, filename);
+  const destFile = new File(destDir, originalName);
 
   try {
     const sourceFile = new File(asset.uri);
