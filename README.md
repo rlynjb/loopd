@@ -90,67 +90,122 @@ npx expo run:android --device
 
 Pick your device from the list. The app installs and connects to Metro for live reload.
 
-### 5. Development workflow
+## Development Workflow
 
-After the first build, you can just start Metro:
+### Emulator (local testing)
 
 ```bash
-npm start
+npm run android
 ```
 
-Then press `a` to open on a running Android emulator/device. Native rebuilds are only needed when you change native dependencies.
+Use this for testing changes before pushing to your phone. Requires Android Studio emulator running.
 
-## Install on Android Phone (APK)
+### Phone (production testing via EAS)
 
-### Option A: Local APK build
+The recommended workflow for testing on a real phone:
+
+| Task | Command |
+|---|---|
+| Push code changes to phone | `eas update --branch preview --platform android --message "what changed"` |
+| New native module added | `eas build --platform android --profile preview` |
+| Check build status | Visit expo.dev → your project → Builds |
+
+The app checks for updates on open and prompts to install. You can also manually check in **Settings → App Updates**.
+
+> **Important:** Don't mix local debug builds and EAS builds on the same device — different signing keys will conflict. Use emulator for local builds, phone for EAS builds.
+
+### EAS Setup (one time)
+
+1. Create an account at [expo.dev/signup](https://expo.dev/signup)
+2. If you signed up with Google, go to **Settings → Password** and set a password
+3. Install and login:
+
+```bash
+npm install -g eas-cli
+eas login
+```
+
+4. Build the base app:
+
+```bash
+eas build --platform android --profile preview
+```
+
+This builds in the cloud (~10-15 min). When done, install on your phone (one time only):
+
+**Option A:** From terminal — shows a QR code, scan with your phone:
+```bash
+eas build:run --platform android
+```
+
+**Option B:** From browser — open on your phone:
+Go to **expo.dev** → sign in → your project **loopd** → **Builds** → latest build → **Install**
+
+> If you get `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, uninstall the old debug build first:
+> ```bash
+> ~/Library/Android/sdk/platform-tools/adb uninstall com.anonymous.loopd
+> ```
+
+5. From now on, push JS changes with (no reinstall needed):
+
+```bash
+eas update --branch preview --platform android --message "description of changes"
+```
+
+No APK transfer, no reinstall, no data loss. The app picks up the update next time it opens.
+
+### When you need a full rebuild
+
+Only run `eas build` again when you add a **new native module** (e.g. `npm install` a package with native Android/iOS code). All JS-only changes go through `eas update`.
+
+### Local APK build (alternative)
+
+If you prefer not to use EAS:
 
 ```bash
 cd android
 ./gradlew assembleRelease
 ```
 
-Output APK:
+Output: `android/app/build/outputs/apk/release/app-release.apk`
 
-```
-android/app/build/outputs/apk/release/app-release.apk
-```
-
-Transfer to your phone and install. Enable **Install from unknown sources** if prompted.
-
-### Option B: EAS Build (cloud)
-
-```bash
-npm install -g eas-cli
-eas login
-eas build:configure
-eas build --platform android --profile preview
-```
-
-This gives you a download link. Open it on your phone to install.
+Transfer to your phone and install over the existing app (no uninstall needed, data is preserved).
 
 ## Project Structure
 
 ```
 loopd/
 ├── app/                        # Expo Router screens
-│   ├── _layout.tsx             # Root layout (fonts, DB, navigation)
+│   ├── _layout.tsx             # Root layout (fonts, DB, auto-sync)
 │   ├── index.tsx               # Home screen
 │   ├── journal/[date].tsx      # Journal timeline
-│   └── editor/[date].tsx       # Video editor
+│   ├── editor/[date].tsx       # Video editor
+│   └── settings.tsx            # Notion sync settings
 ├── src/
 │   ├── components/
-│   │   ├── ui/                 # GlowOrb, Chip, PrimaryButton, Slider
-│   │   ├── timeline/           # TimelineEntry, TimelineList, CaptureCard
-│   │   ├── capture/            # CaptureSheet
+│   │   ├── ui/                 # Icon, SpinningIcon, Chip, Slider, GlowOrb
+│   │   ├── timeline/           # TimelineEntry, TimelineList
+│   │   ├── capture/            # CaptureSheet (add + edit)
 │   │   ├── editor/             # EditorTimeline, ClipEditor, TextEditor,
 │   │   │                         FilterEditor, PreviewPlayer, ExportModal
 │   │   └── home/               # HomeHeader, PastVlogCard
-│   ├── hooks/                  # useDatabase, useEntries, useHabits, useProject
-│   ├── services/               # database (SQLite), fileManager
-│   ├── types/                  # entry, project, common
-│   ├── constants/              # theme, moods, categories, filters
+│   ├── hooks/                  # useDatabase, useEntries, useHabits,
+│   │                             useProject, useDayTitle, useNotionSync
+│   ├── services/
+│   │   ├── database.ts         # SQLite schema, CRUD, sync queries
+│   │   ├── fileManager.ts      # File operations, clip import
+│   │   ├── clipMatcher.ts      # Auto-reimport missing clips from camera roll
+│   │   ├── exportPipeline.ts   # FFmpeg video export
+│   │   ├── ffmpegCommand.ts    # FFmpeg command builder
+│   │   └── notion/             # Notion sync
+│   │       ├── api.ts          # REST client with rate limiting
+│   │       ├── config.ts       # SecureStore config
+│   │       ├── mapper.ts       # Bidirectional property mapping
+│   │       └── sync.ts         # Sync orchestrator
+│   ├── types/                  # entry, project, notion, common
+│   ├── constants/              # theme, moods, categories, filters, captureTypes
 │   └── utils/                  # time, id
-└── assets/fonts/               # Syne, JetBrains Mono, Inter
+└── assets/fonts/               # DM Serif Display, DM Mono, Instrument Sans
 ```
 
 ## Tech Stack
@@ -161,10 +216,13 @@ loopd/
 | Language    | TypeScript (strict)                 |
 | Navigation  | Expo Router (file-based)            |
 | Video       | react-native-video                  |
+| Video Export| @wokcito/ffmpeg-kit-react-native    |
 | Storage     | expo-sqlite                         |
 | Files       | expo-file-system                    |
-| Gestures    | react-native-gesture-handler        |
-| Animations  | react-native-reanimated             |
+| Sync        | Notion REST API (bidirectional)     |
+| Secrets     | expo-secure-store                   |
+| Icons       | lucide-react-native                 |
+| Updates     | expo-updates + EAS Update           |
 
 ## Troubleshooting
 

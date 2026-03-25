@@ -2,7 +2,8 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, Alert, StyleSheet } from 'react-native';
+import * as Updates from 'expo-updates';
 import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
@@ -16,6 +17,29 @@ export default function RootLayout() {
     DMMonoMedium: require('../assets/fonts/DMMono-Medium.ttf'),
     InstrumentSans: require('../assets/fonts/InstrumentSans-Variable.ttf'),
   });
+
+  // Check for OTA updates on app open
+  useEffect(() => {
+    if (__DEV__) return; // Skip in dev mode
+    (async () => {
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          await Updates.fetchUpdateAsync();
+          Alert.alert(
+            'Update Available',
+            'A new version has been downloaded. Restart to apply?',
+            [
+              { text: 'Later', style: 'cancel' },
+              { text: 'Restart', onPress: () => Updates.reloadAsync() },
+            ]
+          );
+        }
+      } catch (err) {
+        console.warn('[loopd] Update check failed:', err);
+      }
+    })();
+  }, []);
 
   // Auto-sync on app open
   useEffect(() => {

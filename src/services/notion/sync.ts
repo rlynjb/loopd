@@ -68,9 +68,13 @@ export async function syncAll(): Promise<SyncResult> {
 }
 
 async function pullEntries(token: string, dbId: string, _lastSync: string | null): Promise<number> {
-  // Always do a full pull — dataset is small and ensures we catch all changes
-  // including column renames, edits, and new entries
-  const pages = await queryDatabase(token, dbId);
+  // Limit pull to last 7 days to avoid pulling too much data
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const filter = {
+    property: 'Date',
+    date: { on_or_after: sevenDaysAgo },
+  };
+  const pages = await queryDatabase(token, dbId, filter);
   let count = 0;
 
   // Track which notion page IDs we've seen (for detecting Notion-side deletions)

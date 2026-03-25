@@ -7,6 +7,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "scheme": "loopd",
+    "platforms": ["android"],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -32,6 +33,18 @@
       "expo-sqlite",
       "expo-sharing",
       "react-native-video"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a5d9b9e0-5792-4b30-aa91-3870f6652a31"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a5d9b9e0-5792-4b30-aa91-3870f6652a31"
+    }
   }
 }
