@@ -14,6 +14,7 @@ type Props = {
   visibleFilter: FilterOverlay | null;
   selectedTextId: string | null;
   onSelectText: (id: string) => void;
+  previewHeight?: number;
 };
 
 export function PreviewPlayer({
@@ -24,6 +25,7 @@ export function PreviewPlayer({
   visibleFilter,
   selectedTextId,
   onSelectText,
+  previewHeight = 320,
 }: Props) {
   const videoRef = useRef<VideoRef>(null);
   const filterPreset = visibleFilter ? FILTERS.find(f => f.id === visibleFilter.filterId) : null;
@@ -65,8 +67,10 @@ export function PreviewPlayer({
     }
   }, [currentClipSeekSec, isPlaying, videoStatus]);
 
+  const previewWidth = Math.round(previewHeight * 9 / 16);
+
   return (
-    <View style={styles.preview}>
+    <View style={[styles.preview, { width: previewWidth, height: previewHeight }]}>
       {/* Actual video player */}
       {hasVideo && (
         <Video
@@ -176,10 +180,8 @@ export function PreviewPlayer({
 const styles = StyleSheet.create({
   preview: {
     alignSelf: 'center',
-    width: 180,
-    height: 320,
     backgroundColor: '#0a0a0a',
-    borderRadius: 12,
+    borderRadius: 0,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
     position: 'relative',

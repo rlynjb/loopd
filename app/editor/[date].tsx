@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Alert } from 'react-native';
+import { View, Text, Pressable, TextInput, ScrollView, PanResponder, StyleSheet, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
@@ -49,6 +49,24 @@ export default function EditorScreen() {
   const [newTextContent, setNewTextContent] = useState('');
   const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
   const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const [previewHeight, setPreviewHeight] = useState(280);
+  const heightAtDragStart = useRef(280);
+  const currentHeightRef = useRef(280);
+  currentHeightRef.current = previewHeight;
+
+  const resizePanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        heightAtDragStart.current = currentHeightRef.current;
+      },
+      onPanResponderMove: (_, gs) => {
+        const newHeight = Math.max(100, Math.min(500, heightAtDragStart.current + gs.dy));
+        setPreviewHeight(Math.round(newHeight));
+      },
+    })
+  ).current;
 
   const clips = project?.clips ?? [];
   const textOverlays = project?.textOverlays ?? [];
@@ -416,7 +434,8 @@ export default function EditorScreen() {
         </View>
       </View>
 
-      {/* Preview */}
+      {/* Preview — tap to deselect */}
+      <Pressable onPress={clearSelections}>
       <PreviewPlayer
         currentClip={currentClip}
         currentClipSeekSec={currentClipSeekSec}
@@ -425,7 +444,14 @@ export default function EditorScreen() {
         visibleFilter={visibleFilter}
         selectedTextId={selectedTextId}
         onSelectText={id => { clearSelections(); setSelectedTextId(id === selectedTextId ? null : id); }}
+        previewHeight={previewHeight}
       />
+      </Pressable>
+
+      {/* Resize handle */}
+      <View {...resizePanResponder.panHandlers} style={styles.resizeHandle}>
+        <View style={styles.resizeGrip} />
+      </View>
 
       {/* Transport controls */}
       <View style={styles.transport}>
@@ -548,6 +574,13 @@ export default function EditorScreen() {
         {clips.length === 0 && !addingClip && !addingText && !selectedText && (
           <Text style={styles.emptyText}>No clips in your vlog yet. Tap + on the timeline to add.</Text>
         )}
+
+        {/* Tap to deselect — fills remaining space */}
+        {(selectedClipId || selectedTextId || selectedFilterId) && (
+          <Pressable onPress={clearSelections} style={styles.deselectArea}>
+            <Text style={styles.deselectText}>tap to deselect</Text>
+          </Pressable>
+        )}
       </ScrollView>
 
       {/* Bottom bar */}
@@ -601,6 +634,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.text,
   },
+  resizeHandle: {
+    alignSelf: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 40,
+  },
+  resizeGrip: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
   topBarRight: {
     flexDirection: 'row',
     gap: 2,
@@ -652,7 +696,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,217,163,0.06)',
     borderWidth: 1.5,
     borderColor: 'rgba(0,217,163,0.2)',
-    borderRadius: 14,
+    borderRadius: 0,
     padding: 16,
     marginBottom: 14,
   },
@@ -704,6 +748,15 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 11,
     fontWeight: '700',
+  },
+  deselectArea: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  deselectText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDimmer,
   },
   emptyText: {
     textAlign: 'center',

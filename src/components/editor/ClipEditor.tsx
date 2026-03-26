@@ -58,7 +58,7 @@ export function ClipEditor({ clip, playheadPctInClip, onUpdate, onMoveLeft, onMo
 const styles = StyleSheet.create({
   container: {
     borderWidth: 1,
-    borderRadius: 14,
+    borderRadius: 0,
     padding: 16,
     marginBottom: 14,
   },
