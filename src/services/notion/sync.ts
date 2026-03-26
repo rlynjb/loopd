@@ -41,21 +41,29 @@ export async function syncAll(): Promise<SyncResult> {
       console.warn('[loopd sync] Clip reimport error:', err);
     }
 
-    // 3. Push local entries to Notion
+    // 3. Push local entries to Notion + clean up names
     const pushResult = await pushEntries(token, entriesDbId, lastSync);
     result.pushed += pushResult.count;
     result.errors.push(...pushResult.errors);
 
-    // 4. Process deletions
-    await processDeletions(token);
+    // 4. Clean up Notion entry names (append type to all entries)
+    await cleanUpNotionNames(token, entriesDbId);
 
-    // 5. Aggregate daily log (if configured)
+    // 5. Process deletions (skip on fresh install — no previous sync)
+    if (lastSync) {
+      await processDeletions(token);
+    } else {
+      // Clear any stale deletion records from a previous install
+      await clearSyncDeletions();
+    }
+
+    // 6. Aggregate daily log (if configured)
     const dailyLogDbId = await getDailyLogDbId();
     if (dailyLogDbId) {
       await syncDailyLog(token, dailyLogDbId);
     }
 
-    // 6. Update last sync timestamp
+    // 7. Update last sync timestamp
     await setLastSyncTimestamp(new Date().toISOString());
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -68,20 +76,32 @@ export async function syncAll(): Promise<SyncResult> {
 }
 
 async function pullEntries(token: string, dbId: string, _lastSync: string | null): Promise<number> {
-  // Limit pull to last 7 days to avoid pulling too much data
+  // Pull entries from last 7 days — try Date first, then Created At, then all
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const filter = {
-    property: 'Date',
-    date: { on_or_after: sevenDaysAgo },
-  };
-  const pages = await queryDatabase(token, dbId, filter);
+  let pages;
+  try {
+    pages = await queryDatabase(token, dbId, {
+      or: [
+        { property: 'Date', date: { on_or_after: sevenDaysAgo } },
+        { property: 'Date', date: { is_empty: true } },
+      ],
+    });
+  } catch {
+    try {
+      pages = await queryDatabase(token, dbId, {
+        property: 'Created At',
+        date: { on_or_after: sevenDaysAgo },
+      });
+    } catch {
+      console.log('[loopd sync] Date filters failed, pulling all entries');
+      pages = await queryDatabase(token, dbId);
+    }
+  }
+  console.log('[loopd sync] Pulled', pages.length, 'pages from Notion');
   let count = 0;
 
   // Track which notion page IDs we've seen (for detecting Notion-side deletions)
   const seenNotionIds = new Set<string>();
-
-  // Collect titles per date from Notion entries to sync day titles
-  const titlesByDate = new Map<string, string>();
 
   for (const page of pages) {
     if (page.archived) continue;
@@ -89,25 +109,6 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
 
     try {
       const entry = notionPageToEntry(page);
-
-      // Extract day title from Notion row name: "Day Title — Type" → "Day Title"
-      const pageName = getTitleFromPage(page);
-      if (pageName && entry.date) {
-        const suffixes = [' — Clip', ' — Journal', ' — Habits', ' — video', ' — journal', ' — habit'];
-        let dayTitle = pageName;
-        for (const suffix of suffixes) {
-          if (dayTitle.endsWith(suffix)) {
-            dayTitle = dayTitle.slice(0, -suffix.length);
-            break;
-          }
-        }
-        // Only use as day title if it's not just a date or empty
-        if (dayTitle && dayTitle !== entry.date && !dayTitle.match(/^\d{4}-\d{2}-\d{2}$/)) {
-          if (!titlesByDate.has(entry.date)) {
-            titlesByDate.set(entry.date, dayTitle);
-          }
-        }
-      }
 
       // Check if we already have this entry locally (by loopd ID or notion page ID)
       let existing = await getEntryById(entry.id);
@@ -139,30 +140,6 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
     } catch (err) {
       console.warn('[loopd sync] Pull error for page', page.id, err);
     }
-  }
-
-  // Sync day titles from Notion entry names — last-edit-wins
-  for (const [date, notionTitle] of titlesByDate) {
-    const local = await getDayTitleWithTimestamp(date);
-    if (local.title === notionTitle) continue; // already in sync
-
-    // Find the latest edit time for Notion entries on this date
-    const notionEditTimes = pages
-      .filter(p => !p.archived)
-      .filter(p => {
-        const d = getPropertyDate(p, 'Date');
-        return d === date;
-      })
-      .map(p => new Date(p.last_edited_time).getTime());
-    const latestNotionEdit = notionEditTimes.length > 0 ? Math.max(...notionEditTimes) : 0;
-    const localEditTime = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
-
-    if (latestNotionEdit > localEditTime) {
-      // Notion is newer — pull title
-      await setDayTitleFromSync(date, notionTitle);
-      console.log('[loopd sync] Pulled day title:', date, notionTitle);
-    }
-    // else: local is newer — will be pushed in pushEntries
   }
 
   return count;
@@ -210,6 +187,61 @@ async function pushEntries(token: string, dbId: string, lastSync: string | null)
   }
 
   return { count, errors };
+}
+
+async function cleanUpNotionNames(token: string, dbId: string): Promise<void> {
+  try {
+    // Get title column name
+    let titleColumn = 'Name';
+    try {
+      const dbSchema = await getNotionDatabase(token, dbId) as { properties: Record<string, unknown> };
+      titleColumn = getTitlePropertyKey(dbSchema.properties);
+    } catch { /* fallback */ }
+
+    const pages = await queryDatabase(token, dbId);
+    const habits = await getHabits();
+    const habitIdToLabel = new Map(habits.map(h => [h.id, h.label]));
+
+    for (const page of pages) {
+      if (page.archived) continue;
+      const currentName = getTitleFromPage(page);
+      const entry = notionPageToEntry(page);
+
+      // Check if the name already has the [Type] format
+      const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';
+      if (currentName.includes(`[${typeLabel}]`)) continue;
+
+      // Strip old " — Type" format if present
+      let baseName = currentName;
+      const oldSuffixes = [' — Journal', ' — Clip', ' — Habits', ' — video', ' — journal', ' — habit'];
+      for (const suffix of oldSuffixes) {
+        if (baseName.endsWith(suffix)) {
+          baseName = baseName.slice(0, -suffix.length);
+          break;
+        }
+      }
+
+      // Build the clean name
+      let cleanName: string;
+      if (baseName && baseName !== entry.date && !baseName.match(/^\d{4}-\d{2}-\d{2}/)) {
+        cleanName = `${baseName.slice(0, 50)}${baseName.length > 50 ? '...' : ''} [${typeLabel}]`;
+      } else {
+        const preview = entry.text?.slice(0, 50) ?? '';
+        cleanName = preview
+          ? `${preview}${preview.length >= 50 ? '...' : ''} [${typeLabel}]`
+          : `${entry.date} [${typeLabel}]`;
+      }
+
+      if (cleanName !== currentName) {
+        await updatePage(token, page.id, {
+          [titleColumn]: { title: [{ text: { content: cleanName } }] },
+        });
+        console.log('[loopd sync] Cleaned name:', currentName, '→', cleanName);
+      }
+    }
+  } catch (err) {
+    console.warn('[loopd sync] Name cleanup error:', err);
+  }
 }
 
 async function processDeletions(token: string): Promise<void> {

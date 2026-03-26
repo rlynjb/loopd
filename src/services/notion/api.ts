@@ -18,9 +18,10 @@ async function rateLimit(): Promise<void> {
 async function notionFetch(
   token: string,
   endpoint: string,
-  options: { method?: string; body?: unknown } = {}
+  options: { method?: string; body?: unknown; _retries?: number } = {}
 ): Promise<unknown> {
   await rateLimit();
+  const retries = options._retries ?? 0;
 
   const res = await fetch(`${NOTION_API}${endpoint}`, {
     method: options.method ?? 'GET',
@@ -32,10 +33,19 @@ async function notionFetch(
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
+  // Rate limited — wait and retry
   if (res.status === 429) {
     const retryAfter = parseInt(res.headers.get('Retry-After') ?? '1', 10);
     await new Promise(r => setTimeout(r, retryAfter * 1000));
-    return notionFetch(token, endpoint, options);
+    return notionFetch(token, endpoint, { ...options, _retries: retries + 1 });
+  }
+
+  // Server error (500, 502, 503, 504) — retry up to 3 times with backoff
+  if (res.status >= 500 && retries < 3) {
+    const delay = (retries + 1) * 2000;
+    console.warn(`[loopd] Notion ${res.status}, retrying in ${delay}ms (attempt ${retries + 1}/3)`);
+    await new Promise(r => setTimeout(r, delay));
+    return notionFetch(token, endpoint, { ...options, _retries: retries + 1 });
   }
 
   if (!res.ok) {

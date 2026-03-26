@@ -32,6 +32,7 @@
       "expo-font",
       "expo-sqlite",
       "expo-sharing",
+      "expo-updates",
       "react-native-video"
     ],
     "extra": {

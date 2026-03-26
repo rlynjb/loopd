@@ -68,12 +68,14 @@ function getTitlePropertyKey(props: Record<string, unknown>): string {
 export function notionPageToEntry(page: NotionPage): Entry {
   const props = page.properties;
   const loopdId = getPlainText(props['loopd ID']) || generateId('notion');
-  const date = getDate(props['Date']) ?? new Date(page.created_time).toISOString().slice(0, 10);
+  const createdAtRaw = getDate(props['Created At']) ?? page.created_time;
+  const date = getDate(props['Date'])
+    ?? (createdAtRaw ? createdAtRaw.slice(0, 10) : new Date(page.created_time).toISOString().slice(0, 10));
   const type = (getSelect(props['Type']) ?? 'journal') as Entry['type'];
-  const text = getPlainText(props['Text']) || getTitleProperty(props as Record<string, unknown>) || null;
+  const text = getPlainText(props['Text']) || getPlainText(props['Note']) || getTitleProperty(props as Record<string, unknown>) || null;
   // Convert Notion habit names to local IDs (lowercase, dashes for spaces)
   const habits = getMultiSelect(props['Habits']).map(h => h.toLowerCase().replace(/\s+/g, '-'));
-  const createdAt = getDate(props['Created At']) ?? page.created_time;
+  const createdAt = createdAtRaw;
 
   // Parse clips JSON from rich_text
   let clips: ClipRef[] = [];
@@ -111,19 +113,10 @@ export function entryToNotionProperties(
     ? JSON.stringify(entry.clips.map(c => ({ uri: c.uri.split('/').pop(), durationMs: c.durationMs })))
     : '';
 
-  // Build a descriptive title: "Day Title — Type" or "Type — Date"
-  const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';
-  const label = dayTitle
-    ? `${dayTitle} — ${typeLabel}`
-    : entry.type === 'journal'
-      ? entry.text?.slice(0, 60) ?? `Journal — ${entry.date}`
-      : `${typeLabel} — ${entry.date}`;
-
   // Convert habit IDs to display labels for Notion multi-select
   const habitNames = entry.habits.map(id => habitIdToLabel?.get(id) ?? id);
 
   const props: Record<string, unknown> = {
-    [titleColumnName]: { title: [{ text: { content: label } }] },
     'Date': { date: { start: entry.date } },
     'Type': { select: { name: entry.type } },
     'Text': { rich_text: [{ text: { content: entry.text ?? '' } }] },
@@ -132,6 +125,16 @@ export function entryToNotionProperties(
     'loopd ID': { rich_text: [{ text: { content: entry.id } }] },
     'Created At': { date: { start: entry.createdAt } },
   };
+
+  // Always set the Name with type appended for clean Notion display
+  const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';
+  const preview = entry.text?.slice(0, 50) ?? '';
+  const label = dayTitle
+    ? `${dayTitle} [${typeLabel}]`
+    : preview
+      ? `${preview}${preview.length >= 50 ? '...' : ''} [${typeLabel}]`
+      : `${entry.date} [${typeLabel}]`;
+  props[titleColumnName] = { title: [{ text: { content: label } }] };
 
   return props;
 }

@@ -6,10 +6,11 @@ import { View, ActivityIndicator, Alert, StyleSheet } from 'react-native';
 import * as Updates from 'expo-updates';
 import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
+import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
 import { syncAll } from '../src/services/notion/sync';
 
-export default function RootLayout() {
+function AppContent() {
   const { ready } = useDatabase();
   const [fontsLoaded] = useFonts({
     DMSerifDisplay: require('../assets/fonts/DMSerifDisplay.ttf'),
@@ -20,7 +21,7 @@ export default function RootLayout() {
 
   // Check for OTA updates on app open
   useEffect(() => {
-    if (__DEV__) return; // Skip in dev mode
+    if (__DEV__) return;
     (async () => {
       try {
         const update = await Updates.checkForUpdateAsync();
@@ -73,6 +74,14 @@ export default function RootLayout() {
         }}
       />
     </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <NotionSyncProvider>
+      <AppContent />
+    </NotionSyncProvider>
   );
 }
 
