@@ -13,6 +13,8 @@ import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
+import { recordClip } from '../../src/services/fileManager';
+import { generateId } from '../../src/utils/id';
 import type { Entry } from '../../src/types/entry';
 
 export default function JournalScreen() {
@@ -65,14 +67,43 @@ export default function JournalScreen() {
     handleCloseSheet();
   };
 
+  const [recording, setRecording] = useState(false);
+  const handleQuickRecord = async () => {
+    if (recording) return;
+    setRecording(true);
+    try {
+      const result = await recordClip(date);
+      if (result) {
+        const entry: Entry = {
+          id: generateId('entry'),
+          date,
+          type: 'video',
+          text: null,
+          mood: null,
+          category: null,
+          habits: [],
+          clipUri: result.uri,
+          clipDurationMs: result.durationMs,
+          clips: [{ uri: result.uri, durationMs: result.durationMs }],
+          createdAt: new Date().toISOString(),
+        };
+        addEntry(entry);
+      }
+    } catch (err) {
+      console.warn('[loopd] Quick record failed:', err);
+    } finally {
+      setRecording(false);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <HomeHeader
-        dayStarted
-        dateLabel={formatDate(new Date(date + 'T12:00:00'))}
+        dayStarted={false}
+        dateLabel=""
         entries={entries}
         habits={habits}
-        onBack={() => router.back()}
+        onBack={() => router.push('/')}
       />
 
       <View style={styles.titleRow}>
@@ -83,6 +114,7 @@ export default function JournalScreen() {
           placeholderTextColor={colors.textDimmer}
           style={styles.titleInput}
         />
+        <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
         {/* Habit streak */}
         {habits.length > 0 && (
           <View style={styles.habitStreak}>
@@ -107,19 +139,30 @@ export default function JournalScreen() {
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
         <View style={styles.captureRow}>
-          {CAPTURE_TYPES.map(ct => (
-            <Pressable
-              key={ct.id}
-              onPress={() => handleCapture(ct.id)}
-              style={styles.captureBtn}
-            >
-              <Icon name={ct.icon} size={20} color={colors.textMuted} />
-              <Text style={styles.captureLabel}>{ct.label}</Text>
-            </Pressable>
-          ))}
-          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.closeBtn}>
-            <Icon name="moon" size={20} color={colors.accent2} />
-            <Text style={styles.closeLabel}>Close</Text>
+          {/* Journal */}
+          <Pressable onPress={() => handleCapture('journal')} style={styles.captureBtn}>
+            <Icon name="penLine" size={18} color={colors.textMuted} />
+            <Text style={styles.captureLabel}>Journal</Text>
+          </Pressable>
+          {/* Habit */}
+          <Pressable onPress={() => handleCapture('habit')} style={styles.captureBtn}>
+            <Icon name="checkSquare" size={18} color={colors.textMuted} />
+            <Text style={styles.captureLabel}>Habit</Text>
+          </Pressable>
+          {/* Record — center */}
+          <Pressable onPress={handleQuickRecord} style={styles.captureBtn} disabled={recording}>
+            <Icon name="camera" size={18} color={recording ? colors.textDim : colors.coral} />
+            <Text style={[styles.captureLabel, { color: colors.coral }]}>Record</Text>
+          </Pressable>
+          {/* Clip */}
+          <Pressable onPress={() => handleCapture('video')} style={styles.captureBtn}>
+            <Icon name="video" size={18} color={colors.textMuted} />
+            <Text style={styles.captureLabel}>Clip</Text>
+          </Pressable>
+          {/* Edit */}
+          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.captureBtn}>
+            <Icon name="film" size={18} color={colors.accent2} />
+            <Text style={[styles.captureLabel, { color: colors.accent2 }]}>Edit</Text>
           </Pressable>
         </View>
       </View>
@@ -145,8 +188,9 @@ const styles = StyleSheet.create({
   },
   titleRow: {
     paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingTop: 16,
     paddingBottom: 4,
+    alignItems: 'center',
   },
   titleInput: {
     fontFamily: fonts.heading,
@@ -154,6 +198,14 @@ const styles = StyleSheet.create({
     color: colors.text,
     padding: 0,
     letterSpacing: -0.3,
+    textAlign: 'center',
+    width: '100%',
+  },
+  dateText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.textDim,
+    marginTop: 4,
   },
   habitStreak: {
     flexDirection: 'row',
@@ -181,41 +233,34 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 20,
-    paddingTop: 14,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    backgroundColor: colors.bg,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
   },
   captureRow: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'flex-end',
+  },
+  recordWrap: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  recordBtn: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    gap: 4,
   },
   captureBtn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: colors.radius,
-    backgroundColor: colors.bg2,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
+    paddingVertical: 6,
     alignItems: 'center',
-    gap: 4,
+    gap: 3,
   },
   captureLabel: {
     fontFamily: fonts.mono,
     fontSize: 8,
     color: colors.textDim,
-  },
-  closeBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: colors.radius,
-    backgroundColor: colors.bg2,
-    borderWidth: 1,
-    borderColor: `${colors.accent2}40`,
-    alignItems: 'center',
-    gap: 4,
-  },
-  closeLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
-    color: colors.accent2,
   },
 });

@@ -175,13 +175,14 @@ const styles = StyleSheet.create({
   // Thumbnails
   thumbRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
     marginBottom: 8,
   },
   thumbCard: {
     position: 'relative',
-    width: 72,
-    height: 54,
+    width: '31%',
+    aspectRatio: 4 / 3,
     backgroundColor: colors.bg3,
     overflow: 'hidden',
   },

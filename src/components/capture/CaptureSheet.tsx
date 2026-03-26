@@ -7,7 +7,7 @@ import { CAPTURE_TYPES } from '../../constants/captureTypes';
 import { Icon } from '../ui/Icon';
 import type { Habit, Entry, ClipRef } from '../../types/entry';
 import { generateId } from '../../utils/id';
-import { pickAndCopyClip } from '../../services/fileManager';
+import { pickAndCopyClip, recordClip } from '../../services/fileManager';
 
 type PickedClip = {
   uri: string;
@@ -112,19 +112,35 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
     );
   };
 
+  const addClipResult = async (result: { uri: string; durationMs: number }) => {
+    let thumbnail: string | null = null;
+    try {
+      const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
+      thumbnail = t.uri;
+    } catch { /* ignore */ }
+    setClips(prev => [...prev, { uri: result.uri, durationMs: result.durationMs, thumbnail }]);
+  };
+
   const handlePickClip = async () => {
     setPicking(true);
     setPickError(null);
     try {
       const result = await pickAndCopyClip(date);
-      if (result) {
-        let thumbnail: string | null = null;
-        try {
-          const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
-          thumbnail = t.uri;
-        } catch { /* ignore */ }
-        setClips(prev => [...prev, { uri: result.uri, durationMs: result.durationMs, thumbnail }]);
-      }
+      if (result) await addClipResult(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setPickError(msg);
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleRecordClip = async () => {
+    setPicking(true);
+    setPickError(null);
+    try {
+      const result = await recordClip(date);
+      if (result) await addClipResult(result);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setPickError(msg);
@@ -300,22 +316,25 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 </View>
               )}
 
-              {/* Add more */}
-              <Pressable
-                onPress={!picking ? handlePickClip : undefined}
-                style={styles.addClipBtn}
-              >
-                {picking ? (
-                  <Text style={styles.addClipBtnText}>Opening gallery...</Text>
-                ) : (
-                  <View style={styles.addClipBtnContent}>
-                    <Icon name="plus" size={16} color={colors.textMuted} />
+              {/* Record + Import buttons */}
+              {picking ? (
+                <View style={styles.addClipBtn}>
+                  <Text style={styles.addClipBtnText}>Opening...</Text>
+                </View>
+              ) : (
+                <View style={styles.clipBtnRow}>
+                  <Pressable onPress={handleRecordClip} style={styles.recordBtn}>
+                    <Icon name="camera" size={18} color={colors.coral} />
+                    <Text style={[styles.addClipBtnText, { color: colors.coral }]}>Record</Text>
+                  </Pressable>
+                  <Pressable onPress={handlePickClip} style={styles.importBtn}>
+                    <Icon name="plus" size={18} color={colors.textMuted} />
                     <Text style={styles.addClipBtnText}>
-                      {clips.length === 0 ? 'Choose from camera roll' : 'Add another clip'}
+                      {clips.length === 0 ? 'Import' : 'Add more'}
                     </Text>
-                  </View>
-                )}
-              </Pressable>
+                  </Pressable>
+                </View>
+              )}
 
               {pickError && <Text style={styles.pickErrorText}>{pickError}</Text>}
 
@@ -568,6 +587,35 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 10,
     color: '#fff',
+  },
+  clipBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  recordBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: colors.radius,
+    borderWidth: 1.5,
+    borderColor: `${colors.coral}30`,
+    backgroundColor: `${colors.coral}08`,
+  },
+  importBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    borderRadius: colors.radius,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: colors.cardBorder,
   },
   addClipBtn: {
     borderWidth: 1.5,

@@ -9,7 +9,7 @@ import {
   AlignLeft, AlignCenter, AlignRight,
   AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
   Bold, Type, Italic,
-  Save, Download,
+  Save, Download, Camera, LayoutDashboard, Film,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -64,6 +64,9 @@ export const ICONS = {
   thin: Italic,
   save: Save,
   download: Download,
+  camera: Camera,
+  dashboard: LayoutDashboard,
+  film: Film,
 } as const;
 
 export type IconName = keyof typeof ICONS;

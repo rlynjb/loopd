@@ -30,9 +30,9 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
 
   return (
     <View style={styles.container}>
-      {dayStarted && onBack && (
+      {onBack && (
         <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
-          <Icon name="chevronLeft" size={22} color={colors.textMuted} />
+          <Icon name="dashboard" size={20} color={colors.textMuted} />
         </Pressable>
       )}
       <View style={styles.logoBlock}>

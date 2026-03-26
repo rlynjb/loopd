@@ -1,6 +1,7 @@
+import { useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useRef } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
 import { HomeHeader } from '../src/components/home/HomeHeader';
@@ -12,8 +13,19 @@ import { MOODS } from '../src/constants/moods';
 import { Icon } from '../src/components/ui/Icon';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 
+let initialRedirectDone = false;
+
 export default function HomeScreen() {
   const router = useRouter();
+
+  // Auto-redirect to today's journal only on first app open
+  useEffect(() => {
+    if (!initialRedirectDone) {
+      initialRedirectDone = true;
+      const today = getTodayString();
+      router.replace(`/journal/${today}`);
+    }
+  }, []);
   const [vlogs, setVlogs] = useState<Vlog[]>([]);
   const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
   const [todayEntries, setTodayEntries] = useState<Entry[]>([]);
