@@ -41,6 +41,7 @@ export default function EditorScreen() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
   const [selectedFilterId, setSelectedFilterId] = useState<string | null>(null);
+  const [shouldFocusText, setShouldFocusText] = useState(false);
   const [playheadPos, setPlayheadPos] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [addingClip, setAddingClip] = useState(false);
@@ -78,6 +79,7 @@ export default function EditorScreen() {
     setSelectedClipId(null);
     setSelectedTextId(null);
     setSelectedFilterId(null);
+    setShouldFocusText(false);
   };
 
   // Playhead animation
@@ -133,7 +135,9 @@ export default function EditorScreen() {
   };
 
   const playheadPct = playheadPos * 100;
-  const visibleTexts = textOverlays.filter(t => playheadPct >= t.startPct && playheadPct <= t.endPct);
+  const visibleTexts = textOverlays.filter(t =>
+    (playheadPct >= t.startPct && playheadPct <= t.endPct) || t.id === selectedTextId
+  );
   const visibleFilter = filterOverlays.find(f => playheadPct >= f.startPct && playheadPct <= f.endPct) ?? null;
   const { clip: currentClip, seekSec: currentClipSeekSec } = getClipAtPlayhead();
 
@@ -153,22 +157,24 @@ export default function EditorScreen() {
   };
 
   const moveClip = (id: string, dir: number) => {
-    const idx = clips.findIndex(c => c.id === id);
-    if (idx < 0) return;
-    const ni = idx + dir;
-    if (ni < 0 || ni >= clips.length) return;
-    const next = [...clips];
-    [next[idx], next[ni]] = [next[ni], next[idx]];
-    updateClips(next);
+    updateClips(prev => {
+      const idx = prev.findIndex(c => c.id === id);
+      if (idx < 0) return prev;
+      const ni = idx + dir;
+      if (ni < 0 || ni >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[ni]] = [next[ni], next[idx]];
+      return next;
+    });
   };
 
   const deleteClip = (id: string) => {
-    updateClips(clips.filter(c => c.id !== id));
+    updateClips(prev => prev.filter(c => c.id !== id));
     if (selectedClipId === id) setSelectedClipId(null);
   };
 
   const updateClip = (id: string, updates: Partial<ClipItem>) => {
-    updateClips(clips.map(c => c.id === id ? { ...c, ...updates } : c));
+    updateClips(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
   };
 
   const addClip = () => {
@@ -235,24 +241,23 @@ export default function EditorScreen() {
 
   // Trim clip via drag handle
   const trimClip = (id: string, side: 'left' | 'right', deltaPct: number) => {
-    const clip = clips.find(c => c.id === id);
-    if (!clip) return;
+    updateClips(prev => prev.map(clip => {
+      if (clip.id !== id) return clip;
+      const clipWidthPct = totalDurationSec > 0
+        ? (getEffective(clip) / totalDurationSec) * 100
+        : 100;
+      const clipDeltaPct = clipWidthPct > 0
+        ? (deltaPct / clipWidthPct) * (clip.trimEndPct - clip.trimStartPct)
+        : 0;
 
-    // deltaPct is relative to track width — convert to clip's own duration percentage
-    const clipWidthPct = totalDurationSec > 0
-      ? (getEffective(clip) / totalDurationSec) * 100
-      : 100;
-    const clipDeltaPct = clipWidthPct > 0
-      ? (deltaPct / clipWidthPct) * (clip.trimEndPct - clip.trimStartPct)
-      : 0;
-
-    if (side === 'left') {
-      const newStart = Math.max(0, Math.min(clip.trimEndPct - 5, clip.trimStartPct + clipDeltaPct));
-      updateClip(id, { trimStartPct: Math.round(newStart) });
-    } else {
-      const newEnd = Math.min(100, Math.max(clip.trimStartPct + 5, clip.trimEndPct + clipDeltaPct));
-      updateClip(id, { trimEndPct: Math.round(newEnd) });
-    }
+      if (side === 'left') {
+        const newStart = Math.max(0, Math.min(clip.trimEndPct - 5, clip.trimStartPct + clipDeltaPct));
+        return { ...clip, trimStartPct: newStart };
+      } else {
+        const newEnd = Math.min(100, Math.max(clip.trimStartPct + 5, clip.trimEndPct + clipDeltaPct));
+        return { ...clip, trimEndPct: newEnd };
+      }
+    }));
   };
 
   // Playhead position within selected clip (0-100)
@@ -271,82 +276,202 @@ export default function EditorScreen() {
     return 0;
   };
 
-  // Trim text overlay via drag handle
+  // Trim text overlay via drag handle — no overlap
   const trimText = (id: string, side: 'left' | 'right', deltaPct: number) => {
-    const overlay = textOverlays.find(t => t.id === id);
-    if (!overlay) return;
-    if (side === 'left') {
-      const newStart = Math.max(0, Math.min(overlay.endPct - 5, overlay.startPct + deltaPct));
-      updateText(id, { startPct: Math.round(newStart) });
-    } else {
-      const newEnd = Math.min(100, Math.max(overlay.startPct + 5, overlay.endPct + deltaPct));
-      updateText(id, { endPct: Math.round(newEnd) });
-    }
+    updateTextOverlays(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      const neighbors = prev.filter(o => o.id !== id);
+      if (side === 'left') {
+        let newStart = Math.max(0, Math.min(t.endPct - 5, t.startPct + deltaPct));
+        // Don't extend into left neighbor
+        for (const n of neighbors) {
+          if (n.endPct <= t.startPct + 1 && n.endPct > newStart) {
+            newStart = n.endPct;
+          }
+        }
+        return { ...t, startPct: newStart };
+      } else {
+        let newEnd = Math.min(100, Math.max(t.startPct + 5, t.endPct + deltaPct));
+        // Don't extend into right neighbor
+        for (const n of neighbors) {
+          if (n.startPct >= t.endPct - 1 && n.startPct < newEnd) {
+            newEnd = n.startPct;
+          }
+        }
+        return { ...t, endPct: newEnd };
+      }
+    }));
   };
 
-  // Trim filter overlay via drag handle
+  // Trim filter overlay via drag handle — no overlap
   const trimFilter = (id: string, side: 'left' | 'right', deltaPct: number) => {
-    const overlay = filterOverlays.find(f => f.id === id);
-    if (!overlay) return;
-    if (side === 'left') {
-      const newStart = Math.max(0, Math.min(overlay.endPct - 5, overlay.startPct + deltaPct));
-      updateFilter(id, { startPct: Math.round(newStart) });
-    } else {
-      const newEnd = Math.min(100, Math.max(overlay.startPct + 5, overlay.endPct + deltaPct));
-      updateFilter(id, { endPct: Math.round(newEnd) });
+    updateFilterOverlays(prev => prev.map(f => {
+      if (f.id !== id) return f;
+      const neighbors = prev.filter(o => o.id !== id);
+      if (side === 'left') {
+        let newStart = Math.max(0, Math.min(f.endPct - 5, f.startPct + deltaPct));
+        for (const n of neighbors) {
+          if (n.endPct <= f.startPct + 1 && n.endPct > newStart) {
+            newStart = n.endPct;
+          }
+        }
+        return { ...f, startPct: newStart };
+      } else {
+        let newEnd = Math.min(100, Math.max(f.startPct + 5, f.endPct + deltaPct));
+        for (const n of neighbors) {
+          if (n.startPct >= f.endPct - 1 && n.startPct < newEnd) {
+            newEnd = n.startPct;
+          }
+        }
+        return { ...f, endPct: newEnd };
+      }
+    }));
+  };
+
+  // Clamp position to avoid overlapping neighbors
+  function clampToNeighbors(
+    id: string,
+    newStart: number,
+    width: number,
+    all: { id: string; startPct: number; endPct: number }[],
+  ): number {
+    let clamped = Math.max(0, Math.min(100 - width, newStart));
+    const newEnd = clamped + width;
+    for (const other of all) {
+      if (other.id === id) continue;
+      // Moving right — hit left edge of neighbor
+      if (clamped < other.endPct && newEnd > other.startPct) {
+        if (clamped + width / 2 < other.startPct + (other.endPct - other.startPct) / 2) {
+          // Snap to left of neighbor
+          clamped = Math.min(clamped, other.startPct - width);
+        } else {
+          // Snap to right of neighbor
+          clamped = Math.max(clamped, other.endPct);
+        }
+      }
     }
+    return Math.max(0, Math.min(100 - width, clamped));
+  }
+
+  // Move text overlay by dragging — no overlap
+  const moveText = (id: string, deltaPct: number) => {
+    updateTextOverlays(prev => prev.map(t => {
+      if (t.id !== id) return t;
+      const width = t.endPct - t.startPct;
+      const desired = t.startPct + deltaPct;
+      const newStart = clampToNeighbors(id, desired, width, prev);
+      return { ...t, startPct: newStart, endPct: newStart + width };
+    }));
+  };
+
+  // Move filter overlay by dragging — no overlap
+  const moveFilter = (id: string, deltaPct: number) => {
+    updateFilterOverlays(prev => prev.map(f => {
+      if (f.id !== id) return f;
+      const width = f.endPct - f.startPct;
+      const desired = f.startPct + deltaPct;
+      const newStart = clampToNeighbors(id, desired, width, prev);
+      return { ...f, startPct: newStart, endPct: newStart + width };
+    }));
   };
 
   // Text overlay operations
+  // Find available position that doesn't overlap existing overlays
+  function findAvailableStart(
+    desired: number,
+    width: number,
+    existing: { startPct: number; endPct: number }[],
+  ): number {
+    let start = desired;
+    const sorted = [...existing].sort((a, b) => a.startPct - b.startPct);
+
+    // Check if desired position overlaps anything
+    let hasOverlap = true;
+    while (hasOverlap && start + width <= 100) {
+      hasOverlap = false;
+      for (const o of sorted) {
+        if (start < o.endPct && start + width > o.startPct) {
+          // Overlap — move to after this block
+          start = o.endPct;
+          hasOverlap = true;
+          break;
+        }
+      }
+    }
+
+    // If no room after, try from the beginning
+    if (start + width > 100) {
+      start = 0;
+      hasOverlap = true;
+      while (hasOverlap && start + width <= 100) {
+        hasOverlap = false;
+        for (const o of sorted) {
+          if (start < o.endPct && start + width > o.startPct) {
+            start = o.endPct;
+            hasOverlap = true;
+            break;
+          }
+        }
+      }
+    }
+
+    return Math.min(start, 100 - width);
+  }
+
   const addTextOverlay = () => {
-    if (!newTextContent.trim()) return;
+    const width = 25;
+    const desired = Math.round(playheadPos * 100);
+    const start = findAvailableStart(desired, width, textOverlays);
     const newT: TextOverlay = {
       id: generateId('txt'),
-      text: newTextContent.trim(),
-      startPct: Math.round(playheadPos * 100),
-      endPct: Math.min(100, Math.round(playheadPos * 100) + 25),
+      text: '',
+      startPct: start,
+      endPct: start + width,
       fontSize: 20,
       fontWeight: 400,
       color: '#ffffff',
+      position: 'bottom',
     };
-    updateTextOverlays([...textOverlays, newT]);
-    setNewTextContent('');
-    setAddingText(false);
+    updateTextOverlays(prev => [...prev, newT]);
     clearSelections();
     setSelectedTextId(newT.id);
+    setShouldFocusText(true);
   };
 
   const updateText = (id: string, updates: Partial<TextOverlay>) => {
-    updateTextOverlays(textOverlays.map(t => t.id === id ? { ...t, ...updates } : t));
+    updateTextOverlays(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   };
 
   const deleteText = (id: string) => {
-    updateTextOverlays(textOverlays.filter(t => t.id !== id));
+    updateTextOverlays(prev => prev.filter(t => t.id !== id));
     if (selectedTextId === id) setSelectedTextId(null);
   };
 
   // Filter overlay operations
   const addFilterOverlay = () => {
+    const width = 30;
+    const desired = Math.round(playheadPos * 100);
+    const start = findAvailableStart(desired, width, filterOverlays);
     const newF: FilterOverlay = {
       id: generateId('fx'),
       filterId: 'none',
-      startPct: Math.round(playheadPos * 100),
-      endPct: Math.min(100, Math.round(playheadPos * 100) + 30),
+      startPct: start,
+      endPct: start + width,
       brightness: 100,
       contrast: 100,
       saturate: 100,
     };
-    updateFilterOverlays([...filterOverlays, newF]);
+    updateFilterOverlays(prev => [...prev, newF]);
     clearSelections();
     setSelectedFilterId(newF.id);
   };
 
   const updateFilter = (id: string, updates: Partial<FilterOverlay>) => {
-    updateFilterOverlays(filterOverlays.map(f => f.id === id ? { ...f, ...updates } : f));
+    updateFilterOverlays(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
   };
 
   const deleteFilter = (id: string) => {
-    updateFilterOverlays(filterOverlays.filter(f => f.id !== id));
+    updateFilterOverlays(prev => prev.filter(f => f.id !== id));
     if (selectedFilterId === id) setSelectedFilterId(null);
   };
 
@@ -435,17 +560,36 @@ export default function EditorScreen() {
       </View>
 
       {/* Preview — tap to deselect */}
-      <Pressable onPress={clearSelections}>
-      <PreviewPlayer
-        currentClip={currentClip}
-        currentClipSeekSec={currentClipSeekSec}
-        isPlaying={isPlaying}
-        visibleTexts={visibleTexts}
-        visibleFilter={visibleFilter}
-        selectedTextId={selectedTextId}
-        onSelectText={id => { clearSelections(); setSelectedTextId(id === selectedTextId ? null : id); }}
-        previewHeight={previewHeight}
-      />
+      <Pressable onPress={clearSelections} style={styles.previewWrap}>
+        <PreviewPlayer
+          currentClip={currentClip}
+          currentClipSeekSec={currentClipSeekSec}
+          isPlaying={isPlaying}
+          visibleTexts={visibleTexts}
+          visibleFilter={visibleFilter}
+          selectedTextId={selectedTextId}
+          focusTextInput={shouldFocusText}
+          onSelectText={id => {
+            clearSelections();
+            if (id !== selectedTextId) {
+              setSelectedTextId(id);
+              setShouldFocusText(true);
+            }
+          }}
+          onUpdateText={(id, text) => updateText(id, { text })}
+          previewHeight={previewHeight}
+        />
+        {/* Save + Export overlaid on preview */}
+        <Pressable onPress={handleSaveDraft} hitSlop={8} style={styles.previewSaveBtn}>
+          <Icon name="save" size={18} color={colors.textMuted} />
+        </Pressable>
+        <Pressable
+          onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
+          hitSlop={8}
+          style={[styles.previewExportBtn, clips.length === 0 && { opacity: 0.3 }]}
+        >
+          <Icon name="download" size={18} color={colors.bg} />
+        </Pressable>
       </Pressable>
 
       {/* Resize handle */}
@@ -477,16 +621,26 @@ export default function EditorScreen() {
         playheadPos={playheadPos}
         totalDurationSec={totalDurationSec}
         onSelectClip={selectClip}
-        onSelectText={id => { clearSelections(); setSelectedTextId(id === selectedTextId ? null : id); }}
+        onSelectText={id => {
+          clearSelections();
+          if (id !== selectedTextId) {
+            setSelectedTextId(id);
+            // Auto-focus only if text is empty
+            const overlay = textOverlays.find(t => t.id === id);
+            setShouldFocusText(!overlay?.text);
+          }
+        }}
         onSelectFilter={id => { clearSelections(); setSelectedFilterId(id === selectedFilterId ? null : id); }}
         onAddClip={() => setAddingClip(true)}
-        onAddText={() => { setAddingText(true); clearSelections(); }}
+        onAddText={() => addTextOverlay()}
         onAddFilter={() => addFilterOverlay()}
         onTimelinePress={pct => setPlayheadPos(pct)}
         onPlayheadDrag={pos => { if (isPlaying) { setIsPlaying(false); } setPlayheadPos(pos); }}
         onTrimClip={trimClip}
         onTrimText={trimText}
         onTrimFilter={trimFilter}
+        onMoveText={moveText}
+        onMoveFilter={moveFilter}
       />
 
       {/* Editor panels */}
@@ -502,6 +656,8 @@ export default function EditorScreen() {
               placeholderTextColor={colors.textDimmer}
               autoFocus
               multiline
+              blurOnSubmit={false}
+              returnKeyType="default"
               style={styles.addInput}
             />
             <View style={styles.addBtnRow}>
@@ -516,27 +672,6 @@ export default function EditorScreen() {
         )}
 
         {/* Add text form */}
-        {addingText && (
-          <View style={[styles.addPanel, { borderColor: 'rgba(251,191,36,0.2)', backgroundColor: 'rgba(251,191,36,0.06)' }]}>
-            <Text style={[styles.addLabel, { color: colors.amber }]}>ADD TEXT OVERLAY</Text>
-            <TextInput
-              value={newTextContent}
-              onChangeText={setNewTextContent}
-              placeholder="Your text..."
-              placeholderTextColor={colors.textDimmer}
-              autoFocus
-              style={[styles.addInput, { fontFamily: fonts.heading }]}
-            />
-            <View style={styles.addBtnRow}>
-              <Pressable onPress={() => { setAddingText(false); setNewTextContent(''); }} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>CANCEL</Text>
-              </Pressable>
-              <Pressable onPress={addTextOverlay} style={[styles.confirmBtn, { backgroundColor: newTextContent.trim() ? colors.amber : 'rgba(255,255,255,0.05)' }]}>
-                <Text style={[styles.confirmBtnText, { color: newTextContent.trim() ? colors.bg : colors.textDimmer }]}>ADD TEXT</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
 
         {/* Filter picker removed — addFilterOverlay creates one directly */}
 
@@ -545,9 +680,6 @@ export default function EditorScreen() {
           <ClipEditor
             clip={selectedClip}
             playheadPctInClip={getPlayheadPctInClip()}
-            onUpdate={updates => updateClip(selectedClip.id, updates)}
-            onMoveLeft={() => moveClip(selectedClip.id, -1)}
-            onMoveRight={() => moveClip(selectedClip.id, 1)}
             onDelete={() => deleteClip(selectedClip.id)}
             onSplit={() => splitClip(selectedClip.id)}
           />
@@ -583,18 +715,6 @@ export default function EditorScreen() {
         )}
       </ScrollView>
 
-      {/* Bottom bar */}
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
-        <Pressable onPress={handleSaveDraft} style={styles.draftBtn}>
-          <Text style={styles.draftBtnText}>SAVE DRAFT</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
-          style={[styles.exportBtn, { backgroundColor: clips.length > 0 ? colors.teal : 'rgba(255,255,255,0.05)' }]}
-        >
-          <Text style={[styles.exportBtnText, { color: clips.length > 0 ? colors.bg : colors.textDimmer }]}>EXPORT & CLOSE</Text>
-        </Pressable>
-      </View>
 
       {/* Export modal */}
       <ExportModal
@@ -633,6 +753,31 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.text,
+  },
+  previewWrap: {
+    position: 'relative',
+  },
+  previewSaveBtn: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewExportBtn: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.teal,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   resizeHandle: {
     alignSelf: 'center',
@@ -765,41 +910,5 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontFamily: fonts.body,
     fontSize: 13,
-  },
-  bottomBar: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.06)',
-    backgroundColor: 'rgba(0,0,0,0.95)',
-    flexDirection: 'row',
-    gap: 10,
-  },
-  draftBtn: {
-    flex: 1,
-    paddingVertical: 13,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  draftBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 11,
-    color: colors.textMuted,
-    letterSpacing: 0.6,
-  },
-  exportBtn: {
-    flex: 1,
-    paddingVertical: 13,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  exportBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.6,
   },
 });

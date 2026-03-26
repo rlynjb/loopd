@@ -18,6 +18,8 @@ export type TextOverlay = {
   fontSize: number;
   fontWeight: 300 | 400 | 700;
   color: string;
+  textAlign?: 'left' | 'center' | 'right';
+  position?: 'top' | 'center' | 'bottom';
 };
 
 export type FilterOverlay = {

@@ -14,18 +14,19 @@ type Props = {
   onBack?: () => void;
 };
 
+function formatSyncTime(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
 export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: Props) {
   const router = useRouter();
-  const { status: syncStatus, configured: syncConfigured, syncNow } = useNotionSync();
+  const { status: syncStatus, configured: syncConfigured, syncNow, result: syncResult, lastSynced } = useNotionSync();
   const syncing = syncStatus === 'syncing';
 
-  const habitsChecked = [
-    ...new Set(
-      entries.filter(e => e.type === 'habit').flatMap(e => e.habits)
-    ),
-  ];
-  const streakCount = habitsChecked.length;
-  const totalHabits = habits.length;
 
   return (
     <View style={styles.container}>
@@ -49,35 +50,34 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
         </Pressable>
       </View>
 
-      {dayStarted && (
-        <View style={styles.subRow}>
-          <Text style={styles.dateText}>{dateLabel}</Text>
-          <View style={styles.streakContainer}>
-            <View style={styles.dots}>
-              {habits.map(h => (
-                <View
-                  key={h.id}
-                  style={[
-                    styles.dot,
-                    {
-                      backgroundColor: habitsChecked.includes(h.id)
-                        ? colors.green
-                        : 'rgba(255,255,255,0.08)',
-                    },
-                  ]}
-                />
-              ))}
-            </View>
-            <Text
-              style={[
-                styles.streakText,
-                { color: streakCount > 0 ? colors.green : colors.textDim },
-              ]}
-            >
-              {streakCount}/{totalHabits}
-            </Text>
-          </View>
+      {/* Sync status */}
+      {syncConfigured && syncResult && syncStatus !== 'syncing' && (
+        <View style={styles.syncStatus}>
+          {syncResult.pulled > 0 && (
+            <Text style={styles.syncStatusText}>↓ {syncResult.pulled} pulled from Notion</Text>
+          )}
+          {syncResult.pushed > 0 && (
+            <Text style={styles.syncStatusText}>↑ {syncResult.pushed} pushed to Notion</Text>
+          )}
+          {syncResult.pulled === 0 && syncResult.pushed === 0 && syncResult.errors.length === 0 && (
+            <Text style={styles.syncStatusText}>Synced — no changes</Text>
+          )}
+          {syncResult.errors.length > 0 && (
+            <Text style={[styles.syncStatusText, { color: colors.coral }]}>{syncResult.errors[0].slice(0, 60)}</Text>
+          )}
+          {lastSynced && (
+            <Text style={styles.syncTimeText}>{formatSyncTime(lastSynced)}</Text>
+          )}
         </View>
+      )}
+      {syncConfigured && syncing && (
+        <View style={styles.syncStatus}>
+          <Text style={[styles.syncStatusText, { color: colors.accent2 }]}>Syncing with Notion...</Text>
+        </View>
+      )}
+
+      {dayStarted && (
+        <Text style={styles.dateText}>{dateLabel}</Text>
       )}
     </View>
   );
@@ -109,6 +109,21 @@ const styles = StyleSheet.create({
   headerIconBtn: {
     padding: 10,
   },
+  syncStatus: {
+    alignItems: 'center',
+    marginTop: 6,
+    gap: 2,
+  },
+  syncStatusText: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.green,
+  },
+  syncTimeText: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textDimmer,
+  },
   logoBlock: {
     alignItems: 'center',
   },
@@ -126,40 +141,11 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 2,
   },
-  subRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 12,
-  },
   dateText: {
     fontFamily: fonts.mono,
     fontSize: 11,
     color: colors.textDim,
-  },
-  streakContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.cardBg,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  dots: {
-    flexDirection: 'row',
-    gap: 3,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  streakText: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    letterSpacing: 0.4,
+    textAlign: 'center',
+    marginTop: 6,
   },
 });

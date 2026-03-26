@@ -1,5 +1,6 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
+import { Icon } from '../ui/Icon';
 import type { FilterOverlay } from '../../types/project';
 import Slider from '../ui/Slider';
 
@@ -16,18 +17,6 @@ export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerLabel}>COLOR ADJUST</Text>
-        <View style={styles.headerActions}>
-          <Pressable onPress={handleReset} style={styles.resetBtn}>
-            <Text style={styles.resetBtnText}>RESET</Text>
-          </Pressable>
-          <Pressable onPress={onDelete} style={styles.deleteBtn}>
-            <Text style={styles.deleteBtnText}>✕</Text>
-          </Pressable>
-        </View>
-      </View>
-
       {([
         { key: 'brightness' as const, label: 'Brightness', icon: '☀', min: 50, max: 150 },
         { key: 'contrast' as const, label: 'Contrast', icon: '◐', min: 50, max: 150 },
@@ -49,6 +38,14 @@ export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
         </View>
       ))}
 
+      <View style={styles.footer}>
+        <Pressable onPress={handleReset} style={styles.resetBtn}>
+          <Text style={styles.resetBtnText}>RESET</Text>
+        </Pressable>
+        <Pressable onPress={onDelete} style={styles.deleteBtn}>
+          <Icon name="trash" size={14} color={colors.coral} />
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -61,57 +58,6 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     padding: 16,
     marginBottom: 14,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  headerLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.purple,
-    letterSpacing: 1,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  resetBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: 7,
-  },
-  resetBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    letterSpacing: 0.4,
-  },
-  deleteBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 7,
-    backgroundColor: 'rgba(251,113,133,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(251,113,133,0.2)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  deleteBtnText: {
-    color: colors.coral,
-    fontSize: 11,
-  },
-  fieldLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-    letterSpacing: 1,
-    marginBottom: 8,
   },
   adjustRow: {
     flexDirection: 'row',
@@ -140,28 +86,34 @@ const styles = StyleSheet.create({
     width: 30,
     textAlign: 'right',
   },
-  timingHeader: {
+  footer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 14,
-    marginBottom: 6,
+    justifyContent: 'flex-end',
+    gap: 6,
+    marginTop: 8,
   },
-  timingInfo: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
+  resetBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: 7,
   },
-  sliderRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  sliderCol: {
-    flex: 1,
-  },
-  sliderLabel: {
+  resetBtnText: {
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-    marginBottom: 3,
+    letterSpacing: 0.4,
+  },
+  deleteBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    backgroundColor: 'rgba(251,113,133,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,113,133,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

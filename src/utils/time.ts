@@ -16,8 +16,9 @@ export function formatDate(date: Date): string {
 
 export function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, '0')}`;
+  const s = Math.round(seconds % 60);
+  if (m > 0) return `${m}:${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
 }
 
 export function formatRelativeDate(dateStr: string): string {

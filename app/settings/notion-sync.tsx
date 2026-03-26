@@ -190,6 +190,15 @@ export default function NotionSyncScreen() {
             </Text>
           )}
 
+          {result && result.debug && result.debug.length > 0 && (
+            <View style={styles.debugBox}>
+              <Text style={styles.debugTitle}>Debug Log</Text>
+              {result.debug.map((line, i) => (
+                <Text key={i} style={styles.debugLine}>{line}</Text>
+              ))}
+            </View>
+          )}
+
           {configured && (
             <Pressable
               onPress={async () => { await setLastSyncTimestamp(''); refresh(); }}
@@ -237,6 +246,26 @@ const styles = StyleSheet.create({
   syncBtn: { paddingVertical: 14, borderRadius: colors.radius, backgroundColor: colors.accent, alignItems: 'center' },
   syncBtnText: { fontFamily: fonts.body, fontSize: 14, fontWeight: '600', color: colors.bg },
   resultText: { fontFamily: fonts.mono, fontSize: 10, textAlign: 'center', marginTop: 10 },
+  debugBox: {
+    marginTop: 12,
+    backgroundColor: colors.bg3,
+    borderRadius: 8,
+    padding: 10,
+  },
+  debugTitle: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.amber,
+    marginBottom: 6,
+    letterSpacing: 0.5,
+  },
+  debugLine: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textMuted,
+    lineHeight: 14,
+    marginBottom: 2,
+  },
   resetBtn: { marginTop: 14, paddingVertical: 10, borderRadius: colors.radius, borderWidth: 1, borderColor: colors.cardBorder, alignItems: 'center' },
   resetBtnText: { fontFamily: fonts.mono, fontSize: 10, color: colors.textDim },
 });

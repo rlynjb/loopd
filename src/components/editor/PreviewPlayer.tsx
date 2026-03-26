@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import Video, { type VideoRef, type OnLoadData, type OnVideoErrorData } from 'react-native-video';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
@@ -13,7 +13,9 @@ type Props = {
   visibleTexts: TextOverlay[];
   visibleFilter: FilterOverlay | null;
   selectedTextId: string | null;
+  focusTextInput?: boolean;
   onSelectText: (id: string) => void;
+  onUpdateText?: (id: string, text: string) => void;
   previewHeight?: number;
 };
 
@@ -25,6 +27,8 @@ export function PreviewPlayer({
   visibleFilter,
   selectedTextId,
   onSelectText,
+  focusTextInput = false,
+  onUpdateText,
   previewHeight = 320,
 }: Props) {
   const videoRef = useRef<VideoRef>(null);
@@ -130,30 +134,71 @@ export function PreviewPlayer({
 
       {/* Text overlays */}
       {visibleTexts.map(t => {
-        const scaledSize = Math.max(10, Math.round(t.fontSize * 0.55));
+        const scale = previewHeight / 320;
+        const scaledSize = Math.max(6, Math.round(t.fontSize * scale * 0.7));
+        const isSelected = selectedTextId === t.id;
+        const align = t.textAlign ?? 'center';
+        const pos = t.position ?? 'bottom';
+        const posStyle = pos === 'top'
+          ? { top: 8, bottom: undefined, justifyContent: 'flex-start' as const }
+          : pos === 'center'
+            ? { top: 8, bottom: 8, justifyContent: 'center' as const }
+            : { top: undefined, bottom: 8, justifyContent: 'flex-end' as const };
         return (
           <Pressable
             key={t.id}
-            onPress={() => onSelectText(t.id)}
-            style={styles.textOverlayWrap}
+            onPress={() => { if (!isSelected) onSelectText(t.id); }}
+            style={[styles.textOverlayWrap, posStyle]}
           >
-            <Text style={{
-              fontFamily: fonts.heading,
-              fontSize: scaledSize,
-              fontWeight: String(t.fontWeight) as '300' | '400' | '700',
-              color: t.color,
-              textAlign: 'center',
-              borderWidth: selectedTextId === t.id ? 1 : 0,
-              borderColor: 'rgba(255,255,255,0.4)',
-              borderStyle: 'dashed',
-              paddingHorizontal: 6,
-              borderRadius: 3,
-              textShadowColor: 'rgba(0,0,0,0.7)',
-              textShadowOffset: { width: 0, height: 1 },
-              textShadowRadius: 4,
-            }}>
-              {t.text}
-            </Text>
+            {isSelected && onUpdateText ? (
+              <TextInput
+                key={`input-${t.id}`}
+                value={t.text}
+                onChangeText={text => onUpdateText(t.id, text)}
+                placeholder="Type here..."
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                autoFocus={focusTextInput}
+                style={{
+                  fontFamily: fonts.heading,
+                  fontSize: scaledSize,
+                  fontWeight: String(t.fontWeight) as '300' | '400' | '700',
+                  color: t.color,
+                  textAlign: align,
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.4)',
+                  borderStyle: 'dashed',
+                  paddingHorizontal: 6,
+                  paddingVertical: 2,
+                  borderRadius: 3,
+                  textShadowColor: 'rgba(0,0,0,0.7)',
+                  textShadowOffset: { width: 0, height: 1 },
+                  textShadowRadius: 4,
+                  minWidth: '80%',
+                  minHeight: scaledSize + 16,
+                  maxWidth: '100%',
+                }}
+                multiline
+                scrollEnabled
+                blurOnSubmit={false}
+                returnKeyType="default"
+              />
+            ) : (
+              <Text style={{
+                fontFamily: fonts.heading,
+                fontSize: scaledSize,
+                fontWeight: String(t.fontWeight) as '300' | '400' | '700',
+                color: t.color,
+                textAlign: align,
+                borderWidth: 0,
+                paddingHorizontal: 6,
+                borderRadius: 3,
+                textShadowColor: 'rgba(0,0,0,0.7)',
+                textShadowOffset: { width: 0, height: 1 },
+                textShadowRadius: 4,
+              }}>
+                {t.text}
+              </Text>
+            )}
           </Pressable>
         );
       })}
@@ -283,9 +328,11 @@ const styles = StyleSheet.create({
   },
   textOverlayWrap: {
     position: 'absolute',
-    bottom: 28,
+    top: 8,
+    bottom: 8,
     left: 8,
     right: 8,
+    justifyContent: 'flex-end',
     alignItems: 'center',
     zIndex: 5,
   },

@@ -28,6 +28,7 @@ export type SyncResult = {
   pulled: number;
   pushed: number;
   errors: string[];
+  debug: string[];
 };
 
 export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error';

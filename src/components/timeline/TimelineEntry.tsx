@@ -56,7 +56,17 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.timeLabel}>{timeStr}</Text>
+      <View style={styles.topRow}>
+        <Text style={styles.timeLabel}>{timeStr}</Text>
+        <View style={[styles.typeBadge, { backgroundColor: `${captureType?.color}18`, borderColor: `${captureType?.color}30` }]}>
+          <View style={styles.typeBadgeContent}>
+            {captureType && <Icon name={captureType.icon} size={12} color={captureType.color} />}
+            <Text style={[styles.typeText, { color: captureType?.color }]}>
+              {captureType?.label}
+            </Text>
+          </View>
+        </View>
+      </View>
 
       <Pressable
         onPress={() => onEdit?.(entry)}
@@ -65,29 +75,6 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
           pressed && styles.cardPressed,
         ]}
       >
-        <View style={styles.badges}>
-          <View style={[styles.typeBadge, { backgroundColor: `${captureType?.color}18`, borderColor: `${captureType?.color}30` }]}>
-            <View style={styles.typeBadgeContent}>
-              {captureType && <Icon name={captureType.icon} size={12} color={captureType.color} />}
-              <Text style={[styles.typeText, { color: captureType?.color }]}>
-                {captureType?.label}
-              </Text>
-            </View>
-          </View>
-          {mood && (
-            <View style={styles.moodBadge}>
-              <Icon name={mood.icon} size={10} color={mood.color} />
-              <Text style={[styles.moodText, { color: mood.color }]}>{mood.label}</Text>
-            </View>
-          )}
-          {cat && (
-            <View style={styles.catBadge}>
-              <Icon name={cat.icon} size={10} color={colors.textDim} />
-              <Text style={styles.catText}>{cat.label}</Text>
-            </View>
-          )}
-          <Text style={styles.editHint}>tap to edit</Text>
-        </View>
 
         {/* Clip thumbnails */}
         {isVideo && clipRefs.length > 0 && (
@@ -147,32 +134,28 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 20,
-    marginBottom: 10,
+    paddingBottom: 16,
+    marginBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.04)',
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   timeLabel: {
     fontFamily: fonts.mono,
     fontSize: 11,
     color: colors.textDim,
-    marginBottom: 6,
-    paddingLeft: 2,
   },
   card: {
-    backgroundColor: colors.bg2,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: colors.radiusLg,
     padding: 14,
+    paddingTop: 0,
   },
   cardPressed: {
-    borderColor: colors.border2,
-    backgroundColor: colors.bg3,
-  },
-  badges: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
+    opacity: 0.7,
   },
   typeBadge: {
     borderRadius: 6,
@@ -188,32 +171,6 @@ const styles = StyleSheet.create({
   typeText: {
     fontFamily: fonts.mono,
     fontSize: 10,
-  },
-  moodBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  moodText: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    opacity: 0.8,
-  },
-  catBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-  },
-  catText: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-  },
-  editHint: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDimmer,
-    marginLeft: 'auto',
   },
   // Thumbnails
   thumbRow: {

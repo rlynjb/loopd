@@ -45,7 +45,7 @@ export function NotionSyncProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setStatus('error');
-      setResult({ pulled: 0, pushed: 0, errors: [msg] });
+      setResult({ pulled: 0, pushed: 0, errors: [msg], debug: [] });
       return null;
     }
   }, [status]);

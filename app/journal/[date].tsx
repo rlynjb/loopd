@@ -83,6 +83,20 @@ export default function JournalScreen() {
           placeholderTextColor={colors.textDimmer}
           style={styles.titleInput}
         />
+        {/* Habit streak */}
+        {habits.length > 0 && (
+          <View style={styles.habitStreak}>
+            {habits.map(h => {
+              const checked = entries.some(e => e.type === 'habit' && e.habits.includes(h.id));
+              return (
+                <View key={h.id} style={styles.habitChip}>
+                  <View style={[styles.habitDot, { backgroundColor: checked ? colors.green : colors.textDimmer }]} />
+                  <Text style={[styles.habitLabel, { color: checked ? colors.green : colors.textDim }]}>{h.label}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
       </View>
 
       <TimelineList
@@ -140,6 +154,27 @@ const styles = StyleSheet.create({
     color: colors.text,
     padding: 0,
     letterSpacing: -0.3,
+  },
+  habitStreak: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+    justifyContent: 'center',
+  },
+  habitChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  habitDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  habitLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
   },
   bottomBar: {
     position: 'absolute',

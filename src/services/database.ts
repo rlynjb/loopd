@@ -231,13 +231,13 @@ export async function setDayTitle(date: string, title: string): Promise<void> {
   await db.runAsync('UPDATE entries SET updated_at = ? WHERE date = ?', [now, date]);
 }
 
-export async function setDayTitleFromSync(date: string, title: string): Promise<void> {
-  // Used by sync — sets title without touching entry updated_at (to avoid re-push loop)
+export async function setDayTitleFromSync(date: string, title: string, notionEditTime?: string): Promise<void> {
+  // Used by sync — sets updated_at to the Notion edit time so local doesn't appear newer
   const db = await getDatabase();
-  const now = new Date().toISOString();
+  const ts = notionEditTime ?? new Date().toISOString();
   await db.runAsync(
     'INSERT INTO day_meta (date, title, updated_at) VALUES (?, ?, ?) ON CONFLICT(date) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at',
-    [date, title, now]
+    [date, title, ts]
   );
 }
 

@@ -325,6 +325,8 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 placeholder="What's in these clips? (optional)"
                 placeholderTextColor={colors.textDimmer}
                 multiline
+                blurOnSubmit={false}
+                returnKeyType="default"
                 style={styles.textArea}
               />
 
@@ -350,6 +352,8 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 placeholder="What's on your mind?"
                 placeholderTextColor={colors.textDimmer}
                 multiline
+                blurOnSubmit={false}
+                returnKeyType="default"
                 autoFocus={!isEdit}
                 style={styles.textArea}
               />
@@ -399,6 +403,8 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 placeholder="How did it feel? Any details..."
                 placeholderTextColor={colors.textDimmer}
                 multiline
+                blurOnSubmit={false}
+                returnKeyType="default"
                 style={[styles.textArea, { height: 60 }]}
               />
               <Pressable

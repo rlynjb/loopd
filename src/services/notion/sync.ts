@@ -18,7 +18,7 @@ export async function syncAll(): Promise<SyncResult> {
   const entriesDbId = await getEntriesDbId();
   if (!token || !entriesDbId) throw new Error('Notion not configured');
 
-  const result: SyncResult = { pulled: 0, pushed: 0, errors: [] };
+  const result: SyncResult = { pulled: 0, pushed: 0, errors: [], debug: [] };
   const lastSync = await getLastSyncTimestamp();
 
   try {
@@ -26,7 +26,7 @@ export async function syncAll(): Promise<SyncResult> {
     await syncHabitsFromNotionSchema(token, entriesDbId);
 
     // 2. Pull entries from Notion
-    const pullResult = await pullEntries(token, entriesDbId, lastSync);
+    const pullResult = await pullEntries(token, entriesDbId, lastSync, result.debug);
     result.pulled += pullResult;
 
     // 2b. Auto-reimport missing video clips from camera roll
@@ -75,7 +75,7 @@ export async function syncAll(): Promise<SyncResult> {
   return result;
 }
 
-async function pullEntries(token: string, dbId: string, _lastSync: string | null): Promise<number> {
+async function pullEntries(token: string, dbId: string, _lastSync: string | null, debug: string[] = []): Promise<number> {
   // Pull entries from last 7 days — try Date first, then Created At, then all
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let pages;
@@ -97,7 +97,7 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
       pages = await queryDatabase(token, dbId);
     }
   }
-  console.log('[loopd sync] Pulled', pages.length, 'pages from Notion');
+  debug.push(`Fetched ${pages.length} pages from Notion`);
   let count = 0;
 
   // Track which notion page IDs we've seen (for detecting Notion-side deletions)
@@ -142,6 +142,57 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
     }
   }
 
+  // Pull day titles from Notion entry names
+  // Format: "My Title [Journal]" → extract "My Title"
+  const titlesByDate = new Map<string, { title: string; editTime: number }>();
+  for (const page of pages) {
+    if (page.archived) continue;
+    const entry = notionPageToEntry(page);
+    const pageName = getTitleFromPage(page);
+    if (!pageName || !entry.date) continue;
+
+    // Strip [Type] tag
+    let dayTitle = pageName;
+    const tagMatch = dayTitle.match(/\s*\[(Journal|Clip|Habits)\]\s*$/);
+    if (tagMatch) {
+      dayTitle = dayTitle.slice(0, -tagMatch[0].length).trim();
+    }
+
+    // Skip if it's just a date string or empty
+    if (!dayTitle || dayTitle.match(/^\d{4}-\d{2}-\d{2}/)) continue;
+
+    const editTime = new Date(page.last_edited_time).getTime();
+
+    // Keep the most recently edited title per date
+    const existing = titlesByDate.get(entry.date);
+    if (!existing || editTime > existing.editTime) {
+      titlesByDate.set(entry.date, { title: dayTitle, editTime });
+    }
+  }
+
+  // Save pulled titles — last edit wins
+  for (const [date, { title: notionTitle, editTime: notionEditTime }] of titlesByDate) {
+    const local = await getDayTitleWithTimestamp(date);
+    if (local.title === notionTitle) continue;
+
+    const localEditTime = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+
+    const notionDate = new Date(notionEditTime).toISOString().slice(11, 19);
+    const localDate = localEditTime ? new Date(localEditTime).toISOString().slice(11, 19) : 'none';
+    debug.push(`Title ${date}: notion="${notionTitle}" (${notionDate}) vs local="${local.title}" (${localDate})`);
+
+    // Use Notion title if: Notion is newer, titles differ and within 2min tolerance, or local is empty
+    const diff = Math.abs(notionEditTime - localEditTime);
+    const notionWins = notionEditTime > localEditTime || diff < 120000 || !local.title;
+
+    if (notionWins) {
+      await setDayTitleFromSync(date, notionTitle, new Date(notionEditTime).toISOString());
+      debug.push(`→ Used Notion title (diff: ${Math.round(diff / 1000)}s)`);
+    } else {
+      debug.push(`→ Kept local title`);
+    }
+  }
+
   return count;
 }
 
@@ -168,7 +219,8 @@ async function pushEntries(token: string, dbId: string, lastSync: string | null)
         dayTitleCache.set(entry.date, await getDayTitle(entry.date));
       }
       const dayTitle = dayTitleCache.get(entry.date) || undefined;
-      const properties = entryToNotionProperties(entry, titleColumn, dayTitle, habitIdToLabel);
+      const isNew = !entry.notionPageId;
+      const properties = entryToNotionProperties(entry, titleColumn, dayTitle, isNew, habitIdToLabel);
 
       if (entry.notionPageId) {
         console.log('[loopd sync] Updating entry:', entry.id, entry.type);

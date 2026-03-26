@@ -72,7 +72,7 @@ export function notionPageToEntry(page: NotionPage): Entry {
   const date = getDate(props['Date'])
     ?? (createdAtRaw ? createdAtRaw.slice(0, 10) : new Date(page.created_time).toISOString().slice(0, 10));
   const type = (getSelect(props['Type']) ?? 'journal') as Entry['type'];
-  const text = getPlainText(props['Text']) || getPlainText(props['Note']) || getTitleProperty(props as Record<string, unknown>) || null;
+  const text = getPlainText(props['Text']) || getPlainText(props['Note']) || null;
   // Convert Notion habit names to local IDs (lowercase, dashes for spaces)
   const habits = getMultiSelect(props['Habits']).map(h => h.toLowerCase().replace(/\s+/g, '-'));
   const createdAt = createdAtRaw;
@@ -107,6 +107,7 @@ export function entryToNotionProperties(
   entry: Entry,
   titleColumnName = 'Name',
   dayTitle?: string,
+  isNew = false,
   habitIdToLabel?: Map<string, string>,
 ): Record<string, unknown> {
   const clipsJson = entry.clips.length > 0
@@ -123,8 +124,12 @@ export function entryToNotionProperties(
     'Habits': { multi_select: habitNames.map(h => ({ name: h })) },
     'Clips': { rich_text: [{ text: { content: clipsJson } }] },
     'loopd ID': { rich_text: [{ text: { content: entry.id } }] },
-    'Created At': { date: { start: entry.createdAt } },
   };
+
+  // Only set Created At on new entries — don't overwrite existing timestamps
+  if (isNew) {
+    props['Created At'] = { date: { start: entry.createdAt } };
+  }
 
   // Always set the Name with type appended for clean Notion display
   const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';

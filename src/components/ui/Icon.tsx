@@ -6,6 +6,10 @@ import {
   Moon, ChevronLeft, Plus, Scissors, Trash2, ArrowLeft, ArrowRight,
   Play, Square, Sun, Circle, Contrast,
   X, RefreshCw, Settings,
+  AlignLeft, AlignCenter, AlignRight,
+  AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd,
+  Bold, Type, Italic,
+  Save, Download,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -49,6 +53,17 @@ export const ICONS = {
   x: X,
   refresh: RefreshCw,
   settings: Settings,
+  alignLeft: AlignLeft,
+  alignCenter: AlignCenter,
+  alignRight: AlignRight,
+  posTop: AlignVerticalJustifyStart,
+  posCenter: AlignVerticalJustifyCenter,
+  posBottom: AlignVerticalJustifyEnd,
+  bold: Bold,
+  type: Type,
+  thin: Italic,
+  save: Save,
+  download: Download,
 } as const;
 
 export type IconName = keyof typeof ICONS;

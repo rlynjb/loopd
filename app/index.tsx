@@ -5,12 +5,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
 import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
-import { getVlogs, getEntriesByDate, archivePastDays, getDayTitle } from '../src/services/database';
+import { getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { CATEGORIES } from '../src/constants/categories';
 import { MOODS } from '../src/constants/moods';
 import { Icon } from '../src/components/ui/Icon';
-import type { Entry, Vlog } from '../src/types/entry';
+import type { Entry, Habit, Vlog } from '../src/types/entry';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -18,6 +18,8 @@ export default function HomeScreen() {
   const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
   const [todayEntries, setTodayEntries] = useState<Entry[]>([]);
   const [todayTitle, setTodayTitle] = useState('');
+  const [habits, setHabits] = useState<Habit[]>([]);
+  const [weeklyHabits, setWeeklyHabits] = useState<Record<string, string[]>>({});
 
   const hasToday = todayEntries.length > 0;
 
@@ -27,7 +29,6 @@ export default function HomeScreen() {
       archivePastDays(today).then(() => {
         getVlogs().then(async (v) => {
           setVlogs(v);
-          // Load titles for all vlogs
           const titles: Record<string, string> = {};
           for (const vlog of v) {
             titles[vlog.date] = await getDayTitle(vlog.date);
@@ -37,6 +38,23 @@ export default function HomeScreen() {
       });
       getEntriesByDate(today).then(setTodayEntries);
       getDayTitle(today).then(setTodayTitle);
+      getHabits().then(setHabits);
+
+      // Load weekly habit data (Sunday–Saturday of current week)
+      (async () => {
+        const weekly: Record<string, string[]> = {};
+        const now = new Date();
+        const sunday = new Date(now);
+        sunday.setDate(now.getDate() - now.getDay());
+        for (let i = 0; i < 7; i++) {
+          const d = new Date(sunday);
+          d.setDate(sunday.getDate() + i);
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const dayEntries = await getEntriesByDate(dateStr);
+          weekly[dateStr] = [...new Set(dayEntries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
+        }
+        setWeeklyHabits(weekly);
+      })();
     }, [])
   );
 
@@ -65,6 +83,52 @@ export default function HomeScreen() {
       />
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+
+        {/* Weekly habit streak */}
+        {habits.length > 0 && Object.keys(weeklyHabits).length > 0 && (
+          <View style={styles.weeklyStreak}>
+            <Text style={styles.sectionLabel}>WEEKLY HABITS</Text>
+            <View style={styles.weekGrid}>
+              {/* Day labels */}
+              <View style={styles.weekDayCol}>
+                <View style={styles.weekCorner} />
+                {habits.map(h => (
+                  <Text key={h.id} style={styles.weekHabitLabel} numberOfLines={1}>{h.label}</Text>
+                ))}
+              </View>
+              {/* Day columns — Sunday to Saturday of current week */}
+              {Array.from({ length: 7 }).map((_, i) => {
+                const today = new Date();
+                const sunday = new Date(today);
+                sunday.setDate(today.getDate() - today.getDay());
+                const d = new Date(sunday);
+                d.setDate(sunday.getDate() + i);
+                const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                const checkedHabits = weeklyHabits[dateStr] ?? [];
+                const dayLabel = ['S', 'M', 'T', 'W', 'T', 'F', 'S'][i];
+                const todayStr = getTodayString();
+                const isToday = dateStr === todayStr;
+                return (
+                  <View key={dateStr} style={styles.weekCol}>
+                    <Text style={[styles.weekDayLabel, isToday && { color: colors.accent }]}>{dayLabel}</Text>
+                    {habits.map(h => (
+                      <View
+                        key={h.id}
+                        style={[
+                          styles.weekDot,
+                          {
+                            backgroundColor: checkedHabits.includes(h.id) ? colors.green : 'rgba(255,255,255,0.05)',
+                          },
+                        ]}
+                      />
+                    ))}
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         {!hasToday && (
           <View style={styles.cta}>
             <Pressable onPress={handleStart} style={styles.startBtn}>
@@ -146,6 +210,45 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     marginBottom: 24,
     textAlign: 'center',
+  },
+  weeklyStreak: {
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  weekGrid: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  weekDayCol: {
+    gap: 4,
+    marginRight: 4,
+  },
+  weekCorner: {
+    height: 18,
+  },
+  weekHabitLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    height: 18,
+    lineHeight: 18,
+  },
+  weekCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  weekDayLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    height: 18,
+    lineHeight: 18,
+  },
+  weekDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
   },
   startBtn: {
     backgroundColor: colors.accent,
