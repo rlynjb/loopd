@@ -415,29 +415,29 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
             </View>
           )}
 
-          {/* Delete — only in edit mode */}
-          {isEdit && (
-            <Pressable onPress={() => onDelete?.(editEntry!.id)} style={styles.deleteBtn}>
-              <Icon name="trash" size={14} color={colors.coral} />
-              <Text style={styles.deleteBtnText}>Delete entry</Text>
-            </Pressable>
-          )}
         </ScrollView>
 
-        {/* Fixed bottom save bar */}
+        {/* Fixed bottom bar */}
         {step === 'details' && (
           <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <Pressable
-              onPress={canSave() ? handleSave : undefined}
-              style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-            >
-              <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
-                {isEdit ? 'SAVE CHANGES'
-                  : captureType === 'video' ? (clips.length <= 1 ? 'SAVE' : `SAVE ${clips.length} CLIPS`)
-                  : captureType === 'habit' ? 'SAVE HABITS'
-                  : 'SAVE'}
-              </Text>
-            </Pressable>
+            <View style={styles.bottomBarRow}>
+              {isEdit && (
+                <Pressable onPress={() => onDelete?.(editEntry!.id)} style={styles.deleteBtn}>
+                  <Icon name="trash" size={16} color={colors.coral} />
+                </Pressable>
+              )}
+              <Pressable
+                onPress={canSave() ? handleSave : undefined}
+                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
+              >
+                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
+                  {isEdit ? 'SAVE CHANGES'
+                    : captureType === 'video' ? (clips.length <= 1 ? 'SAVE' : `SAVE ${clips.length} CLIPS`)
+                    : captureType === 'habit' ? 'SAVE HABITS'
+                    : 'SAVE'}
+                </Text>
+              </Pressable>
+            </View>
           </View>
         )}
       </View>
@@ -658,8 +658,13 @@ const styles = StyleSheet.create({
     borderTopColor: colors.cardBorder,
     backgroundColor: colors.bg,
   },
+  bottomBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   saveBtn: {
-    width: '100%',
+    flex: 1,
     paddingVertical: 14,
     borderRadius: 0,
     alignItems: 'center',
@@ -696,20 +701,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   deleteBtn: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    marginTop: 24,
     paddingVertical: 14,
-    borderRadius: 0,
+    paddingHorizontal: 14,
     borderWidth: 1,
     borderColor: `${colors.coral}30`,
     backgroundColor: `${colors.coral}08`,
-  },
-  deleteBtnText: {
-    fontFamily: fonts.body,
-    fontSize: 14,
-    color: colors.coral,
   },
 });

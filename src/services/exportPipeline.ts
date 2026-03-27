@@ -106,17 +106,17 @@ export async function runExport(
   currentStep++;
   reportProgress('encoding');
 
-  // Step 3: Apply color adjustments
-  // Note: text overlays (drawtext) require freetype which isn't in the min FFmpeg build.
-  // Text overlays are visible in the preview but not burned into the final export.
+  // Step 3: Apply filters + text overlays
   let currentInput = concatFile;
   const finalOutput = uriToPath(outputPath);
 
   const hasFilters = filterOverlays.length > 0;
+  const hasText = textOverlays.length > 0;
 
-  if (hasFilters) {
+  if (hasFilters || hasText) {
     const vfParts: string[] = [];
 
+    // B/C/S filter overlays
     for (const fo of filterOverlays) {
       const startSec = (totalDurationSec * fo.startPct / 100).toFixed(3);
       const endSec = (totalDurationSec * fo.endPct / 100).toFixed(3);
@@ -125,6 +125,46 @@ export async function runExport(
       const saturation = (fo.saturate / 100).toFixed(2);
       vfParts.push(
         `eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}:enable='between(t\\,${startSec}\\,${endSec})'`
+      );
+    }
+
+    // Text overlays via drawtext
+    for (const to of textOverlays) {
+      if (!to.text.trim()) continue;
+      const startSec = (totalDurationSec * to.startPct / 100).toFixed(3);
+      const endSec = (totalDurationSec * to.endPct / 100).toFixed(3);
+      const escaped = escapeDrawtext(to.text);
+      const fontSize = Math.round(to.fontSize * (1080 / 360)); // scale for 1080px width
+      const fontColor = to.color || '#ffffff';
+
+      // Position: top/center/bottom
+      let yExpr: string;
+      if (to.position === 'top') {
+        yExpr = 'h*0.08';
+      } else if (to.position === 'center') {
+        yExpr = '(h-text_h)/2';
+      } else {
+        yExpr = 'h*0.85-text_h';
+      }
+
+      // Alignment: left/center/right
+      let xExpr: string;
+      if (to.textAlign === 'left') {
+        xExpr = 'w*0.05';
+      } else if (to.textAlign === 'right') {
+        xExpr = 'w*0.95-text_w';
+      } else {
+        xExpr = '(w-text_w)/2';
+      }
+
+      vfParts.push(
+        `drawtext=text='${escaped}'` +
+        `:fontsize=${fontSize}` +
+        `:fontcolor=${fontColor}` +
+        `:x=${xExpr}` +
+        `:y=${yExpr}` +
+        `:shadowcolor=black@0.6:shadowx=0:shadowy=2` +
+        `:enable='between(t\\,${startSec}\\,${endSec})'`
       );
     }
 
@@ -137,7 +177,7 @@ export async function runExport(
       'Apply filters and text'
     );
   } else {
-    // No filters — just copy with faststart
+    // No filters or text — just copy with faststart
     await runCommand(
       `-y -i ${currentInput} -c copy -movflags +faststart ${finalOutput}`,
       'Finalize'

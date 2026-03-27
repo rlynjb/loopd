@@ -120,17 +120,49 @@ export function PreviewPlayer({
         </View>
       )}
 
-      {/* Filter overlay */}
-      {visibleFilter && filterPreset && (
-        <View style={styles.filterOverlay}>
-          <View style={[styles.filterTint, { backgroundColor: filterPreset.color }]} />
-          <View style={styles.filterBadge}>
-            <Text style={[styles.filterBadgeText, { color: filterPreset.color }]}>
-              {filterPreset.label.toUpperCase()}
-            </Text>
+      {/* Filter overlay — approximate B/C/S */}
+      {visibleFilter && (() => {
+        const b = visibleFilter.brightness ?? 100;
+        const c = visibleFilter.contrast ?? 100;
+        const s = visibleFilter.saturate ?? 100;
+        const hasAdjustment = b !== 100 || c !== 100 || s !== 100;
+        // Brightness: white overlay if brighter, black if darker
+        const brightnessDelta = (b - 100) / 100; // -0.5 to +0.5
+        // Contrast < 100: gray wash; > 100: darken shadows (black overlay)
+        const contrastDelta = (c - 100) / 100;
+        // Saturation < 100: gray desaturation overlay
+        const desatAmount = s < 100 ? (100 - s) / 100 : 0;
+        return (
+          <View style={styles.filterOverlay} pointerEvents="none">
+            {/* Brightness */}
+            {brightnessDelta > 0 && (
+              <View style={[styles.filterTint, { backgroundColor: '#fff', opacity: brightnessDelta * 0.5 }]} />
+            )}
+            {brightnessDelta < 0 && (
+              <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.abs(brightnessDelta) * 0.6 }]} />
+            )}
+            {/* Contrast — low: gray wash; high: deepen blacks */}
+            {contrastDelta < 0 && (
+              <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.abs(contrastDelta) * 0.35 }]} />
+            )}
+            {contrastDelta > 0 && (
+              <View style={[styles.filterTint, { backgroundColor: '#000', opacity: contrastDelta * 0.2 }]} />
+            )}
+            {/* Saturation — desaturate via gray overlay */}
+            {desatAmount > 0 && (
+              <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: desatAmount * 0.45 }]} />
+            )}
+            {/* Badge */}
+            {hasAdjustment && filterPreset && (
+              <View style={styles.filterBadge}>
+                <Text style={[styles.filterBadgeText, { color: filterPreset.color }]}>
+                  {b !== 100 ? `B:${b}` : ''}{c !== 100 ? ` C:${c}` : ''}{s !== 100 ? ` S:${s}` : ''}
+                </Text>
+              </View>
+            )}
           </View>
-        </View>
-      )}
+        );
+      })()}
 
       {/* Text overlays */}
       {visibleTexts.map(t => {
@@ -302,8 +334,6 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 2,
-    opacity: 0.2,
-    pointerEvents: 'none',
   },
   filterTint: {
     position: 'absolute',
