@@ -20,6 +20,7 @@ import { TextEditor } from '../../src/components/editor/TextEditor';
 import { FilterEditor } from '../../src/components/editor/FilterEditor';
 import { ExportModal } from '../../src/components/editor/ExportModal';
 import { useExport } from '../../src/hooks/useExport';
+import { useTextRenderer } from '../../src/services/textRenderer';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../src/types/project';
 
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
@@ -48,6 +49,7 @@ export default function EditorScreen() {
   const [newCaption, setNewCaption] = useState('');
   const [newTextContent, setNewTextContent] = useState('');
   const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
+  const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
   const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const [previewHeight, setPreviewHeight] = useState(280);
   const heightAtDragStart = useRef(280);
@@ -481,7 +483,12 @@ export default function EditorScreen() {
 
   const handleStartExport = useCallback(async () => {
     if (clips.length === 0) return;
-    const exportUri = await startExport(date, clips, textOverlays, filterOverlays);
+
+    // Pre-render text overlays to PNG images
+    const validTexts = textOverlays.filter(t => t.text.trim());
+    const renderedTexts = validTexts.length > 0 ? await renderTextOverlays(textOverlays) : undefined;
+
+    const exportUri = await startExport(date, clips, textOverlays, filterOverlays, renderedTexts);
     if (!exportUri) return; // failed or cancelled
 
     await save({ clips, textOverlays, filterOverlays, status: 'exported', exportUri });
@@ -507,7 +514,7 @@ export default function EditorScreen() {
     }
 
     router.back();
-  }, [clips, textOverlays, filterOverlays, date, startExport, save]);
+  }, [clips, textOverlays, filterOverlays, date, startExport, save, renderTextOverlays]);
 
   const selectedClip = clips.find(c => c.id === selectedClipId);
   const selectedText = textOverlays.find(t => t.id === selectedTextId);
@@ -689,6 +696,9 @@ export default function EditorScreen() {
         )}
       </ScrollView>
 
+
+      {/* Hidden text renderer for export */}
+      <TextRenderer />
 
       {/* Export modal */}
       <ExportModal

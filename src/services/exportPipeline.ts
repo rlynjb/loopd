@@ -2,6 +2,7 @@ import { FFmpegKit, ReturnCode, FFmpegKitConfig } from '@wokcito/ffmpeg-kit-reac
 import { File as FSFile } from 'expo-file-system';
 import { getExportPath, getTempDir, cleanTemp, ensureDirectories, uriToPath } from './fileManager';
 import type { ClipItem, TextOverlay, FilterOverlay, ExportProgress } from '../types/project';
+import type { RenderedText } from './textRenderer';
 
 function writeFileList(path: string, files: string[]): void {
   const content = files.map(f => `file '${f}'`).join('\n');
@@ -11,14 +12,6 @@ function writeFileList(path: string, files: string[]): void {
 
 function getEffectiveSec(clip: ClipItem): number {
   return (clip.durationMs / 1000) * (clip.trimEndPct - clip.trimStartPct) / 100;
-}
-
-function escapeDrawtext(text: string): string {
-  return text
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "'\\''")
-    .replace(/:/g, '\\:')
-    .replace(/%/g, '%%');
 }
 
 async function runCommand(cmd: string, label: string): Promise<void> {
@@ -39,6 +32,7 @@ export async function runExport(
   textOverlays: TextOverlay[],
   filterOverlays: FilterOverlay[],
   onProgress: (progress: ExportProgress) => void,
+  renderedTexts?: RenderedText[],
 ): Promise<string> {
   const outputPath = getExportPath(date);
   await ensureDirectories(date);
@@ -106,17 +100,15 @@ export async function runExport(
   currentStep++;
   reportProgress('encoding');
 
-  // Step 3: Apply filters + text overlays
+  // Step 3: Apply B/C/S filters (if any)
   let currentInput = concatFile;
   const finalOutput = uriToPath(outputPath);
 
   const hasFilters = filterOverlays.length > 0;
-  const hasText = textOverlays.length > 0;
+  const hasText = renderedTexts && renderedTexts.length > 0;
 
-  if (hasFilters || hasText) {
+  if (hasFilters) {
     const vfParts: string[] = [];
-
-    // B/C/S filter overlays
     for (const fo of filterOverlays) {
       const startSec = (totalDurationSec * fo.startPct / 100).toFixed(3);
       const endSec = (totalDurationSec * fo.endPct / 100).toFixed(3);
@@ -127,56 +119,37 @@ export async function runExport(
         `eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}:enable='between(t\\,${startSec}\\,${endSec})'`
       );
     }
-
-    // Text overlays via drawtext
-    for (const to of textOverlays) {
-      if (!to.text.trim()) continue;
-      const startSec = (totalDurationSec * to.startPct / 100).toFixed(3);
-      const endSec = (totalDurationSec * to.endPct / 100).toFixed(3);
-      const escaped = escapeDrawtext(to.text);
-      const fontSize = Math.round(to.fontSize * (1080 / 360)); // scale for 1080px width
-      const fontColor = to.color || '#ffffff';
-
-      // Position: top/center/bottom
-      let yExpr: string;
-      if (to.position === 'top') {
-        yExpr = 'h*0.08';
-      } else if (to.position === 'center') {
-        yExpr = '(h-text_h)/2';
-      } else {
-        yExpr = 'h*0.85-text_h';
-      }
-
-      // Alignment: left/center/right
-      let xExpr: string;
-      if (to.textAlign === 'left') {
-        xExpr = 'w*0.05';
-      } else if (to.textAlign === 'right') {
-        xExpr = 'w*0.95-text_w';
-      } else {
-        xExpr = '(w-text_w)/2';
-      }
-
-      vfParts.push(
-        `drawtext=text='${escaped}'` +
-        `:fontsize=${fontSize}` +
-        `:fontcolor=${fontColor}` +
-        `:x=${xExpr}` +
-        `:y=${yExpr}` +
-        `:shadowcolor=black@0.6:shadowx=0:shadowy=2` +
-        `:enable='between(t\\,${startSec}\\,${endSec})'`
-      );
-    }
-
-    const vfString = vfParts.join(',');
-
+    const filteredFile = hasText ? `${tempDir}/filtered.mp4` : finalOutput;
     await runCommand(
-      `-y -i ${currentInput} -vf "${vfString}" ` +
+      `-y -i ${currentInput} -vf "${vfParts.join(',')}" ` +
       `-c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart ` +
-      finalOutput,
-      'Apply filters and text'
+      filteredFile,
+      'Apply filters'
     );
-  } else {
+    currentInput = filteredFile;
+  }
+
+  // Step 4: Burn pre-rendered text overlay PNGs via overlay filter
+  if (hasText) {
+    let overlayInput = currentInput;
+    for (let i = 0; i < renderedTexts.length; i++) {
+      const rt = renderedTexts[i];
+      const startSec = (totalDurationSec * rt.startPct / 100).toFixed(3);
+      const endSec = (totalDurationSec * rt.endPct / 100).toFixed(3);
+
+      const isLast = i === renderedTexts.length - 1;
+      const outPath = isLast ? finalOutput : `${tempDir}/text-pass-${i}.mp4`;
+
+      await runCommand(
+        `-y -i ${overlayInput} -i ${rt.path} -filter_complex ` +
+        `"[1:v]scale=1080:1920,format=rgba[ovr];[0:v][ovr]overlay=0:0:enable='between(t\\,${startSec}\\,${endSec})'" ` +
+        `-c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart ` +
+        outPath,
+        `Text overlay ${i + 1}`
+      );
+      overlayInput = outPath;
+    }
+  } else if (!hasFilters) {
     // No filters or text — just copy with faststart
     await runCommand(
       `-y -i ${currentInput} -c copy -movflags +faststart ${finalOutput}`,
