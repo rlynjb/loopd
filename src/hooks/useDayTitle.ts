@@ -5,25 +5,27 @@ export function useDayTitle(date: string) {
   const [title, setTitle] = useState('');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getDayTitle(date).then(setTitle);
   }, [date]);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   const updateTitle = useCallback((newTitle: string) => {
     setTitle(newTitle);
-    // Debounce the save — only persist after 500ms of no typing
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
       setDayTitle(date, newTitle);
     }, 500);
   }, [date]);
 
-  // Flush on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
 
-  return { title, updateTitle };
+  return { title, updateTitle, reload: load };
 }

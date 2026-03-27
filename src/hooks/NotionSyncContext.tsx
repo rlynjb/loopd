@@ -1,7 +1,9 @@
-import { createContext, useContext, useCallback, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useCallback, useState, useEffect, useRef, type ReactNode } from 'react';
 import { syncAll } from '../services/notion/sync';
 import { isNotionConfigured, getLastSyncTimestamp } from '../services/notion/config';
 import type { SyncResult, SyncStatus } from '../types/notion';
+
+type SyncListener = () => void;
 
 type NotionSyncContextType = {
   status: SyncStatus;
@@ -10,6 +12,7 @@ type NotionSyncContextType = {
   configured: boolean;
   syncNow: () => Promise<SyncResult | null>;
   refresh: () => Promise<void>;
+  onSyncComplete: (listener: SyncListener) => () => void;
 };
 
 const NotionSyncContext = createContext<NotionSyncContextType>({
@@ -19,6 +22,7 @@ const NotionSyncContext = createContext<NotionSyncContextType>({
   configured: false,
   syncNow: async () => null,
   refresh: async () => {},
+  onSyncComplete: () => () => {},
 });
 
 export function NotionSyncProvider({ children }: { children: ReactNode }) {
@@ -26,10 +30,15 @@ export function NotionSyncProvider({ children }: { children: ReactNode }) {
   const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [configured, setConfigured] = useState(false);
+  const listeners = useRef<Set<SyncListener>>(new Set());
 
   useEffect(() => {
     isNotionConfigured().then(setConfigured);
     getLastSyncTimestamp().then(setLastSynced);
+  }, []);
+
+  const notifyListeners = useCallback(() => {
+    listeners.current.forEach(fn => fn());
   }, []);
 
   const syncNow = useCallback(async (): Promise<SyncResult | null> => {
@@ -41,6 +50,7 @@ export function NotionSyncProvider({ children }: { children: ReactNode }) {
       setStatus(res.errors.length > 0 ? 'error' : 'success');
       setResult(res);
       setLastSynced(new Date().toISOString());
+      notifyListeners();
       return res;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -48,15 +58,20 @@ export function NotionSyncProvider({ children }: { children: ReactNode }) {
       setResult({ pulled: 0, pushed: 0, errors: [msg], debug: [] });
       return null;
     }
-  }, [status]);
+  }, [status, notifyListeners]);
 
   const refresh = useCallback(async () => {
     setConfigured(await isNotionConfigured());
     setLastSynced(await getLastSyncTimestamp());
   }, []);
 
+  const onSyncComplete = useCallback((listener: SyncListener) => {
+    listeners.current.add(listener);
+    return () => { listeners.current.delete(listener); };
+  }, []);
+
   return (
-    <NotionSyncContext.Provider value={{ status, lastSynced, result, configured, syncNow, refresh }}>
+    <NotionSyncContext.Provider value={{ status, lastSynced, result, configured, syncNow, refresh, onSyncComplete }}>
       {children}
     </NotionSyncContext.Provider>
   );

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, Pressable, TextInput, Modal, ScrollView, Image, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
@@ -28,6 +29,7 @@ type Props = {
 };
 
 export function CaptureSheet({ visible, initialType, editEntry, habits, date, onClose, onSave, onDelete }: Props) {
+  const insets = useSafeAreaInsets();
   const isEdit = !!editEntry;
   const [step, setStep] = useState<'type' | 'details'>('type');
   const [captureType, setCaptureType] = useState<string | null>(null);
@@ -349,14 +351,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 style={styles.textArea}
               />
 
-              <Pressable
-                onPress={canSave() ? handleSave : undefined}
-                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-              >
-                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
-                  {isEdit ? 'SAVE CHANGES' : clips.length <= 1 ? 'SAVE' : `SAVE ${clips.length} CLIPS`}
-                </Text>
-              </Pressable>
             </View>
           )}
 
@@ -376,14 +370,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 autoFocus={!isEdit}
                 style={styles.textArea}
               />
-              <Pressable
-                onPress={canSave() ? handleSave : undefined}
-                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-              >
-                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
-                  {isEdit ? 'SAVE CHANGES' : 'SAVE'}
-                </Text>
-              </Pressable>
             </View>
           )}
 
@@ -426,14 +412,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
                 returnKeyType="default"
                 style={[styles.textArea, { height: 60 }]}
               />
-              <Pressable
-                onPress={canSave() ? handleSave : undefined}
-                style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
-              >
-                <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
-                  {isEdit ? 'SAVE CHANGES' : 'SAVE HABITS'}
-                </Text>
-              </Pressable>
             </View>
           )}
 
@@ -445,6 +423,23 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
             </Pressable>
           )}
         </ScrollView>
+
+        {/* Fixed bottom save bar */}
+        {step === 'details' && (
+          <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <Pressable
+              onPress={canSave() ? handleSave : undefined}
+              style={[styles.saveBtn, { backgroundColor: canSave() ? colors.accent : 'rgba(255,255,255,0.05)' }]}
+            >
+              <Text style={[styles.saveBtnText, { color: canSave() ? colors.bg : colors.textDimmer }]}>
+                {isEdit ? 'SAVE CHANGES'
+                  : captureType === 'video' ? (clips.length <= 1 ? 'SAVE' : `SAVE ${clips.length} CLIPS`)
+                  : captureType === 'habit' ? 'SAVE HABITS'
+                  : 'SAVE'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
       </View>
     </Modal>
   );
@@ -470,7 +465,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     padding: 24,
-    paddingBottom: 48,
+    paddingBottom: 100,
   },
   title: {
     fontFamily: fonts.heading,
@@ -502,7 +497,7 @@ const styles = StyleSheet.create({
   typeBtn: {
     width: 80,
     height: 80,
-    borderRadius: 20,
+    borderRadius: 0,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
@@ -600,7 +595,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 14,
-    borderRadius: colors.radius,
+    borderRadius: 0,
     borderWidth: 1.5,
     borderColor: `${colors.coral}30`,
     backgroundColor: `${colors.coral}08`,
@@ -612,7 +607,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 14,
-    borderRadius: colors.radius,
+    borderRadius: 0,
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: colors.cardBorder,
@@ -621,7 +616,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderStyle: 'dashed',
     borderColor: colors.cardBorder,
-    borderRadius: colors.radius,
+    borderRadius: 0,
     paddingVertical: 14,
     alignItems: 'center',
     marginBottom: 16,
@@ -644,10 +639,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   textArea: {
-    backgroundColor: colors.bg3,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: colors.radius,
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    borderRadius: 0,
     padding: 14,
     color: colors.text,
     fontSize: 14,
@@ -656,10 +651,17 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: 14,
   },
+  bottomBar: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.cardBorder,
+    backgroundColor: colors.bg,
+  },
   saveBtn: {
     width: '100%',
     paddingVertical: 14,
-    borderRadius: colors.radius,
+    borderRadius: 0,
     alignItems: 'center',
   },
   saveBtnText: {
@@ -686,7 +688,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 10,
+    borderRadius: 0,
     borderWidth: 1.5,
   },
   habitLabel: {
@@ -700,7 +702,7 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 24,
     paddingVertical: 14,
-    borderRadius: colors.radius,
+    borderRadius: 0,
     borderWidth: 1,
     borderColor: `${colors.coral}30`,
     backgroundColor: `${colors.coral}08`,

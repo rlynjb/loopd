@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { View, Pressable, Text, TextInput, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -15,6 +15,7 @@ import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { recordClip } from '../../src/services/fileManager';
 import { generateId } from '../../src/utils/id';
+import { useNotionSync } from '../../src/hooks/useNotionSync';
 import type { Entry } from '../../src/types/entry';
 
 export default function JournalScreen() {
@@ -23,14 +24,24 @@ export default function JournalScreen() {
   const insets = useSafeAreaInsets();
   const { entries, addEntry, editEntry, removeEntry, reload } = useEntries(date);
   const habits = useHabits();
+  const { title: dayTitle, updateTitle: setDayTitle, reload: reloadTitle } = useDayTitle(date);
+  const { onSyncComplete } = useNotionSync();
 
-  // Reload entries when screen regains focus (after sync, reimport, etc.)
+  // Reload entries when screen regains focus
   useFocusEffect(
     useCallback(() => {
       reload();
-    }, [reload])
+      reloadTitle();
+    }, [reload, reloadTitle])
   );
-  const { title: dayTitle, updateTitle: setDayTitle } = useDayTitle(date);
+
+  // Reload entries and title when sync completes
+  useEffect(() => {
+    return onSyncComplete(() => {
+      reload();
+      reloadTitle();
+    });
+  }, [onSyncComplete, reload, reloadTitle]);
   const [showCapture, setShowCapture] = useState(false);
   const [captureType, setCaptureType] = useState<string | null>(null);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);

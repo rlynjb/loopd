@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
   },
   startBtn: {
     backgroundColor: colors.accent,
-    borderRadius: colors.radiusLg,
+    borderRadius: 0,
     paddingVertical: 15,
     paddingHorizontal: 40,
   },
@@ -289,7 +289,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg2,
     borderWidth: 1,
     borderColor: `${colors.accent2}35`,
-    borderRadius: colors.radiusLg,
+    borderRadius: 0,
     padding: 15,
     marginBottom: 12,
   },
@@ -344,7 +344,7 @@ const styles = StyleSheet.create({
   },
   continueBtn: {
     backgroundColor: colors.accent,
-    borderRadius: colors.radiusLg,
+    borderRadius: 0,
     paddingVertical: 14,
     alignItems: 'center',
   },
