@@ -287,7 +287,7 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
     `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       text = excluded.text, type = excluded.type, habits_json = excluded.habits_json,
+       date = excluded.date, text = excluded.text, type = excluded.type, habits_json = excluded.habits_json,
        clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
     [
       entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,

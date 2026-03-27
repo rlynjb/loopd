@@ -76,14 +76,14 @@ export async function syncAll(): Promise<SyncResult> {
 }
 
 async function pullEntries(token: string, dbId: string, _lastSync: string | null, debug: string[] = []): Promise<number> {
-  // Pull entries from last 7 days — try Date first, then Created At, then all
+  // Pull entries from last 7 days using Created At
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let pages;
   try {
     pages = await queryDatabase(token, dbId, {
       or: [
-        { property: 'Date', date: { on_or_after: sevenDaysAgo } },
-        { property: 'Date', date: { is_empty: true } },
+        { property: 'Created At', date: { on_or_after: sevenDaysAgo } },
+        { property: 'Created At', date: { is_empty: true } },
       ],
     });
   } catch {
@@ -117,12 +117,18 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
       }
 
       if (existing) {
-        // Conflict resolution: last-edit-wins
-        const notionTime = new Date(page.last_edited_time).getTime();
-        const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
-        if (notionTime > localTime) {
+        // Always fix the date from Created At
+        if (existing.date !== entry.date) {
           await upsertEntryFromNotion({ ...entry, id: existing.id });
           count++;
+        } else {
+          // Conflict resolution: last-edit-wins
+          const notionTime = new Date(page.last_edited_time).getTime();
+          const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          if (notionTime > localTime) {
+            await upsertEntryFromNotion({ ...entry, id: existing.id });
+            count++;
+          }
         }
       } else {
         // New entry from Notion

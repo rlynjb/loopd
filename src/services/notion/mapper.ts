@@ -68,14 +68,22 @@ function getTitlePropertyKey(props: Record<string, unknown>): string {
 export function notionPageToEntry(page: NotionPage): Entry {
   const props = page.properties;
   const loopdId = getPlainText(props['loopd ID']) || generateId('notion');
-  const createdAtRaw = getDate(props['Created At']) ?? page.created_time;
-  const date = getDate(props['Date'])
-    ?? (createdAtRaw ? createdAtRaw.slice(0, 10) : new Date(page.created_time).toISOString().slice(0, 10));
+  const createdAtNotionProp = getDate(props['Created At']);
+  const createdAt = createdAtNotionProp ?? page.created_time;
+
+  // Derive date from Created At — use local timezone
+  let date: string;
+  if (createdAtNotionProp && createdAtNotionProp.length === 10) {
+    // Notion returned date-only format "2026-03-26" — use as-is
+    date = createdAtNotionProp;
+  } else {
+    // Full timestamp — convert to local date to avoid UTC day shift
+    const d = new Date(createdAt);
+    date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
   const type = (getSelect(props['Type']) ?? 'journal') as Entry['type'];
   const text = getPlainText(props['Text']) || getPlainText(props['Note']) || null;
-  // Convert Notion habit names to local IDs (lowercase, dashes for spaces)
   const habits = getMultiSelect(props['Habits']).map(h => h.toLowerCase().replace(/\s+/g, '-'));
-  const createdAt = createdAtRaw;
 
   // Parse clips JSON from rich_text
   let clips: ClipRef[] = [];
@@ -118,7 +126,6 @@ export function entryToNotionProperties(
   const habitNames = entry.habits.map(id => habitIdToLabel?.get(id) ?? id);
 
   const props: Record<string, unknown> = {
-    'Date': { date: { start: entry.date } },
     'Type': { select: { name: entry.type } },
     'Text': { rich_text: [{ text: { content: entry.text ?? '' } }] },
     'Habits': { multi_select: habitNames.map(h => ({ name: h })) },
@@ -126,7 +133,7 @@ export function entryToNotionProperties(
     'loopd ID': { rich_text: [{ text: { content: entry.id } }] },
   };
 
-  // Only set Created At on new entries — don't overwrite existing timestamps
+  // Only set Created At on new entries
   if (isNew) {
     props['Created At'] = { date: { start: entry.createdAt } };
   }
