@@ -19,6 +19,12 @@ function AppContent() {
     InstrumentSans: require('../assets/fonts/InstrumentSans-Variable.ttf'),
   });
 
+  // Load Poppins separately so it doesn't block app startup
+  const [poppinsLoaded] = useFonts({
+    Poppins: require('../assets/fonts/Poppins-Regular.ttf'),
+    PoppinsBold: require('../assets/fonts/Poppins-Bold.ttf'),
+  });
+
   // Check for OTA updates on app open
   useEffect(() => {
     if (__DEV__) return;

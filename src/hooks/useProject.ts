@@ -7,20 +7,36 @@ import { generateId } from '../utils/id';
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
 const AUTO_SAVE_DELAY = 1000;
 
-export function useProject(date: string, entries: Entry[]) {
+export function useProject(date: string, entries: Entry[], dayTitle?: string) {
   const [project, setProject] = useState<EditorProject | null>(null);
   const [loading, setLoading] = useState(true);
   const projectRef = useRef(project);
   projectRef.current = project;
+  const dayTitleRef = useRef(dayTitle);
+  dayTitleRef.current = dayTitle;
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLoadDone = useRef(false);
 
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+
+  // Load project once per date — entries are read via ref, not as a dependency
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
       setLoading(true);
+      initialLoadDone.current = false;
       let existing = await getProjectByDate(date);
+      if (cancelled) return;
+
       if (!existing) {
-        const videoEntries = entries.filter(e => e.type === 'video');
+        // No project yet — wait a tick for entries to settle, then read from ref
+        await new Promise(r => setTimeout(r, 300));
+        if (cancelled) return;
+
+        const currentEntries = entriesRef.current;
+        const videoEntries = currentEntries.filter(e => e.type === 'video');
         const clips: ClipItem[] = [];
         let clipIndex = 0;
         for (const e of videoEntries) {
@@ -43,25 +59,72 @@ export function useProject(date: string, entries: Entry[]) {
           }
         }
 
+        // Auto-add day title as text overlay if available
+        const textOverlays: TextOverlay[] = [];
+        const title = dayTitleRef.current;
+        if (title && title.trim()) {
+          textOverlays.push({
+            id: generateId('txt'),
+            text: title.trim(),
+            startPct: 0,
+            endPct: Math.min(20, 100),
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#ffffff',
+            position: 'center',
+            textAlign: 'center',
+          });
+        }
+
         existing = {
           id: generateId('proj'),
           date,
           status: 'draft',
           clips,
-          textOverlays: [],
+          textOverlays,
           filterOverlays: [],
           exportUri: null,
           updatedAt: new Date().toISOString(),
         };
+      } else {
+        // Merge new entries into existing project — add clips for entries not already present
+        const currentEntries = entriesRef.current;
+        const videoEntries = currentEntries.filter(e => e.type === 'video');
+        const knownEntryIds = new Set(existing.clips.map(c => c.entryId));
+        let clipIndex = existing.clips.length;
+        const newClips: ClipItem[] = [];
+        for (const e of videoEntries) {
+          if (knownEntryIds.has(e.id)) continue;
+          const entryClips = e.clips && e.clips.length > 0
+            ? e.clips
+            : e.clipUri ? [{ uri: e.clipUri, durationMs: e.clipDurationMs ?? 10000 }] : [];
+          for (const c of entryClips) {
+            newClips.push({
+              id: generateId('clip'),
+              entryId: e.id,
+              clipUri: c.uri,
+              caption: e.text ?? '',
+              durationMs: c.durationMs,
+              trimStartPct: 0,
+              trimEndPct: 100,
+              order: clipIndex,
+              color: CLIP_COLORS[clipIndex % CLIP_COLORS.length],
+            });
+            clipIndex++;
+          }
+        }
+        if (newClips.length > 0) {
+          existing = { ...existing, clips: [...existing.clips, ...newClips] };
+        }
       }
+      if (cancelled) return;
       setProject(existing);
       setLoading(false);
-      // Mark initial load done after a tick so auto-save doesn't fire immediately
       setTimeout(() => { initialLoadDone.current = true; }, 100);
     })();
 
     return () => {
-      // Save on unmount if there are pending changes
+      cancelled = true;
       if (autoSaveTimer.current) {
         clearTimeout(autoSaveTimer.current);
         const current = projectRef.current;
@@ -70,7 +133,7 @@ export function useProject(date: string, entries: Entry[]) {
         }
       }
     };
-  }, [date, entries]);
+  }, [date]);
 
   // Auto-save when project changes
   useEffect(() => {

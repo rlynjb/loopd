@@ -6,6 +6,7 @@ import {
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
   getSyncDeletions, clearSyncDeletions, getAllEntries,
   insertEntry, insertHabit, deleteHabit, getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
+  rebuildVlogs,
 } from '../database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
@@ -22,6 +23,20 @@ export async function syncAll(): Promise<SyncResult> {
   const lastSync = await getLastSyncTimestamp();
 
   try {
+    // 0. Clean up ghost entries (notion-prefixed IDs with no content)
+    try {
+      const allLocal = await getAllEntries();
+      for (const e of allLocal) {
+        if (e.id.startsWith('notion-') && !e.text && e.habits.length === 0 && e.clips.length === 0) {
+          console.log(`[loopd sync] Removing ghost entry: ${e.id}`);
+          const { deleteEntry } = await import('../database');
+          await deleteEntry(e.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[loopd sync] Ghost cleanup error:', err);
+    }
+
     // 1. Sync habit list from Notion's Habits multi-select options
     await syncHabitsFromNotionSchema(token, entriesDbId);
 
@@ -45,6 +60,9 @@ export async function syncAll(): Promise<SyncResult> {
     const pushResult = await pushEntries(token, entriesDbId, lastSync);
     result.pushed += pushResult.count;
     result.errors.push(...pushResult.errors);
+
+    // 3b. Backfill empty Date columns in Notion from local data
+    await backfillNotionDates(token, entriesDbId);
 
     // 4. Clean up Notion entry names (append type to all entries)
     await cleanUpNotionNames(token, entriesDbId);
@@ -76,20 +94,20 @@ export async function syncAll(): Promise<SyncResult> {
 }
 
 async function pullEntries(token: string, dbId: string, _lastSync: string | null, debug: string[] = []): Promise<number> {
-  // Pull entries from last 7 days using Created At
+  // Pull entries from last 7 days using Date property
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let pages;
   try {
     pages = await queryDatabase(token, dbId, {
       or: [
-        { property: 'Created At', date: { on_or_after: sevenDaysAgo } },
-        { property: 'Created At', date: { is_empty: true } },
+        { property: 'Date', date: { on_or_after: sevenDaysAgo } },
+        { property: 'Date', date: { is_empty: true } },
       ],
     });
   } catch {
     try {
       pages = await queryDatabase(token, dbId, {
-        property: 'Created At',
+        property: 'Date',
         date: { on_or_after: sevenDaysAgo },
       });
     } catch {
@@ -110,6 +128,14 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
     try {
       const entry = notionPageToEntry(page);
 
+      // Skip empty entries — pages created in Notion with no content
+      const hasContent = entry.text || entry.habits.length > 0 || entry.clips.length > 0;
+      const hasLoopdId = getPropertyText(page, 'loopd ID');
+      if (!hasContent && !hasLoopdId) {
+        debug.push(`Skipped empty page ${page.id}`);
+        continue;
+      }
+
       // Check if we already have this entry locally (by loopd ID or notion page ID)
       let existing = await getEntryById(entry.id);
       if (!existing) {
@@ -117,16 +143,40 @@ async function pullEntries(token: string, dbId: string, _lastSync: string | null
       }
 
       if (existing) {
-        // Always fix the date from Created At
+        // Preserve local clip URIs — Notion only stores filenames, not full paths
+        const mergedEntry = { ...entry };
+        if (existing.clips.length > 0 && mergedEntry.clips.length > 0) {
+          const localByName = new Map(
+            existing.clips.map(c => [c.uri.split('/').pop(), c.uri])
+          );
+          mergedEntry.clips = mergedEntry.clips.map(c => {
+            const fullPath = localByName.get(c.uri) ?? localByName.get(c.uri.split('/').pop());
+            return fullPath ? { ...c, uri: fullPath } : c;
+          });
+          mergedEntry.clipUri = mergedEntry.clips[0]?.uri ?? existing.clipUri;
+          mergedEntry.clipDurationMs = mergedEntry.clips[0]?.durationMs ?? existing.clipDurationMs;
+        } else if (existing.clips.length > 0 && mergedEntry.clips.length === 0) {
+          // Notion has no clips data — keep local clips
+          mergedEntry.clips = existing.clips;
+          mergedEntry.clipUri = existing.clipUri;
+          mergedEntry.clipDurationMs = existing.clipDurationMs;
+        }
+
         if (existing.date !== entry.date) {
-          await upsertEntryFromNotion({ ...entry, id: existing.id });
-          count++;
+          const hasNotionDateProp = !!getPropertyDate(page, 'Date');
+          const notionTime = new Date(page.last_edited_time).getTime();
+          const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
+          if (notionTime > localTime) {
+            const useDate = hasNotionDateProp ? entry.date : existing.date;
+            await upsertEntryFromNotion({ ...mergedEntry, id: existing.id, date: useDate });
+            count++;
+          }
         } else {
           // Conflict resolution: last-edit-wins
           const notionTime = new Date(page.last_edited_time).getTime();
           const localTime = existing.updatedAt ? new Date(existing.updatedAt).getTime() : 0;
           if (notionTime > localTime) {
-            await upsertEntryFromNotion({ ...entry, id: existing.id });
+            await upsertEntryFromNotion({ ...mergedEntry, id: existing.id });
             count++;
           }
         }
@@ -459,6 +509,41 @@ async function syncHabitsFromNotionSchema(token: string, entriesDbId: string): P
     }
   } catch (err) {
     console.warn('[loopd sync] Habit schema sync error:', err);
+  }
+}
+
+// ── Backfill empty Date columns in Notion from local entries ──
+
+async function backfillNotionDates(token: string, dbId: string): Promise<void> {
+  try {
+    const pages = await queryDatabase(token, dbId);
+    for (const page of pages) {
+      if (page.archived) continue;
+
+      // Check if Date property is already set
+      const existingDate = getPropertyDate(page, 'Date');
+      if (existingDate) continue;
+
+      // Find the local entry to get the correct date
+      const loopdId = getPropertyText(page, 'loopd ID');
+      let entry: Entry | null = null;
+      if (loopdId) {
+        entry = await getEntryById(loopdId);
+      }
+      if (!entry) {
+        entry = await getEntryByNotionPageId(page.id);
+      }
+
+      if (entry) {
+        // Use the local date (authoritative)
+        await updatePage(token, page.id, {
+          'Date': { date: { start: entry.date } },
+        });
+        console.log(`[loopd sync] Backfilled Date for ${entry.id}: ${entry.date}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[loopd sync] Date backfill error:', err);
   }
 }
 

@@ -76,11 +76,9 @@ export function ExportModal({ progress, clipCount, textCount, filterCount, onCan
         ))}
       </View>
 
-      {!isDone && (
-        <Pressable onPress={onCancel} style={styles.cancelBtn}>
-          <Text style={styles.cancelBtnText}>{isError ? 'DISMISS' : 'CANCEL'}</Text>
-        </Pressable>
-      )}
+      <Pressable onPress={onCancel} style={styles.cancelBtn}>
+        <Text style={styles.cancelBtnText}>{isDone ? 'DISMISS' : isError ? 'DISMISS' : 'CANCEL'}</Text>
+      </Pressable>
     </View>
   );
 }

@@ -68,19 +68,23 @@ function getTitlePropertyKey(props: Record<string, unknown>): string {
 export function notionPageToEntry(page: NotionPage): Entry {
   const props = page.properties;
   const loopdId = getPlainText(props['loopd ID']) || generateId('notion');
-  const createdAtNotionProp = getDate(props['Created At']);
-  const createdAt = createdAtNotionProp ?? page.created_time;
 
-  // Derive date from Created At — use local timezone
+  // Read date from the editable "Date" property (preferred), fall back to "Created At", then page created_time
+  const dateProp = getDate(props['Date']);
+  const createdAtProp = getDate(props['Created At']);
+  const rawDate = dateProp ?? createdAtProp ?? page.created_time;
+
   let date: string;
-  if (createdAtNotionProp && createdAtNotionProp.length === 10) {
-    // Notion returned date-only format "2026-03-26" — use as-is
-    date = createdAtNotionProp;
+  if (rawDate && rawDate.length === 10) {
+    // Date-only format "2026-03-27" — use as-is
+    date = rawDate;
   } else {
-    // Full timestamp — convert to local date to avoid UTC day shift
-    const d = new Date(createdAt);
+    // Full timestamp — convert to local date
+    const d = new Date(rawDate);
     date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
+
+  const createdAt = createdAtProp ?? page.created_time;
   const type = (getSelect(props['Type']) ?? 'journal') as Entry['type'];
   const text = getPlainText(props['Text']) || getPlainText(props['Note']) || null;
   const habits = getMultiSelect(props['Habits']).map(h => h.toLowerCase().replace(/\s+/g, '-'));
@@ -115,7 +119,7 @@ export function entryToNotionProperties(
   entry: Entry,
   titleColumnName = 'Name',
   dayTitle?: string,
-  isNew = false,
+  _isNew = false,
   habitIdToLabel?: Map<string, string>,
 ): Record<string, unknown> {
   const clipsJson = entry.clips.length > 0
@@ -133,10 +137,8 @@ export function entryToNotionProperties(
     'loopd ID': { rich_text: [{ text: { content: entry.id } }] },
   };
 
-  // Only set Created At on new entries
-  if (isNew) {
-    props['Created At'] = { date: { start: entry.createdAt } };
-  }
+  // Always push Date (editable property) so it stays correct in Notion
+  props['Date'] = { date: { start: entry.date } };
 
   // Always set the Name with type appended for clean Notion display
   const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';

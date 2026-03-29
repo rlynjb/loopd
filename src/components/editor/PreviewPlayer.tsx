@@ -1,10 +1,48 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import Video, { type VideoRef, type OnLoadData, type OnVideoErrorData } from 'react-native-video';
+import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { FILTERS } from '../../constants/filters';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
+
+function FilterPreview({ filter, filterPreset }: { filter: FilterOverlay; filterPreset: typeof FILTERS[number] | null }) {
+  const b = filter.brightness ?? 100;
+  const c = filter.contrast ?? 100;
+  const s = filter.saturate ?? 100;
+  const hasAdjustment = b !== 100 || c !== 100 || s !== 100;
+  const brightnessDelta = (b - 100) / 100;
+  const contrastDelta = (c - 100) / 100;
+  const desatAmount = s < 100 ? (100 - s) / 100 : 0;
+
+  return (
+    <View style={styles.filterOverlay} pointerEvents="none">
+      {brightnessDelta > 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#fff', opacity: brightnessDelta * 0.5 }]} />
+      )}
+      {brightnessDelta < 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.abs(brightnessDelta) * 0.6 }]} />
+      )}
+      {contrastDelta < 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.abs(contrastDelta) * 0.35 }]} />
+      )}
+      {contrastDelta > 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: contrastDelta * 0.2 }]} />
+      )}
+      {desatAmount > 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: desatAmount * 0.45 }]} />
+      )}
+      {hasAdjustment && filterPreset && (
+        <View style={styles.filterBadge}>
+          <Text style={[styles.filterBadgeText, { color: filterPreset.color }]}>
+            {b !== 100 ? `B:${b}` : ''}{c !== 100 ? ` C:${c}` : ''}{s !== 100 ? ` S:${s}` : ''}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
 
 type Props = {
   currentClip: ClipItem | null;
@@ -37,7 +75,34 @@ export function PreviewPlayer({
   const [errorMsg, setErrorMsg] = useState('');
   const [lastSeekClipId, setLastSeekClipId] = useState<string | null>(null);
 
-  const hasVideo = !!(currentClip?.clipUri && currentClip.clipUri.length > 0);
+  const hasClipUri = !!(currentClip?.clipUri && currentClip.clipUri.length > 0);
+  const [fileExists, setFileExists] = useState(false);
+  const hasVideo = hasClipUri && fileExists;
+
+  // Check file exists before mounting Video (prevents native crash on bad URIs)
+  useEffect(() => {
+    if (!hasClipUri || !currentClip?.clipUri) {
+      setFileExists(false);
+      return;
+    }
+    try {
+      const uri = currentClip.clipUri;
+      // Trust content:// URIs (from system)
+      if (uri.startsWith('content://')) {
+        setFileExists(true);
+        return;
+      }
+      // Bare filenames (no path separator) are invalid — happens after Notion sync
+      if (!uri.includes('/')) {
+        setFileExists(false);
+        return;
+      }
+      const file = new FSFile(uri.startsWith('file://') ? uri : `file://${uri}`);
+      setFileExists(file.exists);
+    } catch {
+      setFileExists(false);
+    }
+  }, [currentClip?.clipUri, hasClipUri]);
 
   // Reset when clip changes
   useEffect(() => {
@@ -76,7 +141,7 @@ export function PreviewPlayer({
   return (
     <View style={[styles.preview, { width: previewWidth, height: previewHeight }]}>
       {/* Actual video player */}
-      {hasVideo && (
+      {hasVideo && videoStatus !== 'error' && (
         <Video
           key={currentClip.id}
           ref={videoRef}
@@ -97,7 +162,9 @@ export function PreviewPlayer({
           <View style={[styles.colorBg, { backgroundColor: currentClip.color }]} />
           <View style={styles.centerContent}>
             <Icon name="video" size={24} color={colors.textDim} />
-            <Text style={styles.captionText} numberOfLines={3}>{currentClip.caption}</Text>
+            <Text style={styles.captionText} numberOfLines={3}>
+              {hasClipUri && !fileExists ? 'File missing' : currentClip.caption}
+            </Text>
           </View>
         </>
       )}
@@ -121,48 +188,7 @@ export function PreviewPlayer({
       )}
 
       {/* Filter overlay — approximate B/C/S */}
-      {visibleFilter && (() => {
-        const b = visibleFilter.brightness ?? 100;
-        const c = visibleFilter.contrast ?? 100;
-        const s = visibleFilter.saturate ?? 100;
-        const hasAdjustment = b !== 100 || c !== 100 || s !== 100;
-        // Brightness: white overlay if brighter, black if darker
-        const brightnessDelta = (b - 100) / 100; // -0.5 to +0.5
-        // Contrast < 100: gray wash; > 100: darken shadows (black overlay)
-        const contrastDelta = (c - 100) / 100;
-        // Saturation < 100: gray desaturation overlay
-        const desatAmount = s < 100 ? (100 - s) / 100 : 0;
-        return (
-          <View style={styles.filterOverlay} pointerEvents="none">
-            {/* Brightness */}
-            {brightnessDelta > 0 && (
-              <View style={[styles.filterTint, { backgroundColor: '#fff', opacity: brightnessDelta * 0.5 }]} />
-            )}
-            {brightnessDelta < 0 && (
-              <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.abs(brightnessDelta) * 0.6 }]} />
-            )}
-            {/* Contrast — low: gray wash; high: deepen blacks */}
-            {contrastDelta < 0 && (
-              <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.abs(contrastDelta) * 0.35 }]} />
-            )}
-            {contrastDelta > 0 && (
-              <View style={[styles.filterTint, { backgroundColor: '#000', opacity: contrastDelta * 0.2 }]} />
-            )}
-            {/* Saturation — desaturate via gray overlay */}
-            {desatAmount > 0 && (
-              <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: desatAmount * 0.45 }]} />
-            )}
-            {/* Badge */}
-            {hasAdjustment && filterPreset && (
-              <View style={styles.filterBadge}>
-                <Text style={[styles.filterBadgeText, { color: filterPreset.color }]}>
-                  {b !== 100 ? `B:${b}` : ''}{c !== 100 ? ` C:${c}` : ''}{s !== 100 ? ` S:${s}` : ''}
-                </Text>
-              </View>
-            )}
-          </View>
-        );
-      })()}
+      {visibleFilter && <FilterPreview filter={visibleFilter} filterPreset={filterPreset} />}
 
       {/* Text overlays */}
       {visibleTexts.map(t => {
@@ -191,9 +217,8 @@ export function PreviewPlayer({
                 placeholderTextColor="rgba(255,255,255,0.3)"
                 autoFocus={focusTextInput}
                 style={{
-                  fontFamily: fonts.heading,
+                  fontFamily: t.fontWeight >= 700 ? 'PoppinsBold' : 'Poppins',
                   fontSize: scaledSize,
-                  fontWeight: String(t.fontWeight) as '300' | '400' | '700',
                   color: t.color,
                   textAlign: align,
                   borderWidth: 1,
@@ -202,9 +227,6 @@ export function PreviewPlayer({
                   paddingHorizontal: 6,
                   paddingVertical: 2,
                   borderRadius: 3,
-                  textShadowColor: 'rgba(0,0,0,0.7)',
-                  textShadowOffset: { width: 0, height: 1 },
-                  textShadowRadius: 4,
                   minWidth: '80%',
                   minHeight: scaledSize + 16,
                   maxWidth: '100%',
@@ -216,9 +238,8 @@ export function PreviewPlayer({
               />
             ) : (
               <Text style={{
-                fontFamily: fonts.heading,
+                fontFamily: t.fontWeight >= 700 ? 'PoppinsBold' : 'Poppins',
                 fontSize: scaledSize,
-                fontWeight: String(t.fontWeight) as '300' | '400' | '700',
                 color: t.color,
                 textAlign: align,
                 borderWidth: 0,

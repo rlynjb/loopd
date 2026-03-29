@@ -48,9 +48,8 @@ export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
 
       {/* Weight + Align */}
       <View style={styles.btnRow}>
-        <IconBtn icon="thin" active={overlay.fontWeight === 300} onPress={() => onUpdate({ fontWeight: 300 })} />
-        <IconBtn icon="type" active={overlay.fontWeight === 400} onPress={() => onUpdate({ fontWeight: 400 })} />
-        <IconBtn icon="bold" active={overlay.fontWeight === 700} onPress={() => onUpdate({ fontWeight: 700 })} />
+        <IconBtn icon="type" active={overlay.fontWeight < 700} onPress={() => onUpdate({ fontWeight: 400 })} />
+        <IconBtn icon="bold" active={overlay.fontWeight >= 700} onPress={() => onUpdate({ fontWeight: 700 })} />
         <View style={styles.divider} />
         <IconBtn icon="alignLeft" active={align === 'left'} onPress={() => onUpdate({ textAlign: 'left' })} />
         <IconBtn icon="alignCenter" active={align === 'center'} onPress={() => onUpdate({ textAlign: 'center' })} />

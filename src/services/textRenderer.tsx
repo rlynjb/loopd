@@ -4,8 +4,9 @@ import ViewShot, { captureRef } from 'react-native-view-shot';
 import type { TextOverlay } from '../types/project';
 import { fonts } from '../constants/theme';
 
-const W = 1080;
-const H = 1920;
+// Render at half resolution to avoid memory crashes, FFmpeg scales up during overlay
+const W = 540;
+const H = 960;
 
 export type RenderedText = {
   path: string;
@@ -89,7 +90,7 @@ export function useTextRenderer() {
               {
                 fontSize,
                 color: current.color || '#ffffff',
-                fontWeight: bold ? '700' : '400',
+                fontFamily: bold ? 'PoppinsBold' : 'Poppins',
                 textAlign: align,
               },
             ]}
@@ -107,14 +108,11 @@ export function useTextRenderer() {
 const styles = StyleSheet.create({
   offscreen: {
     position: 'absolute',
-    left: 0,
+    left: -W - 10,
     top: 0,
     width: W,
     height: H,
     overflow: 'hidden',
-    // Use transform to shrink it down so it doesn't take space but still renders
-    transform: [{ scale: 0.01 }],
-    opacity: 0.01,
   },
   canvas: {
     width: W,
@@ -123,9 +121,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Math.round(W * 0.05),
   },
   text: {
-    fontFamily: fonts.body,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 6,
+    fontFamily: 'Poppins',
+    letterSpacing: -0.3,
   },
 });

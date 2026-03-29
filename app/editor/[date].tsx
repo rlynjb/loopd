@@ -11,6 +11,7 @@ import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useProject } from '../../src/hooks/useProject';
+import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { generateId } from '../../src/utils/id';
 import { formatDuration } from '../../src/utils/time';
 import { EditorTimeline } from '../../src/components/editor/EditorTimeline';
@@ -36,7 +37,8 @@ export default function EditorScreen() {
   const { status: syncStatus, configured: syncConfigured, syncNow } = useNotionSync();
   const { entries } = useEntries(date);
   const habits = useHabits();
-  const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries);
+  const { title: dayTitle } = useDayTitle(date);
+  const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries, dayTitle);
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
@@ -50,12 +52,14 @@ export default function EditorScreen() {
   const [newTextContent, setNewTextContent] = useState('');
   const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
   const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
+  const [renderingText, setRenderingText] = useState(false);
   const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const [previewHeight, setPreviewHeight] = useState(280);
   const heightAtDragStart = useRef(280);
   const currentHeightRef = useRef(280);
   currentHeightRef.current = previewHeight;
 
+  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resizePanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -64,8 +68,11 @@ export default function EditorScreen() {
         heightAtDragStart.current = currentHeightRef.current;
       },
       onPanResponderMove: (_, gs) => {
-        const newHeight = Math.max(100, Math.min(500, heightAtDragStart.current + gs.dy));
-        setPreviewHeight(Math.round(newHeight));
+        const newHeight = Math.round(Math.max(100, Math.min(500, heightAtDragStart.current + gs.dy)));
+        // Throttle more aggressively to avoid overwhelming react-native-video
+        if (resizeTimer.current) return;
+        resizeTimer.current = setTimeout(() => { resizeTimer.current = null; }, 100);
+        setPreviewHeight(newHeight);
       },
     })
   ).current;
@@ -486,7 +493,18 @@ export default function EditorScreen() {
 
     // Pre-render text overlays to PNG images
     const validTexts = textOverlays.filter(t => t.text.trim());
-    const renderedTexts = validTexts.length > 0 ? await renderTextOverlays(textOverlays) : undefined;
+    let renderedTexts: Awaited<ReturnType<typeof renderTextOverlays>> | undefined;
+    if (validTexts.length > 0) {
+      try {
+        setRenderingText(true);
+        await new Promise(r => setTimeout(r, 150));
+        renderedTexts = await renderTextOverlays(textOverlays);
+      } catch (err) {
+        console.warn('[loopd] Text rendering failed, exporting without text:', err);
+      } finally {
+        setRenderingText(false);
+      }
+    }
 
     const exportUri = await startExport(date, clips, textOverlays, filterOverlays, renderedTexts);
     if (!exportUri) return; // failed or cancelled
@@ -500,7 +518,9 @@ export default function EditorScreen() {
       console.warn('[loopd] Could not save to DCIM:', e);
     }
 
-    // Open share dialog
+    // Dismiss export modal, then open share sheet
+    cancelExport();
+
     try {
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
@@ -512,9 +532,7 @@ export default function EditorScreen() {
     } catch {
       // User dismissed share sheet
     }
-
-    router.back();
-  }, [clips, textOverlays, filterOverlays, date, startExport, save, renderTextOverlays]);
+  }, [clips, textOverlays, filterOverlays, date, startExport, save, cancelExport, renderTextOverlays]);
 
   const selectedClip = clips.find(c => c.id === selectedClipId);
   const selectedText = textOverlays.find(t => t.id === selectedTextId);
@@ -697,8 +715,8 @@ export default function EditorScreen() {
       </ScrollView>
 
 
-      {/* Hidden text renderer for export */}
-      <TextRenderer />
+      {/* Hidden text renderer — only mounted when rendering text for export */}
+      {renderingText && <TextRenderer />}
 
       {/* Export modal */}
       <ExportModal

@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { File as FSFile, Paths } from 'expo-file-system';
 import type { Entry, Habit, Vlog } from '../types/entry';
 import type { EditorProject } from '../types/project';
 
@@ -8,7 +9,41 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
   db = await SQLite.openDatabaseAsync('loopd.db');
   await migrate(db);
+  repairBareClipUris(db).catch(e => console.warn('[loopd] Clip URI repair error:', e));
   return db;
+}
+
+/** Fix bare-filename clip URIs left by Notion sync overwriting full paths */
+async function repairBareClipUris(database: SQLite.SQLiteDatabase): Promise<void> {
+  const rows = await database.getAllAsync<{ id: string; date: string; clips_json: string | null; clip_uri: string | null }>(
+    "SELECT id, date, clips_json, clip_uri FROM entries WHERE type = 'video'"
+  );
+  const baseDir = `${Paths.document.uri}/loopd/clips`;
+  for (const row of rows) {
+    if (!row.clips_json) continue;
+    let clips: { uri: string; durationMs: number }[];
+    try { clips = JSON.parse(row.clips_json); } catch { continue; }
+    let changed = false;
+    for (let i = 0; i < clips.length; i++) {
+      const c = clips[i];
+      if (c.uri.includes('/')) continue; // already a full path
+      const fullUri = `${baseDir}/${row.date}/${c.uri}`;
+      try {
+        const file = new FSFile(fullUri);
+        if (file.exists) {
+          clips[i] = { ...c, uri: fullUri };
+          changed = true;
+        }
+      } catch { /* skip */ }
+    }
+    if (changed) {
+      const newClipUri = clips[0]?.uri ?? row.clip_uri;
+      await database.runAsync(
+        'UPDATE entries SET clips_json = ?, clip_uri = ? WHERE id = ?',
+        [JSON.stringify(clips), newClipUri, row.id]
+      );
+    }
+  }
 }
 
 async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
@@ -444,6 +479,11 @@ export async function archivePastDays(todayStr: string): Promise<void> {
       createdAt: new Date().toISOString(),
     });
   }
+}
+
+export async function rebuildVlogs(): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM vlogs');
 }
 
 export async function insertVlog(vlog: Vlog): Promise<void> {

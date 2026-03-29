@@ -1,4 +1,19 @@
-import { FFmpegKit, ReturnCode, FFmpegKitConfig } from '@wokcito/ffmpeg-kit-react-native';
+import type { FFmpegKit as FFmpegKitType, ReturnCode as ReturnCodeType, FFmpegKitConfig as FFmpegKitConfigType } from '@wokcito/ffmpeg-kit-react-native';
+
+// Lazy-loaded to avoid 234MB native heap allocation at app startup
+let _FFmpegKit: typeof FFmpegKitType;
+let _ReturnCode: typeof ReturnCodeType;
+let _FFmpegKitConfig: typeof FFmpegKitConfigType;
+
+async function getFFmpeg() {
+  if (!_FFmpegKit) {
+    const mod = await import('@wokcito/ffmpeg-kit-react-native');
+    _FFmpegKit = mod.FFmpegKit;
+    _ReturnCode = mod.ReturnCode;
+    _FFmpegKitConfig = mod.FFmpegKitConfig;
+  }
+  return { FFmpegKit: _FFmpegKit, ReturnCode: _ReturnCode, FFmpegKitConfig: _FFmpegKitConfig };
+}
 import { File as FSFile } from 'expo-file-system';
 import { getExportPath, getTempDir, cleanTemp, ensureDirectories, uriToPath } from './fileManager';
 import type { ClipItem, TextOverlay, FilterOverlay, ExportProgress } from '../types/project';
@@ -15,6 +30,7 @@ function getEffectiveSec(clip: ClipItem): number {
 }
 
 async function runCommand(cmd: string, label: string): Promise<void> {
+  const { FFmpegKit, ReturnCode } = await getFFmpeg();
   console.log(`[loopd] FFmpeg ${label}:`, cmd);
   const session = await FFmpegKit.execute(cmd);
   const returnCode = await session.getReturnCode();

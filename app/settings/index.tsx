@@ -1,4 +1,4 @@
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, Alert, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { colors, fonts } from '../../src/constants/theme';
@@ -11,9 +11,65 @@ export default function SettingsMenu() {
   const [lastSynced, setLastSynced] = useState<string | null>(null);
 
   useEffect(() => {
-    isNotionConfigured().then(setConfigured);
-    getLastSyncTimestamp().then(setLastSynced);
+    isNotionConfigured().then(setConfigured).catch(() => {});
+    getLastSyncTimestamp().then(setLastSynced).catch(() => {});
   }, []);
+
+  const handleExportDb = async () => {
+    try {
+      const SQLite = await import('expo-sqlite');
+      const Sharing = await import('expo-sharing');
+      const db = await SQLite.openDatabaseAsync('loopd.db');
+      const dbPath = (db as unknown as { databasePath: string }).databasePath;
+      await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(`file://${dbPath}`, {
+          mimeType: 'application/x-sqlite3',
+          dialogTitle: 'Export loopd database',
+        });
+      }
+    } catch (err) {
+      console.warn('[loopd] DB export failed:', err);
+    }
+  };
+
+  const handleImportDb = async () => {
+    Alert.alert(
+      'Import Database',
+      'This will replace ALL your current data. Are you sure?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Import',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const DocumentPicker = await import('expo-document-picker');
+              const SQLite = await import('expo-sqlite');
+              const { File: FSFile } = await import('expo-file-system');
+              const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDir: true });
+              if (result.canceled || !result.assets?.[0]) return;
+              const pickedUri = result.assets[0].uri;
+
+              const db = await SQLite.openDatabaseAsync('loopd.db');
+              const dbPath = (db as unknown as { databasePath: string }).databasePath;
+              await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
+
+              const src = new FSFile(pickedUri);
+              const dest = new FSFile(`file://${dbPath}`);
+              src.move(dest);
+
+              Alert.alert('Import Complete', 'Restart the app to load the imported data.');
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              Alert.alert('Import Failed', msg);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const formatLastSync = (ts: string | null): string => {
     if (!ts) return 'Never';
@@ -57,6 +113,28 @@ export default function SettingsMenu() {
           <View style={styles.menuInfo}>
             <Text style={styles.menuLabel}>Notion Setup Guide</Text>
             <Text style={styles.menuSub}>How to set up your Notion databases</Text>
+          </View>
+        </Pressable>
+
+        {/* Export Database */}
+        <Pressable onPress={handleExportDb} style={styles.menuItem}>
+          <View style={styles.menuIcon}>
+            <Icon name="download" size={18} color={colors.accent2} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={styles.menuLabel}>Export Database</Text>
+            <Text style={styles.menuSub}>Share SQLite file to laptop</Text>
+          </View>
+        </Pressable>
+
+        {/* Import Database */}
+        <Pressable onPress={handleImportDb} style={styles.menuItem}>
+          <View style={styles.menuIcon}>
+            <Icon name="upload" size={18} color={colors.accent2} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={styles.menuLabel}>Import Database</Text>
+            <Text style={styles.menuSub}>Restore from exported SQLite file</Text>
           </View>
         </Pressable>
 

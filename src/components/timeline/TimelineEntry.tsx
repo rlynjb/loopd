@@ -49,7 +49,7 @@ export function TimelineEntry({ entry, habits, onEdit }: Props) {
       if (!cancelled) setThumbnails(thumbs);
     })();
     return () => { cancelled = true; };
-  }, [entry.id]);
+  }, [entry.id, clipRefs.length]);
 
   const time = new Date(entry.createdAt);
   const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });

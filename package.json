@@ -11,6 +11,7 @@
     "@wokcito/ffmpeg-kit-react-native": "^6.1.2",
     "expo": "~55.0.8",
     "expo-constants": "~55.0.9",
+    "expo-document-picker": "~55.0.9",
     "expo-file-system": "~55.0.11",
     "expo-font": "~55.0.4",
     "expo-haptics": "~55.0.9",
