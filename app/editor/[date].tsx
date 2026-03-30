@@ -27,7 +27,7 @@ import type { ClipItem, TextOverlay, FilterOverlay } from '../../src/types/proje
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
 
 function getEffective(c: ClipItem): number {
-  return Math.round((c.durationMs / 1000) * (c.trimEndPct - c.trimStartPct) / 100);
+  return (c.durationMs / 1000) * (c.trimEndPct - c.trimStartPct) / 100;
 }
 
 export default function EditorScreen() {
@@ -45,6 +45,7 @@ export default function EditorScreen() {
   const [selectedFilterId, setSelectedFilterId] = useState<string | null>(null);
   const [shouldFocusText, setShouldFocusText] = useState(false);
   const [playheadPos, setPlayheadPos] = useState(0);
+  const [timelineZoom, setTimelineZoom] = useState(100);
   const [isPlaying, setIsPlaying] = useState(false);
   const [addingClip, setAddingClip] = useState(false);
   const [addingText, setAddingText] = useState(false);
@@ -258,11 +259,14 @@ export default function EditorScreen() {
         ? (deltaPct / clipWidthPct) * (clip.trimEndPct - clip.trimStartPct)
         : 0;
 
+      // Minimum remaining clip: 0.5s worth of the original duration
+      const minPct = clip.durationMs > 0 ? Math.max(0.5, (500 / clip.durationMs) * 100) : 0.5;
+
       if (side === 'left') {
-        const newStart = Math.max(0, Math.min(clip.trimEndPct - 5, clip.trimStartPct + clipDeltaPct));
+        const newStart = Math.max(0, Math.min(clip.trimEndPct - minPct, clip.trimStartPct + clipDeltaPct));
         return { ...clip, trimStartPct: newStart };
       } else {
-        const newEnd = Math.min(100, Math.max(clip.trimStartPct + 5, clip.trimEndPct + clipDeltaPct));
+        const newEnd = Math.min(100, Math.max(clip.trimStartPct + minPct, clip.trimEndPct + clipDeltaPct));
         return { ...clip, trimEndPct: newEnd };
       }
     }));
@@ -547,6 +551,13 @@ export default function EditorScreen() {
         </Pressable>
         <Text style={styles.title}>Vlog Editor</Text>
         <View style={styles.topBarRight}>
+          <Pressable
+            onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
+            hitSlop={8}
+            style={[{ padding: 8 }, clips.length === 0 && { opacity: 0.3 }]}
+          >
+            <Icon name="download" size={18} color={colors.accent} />
+          </Pressable>
           {syncConfigured && (
             <Pressable onPress={syncStatus !== 'syncing' ? syncNow : undefined} hitSlop={8} style={{ padding: 8 }}>
               <SpinningIcon name="refresh" size={18} color={syncStatus === 'syncing' ? colors.accent2 : colors.textDim} spinning={syncStatus === 'syncing'} />
@@ -578,17 +589,6 @@ export default function EditorScreen() {
           onUpdateText={(id, text) => updateText(id, { text })}
           previewHeight={previewHeight}
         />
-        {/* Save + Export overlaid on preview */}
-        <Pressable onPress={handleSaveDraft} hitSlop={8} style={styles.previewSaveBtn}>
-          <Icon name="save" size={18} color={colors.textMuted} />
-        </Pressable>
-        <Pressable
-          onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
-          hitSlop={8}
-          style={[styles.previewExportBtn, clips.length === 0 && { opacity: 0.3 }]}
-        >
-          <Icon name="download" size={18} color={colors.bg} />
-        </Pressable>
       </Pressable>
 
       {/* Resize handle */}
@@ -606,7 +606,7 @@ export default function EditorScreen() {
         <Text style={styles.timeDisplay}>{formatDuration(Math.round(playheadPos * totalDurationSec))}</Text>
         <View style={styles.divider} />
         <Text style={styles.totalTime}>{formatDuration(totalDurationSec)}</Text>
-        <Text style={styles.clipCount}>{clips.length} clips</Text>
+        <Text style={styles.clipCount}>{clips.length} clips · {Math.round(timelineZoom * 100)}%</Text>
       </View>
 
       {/* NLE Timeline */}
@@ -640,6 +640,7 @@ export default function EditorScreen() {
         onTrimFilter={trimFilter}
         onMoveText={moveText}
         onMoveFilter={moveFilter}
+        onZoomChange={setTimelineZoom}
       />
 
       {/* Editor panels */}
@@ -777,7 +778,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.teal,
+    backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },

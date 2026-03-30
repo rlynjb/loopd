@@ -9,6 +9,7 @@ import { colors } from '../src/constants/theme';
 import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
 import { syncAll } from '../src/services/notion/sync';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 function AppContent() {
   const { ready } = useDatabase();
@@ -19,10 +20,12 @@ function AppContent() {
     InstrumentSans: require('../assets/fonts/InstrumentSans-Variable.ttf'),
   });
 
-  // Load Poppins separately so it doesn't block app startup
-  const [poppinsLoaded] = useFonts({
+  // Load overlay fonts separately so they don't block app startup
+  const [overlayFontsLoaded] = useFonts({
     Poppins: require('../assets/fonts/Poppins-Regular.ttf'),
     PoppinsBold: require('../assets/fonts/Poppins-Bold.ttf'),
+    TikTokSans: require('../assets/fonts/TikTokSans-Regular.ttf'),
+    TikTokSansBold: require('../assets/fonts/TikTokSans-Bold.ttf'),
   });
 
   // Check for OTA updates on app open
@@ -85,9 +88,11 @@ function AppContent() {
 
 export default function RootLayout() {
   return (
-    <NotionSyncProvider>
-      <AppContent />
-    </NotionSyncProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <NotionSyncProvider>
+        <AppContent />
+      </NotionSyncProvider>
+    </GestureHandlerRootView>
   );
 }
 

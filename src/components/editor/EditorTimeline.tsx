@@ -1,8 +1,11 @@
-import { useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, PanResponder, StyleSheet, LayoutChangeEvent } from 'react-native';
+import { useRef, useState, useCallback, useMemo } from 'react';
+import { View, Text, Pressable, PanResponder, StyleSheet, LayoutChangeEvent } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, useAnimatedRef, runOnJS, withTiming, scrollTo } from 'react-native-reanimated';
 import { colors, fonts } from '../../constants/theme';
 import { FILTERS } from '../../constants/filters';
-import { Icon } from '../../components/ui/Icon';
+import { CATEGORIES } from '../../constants/categories';
+import { Icon, type IconName } from '../../components/ui/Icon';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
 import { formatDuration } from '../../utils/time';
 
@@ -28,10 +31,11 @@ type Props = {
   onTrimFilter: (id: string, side: 'left' | 'right', deltaPct: number) => void;
   onMoveText: (id: string, deltaPct: number) => void;
   onMoveFilter: (id: string, deltaPct: number) => void;
+  onZoomChange?: (zoom: number) => void;
 };
 
 function getEffectiveDuration(clip: ClipItem): number {
-  return Math.round((clip.durationMs / 1000) * (clip.trimEndPct - clip.trimStartPct) / 100);
+  return (clip.durationMs / 1000) * (clip.trimEndPct - clip.trimStartPct) / 100;
 }
 
 function getWaveform(clipId: string, bars: number): number[] {
@@ -92,12 +96,13 @@ function DragBlock({ children, itemId, onSelect, onMove, trackWidth, style }: {
   );
 }
 
-function TrimHandle({ side, color, itemId, onTrim, trackWidth }: {
+function TrimHandle({ side, color, itemId, onTrim, trackWidth, trimActiveRef }: {
   side: 'left' | 'right';
   color: string;
   itemId: string;
   onTrim: (id: string, side: 'left' | 'right', deltaPct: number) => void;
   trackWidth: number;
+  trimActiveRef?: React.MutableRefObject<boolean>;
 }) {
   const lastDx = useRef(0);
   const onTrimRef = useRef(onTrim);
@@ -112,6 +117,7 @@ function TrimHandle({ side, color, itemId, onTrim, trackWidth }: {
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
         lastDx.current = 0;
+        if (trimActiveRef) trimActiveRef.current = true;
       },
       onPanResponderMove: (_, gs) => {
         if (trackWidthRef.current <= 0) return;
@@ -120,6 +126,12 @@ function TrimHandle({ side, color, itemId, onTrim, trackWidth }: {
         const deltaPct = (incrementalDx / trackWidthRef.current) * 100;
         onTrimRef.current(itemId, side, deltaPct);
       },
+      onPanResponderRelease: () => {
+        if (trimActiveRef) trimActiveRef.current = false;
+      },
+      onPanResponderTerminate: () => {
+        if (trimActiveRef) trimActiveRef.current = false;
+      },
     })
   ).current;
 
@@ -127,14 +139,19 @@ function TrimHandle({ side, color, itemId, onTrim, trackWidth }: {
     <View
       {...panResponder.panHandlers}
       style={[
+        styles.trimHitArea,
+        side === 'left' ? styles.trimHitLeft : styles.trimHitRight,
+      ]}
+    >
+      <View style={[
         styles.trimHandle,
         side === 'left' ? styles.trimHandleLeft : styles.trimHandleRight,
         { backgroundColor: color },
-      ]}
-    >
-      <View style={styles.trimHandleGrip}>
-        <View style={styles.trimHandleLine} />
-        <View style={styles.trimHandleLine} />
+      ]}>
+        <View style={styles.trimHandleGrip}>
+          <View style={styles.trimHandleLine} />
+          <View style={styles.trimHandleLine} />
+        </View>
       </View>
     </View>
   );
@@ -145,7 +162,7 @@ export function EditorTimeline({
   selectedClipId, selectedTextId, selectedFilterId,
   playheadPos, totalDurationSec,
   onSelectClip, onSelectText, onSelectFilter,
-  onAddClip, onAddText, onAddFilter, onTimelinePress, onPlayheadDrag, onTrimClip, onTrimText, onTrimFilter, onMoveText, onMoveFilter,
+  onAddClip, onAddText, onAddFilter, onTimelinePress, onPlayheadDrag, onTrimClip, onTrimText, onTrimFilter, onMoveText, onMoveFilter, onZoomChange,
 }: Props) {
   const [trackWidth, setTrackWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -153,38 +170,65 @@ export function EditorTimeline({
   const playheadStartRef = useRef(0);
   const playheadPosRef = useRef(playheadPos);
   playheadPosRef.current = playheadPos;
-  const scrollRef = useRef<ScrollView>(null);
-  const pinchStartDistance = useRef(0);
-  const pinchStartZoom = useRef(1);
+  const trimActive = useRef(false);
 
-  const handleTouchStart = (e: { nativeEvent: { touches: { pageX: number; pageY: number }[] } }) => {
-    if (e.nativeEvent.touches.length === 2) {
-      const [t1, t2] = e.nativeEvent.touches;
-      pinchStartDistance.current = Math.hypot(t2.pageX - t1.pageX, t2.pageY - t1.pageY);
-      pinchStartZoom.current = zoom;
-    }
-  };
+  // Reanimated shared values for UI-thread zoom
+  const zoomSV = useSharedValue(1);
+  const pinchBaseZoom = useSharedValue(1);
+  const scrollOffsetSV = useSharedValue(0);
+  const pinchFocalXSV = useSharedValue(0);
+  const pinchStartScrollSV = useSharedValue(0);
+  const animatedScrollRef = useAnimatedRef<Animated.ScrollView>();
+  const trackWidthSV = useSharedValue(0);
 
-  const handleTouchMove = (e: { nativeEvent: { touches: { pageX: number; pageY: number }[] } }) => {
-    if (e.nativeEvent.touches.length === 2 && pinchStartDistance.current > 10) {
-      const [t1, t2] = e.nativeEvent.touches;
-      const currentDistance = Math.hypot(t2.pageX - t1.pageX, t2.pageY - t1.pageY);
-      // Ratio-based: spreading fingers 2x = doubles zoom
-      const ratio = currentDistance / pinchStartDistance.current;
-      // Dampen: square root makes it less aggressive
-      const dampened = 1 + (ratio - 1) * 0.6;
-      const newZoom = Math.max(0.5, Math.min(4, pinchStartZoom.current * dampened));
-      setZoom(newZoom);
-    }
-  };
+  const updateZoomJS = useCallback((z: number) => {
+    const rounded = +(z.toFixed(1));
+    setZoom(rounded);
+    onZoomChange?.(rounded);
+  }, [onZoomChange]);
 
-  const handleTouchEnd = () => {
-    pinchStartDistance.current = 0;
-  };
+  // Pinch gesture — runs entirely on UI thread
+  const pinchGesture = useMemo(() =>
+    Gesture.Pinch()
+      .onStart((e) => {
+        'worklet';
+        pinchBaseZoom.value = zoomSV.value;
+        pinchFocalXSV.value = e.focalX;
+        pinchStartScrollSV.value = scrollOffsetSV.value;
+      })
+      .onUpdate((e) => {
+        'worklet';
+        const oldZoom = pinchBaseZoom.value;
+        const newZoom = Math.max(0.5, Math.min(10, oldZoom * e.scale));
+        zoomSV.value = newZoom;
+
+        // Keep focal point stationary — all on UI thread
+        if (trackWidthSV.value > 0) {
+          const contentX = pinchStartScrollSV.value + pinchFocalXSV.value;
+          const newContentX = contentX * (newZoom / oldZoom);
+          const newScrollX = Math.max(0, newContentX - pinchFocalXSV.value);
+          scrollTo(animatedScrollRef, newScrollX, 0, false);
+        }
+
+        runOnJS(updateZoomJS)(newZoom);
+      })
+      .onEnd(() => {
+        'worklet';
+      }),
+  []);
+
+  // Animated style for the timeline content width
+  const animatedContentStyle = useAnimatedStyle(() => ({
+    width: trackWidth > 0 ? trackWidth * zoomSV.value : '100%' as any,
+  }));
+
 
   const handleContainerLayout = (e: LayoutChangeEvent) => {
-    const w = e.nativeEvent.layout.width - 32; // minus container padding
-    if (trackWidth === 0) setTrackWidth(w);
+    const w = e.nativeEvent.layout.width - 32; // minus padding
+    if (trackWidth === 0) {
+      setTrackWidth(w);
+      trackWidthSV.value = w;
+    }
     trackLayoutRef.current.width = w;
   };
 
@@ -195,6 +239,8 @@ export function EditorTimeline({
   };
 
   // Draggable playhead
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
   const playheadPanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -204,31 +250,26 @@ export function EditorTimeline({
       },
       onPanResponderMove: (_, gs) => {
         if (trackLayoutRef.current.width <= 0) return;
-        const delta = gs.dx / trackLayoutRef.current.width;
+        const delta = gs.dx / (trackLayoutRef.current.width * zoomRef.current);
         const newPos = Math.max(0, Math.min(1, playheadStartRef.current + delta));
         onPlayheadDrag(newPos);
       },
     })
   ).current;
 
-  // Tap on ruler to seek
   const handleRulerPress = (e: { nativeEvent: { locationX: number } }) => {
     if (trackWidth <= 0) return;
     const pct = Math.max(0, Math.min(1, e.nativeEvent.locationX / trackWidth));
     onPlayheadDrag(pct);
   };
 
-  // Timecode markers — more detail at higher zoom
+  // Timecode markers
   const timeMarkers: { pos: number; label: string }[] = [];
   if (totalDurationSec > 0) {
-    const visibleDuration = totalDurationSec / zoom;
-    let step: number;
-    if (visibleDuration <= 5) step = 0.5;
-    else if (visibleDuration <= 15) step = 1;
-    else if (visibleDuration <= 30) step = 2;
-    else if (visibleDuration <= 60) step = 5;
-    else if (visibleDuration <= 120) step = 10;
-    else step = 15;
+    const pxPerSec = (trackWidth * zoom) / totalDurationSec;
+    const minPx = 20;
+    const steps = [1, 2, 5, 10, 15, 30, 60];
+    let step = steps.find(s => s * pxPerSec >= minPx) ?? 60;
 
     for (let t = 0; t <= totalDurationSec; t += step) {
       const label = step < 1
@@ -238,35 +279,37 @@ export function EditorTimeline({
     }
   }
 
-  const zoomIn = () => setZoom(z => Math.min(4, z + 0.5));
-  const zoomOut = () => setZoom(z => Math.max(0.5, z - 0.5));
+
+  const clipWaveforms = useMemo(() =>
+    clips.map(clip => {
+      const w = totalDurationSec > 0 ? (getEffectiveDuration(clip) / totalDurationSec) * 100 : 0;
+      const barCount = Math.max(6, Math.round(w * 0.8));
+      return { clip, w, waveform: getWaveform(clip.id, barCount) };
+    }),
+  [clips, totalDurationSec]);
+
+  // Combined gesture: pinch + native scroll
+  const nativeGesture = useMemo(() => Gesture.Native(), []);
+  const composed = useMemo(() => Gesture.Simultaneous(pinchGesture, nativeGesture), [pinchGesture, nativeGesture]);
 
   return (
     <View
       style={styles.container}
       onLayout={handleContainerLayout}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
     >
-      {/* Zoom controls */}
-      <View style={styles.zoomRow}>
-        <Pressable onPress={zoomOut} style={styles.zoomBtn}>
-          <Text style={styles.zoomBtnText}>−</Text>
-        </Pressable>
-        <Text style={styles.zoomLabel}>{Math.round(zoom * 100)}%</Text>
-        <Pressable onPress={zoomIn} style={styles.zoomBtn}>
-          <Text style={styles.zoomBtnText}>+</Text>
-        </Pressable>
-      </View>
-
-      <ScrollView
-        ref={scrollRef}
+      <GestureDetector gesture={composed}>
+      <Animated.ScrollView
+        ref={animatedScrollRef}
         horizontal
         showsHorizontalScrollIndicator={false}
         style={styles.zoomScroll}
+        onScroll={(e: any) => {
+          scrollOffsetSV.value = e.nativeEvent.contentOffset.x;
+        }}
+        scrollEventThrottle={16}
       >
-      <View style={{ width: trackWidth > 0 ? trackWidth * zoom : '100%' }}>
+      <View style={{ flexDirection: 'row' }}>
+      <Animated.View style={[animatedContentStyle, { flex: 0 }]}>
       {/* Timecode ruler — tap to seek */}
       <Pressable onPress={handleRulerPress} style={styles.ruler}>
         {timeMarkers.map((m, i) => (
@@ -275,7 +318,6 @@ export function EditorTimeline({
             <View style={styles.markerTick} />
           </View>
         ))}
-        {/* Playhead marker on ruler */}
         {totalDurationSec > 0 && (
           <View style={[styles.rulerPlayhead, { left: `${playheadPos * 100}%` }]} />
         )}
@@ -283,7 +325,6 @@ export function EditorTimeline({
 
       {/* Text track */}
       <View style={styles.textTrack}>
-        <Text style={styles.trackLabel}>T</Text>
         {textOverlays.map(t => {
           const isActive = t.id === selectedTextId;
           return (
@@ -298,34 +339,36 @@ export function EditorTimeline({
                 {
                   left: `${t.startPct}%`,
                   width: `${t.endPct - t.startPct}%`,
-                  backgroundColor: isActive ? 'rgba(251,191,36,0.2)' : 'rgba(251,191,36,0.05)',
-                  borderColor: isActive ? colors.amber : 'rgba(251,191,36,0.15)',
+                  backgroundColor: isActive ? 'rgba(251,191,36,0.15)' : 'rgba(251,191,36,0.06)',
+                  borderColor: isActive ? colors.amber : 'rgba(251,191,36,0.2)',
                 },
               ]}
             >
-              <Text style={[styles.textBlockLabel, { color: isActive ? colors.amber : 'rgba(251,191,36,0.7)' }]} numberOfLines={1}>
-                {t.text}
-              </Text>
+              <View style={styles.textBlockRow}>
+                <Text style={[styles.textBlockPrefix, { color: isActive ? colors.amber : 'rgba(251,191,36,0.5)' }]}>T</Text>
+                <Text style={[styles.textBlockLabel, { color: isActive ? colors.amber : 'rgba(251,191,36,0.7)' }]} numberOfLines={1}>
+                  {t.text || 'Text'}
+                </Text>
+              </View>
               {isActive && (
                 <>
-                  <TrimHandle side="left" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth * zoom} />
-                  <TrimHandle side="right" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth * zoom} />
+                  <TrimHandle side="left" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
+                  <TrimHandle side="right" color={colors.amber} itemId={t.id} onTrim={onTrimText} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
                 </>
               )}
             </DragBlock>
           );
         })}
-        <Pressable onPress={onAddText} style={styles.addTrackBtn}>
-          <Text style={styles.addTrackBtnText}>+</Text>
-        </Pressable>
         {totalDurationSec > 0 && <View style={[styles.playheadLine, { left: `${playheadPos * 100}%` }]} />}
       </View>
 
       {/* Filter track */}
       <View style={styles.filterTrack}>
-        <Text style={[styles.trackLabel, { fontSize: 6 }]}>FX</Text>
         {filterOverlays.map(f => {
           const isActive = f.id === selectedFilterId;
+          const filterPreset = FILTERS.find(p => p.id === f.filterId);
+          const filterColor = filterPreset?.color ?? colors.purple;
+          const filterLabel = filterPreset?.label ?? 'Filter';
           return (
             <DragBlock
               key={f.id}
@@ -335,28 +378,29 @@ export function EditorTimeline({
               trackWidth={trackWidth * zoom}
               style={[
                 styles.filterBlock,
-                isActive ? styles.filterBlockActive : styles.filterBlockInactive,
                 {
                   left: `${f.startPct}%`,
                   width: `${f.endPct - f.startPct}%`,
+                  backgroundColor: isActive ? `${filterColor}25` : `${filterColor}10`,
+                  borderColor: isActive ? filterColor : `${filterColor}40`,
                 },
               ]}
             >
-              <Text style={[styles.filterBlockLabel, { color: isActive ? colors.purple : `${colors.purple}90` }]} numberOfLines={1}>
-                B/C/S
-              </Text>
+              <View style={styles.filterBlockRow}>
+                <View style={[styles.filterSwatch, { backgroundColor: filterColor }]} />
+                <Text style={[styles.filterBlockLabel, { color: isActive ? filterColor : `${filterColor}cc` }]} numberOfLines={1}>
+                  {filterLabel}
+                </Text>
+              </View>
               {isActive && (
                 <>
-                  <TrimHandle side="left" color={colors.purple} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth * zoom} />
-                  <TrimHandle side="right" color={colors.purple} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth * zoom} />
+                  <TrimHandle side="left" color={filterColor} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
+                  <TrimHandle side="right" color={filterColor} itemId={f.id} onTrim={onTrimFilter} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
                 </>
               )}
             </DragBlock>
           );
         })}
-        <Pressable onPress={onAddFilter} style={[styles.addTrackBtn, { borderColor: 'rgba(167,139,250,0.2)', backgroundColor: 'rgba(167,139,250,0.06)' }]}>
-          <Text style={[styles.addTrackBtnText, { color: 'rgba(167,139,250,0.5)' }]}>+</Text>
-        </Pressable>
         {totalDurationSec > 0 && <View style={[styles.playheadLine, { left: `${playheadPos * 100}%` }]} />}
       </View>
 
@@ -365,11 +409,12 @@ export function EditorTimeline({
         onLayout={handleTrackLayout}
         style={styles.clipTrack}
       >
-        {clips.map((clip, i) => {
-          const w = totalDurationSec > 0 ? (getEffectiveDuration(clip) / totalDurationSec) * 100 : 0;
+        {clipWaveforms.map(({ clip, w, waveform }) => {
           const isActive = clip.id === selectedClipId;
-          const barCount = Math.max(6, Math.round(w * 0.8));
-          const waveform = getWaveform(clip.id, barCount);
+          // Derive category icon from caption keywords
+          const captionLower = clip.caption.toLowerCase();
+          const cat = CATEGORIES.find(c => captionLower.includes(c.label.toLowerCase()));
+          const clipIcon: IconName = cat?.icon ?? 'video';
 
           return (
             <Pressable
@@ -377,13 +422,26 @@ export function EditorTimeline({
               onPress={() => onSelectClip(clip.id)}
               style={[
                 styles.clipBlock,
-                {
-                  width: `${w}%`,
-                  backgroundColor: isActive ? `${clip.color}18` : `${clip.color}0a`,
-                },
+                { width: `${w}%` },
               ]}
             >
-              <View style={[styles.clipColorBar, { backgroundColor: clip.color, opacity: isActive ? 1 : 0.5 }]} />
+              {/* Gradient background */}
+              <View style={[styles.clipBg, { backgroundColor: `${clip.color}${isActive ? '30' : '18'}` }]} />
+              <View style={[styles.clipBgGradient, { backgroundColor: `${clip.color}${isActive ? '15' : '08'}` }]} />
+
+              {/* Icon + caption at top */}
+              {w > 6 && (
+                <View style={styles.clipLabelRow}>
+                  <Icon name={clipIcon} size={12} color={isActive ? `${clip.color}ee` : `${clip.color}88`} />
+                  {w > 12 && (
+                    <Text style={[styles.clipLabelText, { color: isActive ? colors.text : `${clip.color}cc` }]} numberOfLines={1}>
+                      {clip.caption.slice(0, 25)}
+                    </Text>
+                  )}
+                </View>
+              )}
+
+              {/* Waveform */}
               <View style={styles.waveformContainer}>
                 {waveform.map((h, j) => (
                   <View
@@ -392,45 +450,35 @@ export function EditorTimeline({
                       styles.waveBar,
                       {
                         height: `${h * 100}%`,
-                        backgroundColor: isActive ? `${clip.color}80` : `${clip.color}30`,
+                        backgroundColor: isActive ? `${clip.color}60` : `${clip.color}25`,
                       },
                     ]}
                   />
                 ))}
               </View>
-              {w > 8 && (
-                <View style={styles.clipLabelRow}>
-                  <Icon name="video" size={10} color={isActive ? colors.text : colors.textMuted} />
-                  {w > 15 && (
-                    <Text style={[styles.clipLabelText, { color: isActive ? colors.text : colors.textMuted }]} numberOfLines={1}>
-                      {clip.caption.slice(0, 20)}
-                    </Text>
-                  )}
-                </View>
-              )}
-              {/* Duration — top left, always visible */}
-              <Text style={[styles.clipDuration, { color: isActive ? '#fff' : colors.textMuted }]}>
-                {formatDuration(getEffectiveDuration(clip))}
-              </Text>
+
+              {/* Duration badge — bottom left */}
+              <View style={[styles.clipDurationBadge, { backgroundColor: `${clip.color}${isActive ? 'cc' : '66'}` }]}>
+                <Text style={styles.clipDurationText}>
+                  {formatDuration(getEffectiveDuration(clip))}
+                </Text>
+              </View>
+
+              {/* Left color bar */}
+              <View style={[styles.clipColorBar, { backgroundColor: clip.color, opacity: isActive ? 0.8 : 0.4 }]} />
+
               {isActive && <View style={[styles.clipSelectionBorder, { borderColor: clip.color }]} />}
 
-              {/* Trim handles — only on selected clip */}
               {isActive && (
                 <>
-                  <TrimHandle side="left" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth} />
-                  <TrimHandle side="right" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth} />
+                  <TrimHandle side="left" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
+                  <TrimHandle side="right" color={clip.color} itemId={clip.id} onTrim={onTrimClip} trackWidth={trackWidth * zoom} trimActiveRef={trimActive} />
                 </>
               )}
             </Pressable>
           );
         })}
 
-        {/* Add button */}
-        <Pressable onPress={onAddClip} style={[styles.addClipBtn, { width: clips.length > 0 ? 32 : '100%' }]}>
-          <Text style={styles.addClipBtnText}>+</Text>
-        </Pressable>
-
-        {/* Playhead — draggable */}
         {totalDurationSec > 0 && (
           <View
             {...playheadPanResponder.panHandlers}
@@ -441,8 +489,23 @@ export function EditorTimeline({
           </View>
         )}
       </View>
+      </Animated.View>
+      {/* Add buttons — column at end of timeline, aligned to tracks */}
+      <View style={styles.addBtnColumn}>
+        <View style={{ height: 20 }} />
+        <Pressable onPress={onAddText} style={[styles.addTrackBtn, { height: 40, marginBottom: 3 }]}>
+          <Text style={styles.addTrackBtnText}>+</Text>
+        </Pressable>
+        <Pressable onPress={onAddFilter} style={[styles.addTrackBtn, { height: 40, marginBottom: 6, backgroundColor: 'rgba(167,139,250,0.06)' }]}>
+          <Text style={[styles.addTrackBtnText, { color: 'rgba(167,139,250,0.5)' }]}>+</Text>
+        </Pressable>
+        <Pressable onPress={onAddClip} style={[styles.addTrackBtn, { height: 64, backgroundColor: 'rgba(255,255,255,0.03)' }]}>
+          <Text style={[styles.addTrackBtnText, { color: colors.textDim }]}>+</Text>
+        </Pressable>
       </View>
-      </ScrollView>
+      </View>
+      </Animated.ScrollView>
+      </GestureDetector>
     </View>
   );
 }
@@ -452,42 +515,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginBottom: 10,
   },
-  zoomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginBottom: 6,
-  },
-  zoomBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.bg2,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  zoomBtnText: {
-    fontFamily: fonts.mono,
-    fontSize: 16,
-    color: colors.textMuted,
-  },
-  zoomLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-    minWidth: 36,
-    textAlign: 'center',
-  },
   zoomScroll: {
     flex: 0,
   },
   ruler: {
     height: 18,
     marginBottom: 2,
-    marginRight: 32,
+    marginRight: 0,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.06)',
     position: 'relative',
@@ -510,12 +544,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.08)',
   },
   textTrack: {
-    height: 32,
+    height: 40,
     marginBottom: 3,
-    marginRight: 32,
+    marginRight: 0,
     backgroundColor: 'rgba(255,255,255,0.01)',
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 8,
     borderWidth: 1,
     borderBottomWidth: 0,
     borderColor: 'rgba(255,255,255,0.04)',
@@ -535,22 +567,33 @@ const styles = StyleSheet.create({
   },
   textBlock: {
     position: 'absolute',
-    top: 3,
-    bottom: 3,
+    top: 4,
+    bottom: 4,
     borderWidth: 1.5,
-    borderRadius: 5,
-    paddingHorizontal: 6,
+    borderRadius: 0,
+    paddingHorizontal: 8,
     justifyContent: 'center',
     overflow: 'visible',
   },
+  textBlockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  textBlockPrefix: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    fontWeight: '700',
+  },
   textBlockLabel: {
     fontFamily: fonts.mono,
-    fontSize: 8,
+    fontSize: 9,
+    flex: 1,
   },
   filterTrack: {
-    height: 32,
+    height: 40,
     marginBottom: 6,
-    marginRight: 32,
+    marginRight: 0,
     backgroundColor: 'rgba(255,255,255,0.01)',
     borderWidth: 1,
     borderTopWidth: 0,
@@ -561,53 +604,46 @@ const styles = StyleSheet.create({
   },
   filterBlock: {
     position: 'absolute',
-    top: 3,
-    bottom: 3,
-    borderWidth: 1,
-    borderRadius: 4,
-    paddingHorizontal: 6,
+    top: 4,
+    bottom: 4,
+    borderWidth: 1.5,
+    borderRadius: 0,
+    paddingHorizontal: 8,
     justifyContent: 'center',
-    alignItems: 'center',
     overflow: 'visible',
   },
-  filterBlockActive: {
-    backgroundColor: 'rgba(196,111,212,0.18)',
-    borderColor: '#c46fd4',
-    borderWidth: 1.5,
+  filterBlockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  filterBlockInactive: {
-    backgroundColor: 'rgba(196,111,212,0.04)',
-    borderColor: 'rgba(196,111,212,0.12)',
-    borderWidth: 1,
+  filterSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 2,
   },
   filterBlockLabel: {
     fontFamily: fonts.mono,
-    fontSize: 7.5,
+    fontSize: 9,
+  },
+  addBtnColumn: {
+    width: 28,
+    marginLeft: 4,
   },
   addTrackBtn: {
-    position: 'absolute',
-    right: -28,
-    top: 2,
-    bottom: 2,
-    width: 24,
-    borderRadius: 4,
+    width: 28,
     backgroundColor: 'rgba(251,191,36,0.06)',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: 'rgba(251,191,36,0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   addTrackBtnText: {
     color: 'rgba(251,191,36,0.5)',
-    fontSize: 12,
+    fontSize: 18,
   },
   clipTrack: {
-    height: 40,
-    marginRight: 32,
+    height: 64,
+    marginRight: 0,
     backgroundColor: 'rgba(255,255,255,0.015)',
-    borderBottomLeftRadius: 8,
-    borderBottomRightRadius: 8,
     borderWidth: 1,
     borderTopWidth: 0,
     borderColor: 'rgba(255,255,255,0.06)',
@@ -620,19 +656,35 @@ const styles = StyleSheet.create({
     position: 'relative',
     overflow: 'visible',
   },
-  clipColorBar: {
+  clipBg: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    height: 3,
+    bottom: 0,
+  },
+  clipBgGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: '50%',
+  },
+  clipColorBar: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    width: 3,
+    borderTopLeftRadius: 2,
+    borderBottomLeftRadius: 2,
   },
   waveformContainer: {
     position: 'absolute',
-    bottom: 4,
-    left: 3,
-    right: 3,
-    top: 16,
+    bottom: 22,
+    left: 6,
+    right: 4,
+    top: 24,
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: 1,
@@ -643,27 +695,32 @@ const styles = StyleSheet.create({
   },
   clipLabelRow: {
     position: 'absolute',
-    top: 5,
-    left: 5,
-    right: 5,
+    top: 6,
+    left: 8,
+    right: 4,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-  },
-  clipEmoji: {
-    fontSize: 9,
+    gap: 4,
   },
   clipLabelText: {
     fontFamily: fonts.mono,
-    fontSize: 7.5,
+    fontSize: 8,
     letterSpacing: 0.2,
+    flex: 1,
   },
-  clipDuration: {
+  clipDurationBadge: {
     position: 'absolute',
-    top: 5,
-    left: 16,
+    bottom: 4,
+    left: 6,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  clipDurationText: {
     fontFamily: fonts.mono,
-    fontSize: 7,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
   },
   clipSelectionBorder: {
     position: 'absolute',
@@ -672,26 +729,36 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderWidth: 2,
-    borderRadius: 2,
+    borderRadius: 3,
   },
-  // Trim handles
-  trimHandle: {
+  trimHitArea: {
     position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 14,
+    top: -4,
+    bottom: -4,
+    width: 28,
     zIndex: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 3,
+  },
+  trimHitLeft: {
+    left: -10,
+  },
+  trimHitRight: {
+    right: -10,
+  },
+  trimHandle: {
+    width: 8,
+    height: '60%',
+    maxHeight: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 2,
   },
   trimHandleLeft: {
-    left: -2,
     borderTopLeftRadius: 4,
     borderBottomLeftRadius: 4,
   },
   trimHandleRight: {
-    right: -2,
     borderTopRightRadius: 4,
     borderBottomRightRadius: 4,
   },

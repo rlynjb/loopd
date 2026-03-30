@@ -90,7 +90,7 @@ export function useTextRenderer() {
               {
                 fontSize,
                 color: current.color || '#ffffff',
-                fontFamily: bold ? 'PoppinsBold' : 'Poppins',
+                fontFamily: bold ? 'TikTokSansBold' : 'TikTokSans',
                 textAlign: align,
               },
             ]}
@@ -121,7 +121,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Math.round(W * 0.05),
   },
   text: {
-    fontFamily: 'Poppins',
+    fontFamily: 'TikTokSans',
     letterSpacing: -0.3,
   },
 });

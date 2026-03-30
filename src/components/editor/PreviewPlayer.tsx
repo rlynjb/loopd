@@ -217,7 +217,7 @@ export function PreviewPlayer({
                 placeholderTextColor="rgba(255,255,255,0.3)"
                 autoFocus={focusTextInput}
                 style={{
-                  fontFamily: t.fontWeight >= 700 ? 'PoppinsBold' : 'Poppins',
+                  fontFamily: t.fontWeight >= 700 ? 'TikTokSansBold' : 'TikTokSans',
                   fontSize: scaledSize,
                   color: t.color,
                   textAlign: align,
@@ -238,7 +238,7 @@ export function PreviewPlayer({
               />
             ) : (
               <Text style={{
-                fontFamily: t.fontWeight >= 700 ? 'PoppinsBold' : 'Poppins',
+                fontFamily: t.fontWeight >= 700 ? 'TikTokSansBold' : 'TikTokSans',
                 fontSize: scaledSize,
                 color: t.color,
                 textAlign: align,

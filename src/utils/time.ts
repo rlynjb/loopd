@@ -16,9 +16,13 @@ export function formatDate(date: Date): string {
 
 export function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  if (m > 0) return `${m}:${String(s).padStart(2, '0')}s`;
-  return `${s}s`;
+  const s = seconds % 60;
+  const half = Math.round(s * 2) / 2; // round to nearest 0.5
+  if (m > 0) {
+    const display = Number.isInteger(half) ? String(Math.round(half)).padStart(2, '0') : half.toFixed(1).padStart(4, '0');
+    return `${m}:${display}`;
+  }
+  return Number.isInteger(half) ? `0:${String(Math.round(half)).padStart(2, '0')}` : `0:${half.toFixed(1).padStart(4, '0')}`;
 }
 
 export function formatRelativeDate(dateStr: string): string {
