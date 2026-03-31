@@ -4,9 +4,9 @@ import ViewShot, { captureRef } from 'react-native-view-shot';
 import type { TextOverlay } from '../types/project';
 import { fonts } from '../constants/theme';
 
-// Render at half resolution to avoid memory crashes, FFmpeg scales up during overlay
-const W = 540;
-const H = 960;
+// Render at full resolution for crisp text
+const W = 1080;
+const H = 1920;
 
 export type RenderedText = {
   path: string;
@@ -36,6 +36,7 @@ export function useTextRenderer() {
           if (!shotRef.current) { resolve(null); return; }
           const uri = await captureRef(shotRef, {
             format: 'png',
+            quality: 1,
             result: 'tmpfile',
           });
           resolve(uri.startsWith('file://') ? uri.replace('file://', '') : uri);
@@ -89,8 +90,9 @@ export function useTextRenderer() {
               styles.text,
               {
                 fontSize,
+                lineHeight: fontSize * (current.lineHeight ?? 14) / 10,
                 color: current.color || '#ffffff',
-                fontFamily: bold ? 'TikTokSansBold' : 'TikTokSans',
+                fontFamily: `Nunito${current.italic ? 'Italic' : ''}${current.fontWeight}`,
                 textAlign: align,
               },
             ]}
@@ -121,7 +123,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Math.round(W * 0.05),
   },
   text: {
-    fontFamily: 'TikTokSans',
+    fontFamily: 'Nunito400',
     letterSpacing: -0.3,
   },
 });

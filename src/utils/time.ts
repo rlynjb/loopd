@@ -22,7 +22,7 @@ export function formatDuration(seconds: number): string {
     const display = Number.isInteger(half) ? String(Math.round(half)).padStart(2, '0') : half.toFixed(1).padStart(4, '0');
     return `${m}:${display}`;
   }
-  return Number.isInteger(half) ? `0:${String(Math.round(half)).padStart(2, '0')}` : `0:${half.toFixed(1).padStart(4, '0')}`;
+  return Number.isInteger(half) ? `${Math.round(half)}s` : `${half.toFixed(1)}s`;
 }
 
 export function formatRelativeDate(dateStr: string): string {

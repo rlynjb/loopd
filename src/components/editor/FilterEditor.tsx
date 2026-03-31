@@ -1,5 +1,6 @@
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
+import { FILTERS } from '../../constants/filters';
 import { Icon } from '../ui/Icon';
 import type { FilterOverlay } from '../../types/project';
 import Slider from '../ui/Slider';
@@ -17,6 +18,28 @@ export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
 
   return (
     <View style={styles.container}>
+      {/* Preset picker */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.presetScroll}>
+        {FILTERS.filter(f => f.id !== 'none').map(f => {
+          const isActive = overlay.filterId === f.id;
+          return (
+            <Pressable
+              key={f.id}
+              onPress={() => onUpdate({
+                filterId: f.id,
+                brightness: f.brightness,
+                contrast: f.contrast,
+                saturate: f.saturate,
+              })}
+              style={[styles.presetBtn, isActive && { borderColor: f.color, backgroundColor: `${f.color}20` }]}
+            >
+              <View style={[styles.presetDot, { backgroundColor: f.color }]} />
+              <Text style={[styles.presetLabel, { color: isActive ? f.color : colors.textMuted }]}>{f.label}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
       {([
         { key: 'brightness' as const, label: 'Brightness', icon: '☀', min: 50, max: 150 },
         { key: 'contrast' as const, label: 'Contrast', icon: '◐', min: 50, max: 150 },
@@ -39,9 +62,16 @@ export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
       ))}
 
       <View style={styles.footer}>
+        <Pressable
+          onPress={() => onUpdate({ startPct: 0, endPct: 100 })}
+          style={[styles.resetBtn, overlay.startPct === 0 && overlay.endPct === 100 && { borderColor: colors.purple, backgroundColor: 'rgba(167,139,250,0.12)' }]}
+        >
+          <Text style={[styles.resetBtnText, overlay.startPct === 0 && overlay.endPct === 100 && { color: colors.purple }]}>FULL</Text>
+        </Pressable>
         <Pressable onPress={handleReset} style={styles.resetBtn}>
           <Text style={styles.resetBtnText}>RESET</Text>
         </Pressable>
+        <View style={{ flex: 1 }} />
         <Pressable onPress={onDelete} style={styles.deleteBtn}>
           <Icon name="trash" size={14} color={colors.coral} />
         </Pressable>
@@ -58,6 +88,31 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     padding: 16,
     marginBottom: 14,
+  },
+  presetScroll: {
+    marginBottom: 12,
+    marginHorizontal: -4,
+  },
+  presetBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 3,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  presetDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  presetLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
   },
   adjustRow: {
     flexDirection: 'row',

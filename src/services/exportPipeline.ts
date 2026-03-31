@@ -18,6 +18,7 @@ import { File as FSFile } from 'expo-file-system';
 import { getExportPath, getTempDir, cleanTemp, ensureDirectories, uriToPath } from './fileManager';
 import type { ClipItem, TextOverlay, FilterOverlay, ExportProgress } from '../types/project';
 import type { RenderedText } from './textRenderer';
+import { FILTERS } from '../constants/filters';
 
 function writeFileList(path: string, files: string[]): void {
   const content = files.map(f => `file '${f}'`).join('\n');
@@ -131,9 +132,23 @@ export async function runExport(
       const brightness = ((fo.brightness - 100) / 100).toFixed(2);
       const contrast = (fo.contrast / 100).toFixed(2);
       const saturation = (fo.saturate / 100).toFixed(2);
-      vfParts.push(
-        `eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}:enable='between(t\\,${startSec}\\,${endSec})'`
-      );
+      const enable = `enable='between(t\\,${startSec}\\,${endSec})'`;
+      vfParts.push(`eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}:${enable}`);
+
+      // Apply color tint if preset has one
+      const preset = FILTERS.find(f => f.id === fo.filterId);
+      if (preset?.tint && preset.tintOpacity > 0) {
+        const hex = preset.tint;
+        const r = parseInt(hex.slice(1, 3), 16) / 255;
+        const g = parseInt(hex.slice(3, 5), 16) / 255;
+        const b2 = parseInt(hex.slice(5, 7), 16) / 255;
+        const t = preset.tintOpacity;
+        const keep = 1 - t;
+        // colorchannelmixer blends original with tint color
+        vfParts.push(
+          `colorchannelmixer=rr=${(keep + t * r).toFixed(3)}:gg=${(keep + t * g).toFixed(3)}:bb=${(keep + t * b2).toFixed(3)}:${enable}`
+        );
+      }
     }
     const filteredFile = hasText ? `${tempDir}/filtered.mp4` : finalOutput;
     await runCommand(

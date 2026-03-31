@@ -280,13 +280,19 @@ export function EditorTimeline({
   }
 
 
-  const clipWaveforms = useMemo(() =>
-    clips.map(clip => {
-      const w = totalDurationSec > 0 ? (getEffectiveDuration(clip) / totalDurationSec) * 100 : 0;
+  const clipWaveforms = useMemo(() => {
+    const totalEffective = clips.reduce((sum, c) => sum + getEffectiveDuration(c), 0);
+    return clips.map(clip => {
+      const fullDurationSec = clip.durationMs / 1000;
+      const effectiveSec = getEffectiveDuration(clip);
+      const w = totalEffective > 0 ? (effectiveSec / totalEffective) * 100 : 0;
+      const fullW = totalEffective > 0 ? (fullDurationSec / totalEffective) * 100 : 0;
+      const leftTrimPct = clip.trimStartPct;
+      const rightTrimPct = 100 - clip.trimEndPct;
       const barCount = Math.max(6, Math.round(w * 0.8));
-      return { clip, w, waveform: getWaveform(clip.id, barCount) };
-    }),
-  [clips, totalDurationSec]);
+      return { clip, w, fullW, leftTrimPct, rightTrimPct, waveform: getWaveform(clip.id, barCount) };
+    });
+  }, [clips, totalDurationSec]);
 
   // Combined gesture: pinch + native scroll
   const nativeGesture = useMemo(() => Gesture.Native(), []);
@@ -409,12 +415,12 @@ export function EditorTimeline({
         onLayout={handleTrackLayout}
         style={styles.clipTrack}
       >
-        {clipWaveforms.map(({ clip, w, waveform }) => {
+        {clipWaveforms.map(({ clip, w, fullW, leftTrimPct, rightTrimPct, waveform }) => {
           const isActive = clip.id === selectedClipId;
-          // Derive category icon from caption keywords
           const captionLower = clip.caption.toLowerCase();
           const cat = CATEGORIES.find(c => captionLower.includes(c.label.toLowerCase()));
           const clipIcon: IconName = cat?.icon ?? 'video';
+          const isTrimmed = leftTrimPct > 0 || rightTrimPct > 0;
 
           return (
             <Pressable
@@ -460,7 +466,7 @@ export function EditorTimeline({
               {/* Duration badge — bottom left */}
               <View style={[styles.clipDurationBadge, { backgroundColor: `${clip.color}${isActive ? 'cc' : '66'}` }]}>
                 <Text style={styles.clipDurationText}>
-                  {formatDuration(getEffectiveDuration(clip))}
+                  {formatDuration(getEffectiveDuration(clip))}/{formatDuration(clip.durationMs / 1000)}
                 </Text>
               </View>
 

@@ -16,7 +16,9 @@ export type TextOverlay = {
   startPct: number;
   endPct: number;
   fontSize: number;
-  fontWeight: 300 | 400 | 700;
+  fontWeight: number;
+  italic?: boolean;
+  lineHeight?: number;
   color: string;
   textAlign?: 'left' | 'center' | 'right';
   position?: 'top' | 'center' | 'bottom';

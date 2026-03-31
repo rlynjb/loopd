@@ -3,7 +3,7 @@ import { View, Text, Pressable, TextInput, ScrollView, PanResponder, StyleSheet,
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import { saveToDCIMLoopd } from '../../src/services/fileManager';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
 import { SpinningIcon } from '../../src/components/ui/SpinningIcon';
@@ -35,10 +35,13 @@ export default function EditorScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { status: syncStatus, configured: syncConfigured, syncNow } = useNotionSync();
-  const { entries } = useEntries(date);
+  const { entries, reload: reloadEntries } = useEntries(date);
   const habits = useHabits();
   const { title: dayTitle } = useDayTitle(date);
   const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries, dayTitle);
+
+  // Reload entries when screen regains focus (e.g., after adding a clip in journal)
+  useFocusEffect(useCallback(() => { reloadEntries(); }, [reloadEntries]));
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
@@ -55,7 +58,7 @@ export default function EditorScreen() {
   const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
   const [renderingText, setRenderingText] = useState(false);
   const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
-  const [previewHeight, setPreviewHeight] = useState(280);
+  const [previewHeight, setPreviewHeight] = useState(200);
   const heightAtDragStart = useRef(280);
   const currentHeightRef = useRef(280);
   currentHeightRef.current = previewHeight;
@@ -84,7 +87,23 @@ export default function EditorScreen() {
 
   const totalDurationSec = clips.reduce((sum, c) => sum + getEffective(c), 0);
 
+  const trimAllTo = (durationSec: number) => {
+    updateClips(prev => prev.map(clip => {
+      const fullDurationSec = clip.durationMs / 1000;
+      const trimStartSec = fullDurationSec * clip.trimStartPct / 100;
+      const availableSec = fullDurationSec - trimStartSec;
+      if (availableSec <= durationSec) return clip; // already shorter
+      const newEndPct = clip.trimStartPct + (durationSec / fullDurationSec) * 100;
+      return { ...clip, trimEndPct: Math.min(100, newEndPct) };
+    }));
+  };
+
   const clearSelections = () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      if (playRef.current) cancelAnimationFrame(playRef.current);
+      return;
+    }
     setSelectedClipId(null);
     setSelectedTextId(null);
     setSelectedFilterId(null);
@@ -437,12 +456,14 @@ export default function EditorScreen() {
     const newT: TextOverlay = {
       id: generateId('txt'),
       text: '',
-      startPct: start,
-      endPct: start + width,
-      fontSize: 20,
-      fontWeight: 400,
+      startPct: 0,
+      endPct: 100,
+      fontSize: 14,
+      fontWeight: 700,
+      lineHeight: 11,
       color: '#ffffff',
-      position: 'bottom',
+      textAlign: 'center',
+      position: 'center',
     };
     updateTextOverlays(prev => [...prev, newT]);
     clearSelections();
@@ -608,6 +629,18 @@ export default function EditorScreen() {
         <Text style={styles.totalTime}>{formatDuration(totalDurationSec)}</Text>
         <Text style={styles.clipCount}>{clips.length} clips · {Math.round(timelineZoom * 100)}%</Text>
       </View>
+
+      {/* Trim All */}
+      {clips.length > 0 && (
+        <View style={styles.trimAllRow}>
+          <Text style={styles.trimAllLabel}>TRIM ALL</Text>
+          {[2, 3, 4, 5].map(sec => (
+            <Pressable key={sec} onPress={() => trimAllTo(sec)} style={styles.trimAllBtn}>
+              <Text style={styles.trimAllBtnText}>{sec}s</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       {/* NLE Timeline */}
       <EditorTimeline
@@ -832,6 +865,32 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 10,
     color: colors.amber,
+  },
+  trimAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingBottom: 6,
+  },
+  trimAllLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    letterSpacing: 1,
+  },
+  trimAllBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  trimAllBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.textMuted,
   },
   panels: {
     flex: 1,

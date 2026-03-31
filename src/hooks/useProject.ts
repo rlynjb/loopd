@@ -135,6 +135,39 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
     };
   }, [date]);
 
+  // Merge new entries into existing project when entries change
+  useEffect(() => {
+    setProject(prev => {
+      if (!prev) return prev;
+      const videoEntries = entries.filter(e => e.type === 'video');
+      const knownEntryIds = new Set(prev.clips.map(c => c.entryId));
+      let clipIndex = prev.clips.length;
+      const newClips: ClipItem[] = [];
+      for (const e of videoEntries) {
+        if (knownEntryIds.has(e.id)) continue;
+        const entryClips = e.clips && e.clips.length > 0
+          ? e.clips
+          : e.clipUri ? [{ uri: e.clipUri, durationMs: e.clipDurationMs ?? 10000 }] : [];
+        for (const c of entryClips) {
+          newClips.push({
+            id: generateId('clip'),
+            entryId: e.id,
+            clipUri: c.uri,
+            caption: e.text ?? '',
+            durationMs: c.durationMs,
+            trimStartPct: 0,
+            trimEndPct: 100,
+            order: clipIndex,
+            color: CLIP_COLORS[clipIndex % CLIP_COLORS.length],
+          });
+          clipIndex++;
+        }
+      }
+      if (newClips.length === 0) return prev;
+      return { ...prev, clips: [...prev.clips, ...newClips] };
+    });
+  }, [entries]);
+
   // Auto-save when project changes
   useEffect(() => {
     if (!project || !initialLoadDone.current) return;

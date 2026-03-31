@@ -26,6 +26,23 @@ function AppContent() {
     PoppinsBold: require('../assets/fonts/Poppins-Bold.ttf'),
     TikTokSans: require('../assets/fonts/TikTokSans-Regular.ttf'),
     TikTokSansBold: require('../assets/fonts/TikTokSans-Bold.ttf'),
+    VarelaRound: require('../assets/fonts/VarelaRound-Regular.ttf'),
+    Nunito200: require('../assets/fonts/Nunito-ExtraLight.ttf'),
+    Nunito300: require('../assets/fonts/Nunito-Light.ttf'),
+    Nunito400: require('../assets/fonts/Nunito-Regular.ttf'),
+    Nunito500: require('../assets/fonts/Nunito-Medium.ttf'),
+    Nunito600: require('../assets/fonts/Nunito-SemiBold.ttf'),
+    Nunito700: require('../assets/fonts/Nunito-Bold.ttf'),
+    Nunito800: require('../assets/fonts/Nunito-ExtraBold.ttf'),
+    Nunito900: require('../assets/fonts/Nunito-Black.ttf'),
+    NunitoItalic200: require('../assets/fonts/NunitoItalic-ExtraLight.ttf'),
+    NunitoItalic300: require('../assets/fonts/NunitoItalic-Light.ttf'),
+    NunitoItalic400: require('../assets/fonts/NunitoItalic-Regular.ttf'),
+    NunitoItalic500: require('../assets/fonts/NunitoItalic-Medium.ttf'),
+    NunitoItalic600: require('../assets/fonts/NunitoItalic-SemiBold.ttf'),
+    NunitoItalic700: require('../assets/fonts/NunitoItalic-Bold.ttf'),
+    NunitoItalic800: require('../assets/fonts/NunitoItalic-ExtraBold.ttf'),
+    NunitoItalic900: require('../assets/fonts/NunitoItalic-Black.ttf'),
   });
 
   // Check for OTA updates on app open

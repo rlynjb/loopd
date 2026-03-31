@@ -46,10 +46,41 @@ export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
         <Text style={styles.value}>{overlay.fontSize}px</Text>
       </View>
 
-      {/* Weight + Align */}
+      {/* Line Height */}
+      <View style={styles.row}>
+        <Text style={styles.label}>LEADING</Text>
+        <View style={styles.sliderWrap}>
+          <Slider
+            min={10}
+            max={25}
+            step={1}
+            value={overlay.lineHeight ?? 14}
+            onValueChange={lineHeight => onUpdate({ lineHeight })}
+            color={colors.amber}
+          />
+        </View>
+        <Text style={styles.value}>{((overlay.lineHeight ?? 14) / 10).toFixed(1)}x</Text>
+      </View>
+
+      {/* Weight */}
+      <View style={styles.row}>
+        <Text style={styles.label}>WEIGHT</Text>
+        <View style={styles.sliderWrap}>
+          <Slider
+            min={200}
+            max={900}
+            step={100}
+            value={overlay.fontWeight}
+            onValueChange={fontWeight => onUpdate({ fontWeight })}
+            color={colors.amber}
+          />
+        </View>
+        <Text style={styles.value}>{overlay.fontWeight}</Text>
+      </View>
+
+      {/* Italic + Align */}
       <View style={styles.btnRow}>
-        <IconBtn icon="type" active={overlay.fontWeight < 700} onPress={() => onUpdate({ fontWeight: 400 })} />
-        <IconBtn icon="bold" active={overlay.fontWeight >= 700} onPress={() => onUpdate({ fontWeight: 700 })} />
+        <IconBtn icon="thin" active={!!overlay.italic} onPress={() => onUpdate({ italic: !overlay.italic })} />
         <View style={styles.divider} />
         <IconBtn icon="alignLeft" active={align === 'left'} onPress={() => onUpdate({ textAlign: 'left' })} />
         <IconBtn icon="alignCenter" active={align === 'center'} onPress={() => onUpdate({ textAlign: 'center' })} />
@@ -66,6 +97,16 @@ export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
         {/* Color picker toggle */}
         <Pressable onPress={() => setShowColors(!showColors)} style={[styles.colorToggle, showColors && styles.iconBtnActive]}>
           <View style={[styles.colorDot, { backgroundColor: overlay.color }]} />
+        </Pressable>
+
+        <View style={styles.divider} />
+
+        {/* Full duration */}
+        <Pressable
+          onPress={() => onUpdate({ startPct: 0, endPct: 100 })}
+          style={[styles.iconBtn, overlay.startPct === 0 && overlay.endPct === 100 && styles.iconBtnActive]}
+        >
+          <Text style={{ fontFamily: fonts.mono, fontSize: 8, color: overlay.startPct === 0 && overlay.endPct === 100 ? colors.amber : colors.textMuted }}>FULL</Text>
         </Pressable>
 
         <View style={{ flex: 1 }} />
@@ -115,19 +156,19 @@ const styles = StyleSheet.create({
   },
   label: {
     fontFamily: fonts.mono,
-    fontSize: 9,
+    fontSize: 8,
     color: colors.textDim,
     letterSpacing: 0.5,
-    width: 28,
+    width: 40,
   },
   sliderWrap: {
     flex: 1,
   },
   value: {
     fontFamily: fonts.mono,
-    fontSize: 9,
+    fontSize: 8,
     color: colors.amber,
-    width: 28,
+    width: 32,
     textAlign: 'right',
   },
   btnRow: {

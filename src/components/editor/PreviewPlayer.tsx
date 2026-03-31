@@ -11,34 +11,36 @@ function FilterPreview({ filter, filterPreset }: { filter: FilterOverlay; filter
   const b = filter.brightness ?? 100;
   const c = filter.contrast ?? 100;
   const s = filter.saturate ?? 100;
-  const hasAdjustment = b !== 100 || c !== 100 || s !== 100;
   const brightnessDelta = (b - 100) / 100;
   const contrastDelta = (c - 100) / 100;
   const desatAmount = s < 100 ? (100 - s) / 100 : 0;
+  const satBoost = s > 100 ? (s - 100) / 100 : 0;
+  const tint = filterPreset?.tint ?? null;
+  const tintOpacity = filterPreset?.tintOpacity ?? 0;
 
   return (
     <View style={styles.filterOverlay} pointerEvents="none">
+      {/* Brightness */}
       {brightnessDelta > 0 && (
-        <View style={[styles.filterTint, { backgroundColor: '#fff', opacity: brightnessDelta * 0.5 }]} />
+        <View style={[styles.filterTint, { backgroundColor: '#fff', opacity: Math.min(0.35, brightnessDelta * 0.4) }]} />
       )}
       {brightnessDelta < 0 && (
-        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.abs(brightnessDelta) * 0.6 }]} />
+        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.min(0.4, Math.abs(brightnessDelta) * 0.5) }]} />
+      )}
+      {/* Contrast — darken shadows */}
+      {contrastDelta > 0 && (
+        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: Math.min(0.15, contrastDelta * 0.15) }]} />
       )}
       {contrastDelta < 0 && (
-        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.abs(contrastDelta) * 0.35 }]} />
+        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.min(0.25, Math.abs(contrastDelta) * 0.3) }]} />
       )}
-      {contrastDelta > 0 && (
-        <View style={[styles.filterTint, { backgroundColor: '#000', opacity: contrastDelta * 0.2 }]} />
-      )}
+      {/* Desaturation */}
       {desatAmount > 0 && (
-        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: desatAmount * 0.45 }]} />
+        <View style={[styles.filterTint, { backgroundColor: '#808080', opacity: Math.min(0.55, desatAmount * 0.55) }]} />
       )}
-      {hasAdjustment && filterPreset && (
-        <View style={styles.filterBadge}>
-          <Text style={[styles.filterBadgeText, { color: filterPreset.color }]}>
-            {b !== 100 ? `B:${b}` : ''}{c !== 100 ? ` C:${c}` : ''}{s !== 100 ? ` S:${s}` : ''}
-          </Text>
-        </View>
+      {/* Color tint — the signature look of each filter */}
+      {tint && tintOpacity > 0 && (
+        <View style={[styles.filterTint, { backgroundColor: tint, opacity: tintOpacity }]} />
       )}
     </View>
   );
@@ -140,10 +142,9 @@ export function PreviewPlayer({
 
   return (
     <View style={[styles.preview, { width: previewWidth, height: previewHeight }]}>
-      {/* Actual video player */}
+      {/* Actual video player — no key prop so it doesn't unmount between clips */}
       {hasVideo && videoStatus !== 'error' && (
         <Video
-          key={currentClip.id}
           ref={videoRef}
           source={{ uri: currentClip.clipUri }}
           style={styles.video}
@@ -217,8 +218,9 @@ export function PreviewPlayer({
                 placeholderTextColor="rgba(255,255,255,0.3)"
                 autoFocus={focusTextInput}
                 style={{
-                  fontFamily: t.fontWeight >= 700 ? 'TikTokSansBold' : 'TikTokSans',
+                  fontFamily: `Nunito${t.italic ? 'Italic' : ''}${t.fontWeight}`,
                   fontSize: scaledSize,
+                  lineHeight: scaledSize * (t.lineHeight ?? 14) / 10,
                   color: t.color,
                   textAlign: align,
                   borderWidth: 1,
@@ -238,16 +240,14 @@ export function PreviewPlayer({
               />
             ) : (
               <Text style={{
-                fontFamily: t.fontWeight >= 700 ? 'TikTokSansBold' : 'TikTokSans',
+                fontFamily: `Nunito${t.italic ? 'Italic' : ''}${t.fontWeight}`,
                 fontSize: scaledSize,
+                lineHeight: scaledSize * (t.lineHeight ?? 14) / 10,
                 color: t.color,
                 textAlign: align,
                 borderWidth: 0,
                 paddingHorizontal: 6,
                 borderRadius: 3,
-                textShadowColor: 'rgba(0,0,0,0.7)',
-                textShadowOffset: { width: 0, height: 1 },
-                textShadowRadius: 4,
               }}>
                 {t.text}
               </Text>
@@ -263,14 +263,6 @@ export function PreviewPlayer({
         </View>
       )}
 
-      {/* Debug: show URI at bottom */}
-      {currentClip && (
-        <View style={styles.debugBar}>
-          <Text style={styles.debugText} numberOfLines={1}>
-            {hasVideo ? currentClip.clipUri.slice(-30) : 'no file'}
-          </Text>
-        </View>
-      )}
     </View>
   );
 }
