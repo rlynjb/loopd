@@ -21,7 +21,7 @@ export async function reimportMissingClips(entries: Entry[]): Promise<number> {
   let reimported = 0;
 
   for (const entry of entries) {
-    if (entry.type !== 'video') continue;
+    if (entry.clips.length === 0 && !entry.clipUri) continue;
 
     const clips = entry.clips.length > 0
       ? entry.clips

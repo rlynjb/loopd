@@ -1,5 +1,3 @@
-export type EntryType = 'video' | 'journal' | 'habit';
-
 export type ClipRef = {
   uri: string;
   durationMs: number;
@@ -8,7 +6,6 @@ export type ClipRef = {
 export type Entry = {
   id: string;
   date: string;
-  type: EntryType;
   text: string | null;
   mood: string | null;
   category: string | null;

@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCallback, useState, useRef } from 'react';
@@ -13,19 +12,9 @@ import { MOODS } from '../src/constants/moods';
 import { Icon } from '../src/components/ui/Icon';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 
-let initialRedirectDone = false;
-
 export default function HomeScreen() {
   const router = useRouter();
 
-  // Auto-redirect to today's journal only on first app open
-  useEffect(() => {
-    if (!initialRedirectDone) {
-      initialRedirectDone = true;
-      const today = getTodayString();
-      router.replace(`/journal/${today}`);
-    }
-  }, []);
   const [vlogs, setVlogs] = useState<Vlog[]>([]);
   const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
   const [todayEntries, setTodayEntries] = useState<Entry[]>([]);
@@ -63,7 +52,7 @@ export default function HomeScreen() {
           d.setDate(sunday.getDate() + i);
           const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           const dayEntries = await getEntriesByDate(dateStr);
-          weekly[dateStr] = [...new Set(dayEntries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
+          weekly[dateStr] = [...new Set(dayEntries.flatMap(e => e.habits))];
         }
         setWeeklyHabits(weekly);
       })();
@@ -76,9 +65,9 @@ export default function HomeScreen() {
   };
 
   // Today's summary stats
-  const todayClips = todayEntries.filter(e => e.type === 'video').length;
-  const todayJournals = todayEntries.filter(e => e.type === 'journal').length;
-  const todayHabits = [...new Set(todayEntries.filter(e => e.type === 'habit').flatMap(e => e.habits))].length;
+  const todayClips = todayEntries.filter(e => e.clips.length > 0).length;
+  const todayJournals = todayEntries.filter(e => !!e.text).length;
+  const todayHabits = [...new Set(todayEntries.flatMap(e => e.habits))].length;
   const todayCategories = [...new Set(todayEntries.map(e => e.category).filter(Boolean))];
   const todayMoods = todayEntries.map(e => e.mood).filter(Boolean);
   const latestMood = todayMoods.length > 0 ? todayMoods[todayMoods.length - 1] : null;

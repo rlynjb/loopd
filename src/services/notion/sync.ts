@@ -47,7 +47,7 @@ export async function syncAll(): Promise<SyncResult> {
     // 2b. Auto-reimport missing video clips from camera roll
     try {
       const allEntries = await getAllEntries();
-      const videoEntries = allEntries.filter(e => e.type === 'video');
+      const videoEntries = allEntries.filter(e => e.clips.length > 0);
       const reimported = await reimportMissingClips(videoEntries);
       if (reimported > 0) {
         console.log(`[loopd sync] Auto-reimported ${reimported} clip(s) from camera roll`);
@@ -279,18 +279,18 @@ async function pushEntries(token: string, dbId: string, lastSync: string | null)
       const properties = entryToNotionProperties(entry, titleColumn, dayTitle, isNew, habitIdToLabel);
 
       if (entry.notionPageId) {
-        console.log('[loopd sync] Updating entry:', entry.id, entry.type);
+        console.log('[loopd sync] Updating entry:', entry.id);
         await updatePage(token, entry.notionPageId, properties);
       } else {
-        console.log('[loopd sync] Creating entry:', entry.id, entry.type, 'habits:', entry.habits);
+        console.log('[loopd sync] Creating entry:', entry.id, 'habits:', entry.habits);
         const page = await createPage(token, dbId, properties);
         await setEntryNotionPageId(entry.id, page.id);
       }
       count++;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[loopd sync] Push FAILED for entry', entry.id, entry.type, 'notionPageId:', entry.notionPageId, 'error:', msg);
-      errors.push(`Push ${entry.type}: ${msg.slice(0, 100)}`);
+      console.error('[loopd sync] Push FAILED for entry', entry.id, 'notionPageId:', entry.notionPageId, 'error:', msg);
+      errors.push(`Push: ${msg.slice(0, 100)}`);
     }
   }
 
@@ -315,29 +315,22 @@ async function cleanUpNotionNames(token: string, dbId: string): Promise<void> {
       const currentName = getTitleFromPage(page);
       const entry = notionPageToEntry(page);
 
-      // Check if the name already has the [Type] format
-      const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';
-      if (currentName.includes(`[${typeLabel}]`)) continue;
-
-      // Strip old " — Type" format if present
+      // Strip old [Type] and " — Type" suffixes
       let baseName = currentName;
-      const oldSuffixes = [' — Journal', ' — Clip', ' — Habits', ' — video', ' — journal', ' — habit'];
-      for (const suffix of oldSuffixes) {
-        if (baseName.endsWith(suffix)) {
-          baseName = baseName.slice(0, -suffix.length);
-          break;
-        }
+      const oldTags = [/\s*\[(Journal|Clip|Habits)\]\s*$/, /\s*—\s*(Journal|Clip|Habits|video|journal|habit)\s*$/];
+      for (const re of oldTags) {
+        baseName = baseName.replace(re, '');
       }
 
-      // Build the clean name
+      // Build clean name — just content preview, no type tag
       let cleanName: string;
       if (baseName && baseName !== entry.date && !baseName.match(/^\d{4}-\d{2}-\d{2}/)) {
-        cleanName = `${baseName.slice(0, 50)}${baseName.length > 50 ? '...' : ''} [${typeLabel}]`;
+        cleanName = baseName.slice(0, 50) + (baseName.length > 50 ? '...' : '');
       } else {
         const preview = entry.text?.slice(0, 50) ?? '';
         cleanName = preview
-          ? `${preview}${preview.length >= 50 ? '...' : ''} [${typeLabel}]`
-          : `${entry.date} [${typeLabel}]`;
+          ? `${preview}${preview.length >= 50 ? '...' : ''}`
+          : entry.date;
       }
 
       if (cleanName !== currentName) {
@@ -428,7 +421,7 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
 
       const notionHabits = parseDailyLogHabits(page, habitLabels);
       const dayEntries = await getEntriesByDate(dateKey);
-      const existingHabitEntry = dayEntries.find(e => e.type === 'habit');
+      const existingHabitEntry = dayEntries.find(e => e.habits.length > 0);
       const existingChecked = existingHabitEntry?.habits ?? [];
 
       // If Notion has different habits checked, update or create habit entry
@@ -448,7 +441,6 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
           await insertEntry({
             id: generateId('notion-habit'),
             date: dateKey,
-            type: 'habit',
             text: null,
             mood: null,
             category: null,

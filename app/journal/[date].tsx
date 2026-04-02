@@ -1,19 +1,17 @@
-import { useState, useCallback, useEffect } from 'react';
-import { View, Pressable, Text, TextInput, StyleSheet } from 'react-native';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { View, Pressable, Text, TextInput, ScrollView, Keyboard, KeyboardAvoidingView, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { colors, fonts } from '../../src/constants/theme';
-import { CAPTURE_TYPES } from '../../src/constants/captureTypes';
-import { Icon } from '../../src/components/ui/Icon';
+import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
-import { TimelineList } from '../../src/components/timeline/TimelineList';
-import { CaptureSheet } from '../../src/components/capture/CaptureSheet';
+import { InlineEntry } from '../../src/components/journal/InlineEntry';
+import { InlineTextInput } from '../../src/components/journal/InlineTextInput';
+import { JournalToolbar } from '../../src/components/journal/JournalToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
-import { recordClip } from '../../src/services/fileManager';
 import { generateId } from '../../src/utils/id';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import type { Entry } from '../../src/types/entry';
@@ -27,7 +25,11 @@ export default function JournalScreen() {
   const { title: dayTitle, updateTitle: setDayTitle, reload: reloadTitle } = useDayTitle(date);
   const { onSyncComplete } = useNotionSync();
 
-  // Reload entries when screen regains focus
+  const [isAddingText, setIsAddingText] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+  const [toolbarExpanded, setToolbarExpanded] = useState<'habit' | null>(null);
+
+  // Reload on focus
   useFocusEffect(
     useCallback(() => {
       reload();
@@ -35,80 +37,121 @@ export default function JournalScreen() {
     }, [reload, reloadTitle])
   );
 
-  // Reload entries and title when sync completes
+  // Reload on sync complete
   useEffect(() => {
     return onSyncComplete(() => {
       reload();
       reloadTitle();
     });
   }, [onSyncComplete, reload, reloadTitle]);
-  const [showCapture, setShowCapture] = useState(false);
-  const [captureType, setCaptureType] = useState<string | null>(null);
-  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
 
-  const handleCapture = (type: string) => {
-    setCaptureType(type);
-    setEditingEntry(null);
-    setShowCapture(true);
+  const sorted = [...entries].sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+
+  const handleTapEmptySpace = () => {
+    if (!isAddingText) {
+      setEditingEntry(null);
+      setToolbarExpanded(null);
+      setIsAddingText(true);
+    }
   };
 
-  const handleEdit = (entry: Entry) => {
+  const handleSaveNewText = useCallback((text: string) => {
+    addEntry({
+      id: generateId('entry'),
+      date,
+      text,
+      mood: null,
+      category: null,
+      habits: [],
+      clipUri: null,
+      clipDurationMs: null,
+      clips: [],
+      createdAt: new Date().toISOString(),
+    });
+    setIsAddingText(false);
+  }, [date, addEntry]);
+
+  const handleCancelNewText = useCallback(() => {
+    setIsAddingText(false);
+  }, []);
+
+  const handleTapToEdit = (entry: Entry) => {
+    // Only inline-edit pure text entries (no clips, no habits)
+    if (entry.clips.length > 0 || entry.habits.length > 0) return;
+    setIsAddingText(false);
     setEditingEntry(entry);
-    setCaptureType(null);
-    setShowCapture(true);
   };
 
-  const handleCloseSheet = () => {
-    setShowCapture(false);
-    setCaptureType(null);
-    setEditingEntry(null);
-  };
-
-  const handleSave = (entry: Entry) => {
+  const handleEditTextSave = async (text: string) => {
     if (editingEntry) {
-      editEntry(entry);
-    } else {
+      await editEntry({ ...editingEntry, text });
+      setEditingEntry(null);
+    }
+  };
+
+  // Habits already logged today
+  const alreadyLoggedHabits = [...new Set(entries.flatMap(e => e.habits))];
+
+  const handleToggleHabit = (habitId: string, checked: boolean) => {
+    if (checked) {
+      // Add a new habit entry for this habit
+      const entry: Entry = {
+        id: generateId('entry'),
+        date,
+        text: null,
+        mood: null,
+        category: null,
+        habits: [habitId],
+        clipUri: null,
+        clipDurationMs: null,
+        clips: [],
+        createdAt: new Date().toISOString(),
+      };
       addEntry(entry);
-    }
-    handleCloseSheet();
-  };
-
-  const handleDelete = (id: string) => {
-    removeEntry(id);
-    handleCloseSheet();
-  };
-
-  const [recording, setRecording] = useState(false);
-  const handleQuickRecord = async () => {
-    if (recording) return;
-    setRecording(true);
-    try {
-      const result = await recordClip(date);
-      if (result) {
-        const entry: Entry = {
-          id: generateId('entry'),
-          date,
-          type: 'video',
-          text: null,
-          mood: null,
-          category: null,
-          habits: [],
-          clipUri: result.uri,
-          clipDurationMs: result.durationMs,
-          clips: [{ uri: result.uri, durationMs: result.durationMs }],
-          createdAt: new Date().toISOString(),
-        };
-        addEntry(entry);
+    } else {
+      // Remove the habit entry that contains this habit
+      const habitEntry = entries.find(e => e.habits.includes(habitId));
+      if (habitEntry) {
+        if (habitEntry.habits.length === 1) {
+          removeEntry(habitEntry.id);
+        } else {
+          editEntry({ ...habitEntry, habits: habitEntry.habits.filter(h => h !== habitId) });
+        }
       }
-    } catch (err) {
-      console.warn('[loopd] Quick record failed:', err);
-    } finally {
-      setRecording(false);
     }
+  };
+
+  const handleSaveClip = (result: { uri: string; durationMs: number }) => {
+    const entry: Entry = {
+      id: generateId('entry'),
+      date,
+      text: null,
+      mood: null,
+      category: null,
+      habits: [],
+      clipUri: result.uri,
+      clipDurationMs: result.durationMs,
+      clips: [{ uri: result.uri, durationMs: result.durationMs }],
+      createdAt: new Date().toISOString(),
+    };
+    addEntry(entry);
+  };
+
+  const handleEditDone = (updated: Entry) => {
+    editEntry(updated);
+    setEditingEntry(null);
+    setToolbarExpanded(null);
+  };
+
+  const dismissAll = () => {
+    Keyboard.dismiss();
+    setToolbarExpanded(null);
   };
 
   return (
-    <View style={styles.container}>
+    <Pressable style={styles.container} onPress={dismissAll}>
       <HomeHeader
         dayStarted={false}
         dateLabel=""
@@ -117,6 +160,7 @@ export default function JournalScreen() {
         onBack={() => router.push('/')}
       />
 
+      {/* Title + Date */}
       <View style={styles.titleRow}>
         <TextInput
           value={dayTitle}
@@ -126,69 +170,68 @@ export default function JournalScreen() {
           style={styles.titleInput}
         />
         <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
-        {/* Habit streak */}
-        {habits.length > 0 && (
-          <View style={styles.habitStreak}>
-            {habits.map(h => {
-              const checked = entries.some(e => e.type === 'habit' && e.habits.includes(h.id));
-              return (
-                <View key={h.id} style={styles.habitChip}>
-                  <View style={[styles.habitDot, { backgroundColor: checked ? colors.green : colors.textDimmer }]} />
-                  <Text style={[styles.habitLabel, { color: checked ? colors.green : colors.textDim }]}>{h.label}</Text>
-                </View>
-              );
-            })}
-          </View>
+      </View>
+
+      {/* Entries */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding">
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={() => {
+          if (toolbarExpanded) setToolbarExpanded(null);
+        }}
+      >
+        {sorted.map(entry => (
+          editingEntry?.id === entry.id ? (
+            <View key={entry.id} style={{ marginBottom: 16 }}>
+              <Text style={styles.entryTime}>
+                {new Date(entry.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
+              </Text>
+              <InlineTextInput
+                initialValue={entry.text ?? ''}
+                onSave={handleEditTextSave}
+                onCancel={() => setEditingEntry(null)}
+              />
+            </View>
+          ) : (
+            <InlineEntry
+              key={entry.id}
+              entry={entry}
+              habits={habits}
+              onTapToEdit={handleTapToEdit}
+            />
+          )
+        ))}
+
+        {/* Add new text entry */}
+        {isAddingText ? (
+          <InlineTextInput
+            onSave={handleSaveNewText}
+            onCancel={handleCancelNewText}
+          />
+        ) : (
+          <Pressable onPress={handleTapEmptySpace} style={styles.emptyTap}>
+            <Text style={styles.emptyTapText}>Tap to write...</Text>
+          </Pressable>
         )}
-      </View>
+      </ScrollView>
+      </KeyboardAvoidingView>
 
-      <TimelineList
-        entries={entries}
-        habits={habits}
-        onEditEntry={handleEdit}
-      />
-
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 16) + 10 }]}>
-        <View style={styles.captureRow}>
-          {/* Journal */}
-          <Pressable onPress={() => handleCapture('journal')} style={styles.captureBtn}>
-            <Icon name="penLine" size={18} color={colors.textMuted} />
-            <Text style={styles.captureLabel}>Journal</Text>
-          </Pressable>
-          {/* Habit */}
-          <Pressable onPress={() => handleCapture('habit')} style={styles.captureBtn}>
-            <Icon name="checkSquare" size={18} color={colors.textMuted} />
-            <Text style={styles.captureLabel}>Habit</Text>
-          </Pressable>
-          {/* Record — center */}
-          <Pressable onPress={handleQuickRecord} style={styles.captureBtn} disabled={recording}>
-            <Icon name="camera" size={18} color={recording ? colors.textDim : colors.coral} />
-            <Text style={[styles.captureLabel, { color: colors.coral }]}>Record</Text>
-          </Pressable>
-          {/* Clip */}
-          <Pressable onPress={() => handleCapture('video')} style={styles.captureBtn}>
-            <Icon name="video" size={18} color={colors.textMuted} />
-            <Text style={styles.captureLabel}>Clip</Text>
-          </Pressable>
-          {/* Edit */}
-          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.captureBtn}>
-            <Icon name="film" size={18} color={colors.accent2} />
-            <Text style={[styles.captureLabel, { color: colors.accent2 }]}>Edit</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <CaptureSheet
-        visible={showCapture}
-        initialType={captureType}
-        editEntry={editingEntry}
-        habits={habits}
+      {/* Journal toolbar */}
+      <JournalToolbar
         date={date}
-        onClose={handleCloseSheet}
-        onSave={handleSave}
-        onDelete={handleDelete}
+        habits={habits}
+        expanded={toolbarExpanded}
+        onExpand={setToolbarExpanded}
+        alreadyLoggedHabits={alreadyLoggedHabits}
+        onToggleHabit={handleToggleHabit}
+        onSaveClip={handleSaveClip}
+        editingEntry={editingEntry}
+        onEditDone={handleEditDone}
       />
-    </View>
+    </Pressable>
   );
 }
 
@@ -218,60 +261,27 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     marginTop: 4,
   },
-  habitStreak: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 8,
-    justifyContent: 'center',
+  scroll: {
+    flex: 1,
   },
-  habitChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: GLOBAL_NAV_HEIGHT + 80,
   },
-  habitDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  habitLabel: {
+  entryTime: {
     fontFamily: fonts.mono,
     fontSize: 10,
-  },
-  bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 16,
-    paddingTop: 6,
-    backgroundColor: colors.bg,
-    borderTopWidth: 1,
-    borderTopColor: colors.cardBorder,
-  },
-  captureRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-  },
-  recordWrap: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  recordBtn: {
-    paddingVertical: 10,
-    alignItems: 'center',
-    gap: 4,
-  },
-  captureBtn: {
-    flex: 1,
-    paddingVertical: 6,
-    alignItems: 'center',
-    gap: 3,
-  },
-  captureLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
     color: colors.textDim,
+    marginBottom: 4,
+  },
+  emptyTap: {
+    minHeight: 200,
+    paddingTop: 16,
+  },
+  emptyTapText: {
+    fontFamily: fonts.body,
+    fontSize: 14,
+    color: colors.textDimmer,
   },
 });

@@ -28,3 +28,5 @@ export const fonts = {
   mono: 'DMMono',
   body: 'InstrumentSans',
 };
+
+export const GLOBAL_NAV_HEIGHT = 112;

@@ -10,6 +10,7 @@ import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
 import { syncAll } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
 
 function AppContent() {
   const { ready } = useDatabase();
@@ -90,7 +91,7 @@ function AppContent() {
   }
 
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -99,7 +100,8 @@ function AppContent() {
           animation: 'fade',
         }}
       />
-    </>
+      <GlobalBottomNav />
+    </View>
   );
 }
 

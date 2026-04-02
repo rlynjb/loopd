@@ -36,7 +36,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
         if (cancelled) return;
 
         const currentEntries = entriesRef.current;
-        const videoEntries = currentEntries.filter(e => e.type === 'video');
+        const videoEntries = currentEntries.filter(e => e.clips.length > 0);
         const clips: ClipItem[] = [];
         let clipIndex = 0;
         for (const e of videoEntries) {
@@ -89,7 +89,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
       } else {
         // Merge new entries into existing project — add clips for entries not already present
         const currentEntries = entriesRef.current;
-        const videoEntries = currentEntries.filter(e => e.type === 'video');
+        const videoEntries = currentEntries.filter(e => e.clips.length > 0);
         const knownEntryIds = new Set(existing.clips.map(c => c.entryId));
         let clipIndex = existing.clips.length;
         const newClips: ClipItem[] = [];
@@ -139,7 +139,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
   useEffect(() => {
     setProject(prev => {
       if (!prev) return prev;
-      const videoEntries = entries.filter(e => e.type === 'video');
+      const videoEntries = entries.filter(e => e.clips.length > 0);
       const knownEntryIds = new Set(prev.clips.map(c => c.entryId));
       let clipIndex = prev.clips.length;
       const newClips: ClipItem[] = [];

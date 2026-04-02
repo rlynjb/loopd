@@ -16,7 +16,7 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 /** Fix bare-filename clip URIs left by Notion sync overwriting full paths */
 async function repairBareClipUris(database: SQLite.SQLiteDatabase): Promise<void> {
   const rows = await database.getAllAsync<{ id: string; date: string; clips_json: string | null; clip_uri: string | null }>(
-    "SELECT id, date, clips_json, clip_uri FROM entries WHERE type = 'video'"
+    "SELECT id, date, clips_json, clip_uri FROM entries WHERE clips_json IS NOT NULL AND clips_json != '[]'"
   );
   const baseDir = `${Paths.document.uri}/loopd/clips`;
   for (const row of rows) {
@@ -60,7 +60,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS entries (
       id TEXT PRIMARY KEY,
       date TEXT NOT NULL,
-      type TEXT NOT NULL,
+      type TEXT,
       text TEXT,
       mood TEXT,
       category TEXT,
@@ -134,6 +134,45 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
   `);
 
+  // Migration: make type column nullable (SQLite can't ALTER COLUMN, must recreate)
+  try {
+    const hasNotNull = await database.getFirstAsync<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='entries'"
+    );
+    if (hasNotNull?.sql?.includes('type TEXT NOT NULL')) {
+      await database.execAsync(`
+        CREATE TABLE entries_new (
+          id TEXT PRIMARY KEY,
+          date TEXT NOT NULL,
+          type TEXT,
+          text TEXT,
+          mood TEXT,
+          category TEXT,
+          habits_json TEXT,
+          clip_uri TEXT,
+          clip_duration_ms INTEGER,
+          clips_json TEXT,
+          created_at TEXT NOT NULL,
+          notion_page_id TEXT,
+          updated_at TEXT
+        );
+        INSERT INTO entries_new SELECT
+          id, date, type, text, mood, category, habits_json,
+          clip_uri, clip_duration_ms, clips_json, created_at,
+          notion_page_id, updated_at
+        FROM entries;
+        DROP TABLE entries;
+        ALTER TABLE entries_new RENAME TO entries;
+        CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
+        CREATE INDEX IF NOT EXISTS idx_entries_notion ON entries(notion_page_id);
+        CREATE INDEX IF NOT EXISTS idx_entries_updated ON entries(updated_at);
+      `);
+      console.log('[loopd] Migrated entries: type column now nullable');
+    }
+  } catch (e) {
+    console.warn('[loopd] Type migration error:', e);
+  }
+
   // Backfill updated_at
   await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
@@ -165,7 +204,7 @@ export async function getHabits(): Promise<Habit[]> {
 // ── Row mapper ──
 
 type EntryRow = {
-  id: string; date: string; type: string; text: string | null;
+  id: string; date: string; type: string | null; text: string | null;
   mood: string | null; category: string | null; habits_json: string | null;
   clip_uri: string | null; clip_duration_ms: number | null;
   clips_json: string | null; created_at: string;
@@ -176,7 +215,6 @@ function mapRowToEntry(r: EntryRow): Entry {
   return {
     id: r.id,
     date: r.date,
-    type: r.type as Entry['type'],
     text: r.text,
     mood: r.mood,
     category: r.category,
@@ -209,10 +247,10 @@ export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
+      entry.id, entry.date, entry.text, entry.mood, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
@@ -319,13 +357,13 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, type, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO entries (id, date, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
-       date = excluded.date, text = excluded.text, type = excluded.type, habits_json = excluded.habits_json,
+       date = excluded.date, text = excluded.text, habits_json = excluded.habits_json,
        clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
     [
-      entry.id, entry.date, entry.type, entry.text, entry.mood, entry.category,
+      entry.id, entry.date, entry.text, entry.mood, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
@@ -452,8 +490,8 @@ export async function archivePastDays(todayStr: string): Promise<void> {
     const entries = await getEntriesByDate(row.date);
     if (entries.length === 0) continue;
 
-    const clipCount = entries.filter(e => e.type === 'video').length;
-    const habitsLogged = [...new Set(entries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
+    const clipCount = entries.filter(e => e.clips.length > 0).length;
+    const habitsLogged = [...new Set(entries.flatMap(e => e.habits))];
     const moods = entries.map(e => e.mood).filter(Boolean);
     const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
     const topMood = moods.length ? moods[moods.length - 1] : 'calm';

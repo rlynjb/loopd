@@ -85,7 +85,6 @@ export function notionPageToEntry(page: NotionPage): Entry {
   }
 
   const createdAt = createdAtProp ?? page.created_time;
-  const type = (getSelect(props['Type']) ?? 'journal') as Entry['type'];
   const text = getPlainText(props['Text']) || getPlainText(props['Note']) || null;
   const habits = getMultiSelect(props['Habits']).map(h => h.toLowerCase().replace(/\s+/g, '-'));
 
@@ -99,7 +98,6 @@ export function notionPageToEntry(page: NotionPage): Entry {
   return {
     id: loopdId,
     date,
-    type: ['video', 'journal', 'habit'].includes(type) ? type : 'journal',
     text,
     mood: null,
     category: null,
@@ -130,7 +128,6 @@ export function entryToNotionProperties(
   const habitNames = entry.habits.map(id => habitIdToLabel?.get(id) ?? id);
 
   const props: Record<string, unknown> = {
-    'Type': { select: { name: entry.type } },
     'Text': { rich_text: [{ text: { content: entry.text ?? '' } }] },
     'Habits': { multi_select: habitNames.map(h => ({ name: h })) },
     'Clips': { rich_text: [{ text: { content: clipsJson } }] },
@@ -140,14 +137,13 @@ export function entryToNotionProperties(
   // Always push Date (editable property) so it stays correct in Notion
   props['Date'] = { date: { start: entry.date } };
 
-  // Always set the Name with type appended for clean Notion display
-  const typeLabel = entry.type === 'video' ? 'Clip' : entry.type === 'habit' ? 'Habits' : 'Journal';
+  // Set the Name for clean Notion display
   const preview = entry.text?.slice(0, 50) ?? '';
   const label = dayTitle
-    ? `${dayTitle} [${typeLabel}]`
+    ? dayTitle
     : preview
-      ? `${preview}${preview.length >= 50 ? '...' : ''} [${typeLabel}]`
-      : `${entry.date} [${typeLabel}]`;
+      ? `${preview}${preview.length >= 50 ? '...' : ''}`
+      : entry.date;
   props[titleColumnName] = { title: [{ text: { content: label } }] };
 
   return props;
@@ -167,9 +163,9 @@ export function entriesToDailyLogProperties(
   dayTitle?: string,
 ): Record<string, unknown> {
   const dayEntries = entries.filter(e => e.date === date);
-  const clipCount = dayEntries.filter(e => e.type === 'video').reduce((sum, e) => sum + Math.max(e.clips.length, 1), 0);
-  const journalTexts = dayEntries.filter(e => e.type === 'journal').map(e => e.text).filter(Boolean);
-  const habitsChecked = [...new Set(dayEntries.filter(e => e.type === 'habit').flatMap(e => e.habits))];
+  const clipCount = dayEntries.reduce((sum, e) => sum + e.clips.length, 0);
+  const journalTexts = dayEntries.map(e => e.text).filter(Boolean);
+  const habitsChecked = [...new Set(dayEntries.flatMap(e => e.habits))];
 
   const summary = [
     clipCount > 0 ? `${clipCount} clip${clipCount > 1 ? 's' : ''}` : '',
