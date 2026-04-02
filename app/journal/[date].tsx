@@ -7,17 +7,19 @@ import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { InlineEntry } from '../../src/components/journal/InlineEntry';
 import { InlineTextInput } from '../../src/components/journal/InlineTextInput';
-import { JournalToolbar } from '../../src/components/journal/JournalToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
+import { updateEntry as updateEntryDB } from '../../src/services/database';
+import { pickAndCopyClip } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
+import { HabitPicker } from '../../src/components/journal/HabitPicker';
 import type { Entry } from '../../src/types/entry';
 
 export default function JournalScreen() {
-  const { date } = useLocalSearchParams<{ date: string }>();
+  const { date, showHabits } = useLocalSearchParams<{ date: string; showHabits?: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { entries, addEntry, editEntry, removeEntry, reload } = useEntries(date);
@@ -27,7 +29,12 @@ export default function JournalScreen() {
 
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
-  const [toolbarExpanded, setToolbarExpanded] = useState<'habit' | null>(null);
+  const [showHabitPicker, setShowHabitPicker] = useState(false);
+
+  // Toggle habit picker based on query param
+  useEffect(() => {
+    setShowHabitPicker(showHabits === '1');
+  }, [showHabits]);
 
   // Reload on focus
   useFocusEffect(
@@ -49,10 +56,16 @@ export default function JournalScreen() {
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
 
-  const handleTapEmptySpace = () => {
+  const handleTapEmptySpace = async () => {
     if (!isAddingText) {
+      // Save pending edits first
+      const current = editingEntryRef.current;
+      if (current && liveTextRef.current.trim()) {
+        await editEntry({ ...current, text: liveTextRef.current.trim() });
+      }
+      liveTextRef.current = '';
       setEditingEntry(null);
-      setToolbarExpanded(null);
+      setShowHabitPicker(false);
       setIsAddingText(true);
     }
   };
@@ -77,27 +90,56 @@ export default function JournalScreen() {
     setIsAddingText(false);
   }, []);
 
+  const justTappedEntry = useRef(false);
+  const liveTextRef = useRef('');
+
   const handleTapToEdit = (entry: Entry) => {
-    // Only inline-edit pure text entries (no clips, no habits)
-    if (entry.clips.length > 0 || entry.habits.length > 0) return;
+    justTappedEntry.current = true;
+    liveTextRef.current = entry.text ?? '';
     setIsAddingText(false);
     setEditingEntry(entry);
   };
 
-  const handleEditTextSave = async (text: string) => {
-    if (editingEntry) {
-      await editEntry({ ...editingEntry, text });
-      setEditingEntry(null);
-    }
-  };
+  const editingEntryRef = useRef(editingEntry);
+  editingEntryRef.current = editingEntry;
 
-  // Habits already logged today
+  // Silent save — DB only, no state update, no re-render
+  const handleEditTextSilent = useCallback(async (text: string) => {
+    const current = editingEntryRef.current;
+    if (current) {
+      await updateEntryDB({ ...current, text });
+    }
+  }, []);
+
+  const handleAddClipToEntry = useCallback(async (entry: Entry) => {
+    const result = await pickAndCopyClip(date);
+    if (result) {
+      await editEntry({
+        ...entry,
+        clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
+        clipUri: entry.clipUri ?? result.uri,
+        clipDurationMs: entry.clipDurationMs ?? result.durationMs,
+      });
+    }
+  }, [date, editEntry]);
+
+  // Final save — updates state and clears editing
+  const handleEditTextSave = useCallback(async (text: string) => {
+    const current = editingEntryRef.current;
+    if (current) {
+      await editEntry({ ...current, text });
+    }
+  }, [editEntry]);
+
+  const handleEditCancel = useCallback(() => {
+    setEditingEntry(null);
+  }, []);
+
   const alreadyLoggedHabits = [...new Set(entries.flatMap(e => e.habits))];
 
   const handleToggleHabit = (habitId: string, checked: boolean) => {
     if (checked) {
-      // Add a new habit entry for this habit
-      const entry: Entry = {
+      addEntry({
         id: generateId('entry'),
         date,
         text: null,
@@ -108,10 +150,8 @@ export default function JournalScreen() {
         clipDurationMs: null,
         clips: [],
         createdAt: new Date().toISOString(),
-      };
-      addEntry(entry);
+      });
     } else {
-      // Remove the habit entry that contains this habit
       const habitEntry = entries.find(e => e.habits.includes(habitId));
       if (habitEntry) {
         if (habitEntry.habits.length === 1) {
@@ -123,31 +163,38 @@ export default function JournalScreen() {
     }
   };
 
-  const handleSaveClip = (result: { uri: string; durationMs: number }) => {
-    const entry: Entry = {
-      id: generateId('entry'),
-      date,
-      text: null,
-      mood: null,
-      category: null,
-      habits: [],
-      clipUri: result.uri,
-      clipDurationMs: result.durationMs,
-      clips: [{ uri: result.uri, durationMs: result.durationMs }],
-      createdAt: new Date().toISOString(),
-    };
-    addEntry(entry);
-  };
-
-  const handleEditDone = (updated: Entry) => {
-    editEntry(updated);
-    setEditingEntry(null);
-    setToolbarExpanded(null);
-  };
-
-  const dismissAll = () => {
+  const dismissAll = async () => {
+    if (justTappedEntry.current) {
+      justTappedEntry.current = false;
+      return;
+    }
+    // Save any pending text before dismissing
+    const current = editingEntryRef.current;
+    if (current && liveTextRef.current.trim()) {
+      await editEntry({ ...current, text: liveTextRef.current.trim() });
+    }
+    if (current) {
+      liveTextRef.current = '';
+      setEditingEntry(null);
+    }
+    if (isAddingText && liveTextRef.current.trim()) {
+      addEntry({
+        id: generateId('entry'),
+        date,
+        text: liveTextRef.current.trim(),
+        mood: null,
+        category: null,
+        habits: [],
+        clipUri: null,
+        clipDurationMs: null,
+        clips: [],
+        createdAt: new Date().toISOString(),
+      });
+      liveTextRef.current = '';
+      setIsAddingText(false);
+    }
     Keyboard.dismiss();
-    setToolbarExpanded(null);
+    setShowHabitPicker(false);
   };
 
   return (
@@ -180,19 +227,23 @@ export default function JournalScreen() {
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         onScrollBeginDrag={() => {
-          if (toolbarExpanded) setToolbarExpanded(null);
         }}
       >
         {sorted.map(entry => (
           editingEntry?.id === entry.id ? (
             <View key={entry.id} style={{ marginBottom: 16 }}>
-              <Text style={styles.entryTime}>
-                {new Date(entry.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
-              </Text>
+              <InlineEntry
+                entry={{ ...entry, text: null }}
+                habits={habits}
+                onTapToEdit={() => {}}
+                compact
+              />
               <InlineTextInput
                 initialValue={entry.text ?? ''}
                 onSave={handleEditTextSave}
-                onCancel={() => setEditingEntry(null)}
+                onSilentSave={handleEditTextSilent}
+                onCancel={handleEditCancel}
+                liveTextRef={liveTextRef}
               />
             </View>
           ) : (
@@ -201,6 +252,7 @@ export default function JournalScreen() {
               entry={entry}
               habits={habits}
               onTapToEdit={handleTapToEdit}
+              onAddClip={handleAddClipToEntry}
             />
           )
         ))}
@@ -210,6 +262,7 @@ export default function JournalScreen() {
           <InlineTextInput
             onSave={handleSaveNewText}
             onCancel={handleCancelNewText}
+            liveTextRef={liveTextRef}
           />
         ) : (
           <Pressable onPress={handleTapEmptySpace} style={styles.emptyTap}>
@@ -219,18 +272,17 @@ export default function JournalScreen() {
       </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Journal toolbar */}
-      <JournalToolbar
-        date={date}
-        habits={habits}
-        expanded={toolbarExpanded}
-        onExpand={setToolbarExpanded}
-        alreadyLoggedHabits={alreadyLoggedHabits}
-        onToggleHabit={handleToggleHabit}
-        onSaveClip={handleSaveClip}
-        editingEntry={editingEntry}
-        onEditDone={handleEditDone}
-      />
+      {/* Habit picker — triggered from bottom nav */}
+      {showHabitPicker && (
+        <View style={styles.habitPickerWrap}>
+          <HabitPicker
+            habits={habits}
+            alreadyLogged={alreadyLoggedHabits}
+            onToggle={handleToggleHabit}
+            onCancel={() => setShowHabitPicker(false)}
+          />
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -278,6 +330,12 @@ const styles = StyleSheet.create({
   emptyTap: {
     minHeight: 200,
     paddingTop: 16,
+  },
+  habitPickerWrap: {
+    position: 'absolute',
+    bottom: GLOBAL_NAV_HEIGHT,
+    left: 0,
+    right: 0,
   },
   emptyTapText: {
     fontFamily: fonts.body,

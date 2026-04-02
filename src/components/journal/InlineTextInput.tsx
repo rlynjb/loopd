@@ -1,30 +1,51 @@
-import { useRef, useState, useCallback, memo } from 'react';
+import { useRef, useState, useCallback, useEffect, memo } from 'react';
 import { TextInput, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 
 type Props = {
   initialValue?: string;
   onSave: (text: string) => void;
+  onSilentSave?: (text: string) => void;
   onCancel: () => void;
+  liveTextRef?: React.MutableRefObject<string>;
 };
 
-export const InlineTextInput = memo(function InlineTextInput({ initialValue = '', onSave, onCancel }: Props) {
+export const InlineTextInput = memo(function InlineTextInput({ initialValue = '', onSave, onSilentSave, onCancel, liveTextRef }: Props) {
   const [text, setText] = useState(initialValue);
   const [height, setHeight] = useState(18);
+  const textRef = useRef(text);
   const onSaveRef = useRef(onSave);
+  const onSilentSaveRef = useRef(onSilentSave);
+  const onCancelRef = useRef(onCancel);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   onSaveRef.current = onSave;
+  onSilentSaveRef.current = onSilentSave;
+  onCancelRef.current = onCancel;
 
   const handleChange = useCallback((newText: string) => {
     setText(newText);
+    textRef.current = newText;
+    if (liveTextRef) liveTextRef.current = newText;
+
+    // Debounce silent save — DB only, no re-render
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      if (newText.trim() && onSilentSaveRef.current) {
+        onSilentSaveRef.current(newText.trim());
+      }
+    }, 800);
   }, []);
 
-  const handleBlur = () => {
-    if (text.trim()) {
-      onSaveRef.current(text.trim());
-    } else {
-      onCancel();
-    }
-  };
+  const handleBlur = useCallback(() => {
+    // Save handled by parent's dismissAll via liveTextRef — no action needed here
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   return (
     <TextInput

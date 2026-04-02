@@ -1,9 +1,9 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { useRouter, usePathname } from 'expo-router';
+import { useRouter, usePathname, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { pickAndCopyClip } from '../../services/fileManager';
+import { pickAndCopyClip, recordClip } from '../../services/fileManager';
 import { insertEntry } from '../../services/database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
@@ -17,46 +17,76 @@ export function GlobalBottomNav() {
   // Hide on editor and settings screens
   if (pathname.startsWith('/editor') || pathname.startsWith('/settings')) return null;
 
+  const { showHabits: showHabitsParam } = useLocalSearchParams<{ showHabits?: string }>();
   const isHome = pathname === '/' || pathname === '';
-  const isEdit = pathname.startsWith('/editor');
+  const isJournal = pathname.startsWith('/journal');
+
+  const createClipEntry = async (result: { uri: string; durationMs: number }) => {
+    const today = getTodayString();
+    const entry: Entry = {
+      id: generateId('entry'),
+      date: today,
+      text: null,
+      mood: null,
+      category: null,
+      habits: [],
+      clipUri: result.uri,
+      clipDurationMs: result.durationMs,
+      clips: [{ uri: result.uri, durationMs: result.durationMs }],
+      createdAt: new Date().toISOString(),
+    };
+    await insertEntry(entry);
+  };
 
   const handleRecord = async () => {
     const today = getTodayString();
+    const result = await recordClip(today);
+    if (result) await createClipEntry(result);
+  };
+
+  const handleClip = async () => {
+    const today = getTodayString();
     const result = await pickAndCopyClip(today);
-    if (result) {
-      const entry: Entry = {
-        id: generateId('entry'),
-        date: today,
-        text: null,
-        mood: null,
-        category: null,
-        habits: [],
-        clipUri: result.uri,
-        clipDurationMs: result.durationMs,
-        clips: [{ uri: result.uri, durationMs: result.durationMs }],
-        createdAt: new Date().toISOString(),
-      };
-      await insertEntry(entry);
+    if (result) await createClipEntry(result);
+  };
+
+  const handleHabit = () => {
+    const today = getTodayString();
+    // Toggle: if already on journal, toggle the picker via param
+    if (pathname.startsWith('/journal')) {
+      router.setParams({ showHabits: showHabitsParam === '1' ? '0' : '1' });
+    } else {
+      router.push(`/journal/${today}?showHabits=1`);
     }
   };
 
   return (
     <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 64) }]}>
       <Pressable onPress={() => router.push('/')} style={styles.tab}>
-        <Icon name="house" size={20} color={isHome ? colors.accent : colors.textDim} />
+        <Icon name="house" size={18} color={isHome ? colors.accent : colors.textDim} />
         <Text style={[styles.label, isHome && { color: colors.accent }]}>Home</Text>
+      </Pressable>
+
+      <Pressable onPress={handleHabit} style={styles.tab}>
+        <Icon name="checkSquare" size={18} color={isJournal ? colors.green : colors.textDim} />
+        <Text style={[styles.label, isJournal && { color: colors.green }]}>Habit</Text>
       </Pressable>
 
       <Pressable onPress={handleRecord} style={styles.tab}>
         <View style={styles.recordBtn}>
-          <Icon name="circle" size={22} color={colors.coral} />
+          <Icon name="circle" size={20} color={colors.coral} />
         </View>
         <Text style={[styles.label, { color: colors.coral }]}>Record</Text>
       </Pressable>
 
+      <Pressable onPress={handleClip} style={styles.tab}>
+        <Icon name="video" size={18} color={colors.textDim} />
+        <Text style={styles.label}>Clip</Text>
+      </Pressable>
+
       <Pressable onPress={() => router.push(`/editor/${getTodayString()}`)} style={styles.tab}>
-        <Icon name="clapperboard" size={20} color={isEdit ? colors.accent : colors.textDim} />
-        <Text style={[styles.label, isEdit && { color: colors.accent }]}>Edit</Text>
+        <Icon name="clapperboard" size={18} color={colors.textDim} />
+        <Text style={styles.label}>Edit</Text>
       </Pressable>
     </View>
   );
