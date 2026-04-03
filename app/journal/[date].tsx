@@ -5,8 +5,11 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
+import { Icon } from '../../src/components/ui/Icon';
 import { InlineEntry } from '../../src/components/journal/InlineEntry';
 import { InlineTextInput } from '../../src/components/journal/InlineTextInput';
+import { InlineTodoList } from '../../src/components/journal/InlineTodoList';
+import { KeyboardToolbar } from '../../src/components/journal/KeyboardToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
@@ -15,7 +18,7 @@ import { generateId } from '../../src/utils/id';
 import { updateEntry as updateEntryDB } from '../../src/services/database';
 import { pickAndCopyClip } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
-import { HabitPicker } from '../../src/components/journal/HabitPicker';
+import { on } from '../../src/utils/events';
 import type { Entry } from '../../src/types/entry';
 
 export default function JournalScreen() {
@@ -29,12 +32,11 @@ export default function JournalScreen() {
 
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
-  const [showHabitPicker, setShowHabitPicker] = useState(false);
+  const [showHabitPicker, setShowHabitPicker] = useState(showHabits === '1');
 
-  // Toggle habit picker based on query param
   useEffect(() => {
-    setShowHabitPicker(showHabits === '1');
-  }, [showHabits]);
+    return on('toggleHabitPicker', () => setShowHabitPicker(prev => !prev));
+  }, []);
 
   // Reload on focus
   useFocusEffect(
@@ -52,9 +54,9 @@ export default function JournalScreen() {
     });
   }, [onSyncComplete, reload, reloadTitle]);
 
-  const sorted = [...entries].sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
+  const sorted = [...entries]
+    .filter(e => e.text || e.clips.length > 0 || e.habits.length > 0 || (e.todos?.length ?? 0) > 0)
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   const handleTapEmptySpace = async () => {
     if (!isAddingText) {
@@ -78,6 +80,7 @@ export default function JournalScreen() {
       mood: null,
       category: null,
       habits: [],
+      todos: [],
       clipUri: null,
       clipDurationMs: null,
       clips: [],
@@ -122,6 +125,47 @@ export default function JournalScreen() {
       });
     }
   }, [date, editEntry]);
+
+  const handleUpdateTodos = useCallback(async (entry: Entry, todos: import('../../src/types/entry').TodoItem[]) => {
+    await editEntry({ ...entry, todos });
+  }, [editEntry]);
+
+  const handleAddTodoEntry = useCallback(() => {
+    const entry: Entry = {
+      id: generateId('entry'),
+      date,
+      text: null,
+      mood: null,
+      category: null,
+      habits: [],
+      todos: [],
+      clipUri: null,
+      clipDurationMs: null,
+      clips: [],
+      createdAt: new Date().toISOString(),
+    };
+    addEntry(entry);
+    setEditingEntry(entry);
+  }, [date, addEntry]);
+
+  const handleAddClipEntry = useCallback(async () => {
+    const result = await pickAndCopyClip(date);
+    if (result) {
+      addEntry({
+        id: generateId('entry'),
+        date,
+        text: null,
+        mood: null,
+        category: null,
+        habits: [],
+        todos: [],
+        clipUri: result.uri,
+        clipDurationMs: result.durationMs,
+        clips: [{ uri: result.uri, durationMs: result.durationMs }],
+        createdAt: new Date().toISOString(),
+      });
+    }
+  }, [date, addEntry]);
 
   // Final save — updates state and clears editing
   const handleEditTextSave = useCallback(async (text: string) => {
@@ -204,19 +248,25 @@ export default function JournalScreen() {
         dateLabel=""
         entries={entries}
         habits={habits}
-        onBack={() => router.push('/')}
       />
 
-      {/* Title + Date */}
+      {/* Title + Date + Edit Vlog */}
       <View style={styles.titleRow}>
-        <TextInput
-          value={dayTitle}
-          onChangeText={setDayTitle}
-          placeholder="Untitled day"
-          placeholderTextColor={colors.textDimmer}
-          style={styles.titleInput}
-        />
-        <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
+        <View style={styles.titleLeft}>
+          <TextInput
+            value={dayTitle}
+            onChangeText={setDayTitle}
+            placeholder="Untitled day"
+            placeholderTextColor={colors.textDimmer}
+            style={styles.titleInput}
+          />
+          <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
+        </View>
+        {entries.length > 0 && (
+          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.editVlogBtn}>
+            <Icon name="clapperboard" size={16} color={colors.accent} />
+          </Pressable>
+        )}
       </View>
 
       {/* Entries */}
@@ -225,7 +275,7 @@ export default function JournalScreen() {
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
+        keyboardDismissMode="none"
         onScrollBeginDrag={() => {
         }}
       >
@@ -233,10 +283,15 @@ export default function JournalScreen() {
           editingEntry?.id === entry.id ? (
             <View key={entry.id} style={{ marginBottom: 16 }}>
               <InlineEntry
-                entry={{ ...entry, text: null }}
+                entry={{ ...entry, text: null, todos: [] }}
                 habits={habits}
                 onTapToEdit={() => {}}
                 compact
+              />
+              <InlineTodoList
+                todos={entry.todos ?? []}
+                onUpdate={(todos) => handleUpdateTodos(entry, todos)}
+                editable
               />
               <InlineTextInput
                 initialValue={entry.text ?? ''}
@@ -253,6 +308,7 @@ export default function JournalScreen() {
               habits={habits}
               onTapToEdit={handleTapToEdit}
               onAddClip={handleAddClipToEntry}
+              onUpdateTodos={handleUpdateTodos}
             />
           )
         ))}
@@ -269,20 +325,24 @@ export default function JournalScreen() {
             <Text style={styles.emptyTapText}>Tap to write...</Text>
           </Pressable>
         )}
+
       </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Habit picker — triggered from bottom nav */}
-      {showHabitPicker && (
-        <View style={styles.habitPickerWrap}>
-          <HabitPicker
-            habits={habits}
-            alreadyLogged={alreadyLoggedHabits}
-            onToggle={handleToggleHabit}
-            onCancel={() => setShowHabitPicker(false)}
-          />
-        </View>
-      )}
+      {/* Keyboard toolbar — shows above keyboard when typing */}
+      <KeyboardToolbar
+        visible={isAddingText || !!editingEntry}
+        actions={[
+          { icon: 'checkSquare', label: 'Todo', onPress: handleAddTodoEntry },
+          { icon: 'video', label: 'Clip', onPress: handleAddClipEntry },
+          { icon: 'checkSquare', label: 'Habit', onPress: () => setShowHabitPicker(true) },
+        ]}
+        habits={habits}
+        alreadyLoggedHabits={alreadyLoggedHabits}
+        onToggleHabit={handleToggleHabit}
+        showHabits={showHabitPicker}
+        onShowHabits={setShowHabitPicker}
+      />
     </Pressable>
   );
 }
@@ -293,10 +353,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 4,
-    alignItems: 'center',
+  },
+  titleLeft: {
+    flex: 1,
   },
   titleInput: {
     fontFamily: fonts.heading,
@@ -304,8 +369,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     padding: 0,
     letterSpacing: -0.3,
-    textAlign: 'center',
-    width: '100%',
+    textAlign: 'left',
   },
   dateText: {
     fontFamily: fonts.mono,
@@ -331,11 +395,8 @@ const styles = StyleSheet.create({
     minHeight: 200,
     paddingTop: 16,
   },
-  habitPickerWrap: {
-    position: 'absolute',
-    bottom: GLOBAL_NAV_HEIGHT,
-    left: 0,
-    right: 0,
+  editVlogBtn: {
+    padding: 8,
   },
   emptyTapText: {
     fontFamily: fonts.body,

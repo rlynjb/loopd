@@ -6,19 +6,22 @@ import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { CATEGORIES } from '../../constants/categories';
 import { formatDuration } from '../../utils/time';
-import type { Entry, Habit } from '../../types/entry';
+import { InlineTodoList } from './InlineTodoList';
+import type { Entry, Habit, TodoItem } from '../../types/entry';
 
 type Props = {
   entry: Entry;
   habits: Habit[];
   onTapToEdit: (entry: Entry) => void;
   onAddClip?: (entry: Entry) => void;
+  onUpdateTodos?: (entry: Entry, todos: TodoItem[]) => void;
   compact?: boolean;
 };
 
-export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, compact }: Props) {
+export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onUpdateTodos, compact }: Props) {
   const hasClips = entry.clips.length > 0 || !!entry.clipUri;
   const hasHabits = entry.habits.length > 0;
+  const hasTodos = (entry.todos?.length ?? 0) > 0;
 
   const time = new Date(entry.createdAt);
   const timeStr = time.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
@@ -106,7 +109,16 @@ export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, compact }: 
           </View>
         )}
 
-        {/* Text — below clips and habits */}
+        {/* Todos */}
+        {hasTodos && (
+          <InlineTodoList
+            todos={entry.todos}
+            onUpdate={(todos) => onUpdateTodos?.(entry, todos)}
+            editable={!!onUpdateTodos}
+          />
+        )}
+
+        {/* Text — below clips, habits, and todos */}
         {entry.text && (
           <Text style={styles.journalText}>{entry.text}</Text>
         )}

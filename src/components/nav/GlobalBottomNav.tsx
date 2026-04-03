@@ -8,6 +8,7 @@ import { insertEntry } from '../../services/database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
 import type { Entry } from '../../types/entry';
+import { emit } from '../../utils/events';
 
 export function GlobalBottomNav() {
   const router = useRouter();
@@ -30,6 +31,7 @@ export function GlobalBottomNav() {
       mood: null,
       category: null,
       habits: [],
+      todos: [],
       clipUri: result.uri,
       clipDurationMs: result.durationMs,
       clips: [{ uri: result.uri, durationMs: result.durationMs }],
@@ -52,9 +54,8 @@ export function GlobalBottomNav() {
 
   const handleHabit = () => {
     const today = getTodayString();
-    // Toggle: if already on journal, toggle the picker via param
     if (pathname.startsWith('/journal')) {
-      router.setParams({ showHabits: showHabitsParam === '1' ? '0' : '1' });
+      emit('toggleHabitPicker');
     } else {
       router.push(`/journal/${today}?showHabits=1`);
     }
@@ -63,30 +64,20 @@ export function GlobalBottomNav() {
   return (
     <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 64) }]}>
       <Pressable onPress={() => router.push('/')} style={styles.tab}>
-        <Icon name="house" size={18} color={isHome ? colors.accent : colors.textDim} />
+        <Icon name="house" size={18} color={isHome ? colors.accent : colors.textDim} strokeWidth={2.5} />
         <Text style={[styles.label, isHome && { color: colors.accent }]}>Home</Text>
-      </Pressable>
-
-      <Pressable onPress={handleHabit} style={styles.tab}>
-        <Icon name="checkSquare" size={18} color={isJournal ? colors.green : colors.textDim} />
-        <Text style={[styles.label, isJournal && { color: colors.green }]}>Habit</Text>
       </Pressable>
 
       <Pressable onPress={handleRecord} style={styles.tab}>
         <View style={styles.recordBtn}>
-          <Icon name="circle" size={20} color={colors.coral} />
+          <Icon name="circle" size={20} color={colors.coral} strokeWidth={2.5} />
         </View>
         <Text style={[styles.label, { color: colors.coral }]}>Record</Text>
       </Pressable>
 
-      <Pressable onPress={handleClip} style={styles.tab}>
-        <Icon name="video" size={18} color={colors.textDim} />
-        <Text style={styles.label}>Clip</Text>
-      </Pressable>
-
-      <Pressable onPress={() => router.push(`/editor/${getTodayString()}`)} style={styles.tab}>
-        <Icon name="clapperboard" size={18} color={colors.textDim} />
-        <Text style={styles.label}>Edit</Text>
+      <Pressable onPress={() => router.push(`/journal/${getTodayString()}`)} style={styles.tab}>
+        <Icon name="penLine" size={18} color={isJournal ? colors.accent : colors.textDim} strokeWidth={2.5} />
+        <Text style={[styles.label, isJournal && { color: colors.accent }]}>Journal</Text>
       </Pressable>
     </View>
   );

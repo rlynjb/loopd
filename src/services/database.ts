@@ -110,6 +110,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     try { await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`); } catch { /* exists */ }
   };
   await addColumn('entries', 'clips_json', 'TEXT');
+  await addColumn('entries', 'todos_json', 'TEXT');
   await addColumn('entries', 'notion_page_id', 'TEXT');
   await addColumn('entries', 'updated_at', 'TEXT');
   await addColumn('habits', 'notion_page_id', 'TEXT');
@@ -206,6 +207,7 @@ export async function getHabits(): Promise<Habit[]> {
 type EntryRow = {
   id: string; date: string; type: string | null; text: string | null;
   mood: string | null; category: string | null; habits_json: string | null;
+  todos_json: string | null;
   clip_uri: string | null; clip_duration_ms: number | null;
   clips_json: string | null; created_at: string;
   notion_page_id: string | null; updated_at: string | null;
@@ -219,6 +221,7 @@ function mapRowToEntry(r: EntryRow): Entry {
     mood: r.mood,
     category: r.category,
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
+    todos: r.todos_json ? JSON.parse(r.todos_json) : [],
     clipUri: r.clip_uri,
     clipDurationMs: r.clip_duration_ms,
     clips: r.clips_json ? JSON.parse(r.clips_json) : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []),
@@ -247,11 +250,12 @@ export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, text, mood, category, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       entry.id, entry.date, entry.text, entry.mood, entry.category,
-      JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
+      JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []),
+      entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
   );
@@ -261,8 +265,8 @@ export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.clips), now, entry.id]
+    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
+    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
   );
 }
 
@@ -361,7 +365,7 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        date = excluded.date, text = excluded.text, habits_json = excluded.habits_json,
-       clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
+       todos_json = excluded.todos_json, clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
     [
       entry.id, entry.date, entry.text, entry.mood, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,

@@ -3,6 +3,13 @@ export type ClipRef = {
   durationMs: number;
 };
 
+export type TodoItem = {
+  id: string;
+  text: string;
+  done: boolean;
+  completedAt: string | null;
+};
+
 export type Entry = {
   id: string;
   date: string;
@@ -10,6 +17,7 @@ export type Entry = {
   mood: string | null;
   category: string | null;
   habits: string[];
+  todos: TodoItem[];
   clipUri: string | null;
   clipDurationMs: number | null;
   clips: ClipRef[];

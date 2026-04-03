@@ -78,9 +78,10 @@ type Props = {
   name: IconName;
   size?: number;
   color?: string;
+  strokeWidth?: number;
 };
 
-export function Icon({ name, size = 18, color = colors.textMuted }: Props) {
+export function Icon({ name, size = 18, color = colors.textMuted, strokeWidth = 1.5 }: Props) {
   const IconComponent = ICONS[name];
-  return <IconComponent size={size} color={color} strokeWidth={1.5} />;
+  return <IconComponent size={size} color={color} strokeWidth={strokeWidth} />;
 }
