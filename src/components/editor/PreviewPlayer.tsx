@@ -106,14 +106,16 @@ export function PreviewPlayer({
     }
   }, [currentClip?.clipUri, hasClipUri]);
 
-  // Reset when clip changes
+  // Reset when clip source changes (not just ID — split clips share the same URI)
+  const lastClipUri = useRef(currentClip?.clipUri);
   useEffect(() => {
-    if (currentClip?.id !== lastSeekClipId) {
+    if (currentClip?.clipUri !== lastClipUri.current) {
       setVideoStatus(hasVideo ? 'loading' : 'idle');
       setErrorMsg('');
-      setLastSeekClipId(currentClip?.id ?? null);
+      lastClipUri.current = currentClip?.clipUri ?? null;
     }
-  }, [currentClip?.id, hasVideo]);
+    setLastSeekClipId(currentClip?.id ?? null);
+  }, [currentClip?.id, currentClip?.clipUri, hasVideo]);
 
   const handleLoad = useCallback((data: OnLoadData) => {
     setVideoStatus('ready');
@@ -131,12 +133,12 @@ export function PreviewPlayer({
     setErrorMsg(msg);
   }, []);
 
-  // Seek on scrub while paused
+  // Seek on scrub while paused or when clip changes
   useEffect(() => {
-    if (videoRef.current && videoStatus === 'ready' && !isPlaying) {
+    if (videoRef.current && (videoStatus === 'ready' || videoStatus === 'loading') && !isPlaying) {
       videoRef.current.seek(currentClipSeekSec);
     }
-  }, [currentClipSeekSec, isPlaying, videoStatus]);
+  }, [currentClipSeekSec, currentClip?.id, isPlaying, videoStatus]);
 
   const previewWidth = Math.round(previewHeight * 9 / 16);
 
@@ -170,12 +172,6 @@ export function PreviewPlayer({
         </>
       )}
 
-      {/* Loading state */}
-      {hasVideo && videoStatus === 'loading' && (
-        <View style={styles.centerContent}>
-          <Text style={styles.statusText}>Loading...</Text>
-        </View>
-      )}
 
       {/* Error state — shows URI for debugging */}
       {videoStatus === 'error' && (
