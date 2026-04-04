@@ -47,16 +47,16 @@ export function KeyboardToolbar({
       {showHabits ? (
         // Sub-view: habit chips
         <>
-          <Pressable onPress={() => onShowHabits?.(false)} style={styles.backBtn}>
+          <Pressable onPress={() => { console.log('[toolbar] back tapped'); onShowHabits?.(false); }} style={styles.backBtn}>
             <Icon name="chevronLeft" size={18} color={colors.textMuted} />
           </Pressable>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.habitScroll}>
+          <View style={styles.habitRow}>
             {habits?.map(h => {
               const isLogged = loggedSet.has(h.id);
               return (
                 <Pressable
                   key={h.id}
-                  onPress={() => onToggleHabit?.(h.id, !isLogged)}
+                  onPress={() => { console.log('[toolbar] habit tapped', h.id); onToggleHabit?.(h.id, !isLogged); }}
                   style={[styles.habitChip, isLogged && styles.habitChipActive]}
                 >
                   {isLogged && <Icon name="checkSquare" size={12} color={colors.green} />}
@@ -64,7 +64,7 @@ export function KeyboardToolbar({
                 </Pressable>
               );
             })}
-          </ScrollView>
+          </View>
         </>
       ) : (
         // Main toolbar actions
@@ -109,7 +109,9 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
   },
-  habitScroll: {
+  habitRow: {
+    flex: 1,
+    flexDirection: 'row',
     gap: 6,
     alignItems: 'center',
   },

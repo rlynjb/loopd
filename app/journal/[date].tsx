@@ -38,12 +38,34 @@ export default function JournalScreen() {
     return on('toggleHabitPicker', () => setShowHabitPicker(prev => !prev));
   }, []);
 
-  // Reload on focus
+  // Reload on focus, save on blur
   useFocusEffect(
     useCallback(() => {
       reload();
       reloadTitle();
-    }, [reload, reloadTitle])
+      return () => {
+        // Save pending text when navigating away
+        const current = editingEntryRef.current;
+        if (current && liveTextRef.current.trim()) {
+          editEntry({ ...current, text: liveTextRef.current.trim() });
+        } else if (isAddingText && liveTextRef.current.trim()) {
+          addEntry({
+            id: generateId('entry'),
+            date,
+            text: liveTextRef.current.trim(),
+            mood: null,
+            category: null,
+            habits: [],
+            todos: [],
+            clipUri: null,
+            clipDurationMs: null,
+            clips: [],
+            createdAt: new Date().toISOString(),
+          });
+        }
+        liveTextRef.current = '';
+      };
+    }, [reload, reloadTitle, date, editEntry, addEntry, isAddingText])
   );
 
   // Reload on sync complete
@@ -60,14 +82,22 @@ export default function JournalScreen() {
 
   const handleTapEmptySpace = async () => {
     if (!isAddingText) {
-      // Save pending edits first
+      // Save or delete pending edits first
       const current = editingEntryRef.current;
-      if (current && liveTextRef.current.trim()) {
-        await editEntry({ ...current, text: liveTextRef.current.trim() });
+      if (current) {
+        const newText = liveTextRef.current.trim() || null;
+        const updated = { ...current, text: newText };
+        const hasContent = newText || updated.clips.length > 0 || updated.habits.length > 0 || (updated.todos?.length ?? 0) > 0;
+        if (hasContent) {
+          await editEntry(updated);
+        } else {
+          removeEntry(current.id);
+        }
       }
       liveTextRef.current = '';
       setEditingEntry(null);
       setShowHabitPicker(false);
+      setShowTodoInput(false);
       setIsAddingText(true);
     }
   };
@@ -96,8 +126,20 @@ export default function JournalScreen() {
   const justTappedEntry = useRef(false);
   const liveTextRef = useRef('');
 
-  const handleTapToEdit = (entry: Entry) => {
+  const handleTapToEdit = async (entry: Entry) => {
     justTappedEntry.current = true;
+    // Save previous entry to state before switching
+    const prev = editingEntryRef.current;
+    if (prev && liveTextRef.current !== (prev.text ?? '')) {
+      const newText = liveTextRef.current.trim() || null;
+      const updated = { ...prev, text: newText };
+      const hasContent = newText || updated.clips.length > 0 || updated.habits.length > 0 || (updated.todos?.length ?? 0) > 0;
+      if (hasContent) {
+        await editEntry(updated);
+      } else {
+        removeEntry(prev.id);
+      }
+    }
     liveTextRef.current = entry.text ?? '';
     setIsAddingText(false);
     setEditingEntry(entry);
@@ -130,23 +172,11 @@ export default function JournalScreen() {
     await editEntry({ ...entry, todos });
   }, [editEntry]);
 
+  const [showTodoInput, setShowTodoInput] = useState(false);
+
   const handleAddTodoEntry = useCallback(() => {
-    const entry: Entry = {
-      id: generateId('entry'),
-      date,
-      text: null,
-      mood: null,
-      category: null,
-      habits: [],
-      todos: [],
-      clipUri: null,
-      clipDurationMs: null,
-      clips: [],
-      createdAt: new Date().toISOString(),
-    };
-    addEntry(entry);
-    setEditingEntry(entry);
-  }, [date, addEntry]);
+    setShowTodoInput(true);
+  }, []);
 
   const handleAddClipEntry = useCallback(async () => {
     const result = await pickAndCopyClip(date);
@@ -177,11 +207,23 @@ export default function JournalScreen() {
 
   const handleEditCancel = useCallback(() => {
     setEditingEntry(null);
+    setShowTodoInput(false);
   }, []);
 
   const alreadyLoggedHabits = [...new Set(entries.flatMap(e => e.habits))];
 
-  const handleToggleHabit = (habitId: string, checked: boolean) => {
+  const handleToggleHabit = async (habitId: string, checked: boolean) => {
+    console.log('[habit toggle]', { habitId, checked, hasEditing: !!editingEntryRef.current, isAddingText });
+    const current = editingEntryRef.current;
+    if (current) {
+      // Add/remove habit from current editing entry
+      const habits = checked
+        ? [...current.habits, habitId]
+        : current.habits.filter(h => h !== habitId);
+      await editEntry({ ...current, habits });
+      setEditingEntry({ ...current, habits });
+      return;
+    }
     if (checked) {
       addEntry({
         id: generateId('entry'),
@@ -190,6 +232,7 @@ export default function JournalScreen() {
         mood: null,
         category: null,
         habits: [habitId],
+        todos: [],
         clipUri: null,
         clipDurationMs: null,
         clips: [],
@@ -214,10 +257,16 @@ export default function JournalScreen() {
     }
     // Save any pending text before dismissing
     const current = editingEntryRef.current;
-    if (current && liveTextRef.current.trim()) {
-      await editEntry({ ...current, text: liveTextRef.current.trim() });
-    }
     if (current) {
+      const newText = liveTextRef.current.trim() || null;
+      const updated = { ...current, text: newText };
+      // Delete entry if completely empty (no text, clips, habits, todos)
+      const hasContent = newText || updated.clips.length > 0 || updated.habits.length > 0 || (updated.todos?.length ?? 0) > 0;
+      if (hasContent) {
+        await editEntry(updated);
+      } else {
+        removeEntry(current.id);
+      }
       liveTextRef.current = '';
       setEditingEntry(null);
     }
@@ -239,16 +288,19 @@ export default function JournalScreen() {
     }
     Keyboard.dismiss();
     setShowHabitPicker(false);
+    setShowTodoInput(false);
   };
 
   return (
-    <Pressable style={styles.container} onPress={dismissAll}>
-      <HomeHeader
-        dayStarted={false}
-        dateLabel=""
-        entries={entries}
-        habits={habits}
-      />
+    <View style={styles.container}>
+      <Pressable onPress={dismissAll}>
+        <HomeHeader
+          dayStarted={false}
+          dateLabel=""
+          entries={entries}
+          habits={habits}
+        />
+      </Pressable>
 
       {/* Title + Date + Edit Vlog */}
       <View style={styles.titleRow}>
@@ -288,11 +340,13 @@ export default function JournalScreen() {
                 onTapToEdit={() => {}}
                 compact
               />
-              <InlineTodoList
-                todos={entry.todos ?? []}
-                onUpdate={(todos) => handleUpdateTodos(entry, todos)}
-                editable
-              />
+              {(showTodoInput || (entry.todos && entry.todos.length > 0)) && (
+                <InlineTodoList
+                  todos={entry.todos ?? []}
+                  onUpdate={(todos) => handleUpdateTodos(entry, todos)}
+                  editable
+                />
+              )}
               <InlineTextInput
                 initialValue={entry.text ?? ''}
                 onSave={handleEditTextSave}
@@ -329,7 +383,7 @@ export default function JournalScreen() {
       </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Keyboard toolbar — shows above keyboard when typing */}
+      {/* Keyboard toolbar — outside Pressable so taps aren't intercepted */}
       <KeyboardToolbar
         visible={isAddingText || !!editingEntry}
         actions={[
@@ -343,7 +397,7 @@ export default function JournalScreen() {
         showHabits={showHabitPicker}
         onShowHabits={setShowHabitPicker}
       />
-    </Pressable>
+    </View>
   );
 }
 

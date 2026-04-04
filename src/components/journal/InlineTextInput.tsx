@@ -17,7 +17,6 @@ export const InlineTextInput = memo(function InlineTextInput({ initialValue = ''
   const onSaveRef = useRef(onSave);
   const onSilentSaveRef = useRef(onSilentSave);
   const onCancelRef = useRef(onCancel);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   onSaveRef.current = onSave;
   onSilentSaveRef.current = onSilentSave;
   onCancelRef.current = onCancel;
@@ -27,24 +26,14 @@ export const InlineTextInput = memo(function InlineTextInput({ initialValue = ''
     textRef.current = newText;
     if (liveTextRef) liveTextRef.current = newText;
 
-    // Debounce silent save — DB only, no re-render
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      if (newText.trim() && onSilentSaveRef.current) {
-        onSilentSaveRef.current(newText.trim());
-      }
-    }, 800);
+    // Save to DB immediately on every keystroke (DB only, no re-render)
+    if (onSilentSaveRef.current) {
+      onSilentSaveRef.current(newText.trim());
+    }
   }, []);
 
   const handleBlur = useCallback(() => {
-    // Save handled by parent's dismissAll via liveTextRef — no action needed here
-    if (timerRef.current) clearTimeout(timerRef.current);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
+    // Save handled by parent via liveTextRef
   }, []);
 
   return (
