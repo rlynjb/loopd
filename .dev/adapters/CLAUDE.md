@@ -129,3 +129,10 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ result });
 }
 ```
+
+## Data Rules
+
+- **Database is the single source of truth.** The UI must display data exactly as stored in the database — no frontend filtering, hiding, or transforming records unless explicitly requested.
+- **Do not filter in frontend/UI.** If data should not be displayed, delete it from the database. Do not use `.filter()` or conditional rendering to hide database records from the user.
+- **Only implement frontend filters when explicitly asked.** If the user requests a filter (search, sort, visibility toggle), implement it. Otherwise, assume all DB records should be shown.
+- **Clean data at the source.** If records should not exist (empty entries, orphaned data), delete them from the database — not hide them in the UI layer.

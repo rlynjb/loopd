@@ -17,6 +17,7 @@ export default function HomeScreen() {
 
   const [vlogs, setVlogs] = useState<Vlog[]>([]);
   const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
+  const [vlogPreviews, setVlogPreviews] = useState<Record<string, string>>({});
   const [todayEntries, setTodayEntries] = useState<Entry[]>([]);
   const [todayTitle, setTodayTitle] = useState('');
   const [habits, setHabits] = useState<Habit[]>([]);
@@ -31,10 +32,18 @@ export default function HomeScreen() {
         getVlogs().then(async (v) => {
           setVlogs(v);
           const titles: Record<string, string> = {};
+          const previews: Record<string, string> = {};
           for (const vlog of v) {
             titles[vlog.date] = await getDayTitle(vlog.date);
+            const dayEntries = await getEntriesByDate(vlog.date);
+            const firstText = dayEntries.find(e => e.text)?.text;
+            if (firstText) {
+              const sentences = firstText.split(/[.!?]+/).filter(Boolean).slice(0, 2).join('. ').trim();
+              previews[vlog.date] = sentences.length > 100 ? sentences.slice(0, 100) + '...' : sentences + (firstText.includes('.') ? '.' : '');
+            }
           }
           setVlogTitles(titles);
+          setVlogPreviews(previews);
         });
       });
       getEntriesByDate(today).then(setTodayEntries);
@@ -149,14 +158,15 @@ export default function HomeScreen() {
                   <Text style={styles.todayDate}>{formatDate(new Date())}</Text>
                   {moodInfo && <Text style={[styles.todayMood, { color: moodInfo.color }]}>{moodInfo.id}</Text>}
                 </View>
-                <Text style={styles.todayCount}>{todayEntries.length} entries</Text>
               </View>
 
-              <View style={styles.todayStats}>
-                {todayClips > 0 && <Text style={styles.todayStat}>{todayClips} clips</Text>}
-                {todayJournals > 0 && <Text style={styles.todayStat}>{todayJournals} journals</Text>}
-                {todayHabits > 0 && <Text style={styles.todayStat}>{todayHabits} habits</Text>}
-              </View>
+              {(() => {
+                const firstText = todayEntries.find(e => e.text)?.text;
+                if (!firstText) return null;
+                const sentences = firstText.split(/[.!?]+/).filter(Boolean).slice(0, 2).join('. ').trim();
+                const preview = sentences.length > 100 ? sentences.slice(0, 100) + '...' : sentences + (firstText.includes('.') ? '.' : '');
+                return <Text style={styles.todayPreview} numberOfLines={2}>{preview}</Text>;
+              })()}
 
               {todayCategories.length > 0 && (
                 <View style={styles.todayCats}>
@@ -178,7 +188,7 @@ export default function HomeScreen() {
           <View style={styles.historySection}>
             <Text style={styles.sectionLabel}>PREVIOUS VLOGS</Text>
             {vlogs.map(vlog => (
-              <PastVlogCard key={vlog.id} vlog={vlog} title={vlogTitles[vlog.date]} onPress={() => router.push(`/journal/${vlog.date}`)} />
+              <PastVlogCard key={vlog.id} vlog={vlog} title={vlogTitles[vlog.date]} preview={vlogPreviews[vlog.date]} onPress={() => router.push(`/journal/${vlog.date}`)} />
             ))}
           </View>
         )}
@@ -313,6 +323,13 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.accent2,
+  },
+  todayPreview: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 19,
+    marginTop: 6,
   },
   todayStats: {
     flexDirection: 'row',

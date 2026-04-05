@@ -27,7 +27,7 @@ export function InlineTodoList({ todos, onUpdate, editable = true }: Props) {
     if (!newText.trim()) return;
     onUpdate([...todos, { id: generateId('todo'), text: newText.trim(), done: false, completedAt: null }]);
     setNewText('');
-    inputRef.current?.focus();
+    setTimeout(() => inputRef.current?.focus(), 100);
   };
 
   const removeItem = (id: string) => {
@@ -70,6 +70,8 @@ export function InlineTodoList({ todos, onUpdate, editable = true }: Props) {
             placeholder="Add item..."
             placeholderTextColor={colors.textDimmer}
             returnKeyType="done"
+            blurOnSubmit={false}
+            autoFocus={todos.length === 0}
             style={styles.addInput}
           />
         </View>
@@ -80,7 +82,7 @@ export function InlineTodoList({ todos, onUpdate, editable = true }: Props) {
 
 const styles = StyleSheet.create({
   container: {
-    marginBottom: 4,
+    marginBottom: 10,
   },
   item: {
     flexDirection: 'row',

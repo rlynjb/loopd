@@ -9,41 +9,16 @@ import { formatRelativeDate, formatDuration } from '../../utils/time';
 type Props = {
   vlog: Vlog;
   title?: string;
+  preview?: string;
   onPress?: () => void;
 };
 
-export function PastVlogCard({ vlog, title, onPress }: Props) {
-  const mood = MOODS.find(m => m.id === vlog.mood);
-  const moodColor = mood?.color ?? colors.textDim;
-
+export function PastVlogCard({ vlog, title, preview, onPress }: Props) {
   return (
     <Pressable onPress={onPress} style={styles.card}>
       {title ? <Text style={styles.title}>{title}</Text> : null}
-      <View style={styles.topRow}>
-        <View style={styles.dateGroup}>
-          <View style={[styles.moodDot, { backgroundColor: moodColor }]} />
-          <Text style={styles.dateText}>{formatRelativeDate(vlog.date)}</Text>
-          {mood && <Text style={[styles.moodLabel, { color: moodColor }]}>{mood.id}</Text>}
-        </View>
-        <Text style={styles.duration}>{formatDuration(vlog.durationSeconds)}</Text>
-      </View>
-
-      {vlog.caption && <Text style={styles.caption} numberOfLines={2}>{vlog.caption}</Text>}
-
-      <View style={styles.bottomRow}>
-        <View style={styles.stats}>
-          <Text style={styles.stat}>{vlog.clipCount} clips</Text>
-          <Text style={styles.stat}>{vlog.habitCount} habits</Text>
-        </View>
-        <View style={styles.catEmojis}>
-          {vlog.categories.slice(0, 4).map(catId => {
-            const cat = CATEGORIES.find(c => c.id === catId);
-            return cat ? (
-              <Icon key={catId} name={cat.icon} size={13} color={colors.textDim} />
-            ) : null;
-          })}
-        </View>
-      </View>
+      <Text style={styles.dateText}>{formatRelativeDate(vlog.date)}</Text>
+      {preview ? <Text style={styles.caption} numberOfLines={2}>{preview}</Text> : null}
     </Pressable>
   );
 }
