@@ -30,15 +30,15 @@ export default function NotionGuideScreen() {
           <Table rows={[
             ['Title', 'Title (default)'],
             ['Date', 'Date'],
-            ['Type', 'Select'],
             ['Text', 'Text (rich text)'],
             ['Habits', 'Multi-select'],
+            ['Todos', 'Text (rich text)'],
             ['Clips', 'Text (rich text)'],
             ['loopd ID', 'Text (rich text)'],
             ['Created At', 'Date'],
           ]} />
           <Text style={styles.hint}>
-            For the Type column, add these select options: video, journal, habit
+            Todos and Clips store JSON data — don't edit them directly in Notion.
           </Text>
         </Step>
 

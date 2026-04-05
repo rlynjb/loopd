@@ -136,3 +136,11 @@ export async function POST(req: NextRequest) {
 - **Do not filter in frontend/UI.** If data should not be displayed, delete it from the database. Do not use `.filter()` or conditional rendering to hide database records from the user.
 - **Only implement frontend filters when explicitly asked.** If the user requests a filter (search, sort, visibility toggle), implement it. Otherwise, assume all DB records should be shown.
 - **Clean data at the source.** If records should not exist (empty entries, orphaned data), delete them from the database — not hide them in the UI layer.
+
+## Autosave & Inline Editing Rules
+
+- **Always read from DB before deleting.** Auto-commit timers, cleanup effects, and idle handlers must read the latest entry from the database before deciding to delete. In-memory refs (`liveTextRef`, `editingEntryRef`) can be stale after navigation or focus changes — the DB is the only reliable source.
+- **Never clear live refs in focus cleanup.** The `useFocusEffect` cleanup runs on navigation but idle timers may still fire afterward. Clearing `liveTextRef` in cleanup causes the timer to see empty text and delete the entry. Let the auto-commit handler clear refs after it's done.
+- **Save to DB on every keystroke.** Use silent/DB-only saves (no React state update) on each keystroke so the database always has the latest text. This prevents data loss on app kill, navigation, or timer races.
+- **Don't auto-delete during sync.** Automatic empty-entry cleanup must not run inside sync operations — it can race with in-progress edits. Run cleanup only on explicit user-initiated page loads, not background processes.
+- **Prefer saving over deleting.** When in doubt, save the entry rather than delete it. An entry with stale or empty text is recoverable; a deleted entry is not.

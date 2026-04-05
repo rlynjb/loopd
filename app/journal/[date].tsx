@@ -15,7 +15,7 @@ import { useHabits } from '../../src/hooks/useHabits';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
-import { updateEntry as updateEntryDB } from '../../src/services/database';
+import { updateEntry as updateEntryDB, deleteEmptyEntries } from '../../src/services/database';
 import { pickAndCopyClip } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { on } from '../../src/utils/events';
@@ -53,7 +53,8 @@ export default function JournalScreen() {
         const current = editingEntryRef.current;
         if (current && liveTextRef.current.trim()) {
           editEntry({ ...current, text: liveTextRef.current.trim() });
-        } else if (isAddingTextRef.current && liveTextRef.current.trim()) {
+        } else if (isAddingTextRef.current && liveTextRef.current.trim() && !newEntryIdRef.current) {
+          // Only create new entry if silent save hasn't already created one
           addEntry({
             id: generateId('entry'),
             date,
@@ -68,7 +69,7 @@ export default function JournalScreen() {
             createdAt: new Date().toISOString(),
           });
         }
-        liveTextRef.current = '';
+        newEntryIdRef.current = null;
       };
     }, [reload, reloadTitle, date, editEntry, addEntry])
   );
@@ -141,6 +142,7 @@ export default function JournalScreen() {
   }, []);
 
   const handleAutoCommitNewText = useCallback(async () => {
+    console.log('[autoCommitNew]', { entryId: newEntryIdRef.current, liveText: liveTextRef.current });
     const entryId = newEntryIdRef.current;
     if (entryId) {
       newEntryIdRef.current = null;
@@ -321,12 +323,20 @@ export default function JournalScreen() {
   const handleAutoCommitEdit = useCallback(async () => {
     const current = editingEntryRef.current;
     if (!current) return;
-    const text = liveTextRef.current.trim() || null;
-    const hasContent = text || current.clips.length > 0 || current.habits.length > 0 || (current.todos?.length ?? 0) > 0;
+    // Read latest from DB — liveTextRef might be stale after focus changes
+    const { getEntryById } = await import('../../src/services/database');
+    const dbEntry = await getEntryById(current.id);
+    const liveText = liveTextRef.current.trim() || null;
+    // Use whichever has text — live text or DB text
+    const text = liveText || dbEntry?.text || null;
+    const clips = dbEntry?.clips ?? current.clips;
+    const habits = dbEntry?.habits ?? current.habits;
+    const todos = dbEntry?.todos ?? current.todos;
+    const hasContent = text || clips.length > 0 || habits.length > 0 || (todos?.length ?? 0) > 0;
     if (!hasContent) {
       removeEntry(current.id);
-    } else {
-      await editEntry({ ...current, text });
+    } else if (liveText) {
+      await editEntry({ ...current, text: liveText });
     }
     liveTextRef.current = '';
     setEditingEntry(null);
@@ -491,7 +501,6 @@ export default function JournalScreen() {
                 onSave={handleEditTextSave}
                 onSilentSave={handleEditTextSilent}
                 onCancel={handleEditCancel}
-                onAutoCommit={handleAutoCommitEdit}
                 liveTextRef={liveTextRef}
               />
               {(showTodoInput || (entry.todos && entry.todos.length > 0)) && (

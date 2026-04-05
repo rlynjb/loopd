@@ -1,4 +1,4 @@
-import type { Entry, ClipRef } from '../../types/entry';
+import type { Entry, ClipRef, TodoItem } from '../../types/entry';
 import type { NotionPage, NotionProperty } from '../../types/notion';
 import { generateId } from '../../utils/id';
 
@@ -95,6 +95,13 @@ export function notionPageToEntry(page: NotionPage): Entry {
     try { clips = JSON.parse(clipsRaw); } catch { /* ignore */ }
   }
 
+  // Parse todos JSON from rich_text
+  let todos: TodoItem[] = [];
+  const todosRaw = getPlainText(props['Todos']);
+  if (todosRaw) {
+    try { todos = JSON.parse(todosRaw); } catch { /* ignore */ }
+  }
+
   return {
     id: loopdId,
     date,
@@ -102,6 +109,7 @@ export function notionPageToEntry(page: NotionPage): Entry {
     mood: null,
     category: null,
     habits,
+    todos,
     clipUri: clips[0]?.uri ?? null,
     clipDurationMs: clips[0]?.durationMs ?? null,
     clips,
@@ -124,6 +132,10 @@ export function entryToNotionProperties(
     ? JSON.stringify(entry.clips.map(c => ({ uri: c.uri.split('/').pop(), durationMs: c.durationMs })))
     : '';
 
+  const todosJson = (entry.todos?.length ?? 0) > 0
+    ? JSON.stringify(entry.todos)
+    : '';
+
   // Convert habit IDs to display labels for Notion multi-select
   const habitNames = entry.habits.map(id => habitIdToLabel?.get(id) ?? id);
 
@@ -131,6 +143,7 @@ export function entryToNotionProperties(
     'Text': { rich_text: [{ text: { content: entry.text ?? '' } }] },
     'Habits': { multi_select: habitNames.map(h => ({ name: h })) },
     'Clips': { rich_text: [{ text: { content: clipsJson } }] },
+    'Todos': { rich_text: [{ text: { content: todosJson } }] },
     'loopd ID': { rich_text: [{ text: { content: entry.id } }] },
   };
 

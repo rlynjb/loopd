@@ -328,9 +328,10 @@ export async function getAllEntries(): Promise<Entry[]> {
 
 export async function deleteEmptyEntries(): Promise<number> {
   const db = await getDatabase();
-  const empty = await db.getAllAsync<{ id: string }>(
-    "SELECT id FROM entries WHERE (text IS NULL OR text = '') AND (habits_json IS NULL OR habits_json = '[]') AND (todos_json IS NULL OR todos_json = '[]') AND (clips_json IS NULL OR clips_json = '[]')"
+  const empty = await db.getAllAsync<{ id: string; date: string; text: string | null }>(
+    "SELECT id, date, text FROM entries WHERE (text IS NULL OR text = '') AND (habits_json IS NULL OR habits_json = '[]') AND (todos_json IS NULL OR todos_json = '[]') AND (clips_json IS NULL OR clips_json = '[]')"
   );
+  console.log('[loopd] deleteEmptyEntries:', empty.length, empty.map(e => ({ id: e.id, date: e.date, text: e.text })));
   for (const e of empty) {
     await db.runAsync('DELETE FROM entries WHERE id = ?', [e.id]);
   }
@@ -339,8 +340,6 @@ export async function deleteEmptyEntries(): Promise<number> {
 
 export async function getUnsyncedEntries(lastSync: string | null): Promise<Entry[]> {
   const db = await getDatabase();
-  // Clean up empty entries before syncing
-  await deleteEmptyEntries();
   // Always include entries with no notion_page_id (never synced)
   // and entries updated since last sync
   const rows = lastSync
