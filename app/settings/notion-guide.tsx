@@ -42,29 +42,13 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="3" title="Create the Daily Log Database (optional)">
-          <Text style={styles.text}>
-            This is your habit tracker view — one row per day with checkbox columns for each habit. Add these columns:
-          </Text>
-          <Table rows={[
-            ['Name', 'Title (default)'],
-            ['Date', 'Date'],
-            ['Note', 'Text (rich text)'],
-            ['Clips', 'Number'],
-            ['loopd Date', 'Text (rich text)'],
-          ]} />
-          <Text style={styles.hint}>
-            Also add a Checkbox column for each habit (e.g. "Workout", "Study", "Read"). The column name must match the habit label exactly.
-          </Text>
-        </Step>
-
-        <Step num="4" title="Share with Integration">
+        <Step num="3" title="Share with Integration">
           <Text style={styles.text}>
             Open each database, click the "..." menu in the top right, select "Connections", search for "loopd", and click "Connect".
           </Text>
         </Step>
 
-        <Step num="5" title="Copy Database IDs">
+        <Step num="4" title="Copy Database IDs">
           <Text style={styles.text}>
             Open your database as a full page. The URL looks like:{'\n\n'}
             notion.so/workspace/{'<'}DATABASE_ID{'>'}?v=...{'\n\n'}
@@ -72,7 +56,7 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="6" title="Connect & Sync">
+        <Step num="5" title="Connect & Sync">
           <Text style={styles.text}>
             Go to Notion Sync in Settings, paste your token and database IDs, tap "Test connection", then "Sync Now".
           </Text>

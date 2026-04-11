@@ -1,6 +1,6 @@
 import { queryDatabase, createPage, updatePage, archivePage, getDatabase as getNotionDatabase } from './api';
-import { getNotionToken, getEntriesDbId, getDailyLogDbId, getLastSyncTimestamp, setLastSyncTimestamp } from './config';
-import { notionPageToEntry, entryToNotionProperties, entriesToDailyLogProperties, parseDailyLogHabits, getTitlePropertyKey } from './mapper';
+import { getNotionToken, getEntriesDbId, getLastSyncTimestamp, setLastSyncTimestamp } from './config';
+import { notionPageToEntry, entryToNotionProperties, getTitlePropertyKey } from './mapper';
 import {
   getUnsyncedEntries, upsertEntryFromNotion, setEntryNotionPageId,
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
@@ -75,11 +75,6 @@ export async function syncAll(): Promise<SyncResult> {
       await clearSyncDeletions();
     }
 
-    // 6. Aggregate daily log (if configured)
-    const dailyLogDbId = await getDailyLogDbId();
-    if (dailyLogDbId) {
-      await syncDailyLog(token, dailyLogDbId);
-    }
 
     // 7. Update last sync timestamp
     await setLastSyncTimestamp(new Date().toISOString());
@@ -359,102 +354,6 @@ async function processDeletions(token: string): Promise<void> {
   }
 }
 
-async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> {
-  const allEntries = await getAllEntries();
-  const habits = await getHabits();
-  const habitLabels = habits.map(h => h.label);
-
-  // Detect the title column name
-  let titleColumn = 'Name';
-  try {
-    const dbSchema = await getNotionDatabase(token, dailyLogDbId) as { properties: Record<string, unknown> };
-    titleColumn = getTitlePropertyKey(dbSchema.properties);
-  } catch { /* fallback */ }
-
-  // Get unique dates that have entries
-  const dates = [...new Set(allEntries.map(e => e.date))];
-
-  // Get existing daily log pages
-  const existingPages = await queryDatabase(token, dailyLogDbId);
-  const pagesByDate = new Map<string, string>();
-  for (const page of existingPages) {
-    const dateKey = getPropertyText(page, 'loopd Date') || getPropertyDate(page, 'Date');
-    if (dateKey) pagesByDate.set(dateKey, page.id);
-  }
-
-  for (const date of dates) {
-    try {
-      const dayTitle = await getDayTitle(date);
-      const props = entriesToDailyLogProperties(date, allEntries, habitLabels, titleColumn, dayTitle);
-      const existingPageId = pagesByDate.get(date);
-
-      if (existingPageId) {
-        await updatePage(token, existingPageId, props);
-      } else {
-        await createPage(token, dailyLogDbId, props);
-      }
-    } catch (err) {
-      console.warn('[loopd sync] Daily log error for', date, err);
-    }
-  }
-
-  // Pull day titles and habit checkbox changes from Daily Log
-  for (const page of existingPages) {
-    if (page.archived) continue;
-    const dateKey = getPropertyText(page, 'loopd Date') || getPropertyDate(page, 'Date');
-    if (!dateKey) continue;
-
-    try {
-      // Pull day title from Notion's title column — last-edit-wins
-      const notionTitle = getTitleFromPage(page);
-      if (notionTitle && notionTitle !== dateKey) {
-        const local = await getDayTitleWithTimestamp(dateKey);
-        if (local.title !== notionTitle) {
-          const notionEditTime = new Date(page.last_edited_time).getTime();
-          const localEditTime = local.updatedAt ? new Date(local.updatedAt).getTime() : 0;
-          if (notionEditTime > localEditTime) {
-            await setDayTitleFromSync(dateKey, notionTitle);
-            console.log('[loopd sync] Pulled day title from daily log:', dateKey, notionTitle);
-          }
-        }
-      }
-
-      const notionHabits = parseDailyLogHabits(page, habitLabels);
-      const dayEntries = await getEntriesByDate(dateKey);
-      const existingHabitEntry = dayEntries.find(e => e.habits.length > 0);
-      const existingChecked = existingHabitEntry?.habits ?? [];
-
-      // If Notion has different habits checked, update or create habit entry
-      const notionSet = new Set(notionHabits);
-      const localSet = new Set(existingChecked);
-      const hasChanged = notionHabits.length !== existingChecked.length ||
-        notionHabits.some(h => !localSet.has(h)) ||
-        existingChecked.some(h => !notionSet.has(h));
-
-      if (hasChanged && notionHabits.length > 0) {
-        if (existingHabitEntry) {
-          await upsertEntryFromNotion({
-            ...existingHabitEntry,
-            habits: notionHabits,
-          });
-        } else {
-          await insertEntry({
-            id: generateId('notion-habit'),
-            date: dateKey,
-            text: null,
-            habits: notionHabits,
-            clipUri: null,
-            clipDurationMs: null,
-            clips: [],
-            createdAt: new Date().toISOString(),
-          });
-        }
-      }
-    } catch (err) {
-      console.warn('[loopd sync] Habit checkbox pull error for', dateKey, err);
-    }
-  }
-}
 
 // ── Sync habits from Notion schema ──
 

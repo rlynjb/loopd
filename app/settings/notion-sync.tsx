@@ -7,7 +7,6 @@ import { Icon } from '../../src/components/ui/Icon';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import {
   getNotionToken, setNotionToken,
-  getDailyLogDbId, setDailyLogDbId,
   getEntriesDbId, setEntriesDbId,
   isAutoSyncEnabled, setAutoSync,
   clearNotionConfig, setLastSyncTimestamp,
@@ -20,7 +19,6 @@ export default function NotionSyncScreen() {
 
   const [token, setToken] = useState('');
   const [entriesDb, setEntriesDb] = useState('');
-  const [dailyLogDb, setDailyLogDb] = useState('');
   const [autoSyncOn, setAutoSyncOn] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -31,7 +29,6 @@ export default function NotionSyncScreen() {
       (async () => {
         setToken(await getNotionToken() ?? '');
         setEntriesDb(await getEntriesDbId() ?? '');
-        setDailyLogDb(await getDailyLogDbId() ?? '');
         setAutoSyncOn(await isAutoSyncEnabled());
         refresh();
       })();
@@ -41,7 +38,6 @@ export default function NotionSyncScreen() {
   const saveCredentials = async () => {
     await setNotionToken(token.trim());
     await setEntriesDbId(entriesDb.trim());
-    await setDailyLogDbId(dailyLogDb.trim());
     refresh();
   };
 
@@ -54,7 +50,6 @@ export default function NotionSyncScreen() {
       const eDb = entriesDb.trim();
       if (!t || !eDb) throw new Error('Token and Entries DB ID are required');
       await testNotionDb(t, eDb);
-      if (dailyLogDb.trim()) await testNotionDb(t, dailyLogDb.trim());
       setTestResult({ ok: true, msg: 'Connected successfully' });
       refresh();
     } catch (err) {
@@ -69,7 +64,6 @@ export default function NotionSyncScreen() {
     await clearNotionConfig();
     setToken('');
     setEntriesDb('');
-    setDailyLogDb('');
     setTestResult(null);
     refresh();
   };
@@ -133,12 +127,6 @@ export default function NotionSyncScreen() {
             autoCapitalize="none" autoCorrect={false} style={styles.input}
           />
 
-          <Text style={styles.fieldLabel}>DAILY LOG DATABASE ID (optional)</Text>
-          <TextInput
-            value={dailyLogDb} onChangeText={setDailyLogDb} onBlur={saveCredentials}
-            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" placeholderTextColor={colors.textDimmer}
-            autoCapitalize="none" autoCorrect={false} style={styles.input}
-          />
 
           {testResult && (
             <View style={[styles.testResult, testResult.ok ? styles.testSuccess : styles.testFail]}>

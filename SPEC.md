@@ -138,10 +138,6 @@ Notion token, database IDs (encrypted via expo-secure-store)
 - Reads habit names from Notion DB multi-select options
 - Adds/removes local habits to match
 
-### Daily Log (optional)
-- One row per day with habit checkboxes, clip count, summary
-- Checkbox changes sync back to entries
-
 ### Entries Database Columns
 | Column | Type |
 |--------|------|
