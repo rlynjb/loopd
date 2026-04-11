@@ -206,7 +206,7 @@ export async function getHabits(): Promise<Habit[]> {
 
 type EntryRow = {
   id: string; date: string; type: string | null; text: string | null;
-  category: string | null; habits_json: string | null;
+  habits_json: string | null;
   todos_json: string | null;
   clip_uri: string | null; clip_duration_ms: number | null;
   clips_json: string | null; created_at: string;
@@ -218,7 +218,6 @@ function mapRowToEntry(r: EntryRow): Entry {
     id: r.id,
     date: r.date,
     text: r.text,
-    category: r.category,
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
     todos: r.todos_json ? JSON.parse(r.todos_json) : [],
     clipUri: r.clip_uri,
@@ -236,7 +235,7 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{
     id: string; date: string; type: string; text: string | null;
-    category: string | null; habits_json: string | null;
+    habits_json: string | null;
     clip_uri: string | null; clip_duration_ms: number | null;
     clips_json: string | null; created_at: string;
     notion_page_id: string | null; updated_at: string | null;
@@ -249,10 +248,10 @@ export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, text, category, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, text, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      entry.id, entry.date, entry.text, entry.category,
+      entry.id, entry.date, entry.text,
       JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []),
       entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
@@ -264,8 +263,8 @@ export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `UPDATE entries SET text = ?, category = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [entry.text, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
+    `UPDATE entries SET text = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
+    [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
   );
 }
 
@@ -372,13 +371,13 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, text, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO entries (id, date, text, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        date = excluded.date, text = excluded.text, habits_json = excluded.habits_json,
        todos_json = excluded.todos_json, clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
     [
-      entry.id, entry.date, entry.text, entry.category,
+      entry.id, entry.date, entry.text,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
@@ -506,7 +505,7 @@ export async function archivePastDays(todayStr: string): Promise<void> {
 
     const clipCount = entries.filter(e => e.clips.length > 0).length;
     const habitsLogged = [...new Set(entries.flatMap(e => e.habits))];
-    const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
+    const cats: string[] = [];
 
     // Check if there's an exported project for this date
     const project = await getProjectByDate(row.date);

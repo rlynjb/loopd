@@ -7,7 +7,6 @@ import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
 import { getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
-import { CATEGORIES } from '../src/constants/categories';
 import { Icon } from '../src/components/ui/Icon';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 

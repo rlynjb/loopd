@@ -190,7 +190,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          category: null,
           createdAt: new Date().toISOString(),
         }),
         type: 'video',
@@ -206,7 +205,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          category: null,
           clipUri: null,
           clipDurationMs: null,
           clips: [],
@@ -222,7 +220,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          category: null,
           habits: [],
           clipUri: null,
           clipDurationMs: null,

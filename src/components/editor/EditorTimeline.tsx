@@ -4,7 +4,6 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, useAnimatedRef, runOnJS, withTiming, scrollTo } from 'react-native-reanimated';
 import { colors, fonts } from '../../constants/theme';
 import { FILTERS } from '../../constants/filters';
-import { CATEGORIES } from '../../constants/categories';
 import { Icon, type IconName } from '../../components/ui/Icon';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../types/project';
 import { formatDuration } from '../../utils/time';
@@ -417,9 +416,7 @@ export function EditorTimeline({
       >
         {clipWaveforms.map(({ clip, w, fullW, leftTrimPct, rightTrimPct, waveform }) => {
           const isActive = clip.id === selectedClipId;
-          const captionLower = clip.caption.toLowerCase();
-          const cat = CATEGORIES.find(c => captionLower.includes(c.label.toLowerCase()));
-          const clipIcon: IconName = cat?.icon ?? 'video';
+          const clipIcon: IconName = 'video';
           const isTrimmed = leftTrimPct > 0 || rightTrimPct > 0;
 
           return (

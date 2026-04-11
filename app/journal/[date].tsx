@@ -60,8 +60,7 @@ export default function JournalScreen() {
             date,
             text: liveTextRef.current.trim(),
       
-            category: null,
-            habits: [],
+                       habits: [],
             todos: [],
             clipUri: null,
             clipDurationMs: null,
@@ -112,8 +111,7 @@ export default function JournalScreen() {
       date,
       text,
 
-      category: null,
-      habits: [],
+           habits: [],
       todos: [],
       clipUri: null,
       clipDurationMs: null,
@@ -291,8 +289,7 @@ export default function JournalScreen() {
         date,
         text: null,
   
-        category: null,
-        habits: [],
+               habits: [],
         todos: [],
         clipUri: result.uri,
         clipDurationMs: result.durationMs,
@@ -355,8 +352,7 @@ export default function JournalScreen() {
       const id = newEntryIdRef.current || generateId('entry');
       const text = liveTextRef.current.trim() || null;
       const entry: Entry = {
-        id, date, text, category: null,
-        habits: [], todos: [],
+        id, date, text,        habits: [], todos: [],
         clipUri: null, clipDurationMs: null, clips: [],
         createdAt: new Date().toISOString(),
       };
@@ -389,8 +385,7 @@ export default function JournalScreen() {
         date,
         text: null,
   
-        category: null,
-        habits: [habitId],
+               habits: [habitId],
         todos: [],
         clipUri: null,
         clipDurationMs: null,
@@ -433,8 +428,7 @@ export default function JournalScreen() {
           date,
           text: liveTextRef.current.trim(),
     
-          category: null,
-          habits: [],
+                   habits: [],
           todos: [],
           clipUri: null,
           clipDurationMs: null,

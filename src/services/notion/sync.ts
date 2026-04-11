@@ -442,7 +442,6 @@ async function syncDailyLog(token: string, dailyLogDbId: string): Promise<void> 
             id: generateId('notion-habit'),
             date: dateKey,
             text: null,
-            category: null,
             habits: notionHabits,
             clipUri: null,
             clipDurationMs: null,

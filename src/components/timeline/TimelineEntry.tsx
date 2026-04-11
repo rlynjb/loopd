@@ -3,7 +3,6 @@ import { View, Text, Pressable, Image, StyleSheet } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
-import { CATEGORIES } from '../../constants/categories';
 import { CAPTURE_TYPES } from '../../constants/captureTypes';
 import { Icon } from '../ui/Icon';
 import type { Entry, Habit } from '../../types/entry';

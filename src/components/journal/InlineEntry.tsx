@@ -4,7 +4,6 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { CATEGORIES } from '../../constants/categories';
 import { formatDuration } from '../../utils/time';
 import { InlineTodoList } from './InlineTodoList';
 import type { Entry, Habit, TodoItem } from '../../types/entry';

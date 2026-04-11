@@ -1,6 +1,5 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
-import { CATEGORIES } from '../../constants/categories';
 import { Icon } from '../ui/Icon';
 import type { Vlog } from '../../types/entry';
 import { formatRelativeDate, formatDuration } from '../../utils/time';

@@ -14,7 +14,6 @@ export type Entry = {
   id: string;
   date: string;
   text: string | null;
-  category: string | null;
   habits: string[];
   todos: TodoItem[];
   clipUri: string | null;

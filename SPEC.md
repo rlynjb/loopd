@@ -68,7 +68,6 @@ A mobile vlog journal app for Android that combines daily journaling, video clip
 | id | string | Generated ID |
 | date | string | "2026-04-05" |
 | text | string \| null | Journal text |
-| category | string \| null | coding, gym, food, social, solo, errand |
 | habits | string[] | Checked habit IDs |
 | todos | TodoItem[] | Checkable items with completion timestamps |
 | clips | ClipRef[] | Video files with duration |

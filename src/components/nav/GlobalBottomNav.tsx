@@ -28,7 +28,6 @@ export function GlobalBottomNav() {
       id: generateId('entry'),
       date: today,
       text: null,
-      category: null,
       habits: [],
       todos: [],
       clipUri: result.uri,
