@@ -3,7 +3,6 @@ import { View, Text, Pressable, Image, StyleSheet } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
-import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
 import { CAPTURE_TYPES } from '../../constants/captureTypes';
 import { Icon } from '../ui/Icon';
@@ -16,7 +15,6 @@ type Props = {
 };
 
 export function TimelineEntry({ entry, habits, onEdit }: Props) {
-  const mood = MOODS.find(m => m.id === entry.mood);
   const cat = CATEGORIES.find(c => c.id === entry.category);
   const captureType = CAPTURE_TYPES.find(c => c.id === entry.type);
   const isHabit = entry.type === 'habit';

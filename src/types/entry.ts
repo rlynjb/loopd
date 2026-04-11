@@ -14,7 +14,6 @@ export type Entry = {
   id: string;
   date: string;
   text: string | null;
-  mood: string | null;
   category: string | null;
   habits: string[];
   todos: TodoItem[];
@@ -40,7 +39,6 @@ export type Vlog = {
   date: string;
   clipCount: number;
   habitCount: number;
-  mood: string | null;
   caption: string | null;
   categories: string[];
   durationSeconds: number;

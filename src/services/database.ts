@@ -206,7 +206,7 @@ export async function getHabits(): Promise<Habit[]> {
 
 type EntryRow = {
   id: string; date: string; type: string | null; text: string | null;
-  mood: string | null; category: string | null; habits_json: string | null;
+  category: string | null; habits_json: string | null;
   todos_json: string | null;
   clip_uri: string | null; clip_duration_ms: number | null;
   clips_json: string | null; created_at: string;
@@ -218,7 +218,6 @@ function mapRowToEntry(r: EntryRow): Entry {
     id: r.id,
     date: r.date,
     text: r.text,
-    mood: r.mood,
     category: r.category,
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
     todos: r.todos_json ? JSON.parse(r.todos_json) : [],
@@ -237,7 +236,7 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{
     id: string; date: string; type: string; text: string | null;
-    mood: string | null; category: string | null; habits_json: string | null;
+    category: string | null; habits_json: string | null;
     clip_uri: string | null; clip_duration_ms: number | null;
     clips_json: string | null; created_at: string;
     notion_page_id: string | null; updated_at: string | null;
@@ -250,10 +249,10 @@ export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, text, mood, category, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO entries (id, date, text, category, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      entry.id, entry.date, entry.text, entry.mood, entry.category,
+      entry.id, entry.date, entry.text, entry.category,
       JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []),
       entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
@@ -265,8 +264,8 @@ export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `UPDATE entries SET text = ?, mood = ?, category = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [entry.text, entry.mood, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
+    `UPDATE entries SET text = ?, category = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
+    [entry.text, entry.category, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
   );
 }
 
@@ -373,13 +372,13 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
   await db.runAsync(
-    `INSERT INTO entries (id, date, text, mood, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO entries (id, date, text, category, habits_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        date = excluded.date, text = excluded.text, habits_json = excluded.habits_json,
        todos_json = excluded.todos_json, clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
     [
-      entry.id, entry.date, entry.text, entry.mood, entry.category,
+      entry.id, entry.date, entry.text, entry.category,
       JSON.stringify(entry.habits), entry.clipUri, entry.clipDurationMs,
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
@@ -472,7 +471,7 @@ export async function getVlogs(): Promise<Vlog[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{
     id: string; date: string; clip_count: number; habit_count: number;
-    mood: string | null; caption: string | null; categories_json: string | null;
+    caption: string | null; categories_json: string | null;
     duration_seconds: number; export_uri: string | null; created_at: string;
   }>('SELECT * FROM vlogs ORDER BY created_at DESC');
 
@@ -481,7 +480,6 @@ export async function getVlogs(): Promise<Vlog[]> {
     date: r.date,
     clipCount: r.clip_count,
     habitCount: r.habit_count,
-    mood: r.mood,
     caption: r.caption,
     categories: r.categories_json ? JSON.parse(r.categories_json) : [],
     durationSeconds: r.duration_seconds,
@@ -508,9 +506,7 @@ export async function archivePastDays(todayStr: string): Promise<void> {
 
     const clipCount = entries.filter(e => e.clips.length > 0).length;
     const habitsLogged = [...new Set(entries.flatMap(e => e.habits))];
-    const moods = entries.map(e => e.mood).filter(Boolean);
     const cats = [...new Set(entries.map(e => e.category).filter(Boolean))];
-    const topMood = moods.length ? moods[moods.length - 1] : 'calm';
 
     // Check if there's an exported project for this date
     const project = await getProjectByDate(row.date);
@@ -525,7 +521,6 @@ export async function archivePastDays(todayStr: string): Promise<void> {
       date: row.date,
       clipCount,
       habitCount: habitsLogged.length,
-      mood: topMood,
       caption: `${entries.length} entries captured.`,
       categories: cats as string[],
       durationSeconds,
@@ -543,11 +538,11 @@ export async function rebuildVlogs(): Promise<void> {
 export async function insertVlog(vlog: Vlog): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT INTO vlogs (id, date, clip_count, habit_count, mood, caption, categories_json, duration_seconds, export_uri, created_at)
+    `INSERT INTO vlogs (id, date, clip_count, habit_count, caption, categories_json, duration_seconds, export_uri, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       vlog.id, vlog.date, vlog.clipCount, vlog.habitCount,
-      vlog.mood, vlog.caption, JSON.stringify(vlog.categories),
+      vlog.caption, JSON.stringify(vlog.categories),
       vlog.durationSeconds, vlog.exportUri, vlog.createdAt,
     ]
   );

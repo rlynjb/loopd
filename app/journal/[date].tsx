@@ -59,7 +59,7 @@ export default function JournalScreen() {
             id: generateId('entry'),
             date,
             text: liveTextRef.current.trim(),
-            mood: null,
+      
             category: null,
             habits: [],
             todos: [],
@@ -111,7 +111,7 @@ export default function JournalScreen() {
       id,
       date,
       text,
-      mood: null,
+
       category: null,
       habits: [],
       todos: [],
@@ -127,12 +127,12 @@ export default function JournalScreen() {
   const handleSilentNewText = useCallback(async (text: string) => {
     if (!text) return;
     if (newEntryIdRef.current) {
-      await updateEntryDB({ id: newEntryIdRef.current, date, text, mood: null, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: '' } as Entry);
+      await updateEntryDB({ id: newEntryIdRef.current, date, text, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: '' } as Entry);
     } else {
       const id = generateId('entry');
       newEntryIdRef.current = id;
       const { insertEntry } = await import('../../src/services/database');
-      await insertEntry({ id, date, text, mood: null, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: new Date().toISOString() });
+      await insertEntry({ id, date, text, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: new Date().toISOString() });
     }
   }, [date]);
 
@@ -290,7 +290,7 @@ export default function JournalScreen() {
         id: generateId('entry'),
         date,
         text: null,
-        mood: null,
+  
         category: null,
         habits: [],
         todos: [],
@@ -355,7 +355,7 @@ export default function JournalScreen() {
       const id = newEntryIdRef.current || generateId('entry');
       const text = liveTextRef.current.trim() || null;
       const entry: Entry = {
-        id, date, text, mood: null, category: null,
+        id, date, text, category: null,
         habits: [], todos: [],
         clipUri: null, clipDurationMs: null, clips: [],
         createdAt: new Date().toISOString(),
@@ -388,7 +388,7 @@ export default function JournalScreen() {
         id: generateId('entry'),
         date,
         text: null,
-        mood: null,
+  
         category: null,
         habits: [habitId],
         todos: [],
@@ -432,7 +432,7 @@ export default function JournalScreen() {
           id: generateId('entry'),
           date,
           text: liveTextRef.current.trim(),
-          mood: null,
+    
           category: null,
           habits: [],
           todos: [],

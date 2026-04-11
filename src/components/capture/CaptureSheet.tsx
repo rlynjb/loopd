@@ -190,7 +190,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          mood: null,
           category: null,
           createdAt: new Date().toISOString(),
         }),
@@ -207,7 +206,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          mood: null,
           category: null,
           clipUri: null,
           clipDurationMs: null,
@@ -224,7 +222,6 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
         ...(editEntry ?? {
           id: generateId('entry'),
           date,
-          mood: null,
           category: null,
           habits: [],
           clipUri: null,

@@ -1,6 +1,5 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
-import { MOODS } from '../../constants/moods';
 import { CATEGORIES } from '../../constants/categories';
 import { Icon } from '../ui/Icon';
 import type { Vlog } from '../../types/entry';
@@ -50,21 +49,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  moodDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
   dateText: {
     fontFamily: fonts.body,
     fontSize: 14,
     fontWeight: '500',
     color: colors.text,
-  },
-  moodLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    opacity: 0.8,
   },
   duration: {
     fontFamily: fonts.mono,

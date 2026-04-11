@@ -8,7 +8,6 @@ import { PastVlogCard } from '../src/components/home/PastVlogCard';
 import { getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { CATEGORIES } from '../src/constants/categories';
-import { MOODS } from '../src/constants/moods';
 import { Icon } from '../src/components/ui/Icon';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 
@@ -78,9 +77,6 @@ export default function HomeScreen() {
   const todayJournals = todayEntries.filter(e => !!e.text).length;
   const todayHabits = [...new Set(todayEntries.flatMap(e => e.habits))].length;
   const todayCategories = [...new Set(todayEntries.map(e => e.category).filter(Boolean))];
-  const todayMoods = todayEntries.map(e => e.mood).filter(Boolean);
-  const latestMood = todayMoods.length > 0 ? todayMoods[todayMoods.length - 1] : null;
-  const moodInfo = latestMood ? MOODS.find(m => m.id === latestMood) : null;
 
   return (
     <View style={styles.container}>
@@ -154,9 +150,7 @@ export default function HomeScreen() {
               {todayTitle ? <Text style={styles.dayTitle}>{todayTitle}</Text> : null}
               <View style={styles.todayTopRow}>
                 <View style={styles.todayDateGroup}>
-                  {moodInfo && <View style={[styles.moodDot, { backgroundColor: moodInfo.color }]} />}
                   <Text style={styles.todayDate}>{formatDate(new Date())}</Text>
-                  {moodInfo && <Text style={[styles.todayMood, { color: moodInfo.color }]}>{moodInfo.id}</Text>}
                 </View>
               </View>
 
@@ -303,21 +297,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  moodDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
   todayDate: {
     fontFamily: fonts.heading,
     fontSize: 13,
     fontWeight: '600',
     color: colors.text,
-  },
-  todayMood: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    opacity: 0.8,
   },
   todayCount: {
     fontFamily: fonts.mono,

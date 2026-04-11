@@ -106,7 +106,6 @@ export function notionPageToEntry(page: NotionPage): Entry {
     id: loopdId,
     date,
     text,
-    mood: null,
     category: null,
     habits,
     todos,
