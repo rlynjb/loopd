@@ -53,7 +53,6 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE TABLE IF NOT EXISTS habits (
       id TEXT PRIMARY KEY,
       label TEXT NOT NULL,
-      emoji TEXT DEFAULT '',
       sort_order INTEGER DEFAULT 0
     );
 
@@ -197,6 +196,31 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     console.warn('[loopd] Vlogs migration error:', e);
   }
 
+  // Migration: drop emoji column from habits
+  try {
+    const habitsSchema = await database.getFirstAsync<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='habits'"
+    );
+    if (habitsSchema?.sql?.includes('emoji')) {
+      await database.execAsync(`
+        CREATE TABLE habits_new (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          sort_order INTEGER DEFAULT 0,
+          notion_page_id TEXT,
+          updated_at TEXT
+        );
+        INSERT INTO habits_new SELECT id, label, sort_order, notion_page_id, updated_at FROM habits;
+        DROP TABLE habits;
+        ALTER TABLE habits_new RENAME TO habits;
+        CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
+      `);
+      console.log('[loopd] Migrated habits: removed emoji column');
+    }
+  } catch (e) {
+    console.warn('[loopd] Habits emoji migration error:', e);
+  }
+
   // Backfill updated_at
   await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
@@ -205,12 +229,12 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   const count = await database.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM habits');
   if (count && count.c === 0) {
     await database.execAsync(`
-      INSERT INTO habits (id, label, emoji, sort_order) VALUES
-        ('workout', 'Workout', '', 0),
-        ('study', 'Study', '', 1),
-        ('vlog', 'Vlog', '', 2),
-        ('meditate', 'Meditate', '', 3),
-        ('read', 'Read', '', 4);
+      INSERT INTO habits (id, label, sort_order) VALUES
+        ('workout', 'Workout', 0),
+        ('study', 'Study', 1),
+        ('vlog', 'Vlog', 2),
+        ('meditate', 'Meditate', 3),
+        ('read', 'Read', 4);
     `);
   }
 }
@@ -219,10 +243,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
 
 export async function getHabits(): Promise<Habit[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<{ id: string; label: string; emoji: string; sort_order: number }>(
+  const rows = await db.getAllAsync<{ id: string; label: string; sort_order: number }>(
     'SELECT * FROM habits ORDER BY sort_order'
   );
-  return rows.map(r => ({ id: r.id, label: r.label, emoji: r.emoji, sortOrder: r.sort_order }));
+  return rows.map(r => ({ id: r.id, label: r.label, sortOrder: r.sort_order }));
 }
 
 // ── Row mapper ──
@@ -422,8 +446,8 @@ export async function clearSyncDeletions(): Promise<void> {
 export async function insertHabit(habit: Habit): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    'INSERT INTO habits (id, label, emoji, sort_order, notion_page_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [habit.id, habit.label, habit.emoji, habit.sortOrder, habit.notionPageId ?? null, new Date().toISOString()]
+    'INSERT INTO habits (id, label, sort_order, notion_page_id, updated_at) VALUES (?, ?, ?, ?, ?)',
+    [habit.id, habit.label, habit.sortOrder, habit.notionPageId ?? null, new Date().toISOString()]
   );
 }
 

@@ -27,7 +27,6 @@ export type Entry = {
 export type Habit = {
   id: string;
   label: string;
-  emoji: string;
   sortOrder: number;
   notionPageId?: string | null;
   updatedAt?: string | null;

@@ -382,7 +382,6 @@ async function syncHabitsFromNotionSchema(token: string, entriesDbId: string): P
         await insertHabit({
           id,
           label: opt.name,
-          emoji: '',
           sortOrder: i,
         });
         console.log('[loopd sync] Added habit from Notion:', opt.name);
