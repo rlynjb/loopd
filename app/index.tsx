@@ -75,7 +75,6 @@ export default function HomeScreen() {
   const todayClips = todayEntries.filter(e => e.clips.length > 0).length;
   const todayJournals = todayEntries.filter(e => !!e.text).length;
   const todayHabits = [...new Set(todayEntries.flatMap(e => e.habits))].length;
-  const todayCategories = [...new Set(todayEntries.map(e => e.category).filter(Boolean))];
 
   return (
     <View style={styles.container}>
@@ -161,14 +160,6 @@ export default function HomeScreen() {
                 return <Text style={styles.todayPreview} numberOfLines={2}>{preview}</Text>;
               })()}
 
-              {todayCategories.length > 0 && (
-                <View style={styles.todayCats}>
-                  {todayCategories.slice(0, 6).map(catId => {
-                    const cat = CATEGORIES.find(c => c.id === catId);
-                    return cat ? <Icon key={catId} name={cat.icon} size={13} color={colors.textDim} /> : null;
-                  })}
-                </View>
-              )}
             </Pressable>
 
             <Pressable onPress={handleStart} style={styles.continueBtn}>
@@ -323,13 +314,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-  },
-  todayCats: {
-    flexDirection: 'row',
-    gap: 4,
-  },
-  catEmoji: {
-    fontSize: 11,
   },
   continueBtn: {
     backgroundColor: colors.accent,

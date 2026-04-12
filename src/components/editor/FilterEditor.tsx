@@ -3,7 +3,6 @@ import { colors, fonts } from '../../constants/theme';
 import { FILTERS } from '../../constants/filters';
 import { Icon } from '../ui/Icon';
 import type { FilterOverlay } from '../../types/project';
-import Slider from '../ui/Slider';
 
 type Props = {
   overlay: FilterOverlay;
@@ -12,10 +11,6 @@ type Props = {
 };
 
 export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
-  const handleReset = () => {
-    onUpdate({ brightness: 100, contrast: 100, saturate: 100 });
-  };
-
   return (
     <View style={styles.container}>
       {/* Preset picker */}
@@ -40,36 +35,12 @@ export function FilterEditor({ overlay, onUpdate, onDelete }: Props) {
         })}
       </ScrollView>
 
-      {([
-        { key: 'brightness' as const, label: 'Brightness', icon: '☀', min: 50, max: 150 },
-        { key: 'contrast' as const, label: 'Contrast', icon: '◐', min: 50, max: 150 },
-        { key: 'saturate' as const, label: 'Saturation', icon: '◉', min: 0, max: 200 },
-      ]).map(ctrl => (
-        <View key={ctrl.key} style={styles.adjustRow}>
-          <Text style={styles.adjustIcon}>{ctrl.icon}</Text>
-          <Text style={styles.adjustLabel}>{ctrl.label}</Text>
-          <View style={styles.adjustSlider}>
-            <Slider
-              min={ctrl.min}
-              max={ctrl.max}
-              value={overlay[ctrl.key]}
-              onValueChange={v => onUpdate({ [ctrl.key]: v })}
-              color={colors.purple}
-            />
-          </View>
-          <Text style={styles.adjustValue}>{overlay[ctrl.key]}%</Text>
-        </View>
-      ))}
-
       <View style={styles.footer}>
         <Pressable
           onPress={() => onUpdate({ startPct: 0, endPct: 100 })}
-          style={[styles.resetBtn, overlay.startPct === 0 && overlay.endPct === 100 && { borderColor: colors.purple, backgroundColor: 'rgba(167,139,250,0.12)' }]}
+          style={[styles.footerBtn, overlay.startPct === 0 && overlay.endPct === 100 && { borderColor: colors.purple, backgroundColor: 'rgba(167,139,250,0.12)' }]}
         >
-          <Text style={[styles.resetBtnText, overlay.startPct === 0 && overlay.endPct === 100 && { color: colors.purple }]}>FULL</Text>
-        </Pressable>
-        <Pressable onPress={handleReset} style={styles.resetBtn}>
-          <Text style={styles.resetBtnText}>RESET</Text>
+          <Text style={[styles.footerBtnText, overlay.startPct === 0 && overlay.endPct === 100 && { color: colors.purple }]}>FULL</Text>
         </Pressable>
         <View style={{ flex: 1 }} />
         <Pressable onPress={onDelete} style={styles.deleteBtn}>
@@ -114,40 +85,12 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 11,
   },
-  adjustRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  adjustIcon: {
-    fontSize: 11,
-    width: 16,
-    textAlign: 'center',
-  },
-  adjustLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
-    color: colors.textDim,
-    width: 52,
-  },
-  adjustSlider: {
-    flex: 1,
-  },
-  adjustValue: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textMuted,
-    width: 30,
-    textAlign: 'right',
-  },
   footer: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: 6,
-    marginTop: 8,
   },
-  resetBtn: {
+  footerBtn: {
     paddingVertical: 6,
     paddingHorizontal: 10,
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -155,7 +98,7 @@ const styles = StyleSheet.create({
     borderColor: colors.cardBorder,
     borderRadius: 7,
   },
-  resetBtnText: {
+  footerBtnText: {
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,

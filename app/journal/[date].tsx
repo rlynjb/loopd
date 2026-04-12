@@ -455,7 +455,7 @@ export default function JournalScreen() {
         />
       </Pressable>
 
-      {/* Title + Date + Edit Vlog */}
+      {/* Title + Date */}
       <View style={styles.titleRow}>
         <View style={styles.titleLeft}>
           <TextInput
@@ -467,11 +467,6 @@ export default function JournalScreen() {
           />
           <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
         </View>
-        {entries.length > 0 && (
-          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.editVlogBtn}>
-            <Icon name="clapperboard" size={16} color={colors.accent} />
-          </Pressable>
-        )}
       </View>
 
       {/* Entries */}
@@ -624,9 +619,6 @@ const styles = StyleSheet.create({
   emptyTap: {
     minHeight: 200,
     paddingTop: 16,
-  },
-  editVlogBtn: {
-    padding: 8,
   },
   emptyTapText: {
     fontFamily: fonts.body,

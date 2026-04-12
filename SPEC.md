@@ -9,9 +9,11 @@ A mobile vlog journal app for Android that combines daily journaling, video clip
 ## Screens & Navigation
 
 ### Global Bottom Nav
-3 tabs: **Home** | **Record** | **Journal**
+4 tabs: **Home** | **Record** | **Vlog** | **Journal**
 - Record opens device camera to capture a clip, saves to today's entries
-- Hidden on editor and settings screens
+- Vlog opens the video editor for today's date
+- Hidden on settings screens
+- Active state highlights current route
 
 ### Home Screen
 - Editable day title with date
@@ -31,7 +33,6 @@ A mobile vlog journal app for Android that combines daily journaling, video clip
   - Habit: toggleable chip picker in toolbar sub-view with back button
   - Clip: opens media picker, adds to current entry
   - Todo: adds todo list to current entry
-- Edit Vlog button in header (opens video editor)
 - Entries auto-save to DB on every keystroke (silent, no re-render)
 - New entries auto-commit after 20s idle, dismiss keyboard
 - Empty entries (no text, clips, habits, todos) auto-delete on 20s idle
@@ -47,8 +48,8 @@ A mobile vlog journal app for Android that combines daily journaling, video clip
 - Draggable playhead with transport controls
 - Trim All: batch trim clips to 2s/3s/4s/5s
 - Clip operations: trim, split, reorder, delete
-- Text overlays: font (Nunito 200-900 + italic), size, color, alignment, position, leading, full-duration toggle
-- Filter presets: 13 options (Vivid, Moody, Warm, Cool, Noir, Golden, Film, Dreamy, Bold, Muted, Sunset, Clean) with manual B/C/S sliders and color tint
+- Text overlays: font (Nunito 200-900), size, leading, weight, alignment (left/center/right), position (top/center/bottom), full-duration toggle
+- Filter presets: Moody, Cool, Film, Muted — applied as full-duration blocks
 - Export: FFmpeg H.264/AAC 1080x1920 MP4, progress modal, cancel support, auto-save to DCIM, share sheet
 - Auto-save draft to DB with 1s debounce
 
@@ -71,11 +72,19 @@ A mobile vlog journal app for Android that combines daily journaling, video clip
 | habits | string[] | Checked habit IDs |
 | todos | TodoItem[] | Checkable items with completion timestamps |
 | clips | ClipRef[] | Video files with duration |
+| clipUri | string \| null | Primary clip URI (legacy compat) |
+| clipDurationMs | number \| null | Primary clip duration (legacy compat) |
 | createdAt | string | ISO timestamp |
 | notionPageId | string \| null | Notion page ID for sync |
 | updatedAt | string \| null | Last edit timestamp |
 
 Entries are unified — a single entry can have text + clips + habits + todos.
+
+### ClipRef
+| Field | Type | Description |
+|-------|------|-------------|
+| uri | string | File path |
+| durationMs | number | Duration in milliseconds |
 
 ### TodoItem
 | Field | Type | Description |
@@ -84,6 +93,16 @@ Entries are unified — a single entry can have text + clips + habits + todos.
 | text | string | Item text |
 | done | boolean | Checked state |
 | completedAt | string \| null | ISO timestamp when checked |
+
+### Habit
+| Field | Type | Description |
+|-------|------|-------------|
+| id | string | e.g. "workout" |
+| label | string | Display name |
+| emoji | string | Optional emoji |
+| sortOrder | number | Order in picker |
+| notionPageId | string \| null | Notion page ID |
+| updatedAt | string \| null | Last edit timestamp |
 
 ### EditorProject
 | Field | Type | Description |
@@ -95,16 +114,64 @@ Entries are unified — a single entry can have text + clips + habits + todos.
 | textOverlays | TextOverlay[] | Text on video |
 | filterOverlays | FilterOverlay[] | Color adjustments |
 | exportUri | string \| null | Path to exported MP4 |
+| updatedAt | string | Last edit timestamp |
 
-### Habit
+### ClipItem (timeline)
 | Field | Type | Description |
 |-------|------|-------------|
-| id | string | e.g. "workout" |
-| label | string | Display name |
-| sortOrder | number | Order in picker |
+| id | string | Generated ID |
+| entryId | string | Source entry |
+| clipUri | string | File path |
+| caption | string | Display label |
+| durationMs | number | Original duration |
+| trimStartPct | number | Trim start (0-100) |
+| trimEndPct | number | Trim end (0-100) |
+| order | number | Position in timeline |
+| color | string | Track color |
+
+### TextOverlay
+| Field | Type | Description |
+|-------|------|-------------|
+| id | string | Generated ID |
+| text | string | Display text |
+| startPct / endPct | number | Duration range (0-100) |
+| fontSize | number | 12-48px |
+| fontWeight | number | 200-900 |
+| lineHeight | number | Line height (10-25) |
+| color | string | Text color (default white) |
+| textAlign | left \| center \| right | Horizontal alignment |
+| position | top \| center \| bottom | Vertical position |
+
+### FilterOverlay
+| Field | Type | Description |
+|-------|------|-------------|
+| id | string | Generated ID |
+| filterId | string | Preset ID (moody, cool, film, muted) |
+| startPct / endPct | number | Duration range (0-100) |
+| brightness | number | Brightness value |
+| contrast | number | Contrast value |
+| saturate | number | Saturation value |
+
+### Filter Presets
+| ID | Label | Brightness | Contrast | Saturate | Tint | Color |
+|----|-------|-----------|----------|----------|------|-------|
+| none | None | 100 | 100 | 100 | — | #94a3b8 |
+| moody | Moody | 90 | 120 | 75 | #1a0a2e | #a78bfa |
+| cool | Cool | 100 | 112 | 85 | #001a3a | #38bdf8 |
+| film | Film | 95 | 92 | 80 | #2a1a0a | #d4a574 |
+| muted | Muted | 100 | 105 | 40 | #1a1a1a | #9ca3af |
 
 ### Vlog
-Archived day summary with clip count, habit count, mood, categories, duration, export URI.
+| Field | Type | Description |
+|-------|------|-------------|
+| id | string | Generated ID |
+| date | string | Archived day |
+| clipCount | number | Number of clips |
+| habitCount | number | Number of habits logged |
+| caption | string \| null | Auto-generated summary |
+| durationSeconds | number | Total duration |
+| exportUri | string \| null | Path to exported MP4 |
+| createdAt | string | ISO timestamp |
 
 ---
 
@@ -112,6 +179,71 @@ Archived day summary with clip count, habit count, mood, categories, duration, e
 
 ### SQLite Database
 Tables: entries, habits, projects, vlogs, day_meta, sync_deletions
+
+#### entries
+| Column | Type |
+|--------|------|
+| id | TEXT PRIMARY KEY |
+| date | TEXT NOT NULL |
+| text | TEXT |
+| habits_json | TEXT |
+| todos_json | TEXT |
+| clip_uri | TEXT |
+| clip_duration_ms | INTEGER |
+| clips_json | TEXT |
+| created_at | TEXT NOT NULL |
+| notion_page_id | TEXT |
+| updated_at | TEXT |
+
+#### habits
+| Column | Type |
+|--------|------|
+| id | TEXT PRIMARY KEY |
+| label | TEXT NOT NULL |
+| emoji | TEXT |
+| sort_order | INTEGER |
+| notion_page_id | TEXT |
+| updated_at | TEXT |
+
+#### projects
+| Column | Type |
+|--------|------|
+| id | TEXT PRIMARY KEY |
+| date | TEXT NOT NULL UNIQUE |
+| status | TEXT (draft/exported) |
+| clips_json | TEXT |
+| text_overlays_json | TEXT |
+| filter_overlays_json | TEXT |
+| export_uri | TEXT |
+| updated_at | TEXT NOT NULL |
+
+#### vlogs
+| Column | Type |
+|--------|------|
+| id | TEXT PRIMARY KEY |
+| date | TEXT NOT NULL |
+| clip_count | INTEGER |
+| habit_count | INTEGER |
+| caption | TEXT |
+| duration_seconds | INTEGER |
+| export_uri | TEXT |
+| created_at | TEXT NOT NULL |
+
+#### day_meta
+| Column | Type |
+|--------|------|
+| date | TEXT PRIMARY KEY |
+| title | TEXT |
+| updated_at | TEXT |
+
+#### sync_deletions
+| Column | Type |
+|--------|------|
+| id | INTEGER PRIMARY KEY AUTOINCREMENT |
+| entity_type | TEXT NOT NULL |
+| entity_id | TEXT NOT NULL |
+| notion_page_id | TEXT NOT NULL |
+| deleted_at | TEXT NOT NULL |
 
 ### File System
 ```
@@ -155,12 +287,14 @@ Notion token, database IDs (encrypted via expo-secure-store)
 - Manual sync via header button or settings
 - Rate limited: 350ms between API calls, retry on 429/5xx
 - Auto-reimport missing clips from camera roll during sync
+- Ghost cleanup: removes empty `notion-` prefixed entries before pull
+- Deletion sync: processes sync_deletions table, archives pages in Notion
 
 ---
 
 ## Video Export Pipeline
 
-1. **Trim**: Each clip → 1080x1920, H.264 baseline, 30fps, AAC 128k
+1. **Trim**: Each clip -> 1080x1920, H.264 baseline, 30fps, AAC 128k
 2. **Concatenate**: Concat demuxer (no re-encode)
 3. **Filters**: FFmpeg `eq` filter with time-based `enable` expressions + `colorchannelmixer` for tints
 4. **Text**: Pre-rendered PNG overlays composited via `overlay` filter
@@ -170,18 +304,26 @@ FFmpeg loaded lazily (234MB native heap) — only on export, not at app startup.
 
 ---
 
+## Error Handling
+
+- Root-level React error boundary wraps entire app
+- Catches render errors, displays error message with "Try Again" button
+- Prevents full app crash from single component failure
+
+---
+
 ## Theme
 
 ### Colors
 - Background: #0c0c0e, #141416, #1c1c1f
 - Accent: #e8d5b0 (warm gold), #c4a96a
-- Semantic: teal #4caf7d, purple #c46fd4, coral #e05555, amber #d4922a
+- Semantic: teal #4caf7d, purple #c46fd4, coral #e05555, amber #d4922a, blue #5b8fe8
 
 ### Typography
 - Headings: DM Serif Display
 - Labels: DM Mono
 - Body: Instrument Sans
-- Text overlays: Nunito (8 weights + italic), Poppins, TikTok Sans, Varela Round
+- Text overlays: Nunito (8 weights), Poppins, TikTok Sans, Varela Round
 
 ### Layout
 - Dark mode only, no border radius on buttons
@@ -216,3 +358,4 @@ FFmpeg loaded lazily (234MB native heap) — only on export, not at app startup.
 - Always read from DB before auto-deleting entries
 - Don't auto-delete during sync operations
 - Prefer saving over deleting
+- Empty entry cleanup uses deleteEntry() to track deletions for sync

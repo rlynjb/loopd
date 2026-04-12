@@ -39,7 +39,6 @@ export type Vlog = {
   clipCount: number;
   habitCount: number;
   caption: string | null;
-  categories: string[];
   durationSeconds: number;
   exportUri: string | null;
   createdAt: string;

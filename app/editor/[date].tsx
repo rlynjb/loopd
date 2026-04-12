@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import { saveToDCIMLoopd } from '../../src/services/fileManager';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { colors, fonts } from '../../src/constants/theme';
+import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
 import { SpinningIcon } from '../../src/components/ui/SpinningIcon';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
@@ -897,7 +897,7 @@ const styles = StyleSheet.create({
   },
   panelsContent: {
     paddingHorizontal: 16,
-    paddingBottom: 24,
+    paddingBottom: GLOBAL_NAV_HEIGHT + 24,
   },
   addPanel: {
     backgroundColor: 'rgba(0,217,163,0.06)',

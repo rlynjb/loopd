@@ -1,11 +1,8 @@
-import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import type { TextOverlay } from '../../types/project';
 import { Icon, type IconName } from '../ui/Icon';
 import Slider from '../ui/Slider';
-
-const TEXT_COLORS = ['#ffffff', '#fbbf24', '#00d9a3', '#fb7185', '#a78bfa', '#38bdf8', '#e05555', '#d4922a', '#000000'];
 
 type Props = {
   overlay: TextOverlay;
@@ -27,7 +24,6 @@ function IconBtn({ icon, active, onPress, size = 16 }: { icon: IconName; active?
 export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
   const align = overlay.textAlign ?? 'center';
   const pos = overlay.position ?? 'bottom';
-  const [showColors, setShowColors] = useState(false);
 
   return (
     <View style={styles.container}>
@@ -78,27 +74,15 @@ export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
         <Text style={styles.value}>{overlay.fontWeight}</Text>
       </View>
 
-      {/* Italic + Align */}
+      {/* Align + Position */}
       <View style={styles.btnRow}>
-        <IconBtn icon="thin" active={!!overlay.italic} onPress={() => onUpdate({ italic: !overlay.italic })} />
-        <View style={styles.divider} />
         <IconBtn icon="alignLeft" active={align === 'left'} onPress={() => onUpdate({ textAlign: 'left' })} />
         <IconBtn icon="alignCenter" active={align === 'center'} onPress={() => onUpdate({ textAlign: 'center' })} />
         <IconBtn icon="alignRight" active={align === 'right'} onPress={() => onUpdate({ textAlign: 'right' })} />
-      </View>
-
-      {/* Position */}
-      <View style={styles.btnRow}>
+        <View style={styles.divider} />
         <IconBtn icon="posTop" active={pos === 'top'} onPress={() => onUpdate({ position: 'top' })} />
         <IconBtn icon="posCenter" active={pos === 'center'} onPress={() => onUpdate({ position: 'center' })} />
         <IconBtn icon="posBottom" active={pos === 'bottom'} onPress={() => onUpdate({ position: 'bottom' })} />
-        <View style={styles.divider} />
-
-        {/* Color picker toggle */}
-        <Pressable onPress={() => setShowColors(!showColors)} style={[styles.colorToggle, showColors && styles.iconBtnActive]}>
-          <View style={[styles.colorDot, { backgroundColor: overlay.color }]} />
-        </Pressable>
-
         <View style={styles.divider} />
 
         {/* Full duration */}
@@ -117,24 +101,6 @@ export function TextEditor({ overlay, onUpdate, onDelete }: Props) {
         </Pressable>
       </View>
 
-      {/* Color picker — expandable */}
-      {showColors && (
-        <View style={styles.colorGrid}>
-          {TEXT_COLORS.map(c => (
-            <Pressable
-              key={c}
-              onPress={() => { onUpdate({ color: c }); setShowColors(false); }}
-              style={[
-                styles.colorSwatch,
-                {
-                  backgroundColor: c,
-                  borderColor: overlay.color === c ? '#ffffff' : 'rgba(255,255,255,0.1)',
-                },
-              ]}
-            />
-          ))}
-        </View>
-      )}
     </View>
   );
 }
@@ -195,34 +161,6 @@ const styles = StyleSheet.create({
     height: 20,
     backgroundColor: colors.cardBorder,
     marginHorizontal: 2,
-  },
-  colorToggle: {
-    width: 34,
-    height: 34,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  colorDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  colorGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  colorSwatch: {
-    width: 30,
-    height: 30,
-    borderRadius: 6,
-    borderWidth: 2,
   },
   deleteBtn: {
     width: 34,

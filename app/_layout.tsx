@@ -11,6 +11,7 @@ import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/co
 import { syncAll } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
 
 function AppContent() {
   const { ready } = useDatabase();
@@ -108,9 +109,11 @@ function AppContent() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NotionSyncProvider>
-        <AppContent />
-      </NotionSyncProvider>
+      <ErrorBoundary>
+        <NotionSyncProvider>
+          <AppContent />
+        </NotionSyncProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

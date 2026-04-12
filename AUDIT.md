@@ -1,6 +1,6 @@
 # loopd — Stability Audit
 
-Last updated: 2026-04-10
+Last updated: 2026-04-11
 
 ---
 
@@ -15,11 +15,15 @@ Features that are stable and tested:
 - **Todo lists**: add items, check/uncheck with completion timestamps, persist to DB and Notion
 - **Video editor**: timeline with clip/text/filter tracks, trim handles, pinch-to-zoom (reanimated), playhead drag, split clips
 - **Export pipeline**: FFmpeg trim → concat → filter → text overlay → MP4 output, cancel support
-- **Notion sync**: bidirectional entry push/pull, habit schema sync, clip URI preservation, last-edit-wins conflict resolution
-- **Bottom nav**: Home, Record, Journal — route-aware active state
+- **Notion sync**: bidirectional entry push/pull, habit schema sync, clip URI preservation, last-edit-wins conflict resolution, deletion tracking via sync_deletions
+- **Bottom nav**: Home, Record, Vlog, Journal — route-aware active state, visible on editor
 - **Keyboard toolbar**: Todo/Clip/Habit actions above keyboard, habit sub-view with back button
 - **Auto-save**: silent DB save on every keystroke, focus cleanup on navigation, auto-commit timer
 - **Settings**: Notion config, export/import database, OTA updates
+- **Error boundary**: root-level catch with error message and "Try Again" recovery
+- **Database schema**: clean schema with no dead columns, migrations for existing installs
+- **Sync-safe deletion**: `deleteEmptyEntries` uses `deleteEntry()` to track deletions for Notion sync
+- **Notion upsert**: `upsertEntryFromNotion` includes todos_json in INSERT
 
 ---
 
@@ -65,22 +69,11 @@ Exists but has gaps — missing states, unhappy paths deferred, known edge cases
 
 Must be resolved before building anything new:
 
-### 1. Database Schema Debt
-The `CREATE TABLE entries` still includes `mood TEXT`, `category TEXT`, and `type TEXT NOT NULL` columns that are never read or written. The migration recreates the table to make `type` nullable, but `mood` and `category` are dead columns.
-- **Risk**: future code might accidentally read these columns and get stale data.
-- **Fix**: clean up CREATE TABLE to remove dead columns, or at minimum document them.
-
-### 2. `upsertEntryFromNotion` Missing `todos_json`
-The INSERT column list in `upsertEntryFromNotion` doesn't include `todos_json`. Any entry pulled from Notion that has todos will fail to insert.
-- **Fix**: add `todos_json` to the INSERT and VALUES in the upsert query.
-
-### 3. `deleteEmptyEntries` Bypasses Sync Tracking
-Direct `DELETE FROM entries` skips the `sync_deletions` table. Deleted entries re-appear from Notion on next sync.
-- **Fix**: use `deleteEntry()` function which tracks deletions for sync.
-
-### 4. No Error Boundaries
-No React error boundaries anywhere. A single render error crashes the entire app.
-- **Fix**: add error boundary at root layout and per-screen.
+No blocking issues at this time. All previously blocking items have been resolved:
+- ~~Database schema debt~~ — dead columns removed, migrations added
+- ~~`upsertEntryFromNotion` missing `todos_json`~~ — added to INSERT and VALUES
+- ~~`deleteEmptyEntries` bypasses sync tracking~~ — now uses `deleteEntry()`
+- ~~No error boundaries~~ — root-level ErrorBoundary added
 
 ---
 
@@ -98,7 +91,7 @@ FFmpeg native libraries (~234MB) are always bundled in the APK. Lazy-loading def
 - **Deferred because**: switching to MediaCodec would require a full export rewrite. `largeHeap` and lazy loading mitigate the OOM for now.
 
 ### Old Components Still in Codebase
-`TimelineList`, `TimelineEntry`, `CaptureSheet`, `EditEntrySheet` are no longer imported by the journal page but still exist in `src/components/`. They reference removed fields (`entry.type`, `MOODS`, `CATEGORIES`).
+`TimelineList`, `TimelineEntry`, `CaptureSheet`, `EditEntrySheet` are no longer imported but still exist in `src/components/`. They reference removed fields (`entry.type`, `MOODS`, `CATEGORIES`).
 - **Deferred because**: they don't affect the app (not imported). Can be cleaned up in a dedicated pass.
 
 ### Notion Sync Without Transactions
