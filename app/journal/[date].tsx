@@ -125,12 +125,12 @@ export default function JournalScreen() {
   const handleSilentNewText = useCallback(async (text: string) => {
     if (!text) return;
     if (newEntryIdRef.current) {
-      await updateEntryDB({ id: newEntryIdRef.current, date, text, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: '' } as Entry);
+      await updateEntryDB({ id: newEntryIdRef.current, date, text, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: '' } as Entry);
     } else {
       const id = generateId('entry');
       newEntryIdRef.current = id;
       const { insertEntry } = await import('../../src/services/database');
-      await insertEntry({ id, date, text, category: null, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: new Date().toISOString() });
+      await insertEntry({ id, date, text, habits: [], todos: [], clipUri: null, clipDurationMs: null, clips: [], createdAt: new Date().toISOString() });
     }
   }, [date]);
 

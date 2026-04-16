@@ -59,22 +59,19 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
           }
         }
 
-        // Auto-add day title as text overlay if available
-        const textOverlays: TextOverlay[] = [];
+        // Single text overlay with day title as default
         const title = dayTitleRef.current;
-        if (title && title.trim()) {
-          textOverlays.push({
-            id: generateId('txt'),
-            text: title.trim(),
-            startPct: 0,
-            endPct: Math.min(20, 100),
-            fontSize: 13,
-            fontWeight: 700,
-            color: '#ffffff',
-            position: 'center',
-            textAlign: 'center',
-          });
-        }
+        const textOverlays: TextOverlay[] = [{
+          id: generateId('txt'),
+          text: title?.trim() ?? '',
+          startPct: 0,
+          endPct: 100,
+          fontSize: 13,
+          fontWeight: 500,
+          color: '#ffffff',
+          position: 'bottom',
+          textAlign: 'center',
+        }];
 
         existing = {
           id: generateId('proj'),
@@ -87,18 +84,19 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
           updatedAt: new Date().toISOString(),
         };
       } else {
-        // Merge new entries into existing project — add clips for entries not already present
+        // Merge new clips into existing project
         const currentEntries = entriesRef.current;
         const videoEntries = currentEntries.filter(e => e.clips.length > 0);
-        const knownEntryIds = new Set(existing.clips.map(c => c.entryId));
+        const knownClipKeys = new Set(existing.clips.map(c => `${c.entryId}:${c.clipUri}`));
         let clipIndex = existing.clips.length;
         const newClips: ClipItem[] = [];
         for (const e of videoEntries) {
-          if (knownEntryIds.has(e.id)) continue;
           const entryClips = e.clips && e.clips.length > 0
             ? e.clips
             : e.clipUri ? [{ uri: e.clipUri, durationMs: e.clipDurationMs ?? 10000 }] : [];
           for (const c of entryClips) {
+            const key = `${e.id}:${c.uri}`;
+            if (knownClipKeys.has(key)) continue;
             newClips.push({
               id: generateId('clip'),
               entryId: e.id,
@@ -116,6 +114,35 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
         if (newClips.length > 0) {
           existing = { ...existing, clips: [...existing.clips, ...newClips] };
         }
+
+        // Remove clips whose source entries no longer have that clip URI
+        const allEntryClipUris = new Set(
+          currentEntries.flatMap(e => e.clips.map(c => c.uri))
+        );
+        if (currentEntries.length > 0) {
+          const validClips = existing.clips.filter(c => allEntryClipUris.has(c.clipUri));
+          if (validClips.length !== existing.clips.length) {
+            existing = { ...existing, clips: validClips };
+          }
+        }
+
+        // Always ensure exactly one text overlay
+        const title = dayTitleRef.current;
+        const keepText = existing.textOverlays[0]?.text || title?.trim() || '';
+        existing = {
+          ...existing,
+          textOverlays: [{
+            id: existing.textOverlays[0]?.id || generateId('txt'),
+            text: keepText,
+            startPct: 0,
+            endPct: 100,
+            fontSize: existing.textOverlays[0]?.fontSize || 13,
+            fontWeight: 500,
+            color: '#ffffff',
+            position: existing.textOverlays[0]?.position || 'bottom',
+            textAlign: 'center',
+          }],
+        };
       }
       if (cancelled) return;
       setProject(existing);
@@ -136,19 +163,22 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
   }, [date]);
 
   // Merge new entries into existing project when entries change
+  // Also handles entries that gained additional clips since last save
   useEffect(() => {
     setProject(prev => {
       if (!prev) return prev;
       const videoEntries = entries.filter(e => e.clips.length > 0);
-      const knownEntryIds = new Set(prev.clips.map(c => c.entryId));
+      // Track known clips by entryId + URI combo to detect new clips within existing entries
+      const knownClipKeys = new Set(prev.clips.map(c => `${c.entryId}:${c.clipUri}`));
       let clipIndex = prev.clips.length;
       const newClips: ClipItem[] = [];
       for (const e of videoEntries) {
-        if (knownEntryIds.has(e.id)) continue;
         const entryClips = e.clips && e.clips.length > 0
           ? e.clips
           : e.clipUri ? [{ uri: e.clipUri, durationMs: e.clipDurationMs ?? 10000 }] : [];
         for (const c of entryClips) {
+          const key = `${e.id}:${c.uri}`;
+          if (knownClipKeys.has(key)) continue;
           newClips.push({
             id: generateId('clip'),
             entryId: e.id,

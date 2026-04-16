@@ -140,10 +140,8 @@ export function PreviewPlayer({
     }
   }, [currentClipSeekSec, currentClip?.id, isPlaying, videoStatus]);
 
-  const previewWidth = Math.round(previewHeight * 9 / 16);
-
   return (
-    <View style={[styles.preview, { width: previewWidth, height: previewHeight }]}>
+    <View style={[styles.preview, { width: '100%', height: '100%' }]}>
       {/* Actual video player — no key prop so it doesn't unmount between clips */}
       {hasVideo && videoStatus !== 'error' && (
         <Video
@@ -156,6 +154,13 @@ export function PreviewPlayer({
           muted={false}
           onLoad={handleLoad}
           onError={handleError}
+          maxBitRate={2000000}
+          bufferConfig={{
+            minBufferMs: 1000,
+            maxBufferMs: 3000,
+            bufferForPlaybackMs: 500,
+            bufferForPlaybackAfterRebufferMs: 1000,
+          }}
         />
       )}
 
