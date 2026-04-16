@@ -1,8 +1,12 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, Image, PanResponder, StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { useSharedValue, useAnimatedStyle, useAnimatedRef, runOnJS, scrollTo } from 'react-native-reanimated';
+import Animated, {
+  useSharedValue, useAnimatedRef,
+  runOnJS, scrollTo,
+} from 'react-native-reanimated';
 import * as VideoThumbnails from 'expo-video-thumbnails';
+import * as Haptics from 'expo-haptics';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { formatDuration } from '../../utils/time';
@@ -12,46 +16,80 @@ function getEffective(c: ClipItem): number {
   return (c.durationMs / 1000) * (c.trimEndPct - c.trimStartPct) / 100;
 }
 
+const PX_PER_SEC = 60;
+const MIN_CLIP_WIDTH = 40;
+const TRACK_HEIGHT = 64;
+
 type Props = {
   clips: ClipItem[];
   selectedClipId: string | null;
-  onSelectClip: (id: string) => void;
+  playheadPos: number;
+  isPlaying: boolean;
+  onSelectClip: (id: string | null) => void;
   onTrimClip: (id: string, side: 'left' | 'right', deltaPct: number) => void;
   onMoveClip: (id: string, dir: number) => void;
   onDeleteClip: (id: string) => void;
+  onSplitClip: (id: string) => void;
+  onPlayheadDrag: (pos: number) => void;
 };
 
-function useThumb(clipUri: string | undefined) {
-  const [thumb, setThumb] = useState<string | null>(null);
+// Multi-frame thumbnails spread across the full clip duration
+function useFrameThumbs(clipUri: string | undefined, durationMs: number, count: number) {
+  const [thumbs, setThumbs] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!clipUri) { setThumb(null); return; }
+    if (!clipUri || count <= 0) { setThumbs([]); return; }
     let cancelled = false;
-    VideoThumbnails.getThumbnailAsync(clipUri, { time: 500, quality: 0.4 })
-      .then(r => { if (!cancelled) setThumb(r.uri); })
-      .catch(() => {});
+    (async () => {
+      const results: string[] = [];
+      const dur = Math.max(1000, durationMs);
+      for (let i = 0; i < count; i++) {
+        if (cancelled) return;
+        try {
+          const timeMs = Math.max(100, Math.round(((i + 0.5) / count) * dur));
+          const { uri } = await VideoThumbnails.getThumbnailAsync(clipUri, { time: timeMs, quality: 0.3 });
+          results.push(uri);
+        } catch { /* skip */ }
+      }
+      if (!cancelled) setThumbs(results);
+    })();
     return () => { cancelled = true; };
-  }, [clipUri]);
+  }, [clipUri, durationMs, count]);
 
-  return thumb;
+  return thumbs;
 }
 
-const PX_PER_SEC = 60;
-const MIN_CLIP_WIDTH = 40;
-
-function ClipBlock({ clip, isSelected, onSelect, onTrim, trackWidth, pxPerSec }: {
+function ClipBlock({ clip, isSelected, onSelect, onTrim, onSplit, trackWidth, pxPerSec }: {
   clip: ClipItem;
   isSelected: boolean;
   onSelect: () => void;
   onTrim: (side: 'left' | 'right', deltaPct: number) => void;
+  onSplit: () => void;
   trackWidth: number;
   pxPerSec: number;
 }) {
-  const thumb = useThumb(clip.clipUri);
   const effectiveSec = getEffective(clip);
   const clipWidth = Math.max(MIN_CLIP_WIDTH, Math.round(effectiveSec * pxPerSec));
+  const thumbCount = Math.max(2, Math.min(10, Math.round(clipWidth / 35)));
+  const thumbs = useFrameThumbs(clip.clipUri, clip.durationMs, thumbCount);
+  const lastTrimBoundary = useRef(0);
 
-  return (
+  const handleTrimWithHaptic = useCallback((side: 'left' | 'right', deltaPct: number) => {
+    onTrim(side, deltaPct);
+    const now = Date.now();
+    if (now - lastTrimBoundary.current > 80) {
+      lastTrimBoundary.current = now;
+      Haptics.selectionAsync();
+    }
+  }, [onTrim]);
+
+  const doubleTap = useMemo(() =>
+    Gesture.Tap()
+      .numberOfTaps(2)
+      .onEnd(() => { runOnJS(onSplit)(); }),
+  [onSplit]);
+
+  const content = (
     <Pressable
       onPress={onSelect}
       style={[
@@ -60,21 +98,23 @@ function ClipBlock({ clip, isSelected, onSelect, onTrim, trackWidth, pxPerSec }:
         isSelected && { borderColor: clip.color, borderWidth: 2 },
       ]}
     >
-      {/* Thumbnail background */}
-      {thumb ? (
-        <Image source={{ uri: thumb }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-      ) : (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: `${clip.color}18` }]} />
-      )}
+      {/* Frame thumbnails */}
+      <View style={styles.thumbStrip}>
+        {thumbs.length > 0 ? thumbs.map((uri, i) => (
+          <Image key={i} source={{ uri }} style={styles.thumb} resizeMode="cover" />
+        )) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: `${clip.color}18` }]} />
+        )}
+      </View>
 
-      {/* Darkened overlay for readability */}
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: isSelected ? 'rgba(0,0,0,0.15)' : 'rgba(0,0,0,0.35)' }]} />
+      {/* Darkened overlay */}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: isSelected ? 'rgba(0,0,0,0.1)' : 'rgba(0,0,0,0.3)' }]} />
 
       {/* Color accent bar */}
       <View style={[styles.accentBar, { backgroundColor: clip.color }]} />
 
       {/* Duration badge */}
-      {clipWidth > 50 && (
+      {clipWidth > 45 && (
         <View style={styles.badgeWrap}>
           <Text style={[styles.badgeText, { color: isSelected ? '#fff' : `${clip.color}cc` }]}>
             {formatDuration(effectiveSec)}
@@ -85,12 +125,23 @@ function ClipBlock({ clip, isSelected, onSelect, onTrim, trackWidth, pxPerSec }:
       {/* Trim handles on selected */}
       {isSelected && (
         <>
-          <TrimPill side="left" color={clip.color} onTrim={onTrim} trackWidth={trackWidth} />
-          <TrimPill side="right" color={clip.color} onTrim={onTrim} trackWidth={trackWidth} />
+          <TrimPill side="left" color={clip.color} onTrim={handleTrimWithHaptic} trackWidth={trackWidth} />
+          <TrimPill side="right" color={clip.color} onTrim={handleTrimWithHaptic} trackWidth={trackWidth} />
         </>
       )}
     </Pressable>
   );
+
+  // Double-tap only on selected
+  if (isSelected) {
+    return (
+      <GestureDetector gesture={doubleTap}>
+        <Animated.View>{content}</Animated.View>
+      </GestureDetector>
+    );
+  }
+
+  return content;
 }
 
 function TrimPill({ side, color, onTrim, trackWidth }: {
@@ -135,7 +186,56 @@ function TrimPill({ side, color, onTrim, trackWidth }: {
   );
 }
 
-export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, onMoveClip, onDeleteClip }: Props) {
+function PlayheadMarker({ playheadPos, totalDurationSec, pxPerSec, onDrag }: {
+  playheadPos: number;
+  totalDurationSec: number;
+  pxPerSec: number;
+  onDrag: (pos: number) => void;
+}) {
+  const totalPx = totalDurationSec * pxPerSec;
+  const pos = Math.round(playheadPos * totalPx);
+  const grabPos = useRef(0);
+  const dragging = useRef(false);
+  const onDragRef = useRef(onDrag);
+  const totalPxRef = useRef(totalPx);
+  const playheadRef = useRef(playheadPos);
+  onDragRef.current = onDrag;
+  totalPxRef.current = totalPx;
+  if (!dragging.current) playheadRef.current = playheadPos;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        dragging.current = true;
+        grabPos.current = playheadRef.current;
+      },
+      onPanResponderMove: (_, gs) => {
+        if (totalPxRef.current <= 0) return;
+        const delta = gs.dx / totalPxRef.current;
+        const newPos = Math.max(0, Math.min(1, grabPos.current + delta));
+        onDragRef.current(newPos);
+      },
+      onPanResponderRelease: () => { dragging.current = false; },
+      onPanResponderTerminate: () => { dragging.current = false; },
+    })
+  ).current;
+
+  return (
+    <View
+      {...panResponder.panHandlers}
+      style={[styles.playhead, { left: pos }]}
+    >
+      <View style={styles.playheadHead} />
+      <View style={styles.playheadLine} />
+      <View style={styles.playheadHitArea} />
+    </View>
+  );
+}
+
+export function ClipTimeline({ clips, selectedClipId, playheadPos, isPlaying, onSelectClip, onTrimClip, onMoveClip, onDeleteClip, onSplitClip, onPlayheadDrag }: Props) {
   const [trackWidth, setTrackWidth] = useState(0);
   const [zoom, setZoom] = useState(0.2);
 
@@ -163,13 +263,10 @@ export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, 
         const oldZoom = pinchBaseZoom.value;
         const newZoom = Math.max(0.1, Math.min(6, oldZoom * e.scale));
         zoomSV.value = newZoom;
-
-        // Keep focal point stationary
         const contentX = pinchStartScroll.value + pinchFocalX.value;
         const newContentX = contentX * (newZoom / oldZoom);
         const newScrollX = Math.max(0, newContentX - pinchFocalX.value);
         scrollTo(scrollRef, newScrollX, 0, false);
-
         runOnJS(updateZoomJS)(newZoom);
       }),
   []);
@@ -185,6 +282,34 @@ export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, 
   const scaledPxPerSec = PX_PER_SEC * zoom;
   const selectedClip = clips.find(c => c.id === selectedClipId);
 
+  // Swipe between clips
+  const selectedIdx = clips.findIndex(c => c.id === selectedClipId);
+  const swipeLeft = useMemo(() =>
+    Gesture.Fling()
+      .direction(1)
+      .onEnd(() => {
+        if (selectedIdx >= 0 && selectedIdx < clips.length - 1) {
+          runOnJS(onSelectClip)(clips[selectedIdx + 1].id);
+        }
+      }),
+  [selectedIdx, clips, onSelectClip]);
+
+  const swipeRight = useMemo(() =>
+    Gesture.Fling()
+      .direction(2)
+      .onEnd(() => {
+        if (selectedIdx > 0) {
+          runOnJS(onSelectClip)(clips[selectedIdx - 1].id);
+        }
+      }),
+  [selectedIdx, clips, onSelectClip]);
+
+  const allGestures = useMemo(() =>
+    selectedClipId
+      ? Gesture.Simultaneous(composed, Gesture.Exclusive(swipeLeft, swipeRight))
+      : composed,
+  [selectedClipId, composed, swipeLeft, swipeRight]);
+
   if (clips.length === 0) return null;
 
   return (
@@ -194,8 +319,7 @@ export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, 
         <Text style={styles.durationLabel}>{formatDuration(totalDurationSec)} · {Math.round(zoom * 100)}%</Text>
       </View>
 
-      {/* Horizontal NLE track with pinch-to-zoom */}
-      <GestureDetector gesture={composed}>
+      <GestureDetector gesture={allGestures}>
         <Animated.ScrollView
           ref={scrollRef}
           horizontal
@@ -213,10 +337,20 @@ export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, 
               isSelected={clip.id === selectedClipId}
               onSelect={() => onSelectClip(clip.id)}
               onTrim={(side, delta) => onTrimClip(clip.id, side, delta)}
+              onSplit={() => onSplitClip(clip.id)}
               trackWidth={trackWidth}
               pxPerSec={scaledPxPerSec}
             />
           ))}
+          {/* Playhead — draggable */}
+          {totalDurationSec > 0 && (
+            <PlayheadMarker
+              playheadPos={playheadPos}
+              totalDurationSec={totalDurationSec}
+              pxPerSec={scaledPxPerSec}
+              onDrag={onPlayheadDrag}
+            />
+          )}
         </Animated.ScrollView>
       </GestureDetector>
 
@@ -228,6 +362,9 @@ export function ClipTimeline({ clips, selectedClipId, onSelectClip, onTrimClip, 
           </Pressable>
           <Pressable onPress={() => onMoveClip(selectedClip.id, 1)} style={styles.actionBtn}>
             <Icon name="arrowRight" size={14} color={colors.textMuted} />
+          </Pressable>
+          <Pressable onPress={() => onSplitClip(selectedClip.id)} style={styles.actionBtn}>
+            <Icon name="scissors" size={14} color={colors.amber} />
           </Pressable>
           <Text style={[styles.trimInfo, { color: selectedClip.color }]}>
             {formatDuration(getEffective(selectedClip))}
@@ -269,8 +406,9 @@ const styles = StyleSheet.create({
   },
   trackContent: {
     flexDirection: 'row',
-    height: 64,
+    height: TRACK_HEIGHT,
     gap: 2,
+    alignItems: 'center',
   },
   clipBlock: {
     height: '100%',
@@ -279,6 +417,16 @@ const styles = StyleSheet.create({
     position: 'relative',
     borderWidth: 1,
     borderColor: 'transparent',
+  },
+  thumbStrip: {
+    flex: 1,
+    flexDirection: 'row',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  thumb: {
+    flex: 1,
+    height: '100%',
   },
   accentBar: {
     position: 'absolute',
@@ -337,30 +485,54 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -4,
     bottom: -4,
-    width: 28,
+    width: 30,
     zIndex: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },
   trimHitLeft: {
-    left: -6,
+    left: -8,
   },
   trimHitRight: {
-    right: -6,
+    right: -8,
   },
   trimPill: {
-    width: 14,
-    height: '60%',
-    maxHeight: 40,
-    borderRadius: 7,
+    width: 16,
+    height: '55%',
+    maxHeight: 44,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 2,
   },
   trimGrip: {
-    width: 6,
+    width: 7,
     height: 1.5,
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 1,
+  },
+  playhead: {
+    position: 'absolute',
+    top: -8,
+    bottom: -8,
+    width: 36,
+    marginLeft: -18,
+    zIndex: 50,
+    alignItems: 'center',
+  },
+  playheadHead: {
+    width: 12,
+    height: 8,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+    backgroundColor: '#fff',
+  },
+  playheadLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: '#fff',
+  },
+  playheadHitArea: {
+    ...StyleSheet.absoluteFillObject,
   },
 });

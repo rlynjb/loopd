@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { EditorProject, ClipItem, TextOverlay, FilterOverlay } from '../types/project';
 import type { Entry } from '../types/entry';
 import { getProjectByDate, upsertProject } from '../services/database';
+import { FILTERS } from '../constants/filters';
 import { generateId } from '../utils/id';
 
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
@@ -69,7 +70,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
           fontSize: 13,
           fontWeight: 500,
           color: '#ffffff',
-          position: 'bottom',
+          position: 'center',
           textAlign: 'center',
         }];
 
@@ -79,7 +80,18 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
           status: 'draft',
           clips,
           textOverlays,
-          filterOverlays: [],
+          filterOverlays: (() => {
+            const film = FILTERS.find(f => f.id === 'film');
+            return film ? [{
+              id: generateId('fx'),
+              filterId: 'film',
+              startPct: 0,
+              endPct: 100,
+              brightness: film.brightness,
+              contrast: film.contrast,
+              saturate: film.saturate,
+            }] : [];
+          })(),
           exportUri: null,
           updatedAt: new Date().toISOString(),
         };
@@ -139,7 +151,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
             fontSize: existing.textOverlays[0]?.fontSize || 13,
             fontWeight: 500,
             color: '#ffffff',
-            position: existing.textOverlays[0]?.position || 'bottom',
+            position: existing.textOverlays[0]?.position || 'center',
             textAlign: 'center',
           }],
         };

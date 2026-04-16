@@ -15,10 +15,8 @@ export function GlobalBottomNav() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
 
-  // Hide on settings screens
-  if (pathname.startsWith('/settings')) return null;
-
-  const isVlog = pathname.startsWith('/editor');
+  // Hide on editor and settings screens
+  if (pathname.startsWith('/editor') || pathname.startsWith('/settings')) return null;
 
   const { showHabits: showHabitsParam } = useLocalSearchParams<{ showHabits?: string }>();
   const isHome = pathname === '/' || pathname === '';
@@ -73,11 +71,6 @@ export function GlobalBottomNav() {
           <Icon name="circle" size={20} color={colors.coral} strokeWidth={2.5} />
         </View>
         <Text style={[styles.label, { color: colors.coral }]}>Record</Text>
-      </Pressable>
-
-      <Pressable onPress={() => router.push(`/editor/${getTodayString()}`)} style={styles.tab}>
-        <Icon name="clapperboard" size={18} color={isVlog ? colors.accent : colors.textDim} strokeWidth={2.5} />
-        <Text style={[styles.label, isVlog && { color: colors.accent }]}>Vlog</Text>
       </Pressable>
 
       <Pressable onPress={() => router.push(`/journal/${getTodayString()}`)} style={styles.tab}>

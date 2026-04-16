@@ -8,6 +8,7 @@
     "ios": "expo run:ios"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.90.0",
     "@wokcito/ffmpeg-kit-react-native": "^6.1.2",
     "expo": "~55.0.8",
     "expo-constants": "~55.0.9",

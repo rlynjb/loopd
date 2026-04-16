@@ -13,6 +13,7 @@ import { generateId } from '../../src/utils/id';
 import { formatDuration } from '../../src/utils/time';
 import { Image } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
+import * as Haptics from 'expo-haptics';
 import { PreviewPlayer } from '../../src/components/editor/PreviewPlayer';
 import { TextOverlaySheet } from '../../src/components/editor/TextOverlaySheet';
 import { ClipTimeline } from '../../src/components/editor/ClipTimeline';
@@ -21,6 +22,11 @@ import { ExportModal } from '../../src/components/editor/ExportModal';
 import { useExport } from '../../src/hooks/useExport';
 import { useTextRenderer } from '../../src/services/textRenderer';
 import { FILTERS } from '../../src/constants/filters';
+import { isAIConfigured } from '../../src/services/ai/config';
+import { summarize } from '../../src/services/ai/summarize';
+import { autoCompose, fallbackCompose } from '../../src/services/ai/compose';
+import { getAISummary } from '../../src/services/database';
+import type { AISummary } from '../../src/types/ai';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../src/types/project';
 
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
@@ -42,6 +48,70 @@ export default function EditorScreen() {
   const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries, dayTitle);
 
   useFocusEffect(useCallback(() => { reloadEntries(); }, [reloadEntries]));
+
+  const [generating, setGenerating] = useState(false);
+
+  // Auto-compose from AI or fallback on mount
+  useEffect(() => {
+    if (!project || entries.length === 0) return;
+    // Only auto-compose if project has no clips yet (fresh project)
+    if (project.clips.length > 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const aiConfigured = await isAIConfigured();
+      const existingSummary = await getAISummary(date);
+
+      if (existingSummary) {
+        const summary: AISummary = JSON.parse(existingSummary.summaryJson);
+        const composed = autoCompose(summary, entries, date, dayTitle);
+        if (!cancelled && composed.clips && composed.clips.length > 0) {
+          updateClips(composed.clips);
+          if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
+          if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
+        }
+      } else if (aiConfigured) {
+        setGenerating(true);
+        const result = await summarize(date);
+        if (!cancelled && result.summary) {
+          const composed = autoCompose(result.summary, entries, date, dayTitle);
+          if (composed.clips && composed.clips.length > 0) {
+            updateClips(composed.clips);
+            if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
+            if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
+          }
+        }
+        setGenerating(false);
+      }
+      // fallbackCompose is handled by useProject's default behavior
+    })();
+    return () => { cancelled = true; };
+  }, [project?.id, entries.length]);
+
+  const handleRegenerate = () => {
+    Alert.alert('Regenerate Vlog', 'Replace current edits with AI-generated version?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Regenerate',
+        onPress: async () => {
+          setGenerating(true);
+          const result = await summarize(date);
+          setGenerating(false);
+          if (result.summary) {
+            const composed = autoCompose(result.summary, entries, date, dayTitle);
+            if (composed.clips && composed.clips.length > 0) {
+              updateClips(composed.clips);
+              if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
+              if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
+            }
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          } else {
+            Alert.alert('Failed', result.error ?? 'Could not generate summary');
+          }
+        },
+      },
+    ]);
+  };
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -78,14 +148,39 @@ export default function EditorScreen() {
   const filterOverlays = project?.filterOverlays ?? [];
   const totalDurationSec = clips.reduce((sum, c) => sum + getEffective(c), 0);
 
-  // Generate thumbnail from first clip
+  // Generate thumbnail at playhead position
+  const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    const firstClip = clips[0];
-    if (!firstClip?.clipUri) { setThumbnailUri(null); return; }
-    VideoThumbnails.getThumbnailAsync(firstClip.clipUri, { time: 1000 })
-      .then(r => setThumbnailUri(r.uri))
-      .catch(() => setThumbnailUri(null));
-  }, [clips[0]?.clipUri]);
+    if (isPlaying || clips.length === 0 || totalDurationSec === 0) return;
+    // Debounce to avoid hammering during drag
+    if (thumbTimer.current) clearTimeout(thumbTimer.current);
+    thumbTimer.current = setTimeout(() => {
+      const playheadTimeSec = playheadPos * totalDurationSec;
+      let acc = 0;
+      for (const c of clips) {
+        const eff = getEffective(c);
+        if (playheadTimeSec < acc + eff) {
+          const offsetInClip = playheadTimeSec - acc;
+          const trimStartSec = (c.durationMs / 1000) * c.trimStartPct / 100;
+          const timeMs = Math.round((trimStartSec + offsetInClip) * 1000);
+          VideoThumbnails.getThumbnailAsync(c.clipUri, { time: Math.max(100, timeMs) })
+            .then(r => setThumbnailUri(r.uri))
+            .catch(() => {});
+          return;
+        }
+        acc += eff;
+      }
+      // Fallback to last clip end
+      const last = clips[clips.length - 1];
+      if (last?.clipUri) {
+        const endMs = Math.round((last.durationMs / 1000) * last.trimEndPct / 100 * 1000);
+        VideoThumbnails.getThumbnailAsync(last.clipUri, { time: Math.max(100, endMs - 100) })
+          .then(r => setThumbnailUri(r.uri))
+          .catch(() => {});
+      }
+    }, 150);
+    return () => { if (thumbTimer.current) clearTimeout(thumbTimer.current); };
+  }, [playheadPos, isPlaying, clips, totalDurationSec]);
 
   // Single active filter (first one, or none)
   const activeFilter = filterOverlays[0] ?? null;
@@ -149,13 +244,47 @@ export default function EditorScreen() {
   const editingText = textOverlays.find(t => t.id === editingTextId);
 
   // Clip operations
-  const selectClip = (id: string) => {
+  const selectClip = (id: string | null) => {
     setSelectedClipId(id === selectedClipId ? null : id);
   };
 
   const deleteClip = (id: string) => {
     updateClips(prev => prev.filter(c => c.id !== id));
     if (selectedClipId === id) setSelectedClipId(null);
+  };
+
+  const splitClip = (id: string) => {
+    const clip = clips.find(c => c.id === id);
+    if (!clip) return;
+
+    // Find where the playhead is within this clip
+    const playheadTimeSec = playheadPos * totalDurationSec;
+    let accSec = 0;
+    for (const c of clips) {
+      if (c.id === id) break;
+      accSec += getEffective(c);
+    }
+    const clipEffectiveSec = getEffective(clip);
+    const offsetInClip = playheadTimeSec - accSec;
+    const splitRatio = clipEffectiveSec > 0 ? offsetInClip / clipEffectiveSec : 0.5;
+    const trimRange = clip.trimEndPct - clip.trimStartPct;
+    const splitPct = clip.trimStartPct + trimRange * splitRatio;
+
+    if (splitPct - clip.trimStartPct < 3 || clip.trimEndPct - splitPct < 3) return;
+
+    const clipA: ClipItem = { ...clip, id: generateId('clip'), trimEndPct: Math.round(splitPct) };
+    const clipB: ClipItem = {
+      ...clip,
+      id: generateId('clip'),
+      trimStartPct: Math.round(splitPct),
+      color: CLIP_COLORS[(clips.indexOf(clip) + 1) % CLIP_COLORS.length],
+    };
+    const idx = clips.findIndex(c => c.id === id);
+    const next = [...clips];
+    next.splice(idx, 1, clipA, clipB);
+    updateClips(next);
+    setSelectedClipId(clipA.id);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
   const moveClip = (id: string, dir: number) => {
@@ -264,8 +393,15 @@ export default function EditorScreen() {
         </Pressable>
         <Text style={styles.title}>Vlog Editor</Text>
         <View style={styles.topBarRight}>
-          {/* Regenerate button slot — wired in Phase 3 */}
-          <View style={{ width: 34 }} />
+          {/* Regenerate with AI */}
+          <Pressable
+            onPress={handleRegenerate}
+            hitSlop={8}
+            style={[{ padding: 8 }, generating && { opacity: 0.4 }]}
+            disabled={generating}
+          >
+            <Icon name="zap" size={18} color={colors.amber} />
+          </Pressable>
           <Pressable
             onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
             hitSlop={8}
@@ -391,10 +527,17 @@ export default function EditorScreen() {
         <ClipTimeline
           clips={clips}
           selectedClipId={selectedClipId}
+          playheadPos={playheadPos}
+          isPlaying={isPlaying}
           onSelectClip={selectClip}
           onTrimClip={trimClip}
           onMoveClip={moveClip}
           onDeleteClip={deleteClip}
+          onSplitClip={splitClip}
+          onPlayheadDrag={pos => {
+            if (isPlaying) { setIsPlaying(false); if (playRef.current) cancelAnimationFrame(playRef.current); }
+            setPlayheadPos(pos);
+          }}
         />
 
         {/* Text overlay editor (inline) */}

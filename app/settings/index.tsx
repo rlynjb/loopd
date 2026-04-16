@@ -116,6 +116,17 @@ export default function SettingsMenu() {
           </View>
         </Pressable>
 
+        {/* AI Settings */}
+        <Pressable onPress={() => router.push('/settings/ai')} style={styles.menuItem}>
+          <View style={styles.menuIcon}>
+            <Icon name="zap" size={18} color={colors.amber} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={styles.menuLabel}>AI Settings</Text>
+            <Text style={styles.menuSub}>Claude API key for vlog auto-compose</Text>
+          </View>
+        </Pressable>
+
         {/* Export Database */}
         <Pressable onPress={handleExportDb} style={styles.menuItem}>
           <View style={styles.menuIcon}>

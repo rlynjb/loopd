@@ -82,6 +82,28 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // Auto-generate AI summary for yesterday on app open
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { isAIConfigured } = await import('../src/services/ai/config');
+        if (!(await isAIConfigured())) return;
+        const { getAISummary } = await import('../src/services/database');
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yStr = yesterday.toISOString().split('T')[0];
+        const existing = await getAISummary(yStr);
+        if (existing) return;
+        const { summarize } = await import('../src/services/ai/summarize');
+        await summarize(yStr);
+        console.log('[loopd] Auto-generated AI summary for', yStr);
+      } catch (err) {
+        console.warn('[loopd] AI auto-generate failed:', err);
+      }
+    })();
+  }, [ready]);
+
   if (!ready || !fontsLoaded) {
     return (
       <View style={styles.loading}>

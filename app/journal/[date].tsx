@@ -538,6 +538,13 @@ export default function JournalScreen() {
           </Pressable>
         )}
 
+        {/* Edit Vlog button */}
+        {entries.some(e => e.clips.length > 0) && (
+          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.vlogBtn}>
+            <Icon name="clapperboard" size={16} color={colors.accent} />
+            <Text style={styles.vlogBtnText}>Edit Vlog</Text>
+          </Pressable>
+        )}
 
       </ScrollView>
       </KeyboardAvoidingView>
@@ -624,5 +631,22 @@ const styles = StyleSheet.create({
     fontFamily: fonts.body,
     fontSize: 14,
     color: colors.textDimmer,
+  },
+  vlogBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 16,
+    backgroundColor: 'rgba(232,213,176,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,213,176,0.2)',
+    borderRadius: 8,
+  },
+  vlogBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.accent,
   },
 });

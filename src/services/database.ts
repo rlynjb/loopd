@@ -129,6 +129,16 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
   `);
 
+  // AI summaries table
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS ai_summaries (
+      date TEXT PRIMARY KEY,
+      summary_json TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      model TEXT NOT NULL
+    );
+  `);
+
   // Migration: drop dead columns (type, mood, category) from entries
   try {
     const entriesSchema = await database.getFirstAsync<{ sql: string }>(
@@ -584,5 +594,25 @@ export async function insertVlog(vlog: Vlog): Promise<void> {
       vlog.id, vlog.date, vlog.clipCount, vlog.habitCount,
       vlog.caption, vlog.durationSeconds, vlog.exportUri, vlog.createdAt,
     ]
+  );
+}
+
+// ── AI Summaries ──
+
+export async function getAISummary(date: string): Promise<{ summaryJson: string; generatedAt: string; model: string } | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ summary_json: string; generated_at: string; model: string }>(
+    'SELECT summary_json, generated_at, model FROM ai_summaries WHERE date = ?', [date]
+  );
+  return row ? { summaryJson: row.summary_json, generatedAt: row.generated_at, model: row.model } : null;
+}
+
+export async function upsertAISummary(date: string, summaryJson: string, model: string): Promise<void> {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO ai_summaries (date, summary_json, generated_at, model) VALUES (?, ?, ?, ?)
+     ON CONFLICT(date) DO UPDATE SET summary_json = excluded.summary_json, generated_at = excluded.generated_at, model = excluded.model`,
+    [date, summaryJson, now, model]
   );
 }
