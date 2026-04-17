@@ -258,11 +258,15 @@ export default function JournalScreen() {
   }, []);
 
   const handleAddClipEntry = useCallback(async () => {
-    // Save entry ID before picker (survives focus loss)
-    const targetId = editingEntryRef.current?.id ?? null;
-    // Also save pending text first
-    if (editingEntryRef.current && liveTextRef.current.trim()) {
-      await updateEntryDB({ ...editingEntryRef.current, text: liveTextRef.current.trim() });
+    // Target: current editing entry OR the silently-saved new entry
+    const targetId = editingEntryRef.current?.id ?? newEntryIdRef.current ?? null;
+    // Save pending text first
+    if (targetId && liveTextRef.current.trim()) {
+      const { getEntryById } = await import('../../src/services/database');
+      const existing = await getEntryById(targetId);
+      if (existing) {
+        await updateEntryDB({ ...existing, text: liveTextRef.current.trim() });
+      }
     }
     const result = await pickAndCopyClip(date);
     if (result && targetId) {
@@ -279,6 +283,7 @@ export default function JournalScreen() {
         await editEntry(updated);
         setEditingEntry(updated);
         editingEntryRef.current = updated;
+        newEntryIdRef.current = null;
         setIsAddingText(false);
         return;
       }
@@ -287,9 +292,8 @@ export default function JournalScreen() {
       const newEntry: Entry = {
         id: generateId('entry'),
         date,
-        text: null,
-  
-               habits: [],
+        text: liveTextRef.current.trim() || null,
+        habits: [],
         todos: [],
         clipUri: result.uri,
         clipDurationMs: result.durationMs,
@@ -299,7 +303,7 @@ export default function JournalScreen() {
       addEntry(newEntry);
       setEditingEntry(newEntry);
       editingEntryRef.current = newEntry;
-      liveTextRef.current = '';
+      newEntryIdRef.current = null;
       setIsAddingText(false);
     }
   }, [date, addEntry, editEntry]);

@@ -122,13 +122,18 @@ function ClipBlock({ clip, isSelected, onSelect, onTrim, onSplit, trackWidth, px
         </View>
       )}
 
-      {/* Trim handles on selected */}
-      {isSelected && (
-        <>
-          <TrimPill side="left" color={clip.color} onTrim={handleTrimWithHaptic} trackWidth={trackWidth} />
-          <TrimPill side="right" color={clip.color} onTrim={handleTrimWithHaptic} trackWidth={trackWidth} />
-        </>
-      )}
+      {/* Trim handles on selected. Each pixel of drag = 100/clipWidth % of trimmed range */}
+      {isSelected && (() => {
+        const trimRangePct = clip.trimEndPct - clip.trimStartPct;
+        // 1 pixel of drag = how many clip-duration %
+        const pctPerPx = clipWidth > 0 ? trimRangePct / clipWidth : 0;
+        return (
+          <>
+            <TrimPill side="left" color={clip.color} onTrim={handleTrimWithHaptic} pctPerPx={pctPerPx} />
+            <TrimPill side="right" color={clip.color} onTrim={handleTrimWithHaptic} pctPerPx={pctPerPx} />
+          </>
+        );
+      })()}
     </Pressable>
   );
 
@@ -144,17 +149,17 @@ function ClipBlock({ clip, isSelected, onSelect, onTrim, onSplit, trackWidth, px
   return content;
 }
 
-function TrimPill({ side, color, onTrim, trackWidth }: {
+function TrimPill({ side, color, onTrim, pctPerPx }: {
   side: 'left' | 'right';
   color: string;
   onTrim: (side: 'left' | 'right', deltaPct: number) => void;
-  trackWidth: number;
+  pctPerPx: number;
 }) {
   const lastDx = useRef(0);
   const onTrimRef = useRef(onTrim);
-  const widthRef = useRef(trackWidth);
+  const ratioRef = useRef(pctPerPx);
   onTrimRef.current = onTrim;
-  widthRef.current = trackWidth;
+  ratioRef.current = pctPerPx;
 
   const panResponder = useRef(
     PanResponder.create({
@@ -163,10 +168,10 @@ function TrimPill({ side, color, onTrim, trackWidth }: {
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => { lastDx.current = 0; },
       onPanResponderMove: (_, gs) => {
-        if (widthRef.current <= 0) return;
+        if (ratioRef.current <= 0) return;
         const inc = gs.dx - lastDx.current;
         lastDx.current = gs.dx;
-        const deltaPct = (inc / widthRef.current) * 100;
+        const deltaPct = inc * ratioRef.current;
         onTrimRef.current(side, deltaPct);
       },
     })

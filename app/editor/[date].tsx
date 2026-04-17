@@ -89,7 +89,7 @@ export default function EditorScreen() {
   }, [project?.id, entries.length]);
 
   const handleRegenerate = () => {
-    Alert.alert('Regenerate Vlog', 'Replace current edits with AI-generated version?', [
+    Alert.alert('Regenerate Summary', 'Regenerate the text overlay from AI? Your clip edits will be preserved.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Regenerate',
@@ -99,11 +99,8 @@ export default function EditorScreen() {
           setGenerating(false);
           if (result.summary) {
             const composed = autoCompose(result.summary, entries, date, dayTitle);
-            if (composed.clips && composed.clips.length > 0) {
-              updateClips(composed.clips);
-              if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
-              if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
-            }
+            // Only update text overlay — preserve user's clip trims/splits
+            if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } else {
             Alert.alert('Failed', result.error ?? 'Could not generate summary');
@@ -148,39 +145,45 @@ export default function EditorScreen() {
   const filterOverlays = project?.filterOverlays ?? [];
   const totalDurationSec = clips.reduce((sum, c) => sum + getEffective(c), 0);
 
-  // Generate thumbnail at playhead position
-  const thumbTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Pre-extract one thumbnail per clip at its trim midpoint
+  const [clipThumbs, setClipThumbs] = useState<Record<string, string>>({});
   useEffect(() => {
-    if (isPlaying || clips.length === 0 || totalDurationSec === 0) return;
-    // Debounce to avoid hammering during drag
-    if (thumbTimer.current) clearTimeout(thumbTimer.current);
-    thumbTimer.current = setTimeout(() => {
-      const playheadTimeSec = playheadPos * totalDurationSec;
-      let acc = 0;
+    if (clips.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const thumbs: Record<string, string> = {};
       for (const c of clips) {
-        const eff = getEffective(c);
-        if (playheadTimeSec < acc + eff) {
-          const offsetInClip = playheadTimeSec - acc;
-          const trimStartSec = (c.durationMs / 1000) * c.trimStartPct / 100;
-          const timeMs = Math.round((trimStartSec + offsetInClip) * 1000);
-          VideoThumbnails.getThumbnailAsync(c.clipUri, { time: Math.max(100, timeMs) })
-            .then(r => setThumbnailUri(r.uri))
-            .catch(() => {});
-          return;
-        }
-        acc += eff;
+        if (cancelled) return;
+        const midPct = (c.trimStartPct + c.trimEndPct) / 2;
+        const timeMs = Math.max(100, Math.round((c.durationMs * midPct) / 100));
+        try {
+          const r = await VideoThumbnails.getThumbnailAsync(c.clipUri, { time: timeMs, quality: 0.4 });
+          thumbs[c.id] = r.uri;
+        } catch { /* skip */ }
       }
-      // Fallback to last clip end
-      const last = clips[clips.length - 1];
-      if (last?.clipUri) {
-        const endMs = Math.round((last.durationMs / 1000) * last.trimEndPct / 100 * 1000);
-        VideoThumbnails.getThumbnailAsync(last.clipUri, { time: Math.max(100, endMs - 100) })
-          .then(r => setThumbnailUri(r.uri))
-          .catch(() => {});
-      }
-    }, 150);
-    return () => { if (thumbTimer.current) clearTimeout(thumbTimer.current); };
-  }, [playheadPos, isPlaying, clips, totalDurationSec]);
+      if (!cancelled) setClipThumbs(thumbs);
+    })();
+    return () => { cancelled = true; };
+  }, [clips.map(c => `${c.id}:${c.trimStartPct}:${c.trimEndPct}`).join(',')]);
+
+  // Find current clip at playhead and set its pre-extracted thumbnail
+  const currentClipId = useMemo(() => {
+    if (clips.length === 0 || totalDurationSec === 0) return null;
+    const playheadTimeSec = playheadPos * totalDurationSec;
+    let acc = 0;
+    for (const c of clips) {
+      const eff = getEffective(c);
+      if (playheadTimeSec < acc + eff) return c.id;
+      acc += eff;
+    }
+    return clips[clips.length - 1]?.id ?? null;
+  }, [playheadPos, clips, totalDurationSec]);
+
+  useEffect(() => {
+    if (currentClipId && clipThumbs[currentClipId]) {
+      setThumbnailUri(clipThumbs[currentClipId]);
+    }
+  }, [currentClipId, clipThumbs]);
 
   // Single active filter (first one, or none)
   const activeFilter = filterOverlays[0] ?? null;
@@ -265,18 +268,21 @@ export default function EditorScreen() {
       accSec += getEffective(c);
     }
     const clipEffectiveSec = getEffective(clip);
-    const offsetInClip = playheadTimeSec - accSec;
+    const offsetInClip = Math.max(0, Math.min(clipEffectiveSec, playheadTimeSec - accSec));
     const splitRatio = clipEffectiveSec > 0 ? offsetInClip / clipEffectiveSec : 0.5;
     const trimRange = clip.trimEndPct - clip.trimStartPct;
     const splitPct = clip.trimStartPct + trimRange * splitRatio;
 
-    if (splitPct - clip.trimStartPct < 3 || clip.trimEndPct - splitPct < 3) return;
+    // Minimum 0.3s on each side
+    const minPct = clip.durationMs > 0 ? (300 / clip.durationMs) * 100 : 0.5;
+    if (splitPct - clip.trimStartPct < minPct || clip.trimEndPct - splitPct < minPct) return;
 
-    const clipA: ClipItem = { ...clip, id: generateId('clip'), trimEndPct: Math.round(splitPct) };
+    const precise = parseFloat(splitPct.toFixed(2));
+    const clipA: ClipItem = { ...clip, id: generateId('clip'), trimEndPct: precise };
     const clipB: ClipItem = {
       ...clip,
       id: generateId('clip'),
-      trimStartPct: Math.round(splitPct),
+      trimStartPct: precise,
       color: CLIP_COLORS[(clips.indexOf(clip) + 1) % CLIP_COLORS.length],
     };
     const idx = clips.findIndex(c => c.id === id);
@@ -303,12 +309,13 @@ export default function EditorScreen() {
   const trimClip = (id: string, side: 'left' | 'right', deltaPct: number) => {
     updateClips(prev => prev.map(clip => {
       if (clip.id !== id) return clip;
-      const minPct = clip.durationMs > 0 ? Math.max(0.5, (500 / clip.durationMs) * 100) : 0.5;
+      // Minimum remaining: 0.3s
+      const minPct = clip.durationMs > 0 ? (300 / clip.durationMs) * 100 : 0.5;
       if (side === 'left') {
-        const newStart = Math.max(0, Math.min(clip.trimEndPct - minPct, clip.trimStartPct + deltaPct));
+        const newStart = parseFloat(Math.max(0, Math.min(clip.trimEndPct - minPct, clip.trimStartPct + deltaPct)).toFixed(2));
         return { ...clip, trimStartPct: newStart };
       } else {
-        const newEnd = Math.min(100, Math.max(clip.trimStartPct + minPct, clip.trimEndPct + deltaPct));
+        const newEnd = parseFloat(Math.min(100, Math.max(clip.trimStartPct + minPct, clip.trimEndPct + deltaPct)).toFixed(2));
         return { ...clip, trimEndPct: newEnd };
       }
     }));
@@ -418,13 +425,13 @@ export default function EditorScreen() {
           onPress={() => { setSelectedClipId(null); setEditingTextId(null); if (isPlaying) { setIsPlaying(false); if (playRef.current) cancelAnimationFrame(playRef.current); } }}
           style={styles.previewContainer}
         >
-          {isPlaying && currentClip ? (
-            <View style={[styles.previewFrame, { width: Math.round(previewHeight * 9 / 16), height: previewHeight }]}>
+          <View style={[styles.previewFrame, { width: Math.round(previewHeight * 9 / 16), height: previewHeight }]}>
+            {currentClip ? (
               <PreviewPlayer
                 currentClip={currentClip}
                 currentClipSeekSec={currentClipSeekSec}
                 isPlaying={isPlaying}
-                visibleTexts={textOverlays}
+                visibleTexts={[]}
                 visibleFilter={visibleFilter}
                 selectedTextId={null}
                 focusTextInput={false}
@@ -432,60 +439,54 @@ export default function EditorScreen() {
                 onUpdateText={() => {}}
                 previewHeight={previewHeight}
               />
-            </View>
-          ) : (
-            <View style={[styles.previewFrame, { width: Math.round(previewHeight * 9 / 16), height: previewHeight }]}>
-              {thumbnailUri ? (
-                <Image source={{ uri: thumbnailUri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-              ) : null}
-              {(() => {
-                const scale = previewHeight / 400;
-                const pad = Math.round(12 * scale);
-                return textOverlays.map(t => {
-                  const sz = Math.max(6, Math.round(t.fontSize * scale));
-                  const isEditing = t.id === editingTextId;
-                  const font = getNunitoFont(t.fontWeight);
-                  return isEditing ? (
-                    <TextInput
-                      key={t.id}
-                      autoFocus
-                      multiline
-                      value={t.text}
-                      onChangeText={text => updateText(t.id, { text })}
-                      placeholder="Type here..."
-                      placeholderTextColor="rgba(255,255,255,0.4)"
-                      style={[
-                        styles.previewTextInput,
-                        { fontSize: sz, fontFamily: font, color: t.color, textAlign: t.textAlign },
-                        t.position === 'top' && { top: pad },
-                        t.position === 'center' && { top: '40%' },
-                        t.position === 'bottom' && { bottom: pad },
-                      ]}
-                    />
-                  ) : (
-                    <Pressable
-                      key={t.id}
-                      onPress={() => openTextEditor(t.id)}
-                      style={[
-                        styles.previewTextWrap,
-                        t.position === 'top' && { top: pad },
-                        t.position === 'center' && { top: '40%' },
-                        t.position === 'bottom' && { bottom: pad },
-                      ]}
-                    >
-                      <Text style={[
-                        styles.previewTextStatic,
-                        { fontSize: sz, fontFamily: font, color: t.color, textAlign: t.textAlign },
-                      ]}>{t.text || 'Tap to edit'}</Text>
-                    </Pressable>
-                  );
-                });
-              })()}
-              {!thumbnailUri && clips.length === 0 && (
-                <Icon name="clapperboard" size={32} color={colors.textDimmer} />
-              )}
-            </View>
-          )}
+            ) : (
+              <Icon name="clapperboard" size={32} color={colors.textDimmer} />
+            )}
+            {/* Text overlays — rendered on top of video */}
+            {(() => {
+              const scale = previewHeight / 400;
+              const pad = Math.round(12 * scale);
+              return textOverlays.map(t => {
+                const sz = Math.max(6, Math.round(t.fontSize * scale));
+                const isEditing = t.id === editingTextId;
+                const font = getNunitoFont(t.fontWeight);
+                return isEditing ? (
+                  <TextInput
+                    key={t.id}
+                    autoFocus
+                    multiline
+                    value={t.text}
+                    onChangeText={text => updateText(t.id, { text })}
+                    placeholder="Type here..."
+                    placeholderTextColor="rgba(255,255,255,0.4)"
+                    style={[
+                      styles.previewTextInput,
+                      { fontSize: sz, fontFamily: font, color: t.color, textAlign: t.textAlign },
+                      t.position === 'top' && { top: pad },
+                      t.position === 'center' && { top: '40%' },
+                      t.position === 'bottom' && { bottom: pad },
+                    ]}
+                  />
+                ) : (
+                  <Pressable
+                    key={t.id}
+                    onPress={() => openTextEditor(t.id)}
+                    style={[
+                      styles.previewTextWrap,
+                      t.position === 'top' && { top: pad },
+                      t.position === 'center' && { top: '40%' },
+                      t.position === 'bottom' && { bottom: pad },
+                    ]}
+                  >
+                    <Text style={[
+                      styles.previewTextStatic,
+                      { fontSize: sz, fontFamily: font, color: t.color, textAlign: t.textAlign },
+                    ]}>{t.text || 'Tap to edit'}</Text>
+                  </Pressable>
+                );
+              });
+            })()}
+          </View>
         </Pressable>
 
         {/* Resize handle */}

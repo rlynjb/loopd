@@ -96,7 +96,7 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
           updatedAt: new Date().toISOString(),
         };
       } else {
-        // Merge new clips into existing project
+        // Merge new clips — track by entryId:clipUri so split clips dedupe properly
         const currentEntries = entriesRef.current;
         const videoEntries = currentEntries.filter(e => e.clips.length > 0);
         const knownClipKeys = new Set(existing.clips.map(c => `${c.entryId}:${c.clipUri}`));
@@ -125,17 +125,6 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
         }
         if (newClips.length > 0) {
           existing = { ...existing, clips: [...existing.clips, ...newClips] };
-        }
-
-        // Remove clips whose source entries no longer have that clip URI
-        const allEntryClipUris = new Set(
-          currentEntries.flatMap(e => e.clips.map(c => c.uri))
-        );
-        if (currentEntries.length > 0) {
-          const validClips = existing.clips.filter(c => allEntryClipUris.has(c.clipUri));
-          if (validClips.length !== existing.clips.length) {
-            existing = { ...existing, clips: validClips };
-          }
         }
 
         // Always ensure exactly one text overlay
@@ -174,13 +163,13 @@ export function useProject(date: string, entries: Entry[], dayTitle?: string) {
     };
   }, [date]);
 
-  // Merge new entries into existing project when entries change
-  // Also handles entries that gained additional clips since last save
+  // Merge new clips from entries. Track by entryId:clipUri so:
+  // - Split clips (same entryId:clipUri, multiple project clips) count as "already present"
+  // - Multi-clip entries (different URIs) each get tracked separately
   useEffect(() => {
     setProject(prev => {
       if (!prev) return prev;
       const videoEntries = entries.filter(e => e.clips.length > 0);
-      // Track known clips by entryId + URI combo to detect new clips within existing entries
       const knownClipKeys = new Set(prev.clips.map(c => `${c.entryId}:${c.clipUri}`));
       let clipIndex = prev.clips.length;
       const newClips: ClipItem[] = [];
