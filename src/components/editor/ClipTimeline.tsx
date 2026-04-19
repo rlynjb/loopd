@@ -2,7 +2,8 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, Image, PanResponder, StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  useSharedValue, useAnimatedRef, useAnimatedStyle, useFrameCallback,
+  useSharedValue, useAnimatedRef, useFrameCallback,
+  useAnimatedScrollHandler, useAnimatedReaction,
   runOnJS, scrollTo,
   type SharedValue,
 } from 'react-native-reanimated';
@@ -241,16 +242,15 @@ function TimeRuler({ totalDurationSec, pxPerSec }: { totalDurationSec: number; p
   );
 }
 
-function PlayheadMarker({
+// Runs the UI-thread playhead extrapolation. No visual output — the playhead itself
+// is a fixed-center overlay and the timeline scrolls under it.
+function usePlayheadExtrapolator({
   playheadPosAnim,
   playheadRefPos,
   playheadRefTimeMs,
   isPlayingSV,
   totalDurationMsSV,
   canExtrapolateSV,
-  totalDurationSec,
-  pxPerSec,
-  onDrag,
 }: {
   playheadPosAnim: SharedValue<number>;
   playheadRefPos: SharedValue<number>;
@@ -258,21 +258,7 @@ function PlayheadMarker({
   isPlayingSV: SharedValue<boolean>;
   totalDurationMsSV: SharedValue<number>;
   canExtrapolateSV: SharedValue<boolean>;
-  totalDurationSec: number;
-  pxPerSec: number;
-  onDrag: (pos: number) => void;
 }) {
-  const totalPxSV = useSharedValue(totalDurationSec * pxPerSec);
-  useEffect(() => { totalPxSV.value = totalDurationSec * pxPerSec; }, [totalDurationSec, pxPerSec]);
-
-  const grabPos = useRef(0);
-  const dragging = useRef(false);
-  const onDragRef = useRef(onDrag);
-  onDragRef.current = onDrag;
-
-  // Extrapolate playhead between progress events on UI thread at display refresh rate.
-  // Gated by canExtrapolateSV so we don't advance during clip-load windows (where the
-  // video is frozen) — that would cause a backward snap when the first real progress arrives.
   useFrameCallback((frameInfo) => {
     'worklet';
     if (!isPlayingSV || !canExtrapolateSV || !totalDurationMsSV || !playheadRefTimeMs || !playheadRefPos || !playheadPosAnim) return;
@@ -280,52 +266,15 @@ function PlayheadMarker({
     if (playheadRefTimeMs.value <= 0) return;
     const elapsed = frameInfo.timestamp - playheadRefTimeMs.value;
     if (elapsed < 0) return;
-    // Cap extrapolation at one progress interval (~80ms). If no new progress event arrives
-    // within that window, the video has stalled (buffering, loading, etc.) — freezing the
-    // playhead there avoids a backward snap when the next real progress finally arrives.
     const capped = elapsed > 80 ? 80 : elapsed;
     const extrapolated = playheadRefPos.value + capped / totalDurationMsSV.value;
     playheadPosAnim.value = extrapolated > 1 ? 1 : extrapolated;
   });
-
-  const animStyle = useAnimatedStyle(() => ({
-    left: playheadPosAnim.value * totalPxSV.value,
-  }));
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
-        dragging.current = true;
-        grabPos.current = playheadPosAnim.value;
-      },
-      onPanResponderMove: (_, gs) => {
-        if (totalPxSV.value <= 0) return;
-        const delta = gs.dx / totalPxSV.value;
-        const newPos = Math.max(0, Math.min(1, grabPos.current + delta));
-        onDragRef.current(newPos);
-      },
-      onPanResponderRelease: () => { dragging.current = false; },
-      onPanResponderTerminate: () => { dragging.current = false; },
-    })
-  ).current;
-
-  return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      style={[styles.playhead, animStyle]}
-    >
-      <View style={styles.playheadHead} />
-      <View style={styles.playheadLine} />
-      <View style={styles.playheadHitArea} />
-    </Animated.View>
-  );
 }
 
 export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAnim, playheadRefPos, playheadRefTimeMs, isPlayingSV, totalDurationMsSV, canExtrapolateSV, isPlaying, onSelectClip, onTrimClip, onMoveClip, onDeleteClip, onSplitClip, onPlayheadDrag }: Props) {
   const [trackWidth, setTrackWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const [zoom, setZoom] = useState(0.75);
 
   const zoomSV = useSharedValue(0.2);
@@ -334,6 +283,20 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
   const pinchStartScroll = useSharedValue(0);
   const scrollOffset = useSharedValue(0);
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  const totalPxSV = useSharedValue(0);
+  const userScrollingSV = useSharedValue(false);
+  const lastScrollMsSV = useSharedValue(0);
+  const lastPlayheadMsSV = useSharedValue(0);
+
+
+  usePlayheadExtrapolator({
+    playheadPosAnim,
+    playheadRefPos,
+    playheadRefTimeMs,
+    isPlayingSV,
+    totalDurationMsSV,
+    canExtrapolateSV,
+  });
 
   const updateZoomJS = useCallback((z: number) => {
     setZoom(+(z.toFixed(2)));
@@ -370,6 +333,86 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
 
   const scaledPxPerSec = PX_PER_SEC * zoom;
   const selectedClip = clips.find(c => c.id === selectedClipId);
+
+  useEffect(() => {
+    totalPxSV.value = totalDurationSec * scaledPxPerSec;
+  }, [totalDurationSec, scaledPxPerSec, totalPxSV]);
+
+  // Reset stuck scrolling flag when playback resumes — guarantees pressing play
+  // unblocks auto-scroll even if a drag event was dropped.
+  useEffect(() => {
+    if (isPlaying) userScrollingSV.value = false;
+  }, [isPlaying, userScrollingSV]);
+
+  const scrollHandler = useAnimatedScrollHandler({
+    onBeginDrag: () => {
+      'worklet';
+      userScrollingSV.value = true;
+      lastScrollMsSV.value = performance.now();
+    },
+    onScroll: (e) => {
+      'worklet';
+      scrollOffset.value = e.contentOffset.x;
+      lastScrollMsSV.value = performance.now();
+
+      // Fallback drag detection: onBeginDrag occasionally misses on Android. If
+      // we're playing and the scroll offset has diverged from where auto-scroll
+      // would place it, the user must be dragging — engage scrubbing mode.
+      if (isPlayingSV.value && !userScrollingSV.value && totalPxSV.value > 0) {
+        const expected = playheadPosAnim.value * totalPxSV.value;
+        if (Math.abs(e.contentOffset.x - expected) > 5) {
+          userScrollingSV.value = true;
+        }
+      }
+
+      if (userScrollingSV.value && totalPxSV.value > 0) {
+        const pos = Math.max(0, Math.min(1, e.contentOffset.x / totalPxSV.value));
+        playheadPosAnim.value = pos;
+        runOnJS(onPlayheadDrag)(pos);
+      }
+    },
+    onEndDrag: () => {
+      'worklet';
+      userScrollingSV.value = false;
+    },
+    onMomentumBegin: () => {
+      'worklet';
+      userScrollingSV.value = true;
+    },
+    onMomentumEnd: () => {
+      'worklet';
+      userScrollingSV.value = false;
+    },
+  }, [onPlayheadDrag]);
+
+  // Playhead → scroll during playback. Safety: if userScrollingSV gets stuck true
+  // (dropped onEndDrag on Android) but no scroll events have fired for a while,
+  // force-clear it so auto-scroll can resume.
+  useAnimatedReaction(
+    () => ({ pos: playheadPosAnim.value, total: totalPxSV.value, user: userScrollingSV.value, playing: isPlayingSV.value }),
+    ({ pos, total, user, playing }) => {
+      'worklet';
+      lastPlayheadMsSV.value = performance.now();
+      if (user && performance.now() - lastScrollMsSV.value > 300) {
+        userScrollingSV.value = false;
+      }
+      if (userScrollingSV.value || !playing || total <= 0) return;
+      scrollTo(scrollRef, pos * total, 0, false);
+    },
+  );
+
+  // Hang recovery: if playback is on but playheadPosAnim hasn't changed for a while,
+  // the handler pipeline is stuck. Force-reset the gates so the next progress event
+  // is accepted and playback resumes.
+  useFrameCallback(() => {
+    'worklet';
+    if (!isPlayingSV.value) return;
+    if (performance.now() - lastPlayheadMsSV.value < 800) return;
+    userScrollingSV.value = false;
+    playheadRefTimeMs.value = performance.now();
+    canExtrapolateSV.value = true;
+    lastPlayheadMsSV.value = performance.now();
+  });
 
   // Swipe between clips
   const selectedIdx = clips.findIndex(c => c.id === selectedClipId);
@@ -408,48 +451,51 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
         <Text style={styles.durationLabel}>{formatDuration(totalDurationSec)} · {Math.round(zoom * 100)}%</Text>
       </View>
 
-      <GestureDetector gesture={allGestures}>
-        <Animated.ScrollView
-          ref={scrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={true}
-          style={styles.trackScroll}
-          contentContainerStyle={styles.trackContent}
-          onLayout={e => { if (!trackWidth) setTrackWidth(e.nativeEvent.layout.width); }}
-          onScroll={(e: any) => { scrollOffset.value = e.nativeEvent.contentOffset.x; }}
-          scrollEventThrottle={16}
-        >
-          <TimeRuler totalDurationSec={totalDurationSec} pxPerSec={scaledPxPerSec} />
-          <View style={styles.trackRow}>
-            {clips.map(clip => (
-              <ClipBlock
-                key={clip.id}
-                clip={clip}
-                isSelected={clip.id === selectedClipId}
-                onSelect={() => onSelectClip(clip.id)}
-                onTrim={(side, delta) => onTrimClip(clip.id, side, delta)}
-                onSplit={() => onSplitClip(clip.id)}
-                trackWidth={trackWidth}
-                pxPerSec={scaledPxPerSec}
-              />
-            ))}
+      <View
+        style={styles.viewport}
+        onLayout={e => {
+          const w = e.nativeEvent.layout.width;
+          if (w !== viewportWidth) setViewportWidth(w);
+          if (!trackWidth) setTrackWidth(w);
+        }}
+      >
+        <GestureDetector gesture={allGestures}>
+          <Animated.ScrollView
+            ref={scrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.trackScroll}
+            contentContainerStyle={[styles.trackContent, { paddingLeft: viewportWidth / 2, paddingRight: viewportWidth / 2 }]}
+            onScroll={scrollHandler}
+            scrollEventThrottle={16}
+            decelerationRate="fast"
+          >
+            <TimeRuler totalDurationSec={totalDurationSec} pxPerSec={scaledPxPerSec} />
+            <View style={styles.trackRow}>
+              {clips.map(clip => (
+                <ClipBlock
+                  key={clip.id}
+                  clip={clip}
+                  isSelected={clip.id === selectedClipId}
+                  onSelect={() => onSelectClip(clip.id)}
+                  onTrim={(side, delta) => onTrimClip(clip.id, side, delta)}
+                  onSplit={() => onSplitClip(clip.id)}
+                  trackWidth={trackWidth}
+                  pxPerSec={scaledPxPerSec}
+                />
+              ))}
+            </View>
+          </Animated.ScrollView>
+        </GestureDetector>
+
+        {/* Fixed centered playhead — the timeline scrolls underneath it */}
+        {totalDurationSec > 0 && viewportWidth > 0 && (
+          <View pointerEvents="none" style={[styles.centerPlayhead, { left: viewportWidth / 2 - 1 }]}>
+            <View style={styles.centerPlayheadHead} />
+            <View style={styles.centerPlayheadLine} />
           </View>
-          {/* Playhead — draggable, animated via SharedValue for zero-lag tracking */}
-          {totalDurationSec > 0 && (
-            <PlayheadMarker
-              playheadPosAnim={playheadPosAnim}
-              playheadRefPos={playheadRefPos}
-              playheadRefTimeMs={playheadRefTimeMs}
-              isPlayingSV={isPlayingSV}
-              totalDurationMsSV={totalDurationMsSV}
-              canExtrapolateSV={canExtrapolateSV}
-              totalDurationSec={totalDurationSec}
-              pxPerSec={scaledPxPerSec}
-              onDrag={onPlayheadDrag}
-            />
-          )}
-        </Animated.ScrollView>
-      </GestureDetector>
+        )}
+      </View>
 
       {/* Selected clip actions */}
       {selectedClip && (
@@ -498,9 +544,31 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.textMuted,
   },
-  trackScroll: {
-    marginHorizontal: 16,
+  viewport: {
+    position: 'relative',
   },
+  centerPlayhead: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  centerPlayheadHead: {
+    width: 12,
+    height: 8,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+    backgroundColor: '#fff',
+    marginLeft: -5,
+  },
+  centerPlayheadLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: '#fff',
+  },
+  trackScroll: {},
   trackContent: {
     // No gap: the playhead is positioned on totalDurationSec * pxPerSec, so any
     // spacing between clips would desync visual boundaries from playhead position.

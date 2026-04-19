@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, Pressable, StyleSheet } from 'react-native';
+import { View, Text, Image, Pressable, ActivityIndicator, StyleSheet } from 'react-native';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
@@ -16,11 +16,15 @@ type Props = {
   onRemoveClip?: (entry: Entry, clipIndex: number) => void;
   onRemoveHabit?: (entry: Entry, habitId: string) => void;
   onUpdateTodos?: (entry: Entry, todos: TodoItem[]) => void;
+  // Number of clips currently being transcoded (FFmpeg pass) for this entry.
+  // Rendered as placeholder spinner cards after the real clip thumbnails so
+  // the user sees exactly where the new clip will land.
+  pendingClipCount?: number;
   compact?: boolean;
 };
 
-export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveClip, onRemoveHabit, onUpdateTodos, compact }: Props) {
-  const hasClips = entry.clips.length > 0 || !!entry.clipUri;
+export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveClip, onRemoveHabit, onUpdateTodos, pendingClipCount = 0, compact }: Props) {
+  const hasClips = entry.clips.length > 0 || !!entry.clipUri || pendingClipCount > 0;
   const hasHabits = entry.habits.length > 0;
   const hasTodos = (entry.todos?.length ?? 0) > 0;
 
@@ -131,6 +135,14 @@ export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveCli
                 )}
               </View>
             ))}
+            {/* Placeholder cards for in-flight transcodes */}
+            {Array.from({ length: pendingClipCount }).map((_, i) => (
+              <View key={`pending-${i}`} style={styles.clipCard}>
+                <View style={[styles.clipThumb, styles.clipThumbPending]}>
+                  <ActivityIndicator size="small" color={colors.teal} />
+                </View>
+              </View>
+            ))}
             {onAddClip && (
               <Pressable
                 onPress={() => onAddClip(entry)}
@@ -212,6 +224,11 @@ const styles = StyleSheet.create({
     aspectRatio: 4 / 3,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  clipThumbPending: {
+    backgroundColor: 'rgba(0,217,163,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(0,217,163,0.3)',
   },
   clipDurationBadge: {
     position: 'absolute',

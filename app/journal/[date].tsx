@@ -33,6 +33,20 @@ export default function JournalScreen() {
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [showHabitPicker, setShowHabitPicker] = useState(showHabits === '1');
+  // Per-entry count of in-flight clip transcodes. InlineEntry renders N placeholder
+  // cards beside its real clips while > 0, so the user sees a spinner exactly where
+  // the new clip will land instead of a global banner.
+  const [pendingByEntry, setPendingByEntry] = useState<Record<string, number>>({});
+
+  const bumpPending = useCallback((entryId: string, delta: number) => {
+    setPendingByEntry(prev => {
+      const next = (prev[entryId] ?? 0) + delta;
+      const copy = { ...prev };
+      if (next <= 0) delete copy[entryId];
+      else copy[entryId] = next;
+      return copy;
+    });
+  }, []);
 
   useEffect(() => {
     return on('toggleHabitPicker', () => setShowHabitPicker(prev => !prev));
@@ -196,19 +210,28 @@ export default function JournalScreen() {
   }, []);
 
   const handleAddClipToEntry = useCallback(async (entry: Entry) => {
-    const result = await pickAndCopyClip(date);
-    if (result) {
-      const updated = {
-        ...entry,
-        clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
-        clipUri: entry.clipUri ?? result.uri,
-        clipDurationMs: entry.clipDurationMs ?? result.durationMs,
-      };
-      await editEntry(updated);
-      setEditingEntry(updated);
-      editingEntryRef.current = updated;
+    let pendingAttachedTo: string | null = null;
+    try {
+      const result = await pickAndCopyClip(date, () => {
+        // Picker closed — show the placeholder slot in this entry's clip row.
+        pendingAttachedTo = entry.id;
+        bumpPending(entry.id, 1);
+      });
+      if (result) {
+        const updated = {
+          ...entry,
+          clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
+          clipUri: entry.clipUri ?? result.uri,
+          clipDurationMs: entry.clipDurationMs ?? result.durationMs,
+        };
+        await editEntry(updated);
+        setEditingEntry(updated);
+        editingEntryRef.current = updated;
+      }
+    } finally {
+      if (pendingAttachedTo) bumpPending(pendingAttachedTo, -1);
     }
-  }, [date, editEntry]);
+  }, [date, editEntry, bumpPending]);
 
   const handleRemoveHabitFromEntry = useCallback(async (entry: Entry, habitId: string) => {
     const currentText = editingEntryRef.current?.id === entry.id ? (liveTextRef.current.trim() || entry.text) : entry.text;
@@ -259,7 +282,7 @@ export default function JournalScreen() {
 
   const handleAddClipEntry = useCallback(async () => {
     // Target: current editing entry OR the silently-saved new entry
-    const targetId = editingEntryRef.current?.id ?? newEntryIdRef.current ?? null;
+    let targetId = editingEntryRef.current?.id ?? newEntryIdRef.current ?? null;
     // Save pending text first
     if (targetId && liveTextRef.current.trim()) {
       const { getEntryById } = await import('../../src/services/database');
@@ -268,45 +291,58 @@ export default function JournalScreen() {
         await updateEntryDB({ ...existing, text: liveTextRef.current.trim() });
       }
     }
-    const result = await pickAndCopyClip(date);
-    if (result && targetId) {
-      // Re-read entry from DB (state may be stale after picker)
-      const { getEntryById } = await import('../../src/services/database');
-      const entry = await getEntryById(targetId);
-      if (entry) {
-        const updated = {
-          ...entry,
-          clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
-          clipUri: entry.clipUri ?? result.uri,
-          clipDurationMs: entry.clipDurationMs ?? result.durationMs,
-        };
-        await editEntry(updated);
-        setEditingEntry(updated);
-        editingEntryRef.current = updated;
-        newEntryIdRef.current = null;
-        setIsAddingText(false);
-        return;
+    let pendingAttachedTo: string | null = null;
+    try {
+      const result = await pickAndCopyClip(date, () => {
+        // Picker closed — make sure we have a target entry so the placeholder
+        // card has somewhere to render. If no entry existed yet (new-entry flow
+        // from the toolbar), create one now with whatever text is in flight.
+        if (!targetId) {
+          const stub: Entry = {
+            id: generateId('entry'),
+            date,
+            text: liveTextRef.current.trim() || null,
+            habits: [],
+            todos: [],
+            clipUri: null,
+            clipDurationMs: null,
+            clips: [],
+            createdAt: new Date().toISOString(),
+          };
+          addEntry(stub);
+          setEditingEntry(stub);
+          editingEntryRef.current = stub;
+          newEntryIdRef.current = stub.id;
+          targetId = stub.id;
+        }
+        pendingAttachedTo = targetId;
+        bumpPending(targetId, 1);
+      });
+      if (result && targetId) {
+        // Re-read entry from DB (state may be stale after picker)
+        const { getEntryById } = await import('../../src/services/database');
+        const entry = await getEntryById(targetId);
+        if (entry) {
+          const updated = {
+            ...entry,
+            clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
+            clipUri: entry.clipUri ?? result.uri,
+            clipDurationMs: entry.clipDurationMs ?? result.durationMs,
+          };
+          await editEntry(updated);
+          setEditingEntry(updated);
+          editingEntryRef.current = updated;
+          newEntryIdRef.current = null;
+          setIsAddingText(false);
+          return;
+        }
       }
+      // The !targetId fallback is no longer reachable — the picker's onProcessing
+      // callback always creates a stub entry before the transcode starts.
+    } finally {
+      if (pendingAttachedTo) bumpPending(pendingAttachedTo, -1);
     }
-    if (result) {
-      const newEntry: Entry = {
-        id: generateId('entry'),
-        date,
-        text: liveTextRef.current.trim() || null,
-        habits: [],
-        todos: [],
-        clipUri: result.uri,
-        clipDurationMs: result.durationMs,
-        clips: [{ uri: result.uri, durationMs: result.durationMs }],
-        createdAt: new Date().toISOString(),
-      };
-      addEntry(newEntry);
-      setEditingEntry(newEntry);
-      editingEntryRef.current = newEntry;
-      newEntryIdRef.current = null;
-      setIsAddingText(false);
-    }
-  }, [date, addEntry, editEntry]);
+  }, [date, addEntry, editEntry, bumpPending]);
 
   // Final save — updates state and clears editing
   const handleEditTextSave = useCallback(async (text: string) => {
@@ -510,6 +546,7 @@ export default function JournalScreen() {
                 onAddClip={handleAddClipToEntry}
                 onRemoveClip={handleRemoveClipFromEntry}
                 onRemoveHabit={handleRemoveHabitFromEntry}
+                pendingClipCount={pendingByEntry[entry.id] ?? 0}
                 compact
               />
             </View>
@@ -523,6 +560,7 @@ export default function JournalScreen() {
               onRemoveClip={handleRemoveClipFromEntry}
               onRemoveHabit={handleRemoveHabitFromEntry}
               onUpdateTodos={handleUpdateTodos}
+              pendingClipCount={pendingByEntry[entry.id] ?? 0}
             />
           )
         ))}

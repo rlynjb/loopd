@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, Pressable, TextInput, Modal, ScrollView, Image, StyleSheet } from 'react-native';
+import { View, Text, Pressable, TextInput, Modal, ScrollView, Image, ActivityIndicator, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import { File as FSFile } from 'expo-file-system';
@@ -15,6 +15,9 @@ type PickedClip = {
   durationMs: number;
   thumbnail: string | null;
   missing?: boolean;
+  // Set while the picked asset is being transcoded to a 1080p proxy.
+  // The clip renders as a spinner placeholder until this clears.
+  pendingId?: string;
 };
 
 type Props = {
@@ -114,24 +117,45 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
     );
   };
 
-  const addClipResult = async (result: { uri: string; durationMs: number }) => {
+  // Replaces the pending placeholder created when the picker closed with the
+  // transcoded result. If the placeholder was removed (cancelled) we silently
+  // drop the result — its proxy file was still written to disk but is unused.
+  const finalizePendingClip = async (pendingId: string, result: { uri: string; durationMs: number }) => {
     let thumbnail: string | null = null;
     try {
       const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
       thumbnail = t.uri;
     } catch { /* ignore */ }
-    setClips(prev => [...prev, { uri: result.uri, durationMs: result.durationMs, thumbnail }]);
+    setClips(prev => prev.map(c => c.pendingId === pendingId
+      ? { uri: result.uri, durationMs: result.durationMs, thumbnail }
+      : c
+    ));
   };
 
   const handlePickClip = async () => {
     setPicking(true);
     setPickError(null);
+    const pendingId = generateId('pending');
     try {
-      const result = await pickAndCopyClip(date);
-      if (result) await addClipResult(result);
+      const result = await pickAndCopyClip(date, () => {
+        console.log('[capture] picker closed, inserting placeholder', pendingId);
+        setPicking(false);
+        setClips(prev => {
+          const next = [...prev, { uri: '', durationMs: 0, thumbnail: null, pendingId }];
+          console.log('[capture] clips after placeholder:', next.length, next.map(c => c.pendingId ?? c.uri.slice(-20)));
+          return next;
+        });
+      });
+      if (result) {
+        console.log('[capture] transcode done, finalizing', pendingId);
+        await finalizePendingClip(pendingId, result);
+      } else {
+        setClips(prev => prev.filter(c => c.pendingId !== pendingId));
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setPickError(msg);
+      setClips(prev => prev.filter(c => c.pendingId !== pendingId));
     } finally {
       setPicking(false);
     }
@@ -140,12 +164,19 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
   const handleRecordClip = async () => {
     setPicking(true);
     setPickError(null);
+    const pendingId = generateId('pending');
     try {
-      const result = await recordClip(date);
-      if (result) await addClipResult(result);
+      const result = await recordClip(date, () => {
+        console.log('[capture] camera closed, inserting placeholder', pendingId);
+        setPicking(false);
+        setClips(prev => [...prev, { uri: '', durationMs: 0, thumbnail: null, pendingId }]);
+      });
+      if (result) await finalizePendingClip(pendingId, result);
+      else setClips(prev => prev.filter(c => c.pendingId !== pendingId));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setPickError(msg);
+      setClips(prev => prev.filter(c => c.pendingId !== pendingId));
     } finally {
       setPicking(false);
     }
@@ -157,25 +188,46 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
 
   const reimportClip = async (index: number) => {
     setPicking(true);
+    const pendingId = generateId('pending');
     try {
-      const result = await pickAndCopyClip(date);
+      const result = await pickAndCopyClip(date, () => {
+        // Picker closed — mark the target slot as pending so it renders a spinner.
+        setPicking(false);
+        setClips(prev => prev.map((c, i) => i === index
+          ? { ...c, pendingId, missing: false }
+          : c
+        ));
+      });
       if (result) {
         let thumbnail: string | null = null;
         try {
           const t = await VideoThumbnails.getThumbnailAsync(result.uri, { time: 500, quality: 0.5 });
           thumbnail = t.uri;
         } catch { /* ignore */ }
-        setClips(prev => prev.map((c, i) => i === index
-          ? { uri: result.uri, durationMs: result.durationMs, thumbnail, missing: false }
+        setClips(prev => prev.map(c => c.pendingId === pendingId
+          ? { uri: result.uri, durationMs: result.durationMs, thumbnail }
+          : c
+        ));
+      } else {
+        // Cancelled — clear pending flag, restore original state.
+        setClips(prev => prev.map(c => c.pendingId === pendingId
+          ? { ...c, pendingId: undefined, missing: true }
           : c
         ));
       }
-    } catch { /* ignore */ } finally {
+    } catch {
+      setClips(prev => prev.map(c => c.pendingId === pendingId
+        ? { ...c, pendingId: undefined, missing: true }
+        : c
+      ));
+    } finally {
       setPicking(false);
     }
   };
 
+  const hasPendingClip = clips.some(c => c.pendingId);
   const canSave = () => {
+    if (hasPendingClip) return false;
     if (captureType === 'habit') return selectedHabits.length > 0;
     if (captureType === 'video') return clips.length > 0;
     return text.trim().length > 0;
@@ -282,40 +334,54 @@ export function CaptureSheet({ visible, initialType, editEntry, habits, date, on
               {/* Clip thumbnails grid */}
               {clips.length > 0 && (
                 <View style={styles.clipGrid}>
-                  {clips.map((clip, i) => (
-                    <View key={i} style={[styles.clipCard, clip.missing && styles.clipCardMissing]}>
-                      {clip.missing ? (
-                        <Pressable onPress={() => reimportClip(i)} style={[styles.clipThumb, styles.clipThumbMissing]}>
-                          <Icon name="video" size={18} color={colors.coral} />
-                          <Text style={styles.reimportText}>Re-import</Text>
-                        </Pressable>
-                      ) : clip.thumbnail ? (
-                        <Image source={{ uri: clip.thumbnail }} style={styles.clipThumb} />
-                      ) : (
-                        <View style={[styles.clipThumb, styles.clipThumbPlaceholder]}>
-                          <Icon name="video" size={20} color={colors.textDim} />
-                        </View>
-                      )}
-                      <View style={styles.clipDurationBadge}>
-                        <Text style={styles.clipDurationText}>{Math.round(clip.durationMs / 1000)}s</Text>
+                  {clips.map((clip, i) => {
+                    const isPending = !!clip.pendingId;
+                    return (
+                      <View key={clip.pendingId ?? clip.uri ?? i} style={[styles.clipCard, clip.missing && styles.clipCardMissing]}>
+                        {isPending ? (
+                          <View style={[styles.clipThumb, styles.clipThumbPlaceholder]}>
+                            <ActivityIndicator size="small" color={colors.teal} />
+                            <Text style={styles.pendingLabel}>Processing…</Text>
+                          </View>
+                        ) : clip.missing ? (
+                          <Pressable onPress={() => reimportClip(i)} style={[styles.clipThumb, styles.clipThumbMissing]}>
+                            <Icon name="video" size={18} color={colors.coral} />
+                            <Text style={styles.reimportText}>Re-import</Text>
+                          </Pressable>
+                        ) : clip.thumbnail ? (
+                          <Image source={{ uri: clip.thumbnail }} style={styles.clipThumb} />
+                        ) : (
+                          <View style={[styles.clipThumb, styles.clipThumbPlaceholder]}>
+                            <Icon name="video" size={20} color={colors.textDim} />
+                          </View>
+                        )}
+                        {!isPending && clip.durationMs > 0 && (
+                          <View style={styles.clipDurationBadge}>
+                            <Text style={styles.clipDurationText}>{Math.round(clip.durationMs / 1000)}s</Text>
+                          </View>
+                        )}
+                        {!isPending && (
+                          <Pressable onPress={() => removeClip(i)} style={styles.clipRemoveBtn}>
+                            <Icon name="x" size={14} color="#fff" />
+                          </Pressable>
+                        )}
+                        {!isPending && (
+                          <View style={styles.clipNameBar}>
+                            <Text style={[styles.clipNameText, clip.missing && { color: colors.coral }]} numberOfLines={1}>
+                              {clip.missing ? 'File missing' : clip.uri.split('/').pop()}
+                            </Text>
+                          </View>
+                        )}
                       </View>
-                      <Pressable onPress={() => removeClip(i)} style={styles.clipRemoveBtn}>
-                        <Icon name="x" size={14} color="#fff" />
-                      </Pressable>
-                      <View style={styles.clipNameBar}>
-                        <Text style={[styles.clipNameText, clip.missing && { color: colors.coral }]} numberOfLines={1}>
-                          {clip.missing ? 'File missing' : clip.uri.split('/').pop()}
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
+                    );
+                  })}
                 </View>
               )}
 
               {/* Record + Import buttons */}
               {picking ? (
                 <View style={styles.addClipBtn}>
-                  <Text style={styles.addClipBtnText}>Opening...</Text>
+                  <Text style={styles.addClipBtnText}>Opening…</Text>
                 </View>
               ) : (
                 <View style={styles.clipBtnRow}>
@@ -538,6 +604,13 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.coral,
+    letterSpacing: 0.3,
+  },
+  pendingLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    marginTop: 6,
     letterSpacing: 0.3,
   },
   clipDurationBadge: {

@@ -180,6 +180,11 @@ export default function EditorScreen() {
       setIsPlaying(false);
     } else {
       advancedFromClipRef.current = null;
+      // Clear any stale pending-transition from previous playback, otherwise the first
+      // progress event after a scrub can be rejected by the (clipId, expectedStartSec)
+      // guard — playback continues in the video (audio audible) but the playhead and
+      // preview never update.
+      pendingTransitionRef.current = null;
       if (playheadPos >= 0.99) { setPlayheadPos(0); playheadPosAnim.value = 0; }
       playheadRefPos.value = playheadPos >= 0.99 ? 0 : playheadPos;
       playheadRefTimeMs.value = performance.now();
@@ -674,6 +679,11 @@ export default function EditorScreen() {
             playheadPosAnim.value = pos;
             playheadRefPos.value = pos;
             playheadRefTimeMs.value = performance.now();
+            // Scrubbing invalidates any in-flight transition/advance state from the
+            // previous playback session — clear so the next play doesn't reject progress
+            // events that fall outside the old transition window.
+            pendingTransitionRef.current = null;
+            advancedFromClipRef.current = null;
             if (isPlaying) { setIsPlaying(false); }
             setPlayheadPos(pos);
           }}

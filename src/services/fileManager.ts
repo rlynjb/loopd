@@ -1,6 +1,16 @@
 import { Paths, Directory, File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as MediaLibrary from 'expo-media-library';
+import { generateId } from '../utils/id';
+import { getFFmpeg, quoteFFmpegPath } from './ffmpeg';
+
+// Proxy transcode target. 1080p long-edge keeps file sizes small (~3-5 MB
+// for a short vlog clip) and keeps the Android MediaCodec happy — two
+// concurrent 4K decoders stutter on the double-buffer preview, two 1080p
+// decoders do not. See docs/media-pipeline.md for the full rationale.
+const PROXY_MAX_LONG_EDGE = 1920;
+const PROXY_MAX_SHORT_EDGE = 1080;
+const PROXY_CRF = 23;
 
 export function uriToPath(uri: string): string {
   return uri.replace(/^file:\/\//, '');
@@ -8,7 +18,6 @@ export function uriToPath(uri: string): string {
 
 async function ensureDir(dir: Directory): Promise<void> {
   if (!dir.exists) {
-    // Parent must exist first
     const parentUri = dir.uri.replace(/\/[^/]+\/?$/, '');
     if (parentUri && parentUri !== dir.uri) {
       const parent = new Directory(parentUri);
@@ -28,13 +37,82 @@ export async function saveToDCIMLoopd(sourceUri: string): Promise<void> {
 }
 
 export async function ensureDirectories(date: string): Promise<void> {
-  await ensureDir(new Directory(Paths.document, 'loopd', 'clips', date));
+  // `media/` is a flat folder of transcoded proxies shared across all dates.
+  // Backup = copy this folder; restore = drop it into the new install.
+  await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
   await ensureDir(new Directory(Paths.document, 'loopd', 'exports', date));
   await ensureDir(new Directory(Paths.document, 'loopd', 'temp'));
 }
 
+export function getMediaPath(clipId: string): string {
+  return new File(Paths.document, 'loopd', 'media', `${clipId}.mp4`).uri;
+}
+
+/**
+ * Transcode a source video (camera recording or library pick) into a
+ * 1080p-max H.264 proxy stored in `loopd/media/{clipId}.mp4`. The original
+ * is never copied or moved; only the proxy lives inside app storage.
+ *
+ * All editor operations (preview, trim, double-buffered playback, export)
+ * run against the proxy. This keeps two simultaneous decoders within
+ * Android codec limits and makes per-clip storage predictable (~3-5 MB
+ * vs. 50-200 MB for a 4K HDR original).
+ */
+export async function transcodeToProxy(sourceUri: string): Promise<string> {
+  const { FFmpegKit, ReturnCode } = await getFFmpeg();
+  const clipId = generateId('m');
+  await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
+  const outputUri = getMediaPath(clipId);
+  const outputPath = uriToPath(outputUri);
+
+  const inQuoted = quoteFFmpegPath(sourceUri);
+  const outQuoted = quoteFFmpegPath(outputPath);
+
+  // Scale so the longer side fits within PROXY_MAX_LONG_EDGE and the shorter
+  // within PROXY_MAX_SHORT_EDGE. Preserves aspect ratio and orientation.
+  // Never upscales (decrease only).
+  const scaleFilter = `scale='if(gt(iw,ih),min(${PROXY_MAX_LONG_EDGE},iw),min(${PROXY_MAX_SHORT_EDGE},iw))':'if(gt(iw,ih),min(${PROXY_MAX_SHORT_EDGE},ih),min(${PROXY_MAX_LONG_EDGE},ih))':force_original_aspect_ratio=decrease:flags=bicubic,pad=ceil(iw/2)*2:ceil(ih/2)*2`;
+
+  const cmd = `-y -i ${inQuoted} ` +
+    `-vf "${scaleFilter}" ` +
+    `-c:v libx264 -preset fast -crf ${PROXY_CRF} -pix_fmt yuv420p ` +
+    `-c:a aac -b:a 128k -ar 44100 -ac 2 ` +
+    `-movflags +faststart ` +
+    `${outQuoted}`;
+
+  console.log('[loopd] transcode:', cmd);
+  const session = await FFmpegKit.execute(cmd);
+  const returnCode = await session.getReturnCode();
+  if (!ReturnCode.isSuccess(returnCode)) {
+    const logs = await session.getAllLogs();
+    const last = logs.slice(-5).map(l => l.getMessage()).join('\n');
+    throw new Error(`Transcode failed: ${last || 'unknown error'}`);
+  }
+  return outputUri;
+}
+
+async function captureToProxy(
+  asset: ImagePicker.ImagePickerAsset,
+): Promise<{ uri: string; durationMs: number }> {
+  const rawDuration = asset.duration ?? 0;
+  const durationMs = rawDuration > 0 && rawDuration < 1000
+    ? rawDuration * 1000
+    : rawDuration;
+
+  try {
+    const proxyUri = await transcodeToProxy(asset.uri);
+    return { uri: proxyUri, durationMs };
+  } catch (e) {
+    console.warn('[loopd] Transcode failed, falling back to source URI:', e);
+    // Fallback: caller keeps referencing the original (content:// or file://).
+    // Editor/export will still work, just without the proxy benefits.
+    return { uri: asset.uri, durationMs };
+  }
+}
+
 export async function recordClip(
-  date: string
+  _date: string,
+  onProcessing?: () => void,
 ): Promise<{ uri: string; durationMs: number } | null> {
   const { status } = await ImagePicker.requestCameraPermissionsAsync();
   if (status !== 'granted') return null;
@@ -47,44 +125,20 @@ export async function recordClip(
 
   if (result.canceled || result.assets.length === 0) return null;
 
-  // Save to DCIM/loopd
+  onProcessing?.();
+
+  // Preserve the untouched original in the system gallery (DCIM) as the
+  // user's master. Non-critical — if it fails we still have the proxy.
   try {
     await saveToDCIMLoopd(result.assets[0].uri);
   } catch { /* non-critical */ }
 
-  return await copyAssetToLocal(result.assets[0], date);
-}
-
-async function copyAssetToLocal(
-  asset: ImagePicker.ImagePickerAsset,
-  date: string,
-): Promise<{ uri: string; durationMs: number }> {
-  const rawDuration = asset.duration ?? 0;
-  const durationMs = rawDuration > 0 && rawDuration < 1000
-    ? rawDuration * 1000
-    : rawDuration;
-
-  await ensureDirectories(date);
-
-  const originalName = asset.uri.split('/').pop() ?? `clip-${Date.now()}.mp4`;
-  const destDir = new Directory(Paths.document, 'loopd', 'clips', date);
-  const destFile = new File(destDir, originalName);
-
-  try {
-    const sourceFile = new File(asset.uri);
-    await sourceFile.copy(destFile);
-    if (destFile.exists) {
-      return { uri: destFile.uri, durationMs };
-    }
-  } catch (e) {
-    console.warn('[loopd] File copy failed, using source URI:', e);
-  }
-
-  return { uri: asset.uri, durationMs };
+  return await captureToProxy(result.assets[0]);
 }
 
 export async function pickAndCopyClip(
-  date: string
+  _date: string,
+  onProcessing?: () => void,
 ): Promise<{ uri: string; durationMs: number } | null> {
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['videos'],
@@ -92,7 +146,9 @@ export async function pickAndCopyClip(
   });
 
   if (result.canceled || result.assets.length === 0) return null;
-  return await copyAssetToLocal(result.assets[0], date);
+  onProcessing?.();
+  // Library picks already live in the user's gallery — no DCIM copy needed.
+  return await captureToProxy(result.assets[0]);
 }
 
 export function getExportPath(date: string): string {
