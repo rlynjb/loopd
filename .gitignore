@@ -39,3 +39,9 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# local device backups (raw app-data tars — use Notion sync as source of truth)
+.backups/
+
+# Claude Code session state
+.claude/scheduled_tasks.lock
