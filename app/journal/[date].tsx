@@ -507,6 +507,12 @@ export default function JournalScreen() {
           />
           <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
         </View>
+        {entries.some(e => e.clips.length > 0) && (
+          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.vlogBtn} hitSlop={12}>
+            <Icon name="clapperboard" size={22} color={colors.accent} />
+            <Text style={styles.vlogBtnText}>Vlog</Text>
+          </Pressable>
+        )}
       </View>
 
       {/* Entries */}
@@ -577,14 +583,6 @@ export default function JournalScreen() {
         ) : (
           <Pressable onPress={handleTapEmptySpace} style={styles.emptyTap}>
             <Text style={styles.emptyTapText}>Write something...</Text>
-          </Pressable>
-        )}
-
-        {/* Edit Vlog button */}
-        {entries.some(e => e.clips.length > 0) && (
-          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.vlogBtn}>
-            <Icon name="clapperboard" size={16} color={colors.accent} />
-            <Text style={styles.vlogBtnText}>Edit Vlog</Text>
           </Pressable>
         )}
 
@@ -675,20 +673,14 @@ const styles = StyleSheet.create({
     color: colors.textDimmer,
   },
   vlogBtn: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    marginTop: 16,
-    backgroundColor: 'rgba(232,213,176,0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(232,213,176,0.2)',
-    borderRadius: 8,
+    alignSelf: 'flex-start',
+    gap: 4,
+    paddingTop: 2,
   },
   vlogBtnText: {
     fontFamily: fonts.mono,
-    fontSize: 12,
+    fontSize: 9,
     color: colors.accent,
   },
 });

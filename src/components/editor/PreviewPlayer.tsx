@@ -133,6 +133,42 @@ function VideoSlot({
     videoRef.current.seek(seekSec);
   }, [seekSec, isPlaying, isActive, status]);
 
+  // Re-seek at the paused → playing transition. Scrub-seeks may still be in flight
+  // when the user hits play, so without this the video can start from wherever the
+  // last pending seek hadn't settled (often the previous boundary). Only clips
+  // that stay mounted across the scrub (usually clips near the active slot) hit
+  // this race; freshly mounted slots naturally seek on load.
+  const wasPlayingRef = useRef(isPlaying);
+  useEffect(() => {
+    const wasPlaying = wasPlayingRef.current;
+    wasPlayingRef.current = isPlaying;
+    if (!isPlaying || wasPlaying) return;
+    if (!isActive || !videoRef.current) return;
+    if (status !== 'ready' && status !== 'loading') return;
+    if (__DEV__) {
+      console.log('[preview slot] play-start seek', {
+        clipId: clipIdRef.current,
+        seekSec: Number(seekSecRef.current.toFixed(3)),
+        status,
+      });
+    }
+    videoRef.current.seek(seekSecRef.current);
+  }, [isPlaying, isActive, status]);
+
+  // Delay the paused→playing flip by ~150ms so ExoPlayer has time to apply the
+  // latest seek (scrub updates issue seeks as fast as scroll events fire; pressing
+  // play immediately after releasing the scrub otherwise races the seek). Pausing
+  // is immediate — no delay on playing→paused.
+  const [renderPaused, setRenderPaused] = useState(true);
+  useEffect(() => {
+    if (!isPlaying) {
+      setRenderPaused(true);
+      return;
+    }
+    const timer = setTimeout(() => setRenderPaused(false), 150);
+    return () => clearTimeout(timer);
+  }, [isPlaying]);
+
   const handleLoad = useCallback((data: OnLoadData) => {
     setStatus('ready');
     loadedUriRef.current = lastUriRef.current;
@@ -188,7 +224,7 @@ function VideoSlot({
       source={videoSource}
       style={[styles.video, hideStyle]}
       resizeMode="cover"
-      paused={!isActive || !isPlaying}
+      paused={!isActive || renderPaused}
       repeat={false}
       muted={!isActive}
       onLoad={handleLoad}
@@ -243,7 +279,12 @@ export function PreviewPlayer({
   // Two-slot ping-pong. The active slot holds currentClip; the other preloads nextClip.
   // On a clip transition where nextClip becomes current, we swap activeSlot — instant visual
   // cut since the next video is already loaded, no source change on either Video.
-  const [slots, setSlots] = useState<[ClipItem | null, ClipItem | null]>(() => [currentClip, nextClip]);
+  //
+  // The preload only runs while playing. During pause/scrub, the inactive slot holds
+  // null so only one MediaCodec decoder is alive — scrubbing fast across clip boundaries
+  // otherwise thrashes two concurrent decoders and stutters on Android. The first
+  // transition after pressing play will briefly spin up the preload.
+  const [slots, setSlots] = useState<[ClipItem | null, ClipItem | null]>(() => [currentClip, isPlaying ? nextClip : null]);
   const [activeSlot, setActiveSlot] = useState<0 | 1>(0);
 
   useEffect(() => {
@@ -252,21 +293,22 @@ export function PreviewPlayer({
       setActiveSlot(0);
       return;
     }
+    const preload = isPlaying ? nextClip : null;
     setSlots(prev => {
       const curIdx = prev.findIndex(c => c?.id === currentClip.id);
       if (curIdx === -1) {
         // Non-adjacent jump (e.g., seek). Reset both slots.
         setActiveSlot(0);
-        return [currentClip, nextClip];
+        return [currentClip, preload];
       }
       setActiveSlot(curIdx as 0 | 1);
       const otherIdx = curIdx === 0 ? 1 : 0;
-      if (prev[otherIdx]?.id === nextClip?.id) return prev;
+      if (prev[otherIdx]?.id === preload?.id) return prev;
       const updated = [...prev] as [ClipItem | null, ClipItem | null];
-      updated[otherIdx] = nextClip;
+      updated[otherIdx] = preload;
       return updated;
     });
-  }, [currentClip?.id, nextClip?.id]);
+  }, [currentClip?.id, nextClip?.id, isPlaying]);
 
   // Per-slot seek: the active slot uses currentClipSeekSec (tracks scrub, trim); inactive uses trimStart.
   const slot0SeekSec = slots[0] && currentClip && slots[0].id === currentClip.id

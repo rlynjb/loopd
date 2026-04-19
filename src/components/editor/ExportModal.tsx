@@ -13,13 +13,10 @@ const STAGE_LABELS: Record<string, string> = {
 
 type Props = {
   progress: ExportProgress | null;
-  clipCount: number;
-  textCount: number;
-  filterCount: number;
   onCancel: () => void;
 };
 
-export function ExportModal({ progress, clipCount, textCount, filterCount, onCancel }: Props) {
+export function ExportModal({ progress, onCancel }: Props) {
   if (!progress) return null;
 
   const pct = progress.progress;
@@ -56,25 +53,6 @@ export function ExportModal({ progress, clipCount, textCount, filterCount, onCan
       {isError && progress.error && (
         <Text style={styles.errorText} numberOfLines={4}>{progress.error}</Text>
       )}
-
-      {!isError && !isDone && (
-        <Text style={styles.stageText}>
-          {Math.round(progress.currentTimeMs / 1000)}s / {Math.round(progress.totalDurationMs / 1000)}s
-        </Text>
-      )}
-
-      <View style={styles.stats}>
-        {[
-          { label: 'clips', value: clipCount, color: colors.coral },
-          { label: 'texts', value: textCount, color: colors.amber },
-          { label: 'filters', value: filterCount, color: colors.purple },
-        ].map(s => (
-          <View key={s.label} style={styles.statItem}>
-            <Text style={[styles.statValue, { color: s.color }]}>{s.value}</Text>
-            <Text style={styles.statLabel}>{s.label.toUpperCase()}</Text>
-          </View>
-        ))}
-      </View>
 
       <Pressable onPress={onCancel} style={styles.cancelBtn}>
         <Text style={styles.cancelBtnText}>{isDone ? 'DISMISS' : isError ? 'DISMISS' : 'CANCEL'}</Text>
@@ -113,12 +91,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 8,
   },
-  stageText: {
-    fontFamily: fonts.mono,
-    fontSize: 11,
-    color: colors.textDim,
-    letterSpacing: 0.4,
-  },
   errorText: {
     fontFamily: fonts.mono,
     fontSize: 9,
@@ -126,25 +98,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 32,
     marginBottom: 8,
-  },
-  stats: {
-    flexDirection: 'row',
-    gap: 16,
-    marginTop: 20,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    fontFamily: fonts.heading,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  statLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
-    color: colors.textDim,
-    letterSpacing: 0.8,
   },
   cancelBtn: {
     marginTop: 24,

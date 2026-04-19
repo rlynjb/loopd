@@ -169,6 +169,50 @@ npm run metro
 
 ## Development Workflow
 
+### Daily cycle: plugged in → unplug → back plugged in
+
+The dev client needs Metro to load JS. When you unplug the phone, Metro
+becomes unreachable and the next app reload will fail with
+**"Unable to load script"**. To stay productive across a normal day:
+
+**While plugged in (coding):**
+
+```bash
+npm run metro                      # starts Metro bundler
+adb reverse tcp:8081 tcp:8081      # lets the phone reach Metro via USB
+```
+
+Open the dev client app on the phone. Code edits hot-reload instantly.
+
+**Before unplugging:**
+
+Build and install a standalone APK. It bundles the JS so the app runs
+offline with no Metro dependency.
+
+```bash
+cd android && ./gradlew :app:assembleRelease
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+First run takes ~3-10 min (compiles native code). Re-runs are faster —
+Gradle caches. You can unplug as soon as the `adb install` finishes.
+
+**When you plug back in for the next dev session:**
+
+```bash
+npm run metro
+adb reverse tcp:8081 tcp:8081
+```
+
+The dev-client APK on the phone (if still installed) reconnects. If you
+rebuilt the release APK in the previous step, reinstall the dev build
+once with `npm run android:device` to get live reload back.
+
+> **Which APK is on my phone right now?** Dev-client and release-standalone
+> share the same package name (`com.anonymous.loopd`), so installing one
+> replaces the other. Pick per session — dev-client for editing code,
+> release for unplugged use.
+
 ### Emulator (local testing)
 
 `npm run android`

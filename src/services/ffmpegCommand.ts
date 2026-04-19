@@ -126,7 +126,7 @@ export function buildExportCommand(
     `-filter_complex "${filterComplex}"`,
     `-map "[${videoLabel}]"`,
     `-map "[${audioLabel}]"`,
-    `-c:v libx264 -preset fast -crf 23`,
+    `-c:v libx264 -preset ultrafast -crf 23`,
     `-c:a aac -b:a 128k`,
     `-movflags +faststart`,
     `-y "${uriToPath(outputPath)}"`,
@@ -165,7 +165,7 @@ export function buildMultiPassCommands(
       `-filter_complex "[0:v]trim=${startSec.toFixed(3)}:${endSec.toFixed(3)},setpts=PTS-STARTPTS,` +
       `scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1[v];` +
       `[0:a]atrim=${startSec.toFixed(3)}:${endSec.toFixed(3)},asetpts=PTS-STARTPTS[a]" ` +
-      `-map "[v]" -map "[a]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${outFile}"`
+      `-map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -y "${outFile}"`
     );
   }
 
@@ -179,7 +179,7 @@ export function buildMultiPassCommands(
     const concatFilter = Array.from({ length: trimmedFiles.length }, (_, i) => `[${i}:v][${i}:a]`).join('');
     commands.push(
       `${concatInputs} -filter_complex "${concatFilter}concat=n=${trimmedFiles.length}:v=1:a=1[v][a]" ` +
-      `-map "[v]" -map "[a]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -y "${concatFile}"`
+      `-map "[v]" -map "[a]" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k -y "${concatFile}"`
     );
   }
 
@@ -219,7 +219,7 @@ export function buildMultiPassCommands(
   if (filterParts.length > 0) {
     commands.push(
       `-i "${concatFile}" -filter_complex "${filterParts.join(';')}" ` +
-      `-map "[${videoLabel}]" -map "0:a" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k ` +
+      `-map "[${videoLabel}]" -map "0:a" -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k ` +
       `-movflags +faststart -y "${uriToPath(outputPath)}"`
     );
   } else {

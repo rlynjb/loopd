@@ -103,6 +103,24 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // Back-fill 1080p proxies for clips captured before the transcode-on-import
+  // change. Runs once per launch if any old-layout clips are still referenced.
+  // Safe to re-run (already-migrated URIs are skipped).
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { countPendingMigrations, migrateOldClips } = await import('../src/services/clipMigration');
+        const pending = await countPendingMigrations();
+        if (pending === 0) return;
+        console.log(`[loopd] starting clip migration for ${pending} clip(s)`);
+        await migrateOldClips();
+      } catch (err) {
+        console.warn('[loopd] clip migration failed:', err);
+      }
+    })();
+  }, [ready]);
+
   useEffect(() => {
     if (!error) return;
     Alert.alert(

@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { SpinningIcon } from '../ui/SpinningIcon';
 import { useNotionSync } from '../../hooks/useNotionSync';
+import { subscribeToMigration, type MigrationStatus } from '../../services/clipMigration';
 import type { Habit, Entry } from '../../types/entry';
 
 type Props = {
@@ -26,6 +28,10 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
   const router = useRouter();
   const { status: syncStatus, configured: syncConfigured, syncNow, result: syncResult, lastSynced } = useNotionSync();
   const syncing = syncStatus === 'syncing';
+
+  // Subscribe to in-flight clip migrations so the status pill ticks live.
+  const [migration, setMigration] = useState<MigrationStatus | null>(null);
+  useEffect(() => subscribeToMigration(s => setMigration(s.running ? s : null)), []);
 
 
   return (
@@ -73,6 +79,14 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
       {syncConfigured && syncing && (
         <View style={styles.syncStatus}>
           <Text style={[styles.syncStatusText, { color: colors.accent2 }]}>Syncing with Notion...</Text>
+        </View>
+      )}
+
+      {migration && (
+        <View style={styles.syncStatus}>
+          <Text style={[styles.syncStatusText, { color: colors.teal }]}>
+            Optimizing clips… {migration.done + migration.failed}/{migration.total}
+          </Text>
         </View>
       )}
 

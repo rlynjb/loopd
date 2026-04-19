@@ -136,9 +136,13 @@ export default function EditorScreen() {
   const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
   const [renderingText, setRenderingText] = useState(false);
   const [previewHeight, setPreviewHeight] = useState(280);
+  const [showFilters, setShowFilters] = useState(false);
   const pendingTransitionRef = useRef<{ clipId: string; expectedStartSec: number } | null>(null);
   const advancedFromClipRef = useRef<string | null>(null);
   const lastProgressRef = useRef<{ wallMs: number; videoSec: number; clipId: string } | null>(null);
+  // Guards against the stale currentTime=0 progress event that fires right after
+  // scrub → play, which would otherwise snap playheadPos to the clip start.
+  const playStartGuardRef = useRef<{ clipId: string; expectedStartSec: number } | null>(null);
   const heightAtDragStart = useRef(280);
   const currentHeightRef = useRef(280);
   currentHeightRef.current = previewHeight;
@@ -177,6 +181,7 @@ export default function EditorScreen() {
 
   const togglePlay = () => {
     if (isPlaying) {
+      playStartGuardRef.current = null;
       setIsPlaying(false);
     } else {
       advancedFromClipRef.current = null;
@@ -189,6 +194,17 @@ export default function EditorScreen() {
       playheadRefPos.value = playheadPos >= 0.99 ? 0 : playheadPos;
       playheadRefTimeMs.value = performance.now();
       canExtrapolateSV.value = false;
+      if (currentClip) {
+        playStartGuardRef.current = {
+          clipId: currentClip.id,
+          expectedStartSec: currentClipSeekSec,
+        };
+      }
+      logPlaybackDebug('play pressed', {
+        clipId: currentClip?.id ?? null,
+        playheadPos: Number(playheadPos.toFixed(4)),
+        currentClipSeekSec: Number((currentClipSeekSec ?? 0).toFixed(3)),
+      });
       setIsPlaying(true);
     }
   };
@@ -284,6 +300,19 @@ export default function EditorScreen() {
     if (advancedFromClipRef.current === clipId) {
       logPlaybackDebug('ignored post-advance progress', { clipId, currentTimeSec: Number(currentTimeSec.toFixed(3)) });
       return;
+    }
+
+    const playStartGuard = playStartGuardRef.current;
+    if (playStartGuard && playStartGuard.clipId === clipId) {
+      if (currentTimeSec < playStartGuard.expectedStartSec - TRANSITION_EARLY_TOLERANCE_SEC) {
+        logPlaybackDebug('ignored pre-seek progress after play', {
+          clipId,
+          currentTimeSec: Number(currentTimeSec.toFixed(3)),
+          expectedStartSec: Number(playStartGuard.expectedStartSec.toFixed(3)),
+        });
+        return;
+      }
+      playStartGuardRef.current = null;
     }
 
     const pendingTransition = pendingTransitionRef.current;
@@ -689,6 +718,39 @@ export default function EditorScreen() {
           }}
         />
 
+        {/* Edit tabs: TEXT / FILTER */}
+        <View style={styles.editTabs}>
+          <Pressable
+            onPress={() => {
+              if (editingTextId) {
+                setEditingTextId(null);
+              } else {
+                setShowFilters(false);
+                const first = textOverlays[0];
+                if (first) { setSelectedClipId(null); setEditingTextId(first.id); }
+              }
+            }}
+            hitSlop={8}
+            style={[styles.editTab, !!editingTextId && styles.editTabActive]}
+          >
+            <Text style={[styles.editTabText, !!editingTextId && styles.editTabTextActive]}>TEXT</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              if (showFilters) {
+                setShowFilters(false);
+              } else {
+                setEditingTextId(null);
+                setShowFilters(true);
+              }
+            }}
+            hitSlop={8}
+            style={[styles.editTab, showFilters && styles.editTabActive]}
+          >
+            <Text style={[styles.editTabText, showFilters && styles.editTabTextActive]}>FILTER</Text>
+          </Pressable>
+        </View>
+
         {/* Text overlay editor (inline) */}
         {editingText && (
           <TextOverlaySheet
@@ -698,15 +760,16 @@ export default function EditorScreen() {
         )}
 
         {/* Filter pills */}
-        <View style={styles.filterSection}>
-          <Text style={styles.sectionLabel}>FILTER</Text>
-          <FilterPills
-            activeFilterId={activeFilterId}
-            onSelect={setFilter}
-            previewClipUri={clips[0]?.clipUri}
-            previewClipTrimStartMs={clips[0] ? clips[0].durationMs * clips[0].trimStartPct / 100 : 0}
-          />
-        </View>
+        {showFilters && (
+          <View style={styles.filterSection}>
+            <FilterPills
+              activeFilterId={activeFilterId}
+              onSelect={setFilter}
+              previewClipUri={clips[0]?.clipUri}
+              previewClipTrimStartMs={clips[0] ? clips[0].durationMs * clips[0].trimStartPct / 100 : 0}
+            />
+          </View>
+        )}
 
 
         {clips.length === 0 && (
@@ -720,9 +783,6 @@ export default function EditorScreen() {
 
       <ExportModal
         progress={exportProgress}
-        clipCount={clips.length}
-        textCount={textOverlays.length}
-        filterCount={filterOverlays.length}
         onCancel={cancelExport}
       />
     </View>
@@ -832,6 +892,33 @@ const styles = StyleSheet.create({
   },
   filterSection: {
     marginBottom: 16,
+  },
+  editTabs: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    gap: 24,
+    marginTop: 8,
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.cardBorder,
+  },
+  editTab: {
+    paddingVertical: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    marginBottom: -1,
+  },
+  editTabActive: {
+    borderBottomColor: colors.accent,
+  },
+  editTabText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.textDim,
+    letterSpacing: 1,
+  },
+  editTabTextActive: {
+    color: colors.accent,
   },
   previewContainer: {
     alignItems: 'center',
