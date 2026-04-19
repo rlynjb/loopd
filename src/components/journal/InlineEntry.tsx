@@ -16,15 +16,17 @@ type Props = {
   onRemoveClip?: (entry: Entry, clipIndex: number) => void;
   onRemoveHabit?: (entry: Entry, habitId: string) => void;
   onUpdateTodos?: (entry: Entry, todos: TodoItem[]) => void;
-  // Number of clips currently being transcoded (FFmpeg pass) for this entry.
-  // Rendered as placeholder spinner cards after the real clip thumbnails so
-  // the user sees exactly where the new clip will land.
-  pendingClipCount?: number;
+  // Clips currently being transcoded (FFmpeg pass) for this entry. Rendered as
+  // placeholder spinner cards after the real clip thumbnails so the user sees
+  // exactly where the new clip will land. Tapping a placeholder cancels its
+  // running FFmpeg session via onCancelPending.
+  pendingClips?: { pendingId: string }[];
+  onCancelPending?: (pendingId: string) => void;
   compact?: boolean;
 };
 
-export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveClip, onRemoveHabit, onUpdateTodos, pendingClipCount = 0, compact }: Props) {
-  const hasClips = entry.clips.length > 0 || !!entry.clipUri || pendingClipCount > 0;
+export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveClip, onRemoveHabit, onUpdateTodos, pendingClips = [], onCancelPending, compact }: Props) {
+  const hasClips = entry.clips.length > 0 || !!entry.clipUri || pendingClips.length > 0;
   const hasHabits = entry.habits.length > 0;
   const hasTodos = (entry.todos?.length ?? 0) > 0;
 
@@ -135,13 +137,18 @@ export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveCli
                 )}
               </View>
             ))}
-            {/* Placeholder cards for in-flight transcodes */}
-            {Array.from({ length: pendingClipCount }).map((_, i) => (
-              <View key={`pending-${i}`} style={styles.clipCard}>
+            {/* Placeholder cards for in-flight transcodes. Tap to cancel. */}
+            {pendingClips.map(p => (
+              <Pressable
+                key={`pending-${p.pendingId}`}
+                onPress={() => onCancelPending?.(p.pendingId)}
+                style={styles.clipCard}
+              >
                 <View style={[styles.clipThumb, styles.clipThumbPending]}>
                   <ActivityIndicator size="small" color={colors.teal} />
+                  <Text style={styles.pendingCancelHint}>tap to cancel</Text>
                 </View>
-              </View>
+              </Pressable>
             ))}
             {onAddClip && (
               <Pressable
@@ -229,6 +236,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,217,163,0.08)',
     borderWidth: 1,
     borderColor: 'rgba(0,217,163,0.3)',
+    gap: 4,
+  },
+  pendingCancelHint: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textDim,
+    letterSpacing: 0.3,
   },
   clipDurationBadge: {
     position: 'absolute',

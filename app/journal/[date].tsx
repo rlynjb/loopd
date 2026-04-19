@@ -16,7 +16,7 @@ import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
 import { updateEntry as updateEntryDB, deleteEmptyEntries } from '../../src/services/database';
-import { pickAndCopyClip } from '../../src/services/fileManager';
+import { pickAndCopyClip, TranscodeCancelledError, type TranscodeHandle } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { on } from '../../src/utils/events';
 import type { Entry } from '../../src/types/entry';
@@ -33,16 +33,36 @@ export default function JournalScreen() {
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [showHabitPicker, setShowHabitPicker] = useState(showHabits === '1');
-  // Per-entry count of in-flight clip transcodes. InlineEntry renders N placeholder
-  // cards beside its real clips while > 0, so the user sees a spinner exactly where
-  // the new clip will land instead of a global banner.
-  const [pendingByEntry, setPendingByEntry] = useState<Record<string, number>>({});
+  // Per-entry in-flight clip transcodes. Tracked by id so each placeholder
+  // can individually cancel the running FFmpeg session (tapping the spinner).
+  type PendingClip = { pendingId: string; cancel: () => void };
+  const [pendingByEntry, setPendingByEntry] = useState<Record<string, PendingClip[]>>({});
 
-  const bumpPending = useCallback((entryId: string, delta: number) => {
+  const addPending = useCallback((entryId: string, pending: PendingClip) => {
+    setPendingByEntry(prev => ({
+      ...prev,
+      [entryId]: [...(prev[entryId] ?? []), pending],
+    }));
+  }, []);
+
+  const removePending = useCallback((entryId: string, pendingId: string) => {
     setPendingByEntry(prev => {
-      const next = (prev[entryId] ?? 0) + delta;
+      const list = (prev[entryId] ?? []).filter(p => p.pendingId !== pendingId);
       const copy = { ...prev };
-      if (next <= 0) delete copy[entryId];
+      if (list.length === 0) delete copy[entryId];
+      else copy[entryId] = list;
+      return copy;
+    });
+  }, []);
+
+  const cancelPending = useCallback((entryId: string, pendingId: string) => {
+    setPendingByEntry(prev => {
+      const list = prev[entryId] ?? [];
+      const target = list.find(p => p.pendingId === pendingId);
+      target?.cancel();
+      const next = list.filter(p => p.pendingId !== pendingId);
+      const copy = { ...prev };
+      if (next.length === 0) delete copy[entryId];
       else copy[entryId] = next;
       return copy;
     });
@@ -210,13 +230,17 @@ export default function JournalScreen() {
   }, []);
 
   const handleAddClipToEntry = useCallback(async (entry: Entry) => {
-    let pendingAttachedTo: string | null = null;
+    const pendingId = generateId('pending');
+    const handleRef: { current: TranscodeHandle | null } = { current: null };
+    let attached = false;
     try {
       const result = await pickAndCopyClip(date, () => {
-        // Picker closed — show the placeholder slot in this entry's clip row.
-        pendingAttachedTo = entry.id;
-        bumpPending(entry.id, 1);
-      });
+        addPending(entry.id, {
+          pendingId,
+          cancel: () => handleRef.current?.cancel(),
+        });
+        attached = true;
+      }, h => { handleRef.current = h; });
       if (result) {
         const updated = {
           ...entry,
@@ -228,10 +252,12 @@ export default function JournalScreen() {
         setEditingEntry(updated);
         editingEntryRef.current = updated;
       }
+    } catch (e) {
+      if (!(e instanceof TranscodeCancelledError)) throw e;
     } finally {
-      if (pendingAttachedTo) bumpPending(pendingAttachedTo, -1);
+      if (attached) removePending(entry.id, pendingId);
     }
-  }, [date, editEntry, bumpPending]);
+  }, [date, editEntry, addPending, removePending]);
 
   const handleRemoveHabitFromEntry = useCallback(async (entry: Entry, habitId: string) => {
     const currentText = editingEntryRef.current?.id === entry.id ? (liveTextRef.current.trim() || entry.text) : entry.text;
@@ -291,6 +317,8 @@ export default function JournalScreen() {
         await updateEntryDB({ ...existing, text: liveTextRef.current.trim() });
       }
     }
+    const pendingId = generateId('pending');
+    const handleRef: { current: TranscodeHandle | null } = { current: null };
     let pendingAttachedTo: string | null = null;
     try {
       const result = await pickAndCopyClip(date, () => {
@@ -316,8 +344,11 @@ export default function JournalScreen() {
           targetId = stub.id;
         }
         pendingAttachedTo = targetId;
-        bumpPending(targetId, 1);
-      });
+        addPending(targetId, {
+          pendingId,
+          cancel: () => handleRef.current?.cancel(),
+        });
+      }, h => { handleRef.current = h; });
       if (result && targetId) {
         // Re-read entry from DB (state may be stale after picker)
         const { getEntryById } = await import('../../src/services/database');
@@ -339,10 +370,12 @@ export default function JournalScreen() {
       }
       // The !targetId fallback is no longer reachable — the picker's onProcessing
       // callback always creates a stub entry before the transcode starts.
+    } catch (e) {
+      if (!(e instanceof TranscodeCancelledError)) throw e;
     } finally {
-      if (pendingAttachedTo) bumpPending(pendingAttachedTo, -1);
+      if (pendingAttachedTo) removePending(pendingAttachedTo, pendingId);
     }
-  }, [date, addEntry, editEntry, bumpPending]);
+  }, [date, addEntry, editEntry, addPending, removePending]);
 
   // Final save — updates state and clears editing
   const handleEditTextSave = useCallback(async (text: string) => {
@@ -552,7 +585,8 @@ export default function JournalScreen() {
                 onAddClip={handleAddClipToEntry}
                 onRemoveClip={handleRemoveClipFromEntry}
                 onRemoveHabit={handleRemoveHabitFromEntry}
-                pendingClipCount={pendingByEntry[entry.id] ?? 0}
+                pendingClips={pendingByEntry[entry.id] ?? []}
+                onCancelPending={pid => cancelPending(entry.id, pid)}
                 compact
               />
             </View>
@@ -566,7 +600,8 @@ export default function JournalScreen() {
               onRemoveClip={handleRemoveClipFromEntry}
               onRemoveHabit={handleRemoveHabitFromEntry}
               onUpdateTodos={handleUpdateTodos}
-              pendingClipCount={pendingByEntry[entry.id] ?? 0}
+              pendingClips={pendingByEntry[entry.id] ?? []}
+              onCancelPending={pid => cancelPending(entry.id, pid)}
             />
           )
         ))}

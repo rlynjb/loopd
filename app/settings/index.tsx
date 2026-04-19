@@ -48,7 +48,7 @@ export default function SettingsMenu() {
               const DocumentPicker = await import('expo-document-picker');
               const SQLite = await import('expo-sqlite');
               const { File: FSFile } = await import('expo-file-system');
-              const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDir: true });
+              const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
               if (result.canceled || !result.assets?.[0]) return;
               const pickedUri = result.assets[0].uri;
 

@@ -58,7 +58,14 @@ export function getMediaPath(clipId: string): string {
  * Android codec limits and makes per-clip storage predictable (~3-5 MB
  * vs. 50-200 MB for a 4K HDR original).
  */
-export async function transcodeToProxy(sourceUri: string): Promise<string> {
+export type TranscodeHandle = {
+  cancel: () => Promise<void>;
+};
+
+export async function transcodeToProxy(
+  sourceUri: string,
+  onHandle?: (handle: TranscodeHandle) => void,
+): Promise<string> {
   const { FFmpegKit, ReturnCode } = await getFFmpeg();
   const clipId = generateId('m');
   await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
@@ -81,7 +88,33 @@ export async function transcodeToProxy(sourceUri: string): Promise<string> {
     `${outQuoted}`;
 
   console.log('[loopd] transcode:', cmd);
-  const session = await FFmpegKit.execute(cmd);
+
+  // Run asynchronously so we can hand back a cancel() before awaiting completion.
+  let cancelled = false;
+  let resolveDone!: () => void;
+  const done = new Promise<void>(resolve => { resolveDone = resolve; });
+  const session = await FFmpegKit.executeAsync(cmd, () => resolveDone());
+
+  if (onHandle) {
+    onHandle({
+      cancel: async () => {
+        cancelled = true;
+        try { await session.cancel(); } catch { /* best-effort */ }
+      },
+    });
+  }
+
+  await done;
+
+  if (cancelled) {
+    // Best-effort cleanup of the partial output file.
+    try {
+      const partial = new File(outputPath);
+      if (partial.exists) partial.delete();
+    } catch { /* ignore */ }
+    throw new TranscodeCancelledError();
+  }
+
   const returnCode = await session.getReturnCode();
   if (!ReturnCode.isSuccess(returnCode)) {
     const logs = await session.getAllLogs();
@@ -91,8 +124,16 @@ export async function transcodeToProxy(sourceUri: string): Promise<string> {
   return outputUri;
 }
 
+export class TranscodeCancelledError extends Error {
+  constructor() {
+    super('Transcode cancelled');
+    this.name = 'TranscodeCancelledError';
+  }
+}
+
 async function captureToProxy(
   asset: ImagePicker.ImagePickerAsset,
+  onHandle?: (handle: TranscodeHandle) => void,
 ): Promise<{ uri: string; durationMs: number }> {
   const rawDuration = asset.duration ?? 0;
   const durationMs = rawDuration > 0 && rawDuration < 1000
@@ -100,9 +141,10 @@ async function captureToProxy(
     : rawDuration;
 
   try {
-    const proxyUri = await transcodeToProxy(asset.uri);
+    const proxyUri = await transcodeToProxy(asset.uri, onHandle);
     return { uri: proxyUri, durationMs };
   } catch (e) {
+    if (e instanceof TranscodeCancelledError) throw e;
     console.warn('[loopd] Transcode failed, falling back to source URI:', e);
     // Fallback: caller keeps referencing the original (content:// or file://).
     // Editor/export will still work, just without the proxy benefits.
@@ -113,6 +155,7 @@ async function captureToProxy(
 export async function recordClip(
   _date: string,
   onProcessing?: () => void,
+  onHandle?: (handle: TranscodeHandle) => void,
 ): Promise<{ uri: string; durationMs: number } | null> {
   const { status } = await ImagePicker.requestCameraPermissionsAsync();
   if (status !== 'granted') return null;
@@ -133,12 +176,13 @@ export async function recordClip(
     await saveToDCIMLoopd(result.assets[0].uri);
   } catch { /* non-critical */ }
 
-  return await captureToProxy(result.assets[0]);
+  return await captureToProxy(result.assets[0], onHandle);
 }
 
 export async function pickAndCopyClip(
   _date: string,
   onProcessing?: () => void,
+  onHandle?: (handle: TranscodeHandle) => void,
 ): Promise<{ uri: string; durationMs: number } | null> {
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['videos'],
@@ -148,7 +192,7 @@ export async function pickAndCopyClip(
   if (result.canceled || result.assets.length === 0) return null;
   onProcessing?.();
   // Library picks already live in the user's gallery — no DCIM copy needed.
-  return await captureToProxy(result.assets[0]);
+  return await captureToProxy(result.assets[0], onHandle);
 }
 
 export function getExportPath(date: string): string {
