@@ -48,6 +48,34 @@ export function getMediaPath(clipId: string): string {
   return new File(Paths.document, 'loopd', 'media', `${clipId}.mp4`).uri;
 }
 
+function getLoopdRootPath(): string {
+  return uriToPath(new Directory(Paths.document, 'loopd').uri);
+}
+
+// Convert an absolute clip URI inside our sandbox to a path relative to
+// `{docs}/loopd/` so the DB survives a sandbox-path change (reinstall,
+// different Android user profile). External URIs (content://, other
+// filesystem locations) pass through unchanged.
+export function normalizeClipUriForStorage(uri: string | null | undefined): string | null {
+  if (!uri) return null;
+  if (uri.startsWith('content://')) return uri;
+  const root = getLoopdRootPath();
+  const path = uriToPath(uri);
+  if (path.startsWith(root + '/')) return path.slice(root.length + 1);
+  return uri;
+}
+
+// Inverse of normalizeClipUriForStorage — resolve any stored URI to one a
+// media component (Video, VideoThumbnails) can load directly.
+export function resolveClipUri(stored: string | null | undefined): string | null {
+  if (!stored) return null;
+  if (stored.startsWith('content://') || stored.startsWith('file://')) return stored;
+  if (stored.startsWith('/')) return `file://${stored}`;
+  // Treat as relative to loopd root.
+  const rootUri = new Directory(Paths.document, 'loopd').uri;
+  return `${rootUri}/${stored}`;
+}
+
 /**
  * Transcode a source video (camera recording or library pick) into a
  * 1080p-max H.264 proxy stored in `loopd/media/{clipId}.mp4`. The original
@@ -62,72 +90,117 @@ export type TranscodeHandle = {
   cancel: () => Promise<void>;
 };
 
-export async function transcodeToProxy(
-  sourceUri: string,
-  onHandle?: (handle: TranscodeHandle) => void,
-): Promise<string> {
-  const { FFmpegKit, ReturnCode } = await getFFmpeg();
-  const clipId = generateId('m');
-  await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
-  const outputUri = getMediaPath(clipId);
-  const outputPath = uriToPath(outputUri);
-
-  const inQuoted = quoteFFmpegPath(sourceUri);
-  const outQuoted = quoteFFmpegPath(outputPath);
-
-  // Scale so the longer side fits within PROXY_MAX_LONG_EDGE and the shorter
-  // within PROXY_MAX_SHORT_EDGE. Preserves aspect ratio and orientation.
-  // Never upscales (decrease only).
-  const scaleFilter = `scale='if(gt(iw,ih),min(${PROXY_MAX_LONG_EDGE},iw),min(${PROXY_MAX_SHORT_EDGE},iw))':'if(gt(iw,ih),min(${PROXY_MAX_SHORT_EDGE},ih),min(${PROXY_MAX_LONG_EDGE},ih))':force_original_aspect_ratio=decrease:flags=bicubic,pad=ceil(iw/2)*2:ceil(ih/2)*2`;
-
-  const cmd = `-y -i ${inQuoted} ` +
-    `-vf "${scaleFilter}" ` +
-    `-c:v libx264 -preset fast -crf ${PROXY_CRF} -pix_fmt yuv420p ` +
-    `-c:a aac -b:a 128k -ar 44100 -ac 2 ` +
-    `-movflags +faststart ` +
-    `${outQuoted}`;
-
-  console.log('[loopd] transcode:', cmd);
-
-  // Run asynchronously so we can hand back a cancel() before awaiting completion.
-  let cancelled = false;
-  let resolveDone!: () => void;
-  const done = new Promise<void>(resolve => { resolveDone = resolve; });
-  const session = await FFmpegKit.executeAsync(cmd, () => resolveDone());
-
-  if (onHandle) {
-    onHandle({
-      cancel: async () => {
-        cancelled = true;
-        try { await session.cancel(); } catch { /* best-effort */ }
-      },
-    });
-  }
-
-  await done;
-
-  if (cancelled) {
-    // Best-effort cleanup of the partial output file.
-    try {
-      const partial = new File(outputPath);
-      if (partial.exists) partial.delete();
-    } catch { /* ignore */ }
-    throw new TranscodeCancelledError();
-  }
-
-  const returnCode = await session.getReturnCode();
-  if (!ReturnCode.isSuccess(returnCode)) {
-    const logs = await session.getAllLogs();
-    const last = logs.slice(-5).map(l => l.getMessage()).join('\n');
-    throw new Error(`Transcode failed: ${last || 'unknown error'}`);
-  }
-  return outputUri;
-}
-
 export class TranscodeCancelledError extends Error {
   constructor() {
     super('Transcode cancelled');
     this.name = 'TranscodeCancelledError';
+  }
+}
+
+export class DiskFullError extends Error {
+  constructor() {
+    super('Not enough free storage to transcode this clip.');
+    this.name = 'DiskFullError';
+  }
+}
+
+// Cap concurrent FFmpeg sessions. Two run fine; beyond that, MediaCodec and
+// memory pressure stacks up. Extra imports wait in FIFO order.
+const MAX_CONCURRENT_TRANSCODES = 2;
+let activeTranscodes = 0;
+const transcodeQueue: Array<() => void> = [];
+
+async function acquireTranscodeSlot(): Promise<void> {
+  if (activeTranscodes < MAX_CONCURRENT_TRANSCODES) {
+    activeTranscodes++;
+    return;
+  }
+  await new Promise<void>(resolve => transcodeQueue.push(resolve));
+  activeTranscodes++;
+}
+
+function releaseTranscodeSlot(): void {
+  activeTranscodes--;
+  const next = transcodeQueue.shift();
+  if (next) next();
+}
+
+function isDiskFullError(msg: string): boolean {
+  const lower = msg.toLowerCase();
+  return lower.includes('no space left') || lower.includes('enospc') || lower.includes('disk full');
+}
+
+export async function transcodeToProxy(
+  sourceUri: string,
+  onHandle?: (handle: TranscodeHandle) => void,
+): Promise<string> {
+  await acquireTranscodeSlot();
+  try {
+    const { FFmpegKit, ReturnCode } = await getFFmpeg();
+    const clipId = generateId('m');
+    await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
+    const outputUri = getMediaPath(clipId);
+    const outputPath = uriToPath(outputUri);
+
+    const inQuoted = quoteFFmpegPath(sourceUri);
+    const outQuoted = quoteFFmpegPath(outputPath);
+
+    // Scale so the longer side fits within PROXY_MAX_LONG_EDGE and the shorter
+    // within PROXY_MAX_SHORT_EDGE. Preserves aspect ratio and orientation.
+    // Never upscales (decrease only).
+    const scaleFilter = `scale='if(gt(iw,ih),min(${PROXY_MAX_LONG_EDGE},iw),min(${PROXY_MAX_SHORT_EDGE},iw))':'if(gt(iw,ih),min(${PROXY_MAX_SHORT_EDGE},ih),min(${PROXY_MAX_LONG_EDGE},ih))':force_original_aspect_ratio=decrease:flags=bicubic,pad=ceil(iw/2)*2:ceil(ih/2)*2`;
+
+    const cmd = `-y -i ${inQuoted} ` +
+      `-vf "${scaleFilter}" ` +
+      `-c:v libx264 -preset fast -crf ${PROXY_CRF} -pix_fmt yuv420p ` +
+      `-c:a aac -b:a 128k -ar 44100 -ac 2 ` +
+      `-movflags +faststart ` +
+      `${outQuoted}`;
+
+    console.log('[loopd] transcode:', cmd);
+
+    // Run asynchronously so we can hand back a cancel() before awaiting completion.
+    let cancelled = false;
+    let resolveDone!: () => void;
+    const done = new Promise<void>(resolve => { resolveDone = resolve; });
+    const session = await FFmpegKit.executeAsync(cmd, () => resolveDone());
+
+    if (onHandle) {
+      onHandle({
+        cancel: async () => {
+          cancelled = true;
+          try { await session.cancel(); } catch { /* best-effort */ }
+        },
+      });
+    }
+
+    await done;
+
+    if (cancelled) {
+      // Best-effort cleanup of the partial output file.
+      try {
+        const partial = new File(outputPath);
+        if (partial.exists) partial.delete();
+      } catch { /* ignore */ }
+      throw new TranscodeCancelledError();
+    }
+
+    const returnCode = await session.getReturnCode();
+    if (!ReturnCode.isSuccess(returnCode)) {
+      const logs = await session.getAllLogs();
+      const last = logs.slice(-5).map(l => l.getMessage()).join('\n');
+      const msg = last || 'unknown error';
+      // Clean up any partial output so a later retry has a fresh target.
+      try {
+        const partial = new File(outputPath);
+        if (partial.exists) partial.delete();
+      } catch { /* ignore */ }
+      if (isDiskFullError(msg)) throw new DiskFullError();
+      throw new Error(`Transcode failed: ${msg}`);
+    }
+    return outputUri;
+  } finally {
+    releaseTranscodeSlot();
   }
 }
 
@@ -145,6 +218,7 @@ async function captureToProxy(
     return { uri: proxyUri, durationMs };
   } catch (e) {
     if (e instanceof TranscodeCancelledError) throw e;
+    if (e instanceof DiskFullError) throw e;
     console.warn('[loopd] Transcode failed, falling back to source URI:', e);
     // Fallback: caller keeps referencing the original (content:// or file://).
     // Editor/export will still work, just without the proxy benefits.

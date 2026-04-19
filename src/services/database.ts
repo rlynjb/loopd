@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 import { File as FSFile, Paths } from 'expo-file-system';
 import type { Entry, Habit, Vlog } from '../types/entry';
 import type { EditorProject } from '../types/project';
+import { normalizeClipUriForStorage, resolveClipUri } from './fileManager';
 
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -273,18 +274,32 @@ type EntryRow = {
 };
 
 function mapRowToEntry(r: EntryRow): Entry {
+  const rawClips: { uri: string; durationMs: number }[] = r.clips_json
+    ? JSON.parse(r.clips_json)
+    : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []);
   return {
     id: r.id,
     date: r.date,
     text: r.text,
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
     todos: r.todos_json ? JSON.parse(r.todos_json) : [],
-    clipUri: r.clip_uri,
+    clipUri: resolveClipUri(r.clip_uri),
     clipDurationMs: r.clip_duration_ms,
-    clips: r.clips_json ? JSON.parse(r.clips_json) : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []),
+    clips: rawClips.map(c => ({ ...c, uri: resolveClipUri(c.uri) ?? c.uri })),
     createdAt: r.created_at,
     notionPageId: r.notion_page_id,
     updatedAt: r.updated_at,
+  };
+}
+
+function entryClipsForStorage(entry: Entry): {
+  clipUri: string | null;
+  clipsJson: string;
+} {
+  const normalizedClips = entry.clips.map(c => ({ ...c, uri: normalizeClipUriForStorage(c.uri) ?? c.uri }));
+  return {
+    clipUri: normalizeClipUriForStorage(entry.clipUri),
+    clipsJson: JSON.stringify(normalizedClips),
   };
 }
 
@@ -302,14 +317,15 @@ export async function getEntriesByDate(date: string): Promise<Entry[]> {
 export async function insertEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
+  const { clipUri, clipsJson } = entryClipsForStorage(entry);
   await db.runAsync(
     `INSERT INTO entries (id, date, text, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       entry.id, entry.date, entry.text,
       JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []),
-      entry.clipUri, entry.clipDurationMs,
-      JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
+      clipUri, entry.clipDurationMs,
+      clipsJson, entry.createdAt, entry.notionPageId ?? null, now,
     ]
   );
 }
@@ -317,9 +333,10 @@ export async function insertEntry(entry: Entry): Promise<void> {
 export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
+  const { clipsJson } = entryClipsForStorage(entry);
   await db.runAsync(
     `UPDATE entries SET text = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), JSON.stringify(entry.clips), now, entry.id]
+    [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), clipsJson, now, entry.id]
   );
 }
 

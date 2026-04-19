@@ -1,6 +1,6 @@
 import { File as FSFile } from 'expo-file-system';
 import { getAllEntries, getDatabase } from './database';
-import { transcodeToProxy } from './fileManager';
+import { transcodeToProxy, normalizeClipUriForStorage } from './fileManager';
 
 // Clips imported before the transcode-on-capture change live at the old
 // per-date path (`loopd/clips/{date}/…`) at original (usually 4K) resolution.
@@ -79,9 +79,11 @@ async function rewriteEntryClips(
 ): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
+  const normalizedClips = newClips.map(c => ({ ...c, uri: normalizeClipUriForStorage(c.uri) ?? c.uri }));
+  const normalizedClipUri = normalizeClipUriForStorage(newClipUri);
   await db.runAsync(
     `UPDATE entries SET clip_uri = ?, clip_duration_ms = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [newClipUri, newClipDurationMs, JSON.stringify(newClips), now, id],
+    [normalizedClipUri, newClipDurationMs, JSON.stringify(normalizedClips), now, id],
   );
 }
 

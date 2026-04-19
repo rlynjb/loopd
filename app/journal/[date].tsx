@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { View, Pressable, Text, TextInput, ScrollView, Keyboard, KeyboardAvoidingView, StyleSheet } from 'react-native';
+import { View, Pressable, Text, TextInput, ScrollView, Keyboard, KeyboardAvoidingView, StyleSheet, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,7 +16,7 @@ import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
 import { updateEntry as updateEntryDB, deleteEmptyEntries } from '../../src/services/database';
-import { pickAndCopyClip, TranscodeCancelledError, type TranscodeHandle } from '../../src/services/fileManager';
+import { pickAndCopyClip, TranscodeCancelledError, DiskFullError, type TranscodeHandle } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { on } from '../../src/utils/events';
 import type { Entry } from '../../src/types/entry';
@@ -253,7 +253,12 @@ export default function JournalScreen() {
         editingEntryRef.current = updated;
       }
     } catch (e) {
-      if (!(e instanceof TranscodeCancelledError)) throw e;
+      if (e instanceof TranscodeCancelledError) { /* user-initiated */ }
+      else if (e instanceof DiskFullError) {
+        Alert.alert('Out of storage', e.message);
+      } else {
+        throw e;
+      }
     } finally {
       if (attached) removePending(entry.id, pendingId);
     }
@@ -371,7 +376,12 @@ export default function JournalScreen() {
       // The !targetId fallback is no longer reachable — the picker's onProcessing
       // callback always creates a stub entry before the transcode starts.
     } catch (e) {
-      if (!(e instanceof TranscodeCancelledError)) throw e;
+      if (e instanceof TranscodeCancelledError) { /* user-initiated */ }
+      else if (e instanceof DiskFullError) {
+        Alert.alert('Out of storage', e.message);
+      } else {
+        throw e;
+      }
     } finally {
       if (pendingAttachedTo) removePending(pendingAttachedTo, pendingId);
     }
