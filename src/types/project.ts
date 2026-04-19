@@ -49,6 +49,7 @@ export type EditorProject = {
   date: string;
   status: 'draft' | 'exported';
   clips: ClipItem[];
+  removedClipSourceKeys: string[];
   textOverlays: TextOverlay[];
   filterOverlays: FilterOverlay[];
   exportUri: string | null;

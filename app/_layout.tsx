@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { View, ActivityIndicator, Alert, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, Alert, StyleSheet } from 'react-native';
 import * as Updates from 'expo-updates';
 import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
@@ -12,9 +12,10 @@ import { syncAll } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { addDays, toLocalDateString } from '../src/utils/time';
 
 function AppContent() {
-  const { ready } = useDatabase();
+  const { ready, error } = useDatabase();
   const [fontsLoaded] = useFonts({
     DMSerifDisplay: require('../assets/fonts/DMSerifDisplay.ttf'),
     DMMono: require('../assets/fonts/DMMono-Regular.ttf'),
@@ -90,9 +91,7 @@ function AppContent() {
         const { isAIConfigured } = await import('../src/services/ai/config');
         if (!(await isAIConfigured())) return;
         const { getAISummary } = await import('../src/services/database');
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yStr = yesterday.toISOString().split('T')[0];
+        const yStr = toLocalDateString(addDays(new Date(), -1));
         const existing = await getAISummary(yStr);
         if (existing) return;
         const { summarize } = await import('../src/services/ai/summarize');
@@ -104,10 +103,19 @@ function AppContent() {
     })();
   }, [ready]);
 
+  useEffect(() => {
+    if (!error) return;
+    Alert.alert(
+      'Database Error',
+      `loopd could not open its local database.\n\n${error}`
+    );
+  }, [error]);
+
   if (!ready || !fontsLoaded) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator color={colors.accent} size="large" />
+        {error ? <Text style={styles.errorText}>Database startup failed. See alert for details.</Text> : null}
         <StatusBar style="light" />
       </View>
     );
@@ -146,5 +154,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  errorText: {
+    marginTop: 12,
+    color: colors.textMuted,
+    fontSize: 13,
   },
 });

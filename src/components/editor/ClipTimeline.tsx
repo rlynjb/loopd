@@ -2,8 +2,9 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { View, Text, Pressable, Image, PanResponder, StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  useSharedValue, useAnimatedRef,
+  useSharedValue, useAnimatedRef, useAnimatedStyle, useFrameCallback,
   runOnJS, scrollTo,
+  type SharedValue,
 } from 'react-native-reanimated';
 import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as Haptics from 'expo-haptics';
@@ -16,14 +17,26 @@ function getEffective(c: ClipItem): number {
   return (c.durationMs / 1000) * (c.trimEndPct - c.trimStartPct) / 100;
 }
 
+const THUMB_COUNT = 6;
+const thumbnailCache = new Map<string, string[]>();
+
 const PX_PER_SEC = 60;
-const MIN_CLIP_WIDTH = 40;
+// A minimum rendered width would desync visual clip widths from the playhead's
+// proportional position (which is based on totalDurationSec * pxPerSec). Keep
+// clips purely proportional so the playhead lines up with clip boundaries.
+const MIN_CLIP_WIDTH = 0;
 const TRACK_HEIGHT = 64;
 
 type Props = {
   clips: ClipItem[];
   selectedClipId: string | null;
   playheadPos: number;
+  playheadPosAnim: SharedValue<number>;
+  playheadRefPos: SharedValue<number>;
+  playheadRefTimeMs: SharedValue<number>;
+  isPlayingSV: SharedValue<boolean>;
+  totalDurationMsSV: SharedValue<number>;
+  canExtrapolateSV: SharedValue<boolean>;
   isPlaying: boolean;
   onSelectClip: (id: string | null) => void;
   onTrimClip: (id: string, side: 'left' | 'right', deltaPct: number) => void;
@@ -34,27 +47,37 @@ type Props = {
 };
 
 // Multi-frame thumbnails spread across the full clip duration
-function useFrameThumbs(clipUri: string | undefined, durationMs: number, count: number) {
+function useFrameThumbs(clipUri: string | undefined, durationMs: number) {
   const [thumbs, setThumbs] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!clipUri || count <= 0) { setThumbs([]); return; }
+    if (!clipUri) { setThumbs([]); return; }
+    const cacheKey = `${clipUri}|${THUMB_COUNT}`;
+    const cached = thumbnailCache.get(cacheKey);
+    if (cached) {
+      setThumbs(cached);
+      return;
+    }
+
     let cancelled = false;
     (async () => {
       const results: string[] = [];
       const dur = Math.max(1000, durationMs);
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < THUMB_COUNT; i++) {
         if (cancelled) return;
         try {
-          const timeMs = Math.max(100, Math.round(((i + 0.5) / count) * dur));
+          const timeMs = Math.max(100, Math.round(((i + 0.5) / THUMB_COUNT) * dur));
           const { uri } = await VideoThumbnails.getThumbnailAsync(clipUri, { time: timeMs, quality: 0.3 });
           results.push(uri);
         } catch { /* skip */ }
       }
-      if (!cancelled) setThumbs(results);
+      if (!cancelled) {
+        thumbnailCache.set(cacheKey, results);
+        setThumbs(results);
+      }
     })();
     return () => { cancelled = true; };
-  }, [clipUri, durationMs, count]);
+  }, [clipUri, durationMs]);
 
   return thumbs;
 }
@@ -69,9 +92,10 @@ function ClipBlock({ clip, isSelected, onSelect, onTrim, onSplit, trackWidth, px
   pxPerSec: number;
 }) {
   const effectiveSec = getEffective(clip);
-  const clipWidth = Math.max(MIN_CLIP_WIDTH, Math.round(effectiveSec * pxPerSec));
-  const thumbCount = Math.max(2, Math.min(10, Math.round(clipWidth / 35)));
-  const thumbs = useFrameThumbs(clip.clipUri, clip.durationMs, thumbCount);
+  // Don't round or clamp — the playhead is positioned on a totalDurationSec * pxPerSec
+  // coordinate space, so any drift here desyncs visuals from the playhead.
+  const clipWidth = Math.max(MIN_CLIP_WIDTH, effectiveSec * pxPerSec);
+  const thumbs = useFrameThumbs(clip.clipUri, clip.durationMs);
   const lastTrimBoundary = useRef(0);
 
   const handleTrimWithHaptic = useCallback((side: 'left' | 'right', deltaPct: number) => {
@@ -191,22 +215,82 @@ function TrimPill({ side, color, onTrim, pctPerPx }: {
   );
 }
 
-function PlayheadMarker({ playheadPos, totalDurationSec, pxPerSec, onDrag }: {
-  playheadPos: number;
+function TimeRuler({ totalDurationSec, pxPerSec }: { totalDurationSec: number; pxPerSec: number }) {
+  if (totalDurationSec <= 0) return null;
+  // Aim for ~50px between labels regardless of zoom
+  const rawIntervalSec = 50 / pxPerSec;
+  // Snap to a "nice" interval: 0.5, 1, 2, 5, 10, 15, 30, 60
+  const niceSteps = [0.5, 1, 2, 5, 10, 15, 30, 60];
+  const labelIntervalSec = niceSteps.find(s => s >= rawIntervalSec) ?? 60;
+  const totalPx = totalDurationSec * pxPerSec;
+  const numLabels = Math.floor(totalDurationSec / labelIntervalSec) + 1;
+
+  return (
+    <View style={[styles.ruler, { width: totalPx }]}>
+      {Array.from({ length: numLabels }, (_, i) => {
+        const t = i * labelIntervalSec;
+        const left = t * pxPerSec;
+        return (
+          <View key={i} style={[styles.rulerTick, { left }]}>
+            <View style={styles.rulerTickLine} />
+            <Text style={styles.rulerTickLabel}>{formatDuration(t)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function PlayheadMarker({
+  playheadPosAnim,
+  playheadRefPos,
+  playheadRefTimeMs,
+  isPlayingSV,
+  totalDurationMsSV,
+  canExtrapolateSV,
+  totalDurationSec,
+  pxPerSec,
+  onDrag,
+}: {
+  playheadPosAnim: SharedValue<number>;
+  playheadRefPos: SharedValue<number>;
+  playheadRefTimeMs: SharedValue<number>;
+  isPlayingSV: SharedValue<boolean>;
+  totalDurationMsSV: SharedValue<number>;
+  canExtrapolateSV: SharedValue<boolean>;
   totalDurationSec: number;
   pxPerSec: number;
   onDrag: (pos: number) => void;
 }) {
-  const totalPx = totalDurationSec * pxPerSec;
-  const pos = Math.round(playheadPos * totalPx);
+  const totalPxSV = useSharedValue(totalDurationSec * pxPerSec);
+  useEffect(() => { totalPxSV.value = totalDurationSec * pxPerSec; }, [totalDurationSec, pxPerSec]);
+
   const grabPos = useRef(0);
   const dragging = useRef(false);
   const onDragRef = useRef(onDrag);
-  const totalPxRef = useRef(totalPx);
-  const playheadRef = useRef(playheadPos);
   onDragRef.current = onDrag;
-  totalPxRef.current = totalPx;
-  if (!dragging.current) playheadRef.current = playheadPos;
+
+  // Extrapolate playhead between progress events on UI thread at display refresh rate.
+  // Gated by canExtrapolateSV so we don't advance during clip-load windows (where the
+  // video is frozen) — that would cause a backward snap when the first real progress arrives.
+  useFrameCallback((frameInfo) => {
+    'worklet';
+    if (!isPlayingSV || !canExtrapolateSV || !totalDurationMsSV || !playheadRefTimeMs || !playheadRefPos || !playheadPosAnim) return;
+    if (!isPlayingSV.value || !canExtrapolateSV.value || totalDurationMsSV.value <= 0) return;
+    if (playheadRefTimeMs.value <= 0) return;
+    const elapsed = frameInfo.timestamp - playheadRefTimeMs.value;
+    if (elapsed < 0) return;
+    // Cap extrapolation at one progress interval (~80ms). If no new progress event arrives
+    // within that window, the video has stalled (buffering, loading, etc.) — freezing the
+    // playhead there avoids a backward snap when the next real progress finally arrives.
+    const capped = elapsed > 80 ? 80 : elapsed;
+    const extrapolated = playheadRefPos.value + capped / totalDurationMsSV.value;
+    playheadPosAnim.value = extrapolated > 1 ? 1 : extrapolated;
+  });
+
+  const animStyle = useAnimatedStyle(() => ({
+    left: playheadPosAnim.value * totalPxSV.value,
+  }));
 
   const panResponder = useRef(
     PanResponder.create({
@@ -215,11 +299,11 @@ function PlayheadMarker({ playheadPos, totalDurationSec, pxPerSec, onDrag }: {
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
         dragging.current = true;
-        grabPos.current = playheadRef.current;
+        grabPos.current = playheadPosAnim.value;
       },
       onPanResponderMove: (_, gs) => {
-        if (totalPxRef.current <= 0) return;
-        const delta = gs.dx / totalPxRef.current;
+        if (totalPxSV.value <= 0) return;
+        const delta = gs.dx / totalPxSV.value;
         const newPos = Math.max(0, Math.min(1, grabPos.current + delta));
         onDragRef.current(newPos);
       },
@@ -229,20 +313,20 @@ function PlayheadMarker({ playheadPos, totalDurationSec, pxPerSec, onDrag }: {
   ).current;
 
   return (
-    <View
+    <Animated.View
       {...panResponder.panHandlers}
-      style={[styles.playhead, { left: pos }]}
+      style={[styles.playhead, animStyle]}
     >
       <View style={styles.playheadHead} />
       <View style={styles.playheadLine} />
       <View style={styles.playheadHitArea} />
-    </View>
+    </Animated.View>
   );
 }
 
-export function ClipTimeline({ clips, selectedClipId, playheadPos, isPlaying, onSelectClip, onTrimClip, onMoveClip, onDeleteClip, onSplitClip, onPlayheadDrag }: Props) {
+export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAnim, playheadRefPos, playheadRefTimeMs, isPlayingSV, totalDurationMsSV, canExtrapolateSV, isPlaying, onSelectClip, onTrimClip, onMoveClip, onDeleteClip, onSplitClip, onPlayheadDrag }: Props) {
   const [trackWidth, setTrackWidth] = useState(0);
-  const [zoom, setZoom] = useState(0.2);
+  const [zoom, setZoom] = useState(0.75);
 
   const zoomSV = useSharedValue(0.2);
   const pinchBaseZoom = useSharedValue(1);
@@ -335,22 +419,30 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, isPlaying, on
           onScroll={(e: any) => { scrollOffset.value = e.nativeEvent.contentOffset.x; }}
           scrollEventThrottle={16}
         >
-          {clips.map(clip => (
-            <ClipBlock
-              key={clip.id}
-              clip={clip}
-              isSelected={clip.id === selectedClipId}
-              onSelect={() => onSelectClip(clip.id)}
-              onTrim={(side, delta) => onTrimClip(clip.id, side, delta)}
-              onSplit={() => onSplitClip(clip.id)}
-              trackWidth={trackWidth}
-              pxPerSec={scaledPxPerSec}
-            />
-          ))}
-          {/* Playhead — draggable */}
+          <TimeRuler totalDurationSec={totalDurationSec} pxPerSec={scaledPxPerSec} />
+          <View style={styles.trackRow}>
+            {clips.map(clip => (
+              <ClipBlock
+                key={clip.id}
+                clip={clip}
+                isSelected={clip.id === selectedClipId}
+                onSelect={() => onSelectClip(clip.id)}
+                onTrim={(side, delta) => onTrimClip(clip.id, side, delta)}
+                onSplit={() => onSplitClip(clip.id)}
+                trackWidth={trackWidth}
+                pxPerSec={scaledPxPerSec}
+              />
+            ))}
+          </View>
+          {/* Playhead — draggable, animated via SharedValue for zero-lag tracking */}
           {totalDurationSec > 0 && (
             <PlayheadMarker
-              playheadPos={playheadPos}
+              playheadPosAnim={playheadPosAnim}
+              playheadRefPos={playheadRefPos}
+              playheadRefTimeMs={playheadRefTimeMs}
+              isPlayingSV={isPlayingSV}
+              totalDurationMsSV={totalDurationMsSV}
+              canExtrapolateSV={canExtrapolateSV}
               totalDurationSec={totalDurationSec}
               pxPerSec={scaledPxPerSec}
               onDrag={onPlayheadDrag}
@@ -410,9 +502,14 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
   },
   trackContent: {
+    // No gap: the playhead is positioned on totalDurationSec * pxPerSec, so any
+    // spacing between clips would desync visual boundaries from playhead position.
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  trackRow: {
     flexDirection: 'row',
     height: TRACK_HEIGHT,
-    gap: 2,
     alignItems: 'center',
   },
   clipBlock: {
@@ -516,9 +613,31 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 1,
   },
+  ruler: {
+    height: 20,
+    position: 'relative',
+    marginBottom: 2,
+  },
+  rulerTick: {
+    position: 'absolute',
+    top: 0,
+    alignItems: 'flex-start',
+  },
+  rulerTickLine: {
+    width: 1,
+    height: 6,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  rulerTickLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.45)',
+    marginTop: 2,
+    marginLeft: -8,
+  },
   playhead: {
     position: 'absolute',
-    top: -8,
+    top: 0,
     bottom: -8,
     width: 36,
     marginLeft: -18,

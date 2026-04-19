@@ -37,7 +37,17 @@ export function formatRelativeDate(dateStr: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export function getTodayString(): string {
-  const d = new Date();
+export function toLocalDateString(date: Date): string {
+  const d = new Date(date);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+export function getTodayString(): string {
+  return toLocalDateString(new Date());
 }

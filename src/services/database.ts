@@ -72,6 +72,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       date TEXT NOT NULL UNIQUE,
       status TEXT DEFAULT 'draft',
       clips_json TEXT,
+      removed_clip_source_keys_json TEXT,
       text_overlays_json TEXT,
       filter_overlays_json TEXT,
       export_uri TEXT,
@@ -110,6 +111,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumn('habits', 'notion_page_id', 'TEXT');
   await addColumn('day_meta', 'updated_at', 'TEXT');
   await addColumn('habits', 'updated_at', 'TEXT');
+  await addColumn('projects', 'removed_clip_source_keys_json', 'TEXT');
 
   // Sync deletions tracking table
   await database.execAsync(`
@@ -480,6 +482,7 @@ export async function getProjectByDate(date: string): Promise<EditorProject | nu
   const db = await getDatabase();
   const row = await db.getFirstAsync<{
     id: string; date: string; status: string;
+    removed_clip_source_keys_json: string | null;
     clips_json: string | null; text_overlays_json: string | null;
     filter_overlays_json: string | null; export_uri: string | null; updated_at: string;
   }>('SELECT * FROM projects WHERE date = ?', [date]);
@@ -491,6 +494,7 @@ export async function getProjectByDate(date: string): Promise<EditorProject | nu
     date: row.date,
     status: row.status as EditorProject['status'],
     clips: row.clips_json ? JSON.parse(row.clips_json) : [],
+    removedClipSourceKeys: row.removed_clip_source_keys_json ? JSON.parse(row.removed_clip_source_keys_json) : [],
     textOverlays: row.text_overlays_json ? JSON.parse(row.text_overlays_json) : [],
     filterOverlays: row.filter_overlays_json ? JSON.parse(row.filter_overlays_json) : [],
     exportUri: row.export_uri,
@@ -501,19 +505,20 @@ export async function getProjectByDate(date: string): Promise<EditorProject | nu
 export async function upsertProject(project: EditorProject): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT INTO projects (id, date, status, clips_json, text_overlays_json, filter_overlays_json, export_uri, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO projects (id, date, status, clips_json, removed_clip_source_keys_json, text_overlays_json, filter_overlays_json, export_uri, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(date) DO UPDATE SET
        status = excluded.status,
        clips_json = excluded.clips_json,
+       removed_clip_source_keys_json = excluded.removed_clip_source_keys_json,
        text_overlays_json = excluded.text_overlays_json,
        filter_overlays_json = excluded.filter_overlays_json,
        export_uri = excluded.export_uri,
        updated_at = excluded.updated_at`,
     [
       project.id, project.date, project.status,
-      JSON.stringify(project.clips), JSON.stringify(project.textOverlays),
-      JSON.stringify(project.filterOverlays), project.exportUri, project.updatedAt,
+      JSON.stringify(project.clips), JSON.stringify(project.removedClipSourceKeys),
+      JSON.stringify(project.textOverlays), JSON.stringify(project.filterOverlays), project.exportUri, project.updatedAt,
     ]
   );
 }

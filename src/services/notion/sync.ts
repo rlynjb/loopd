@@ -9,7 +9,7 @@ import {
   rebuildVlogs,
 } from '../database';
 import { generateId } from '../../utils/id';
-import { getTodayString } from '../../utils/time';
+import { addDays, getTodayString, toLocalDateString } from '../../utils/time';
 import { reimportMissingClips } from '../clipMatcher';
 import type { Entry } from '../../types/entry';
 import type { SyncResult } from '../../types/notion';
@@ -90,7 +90,7 @@ export async function syncAll(): Promise<SyncResult> {
 
 async function pullEntries(token: string, dbId: string, _lastSync: string | null, debug: string[] = []): Promise<number> {
   // Pull entries from last 7 days using Date property
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const sevenDaysAgo = toLocalDateString(addDays(new Date(), -7));
   let pages;
   try {
     pages = await queryDatabase(token, dbId, {

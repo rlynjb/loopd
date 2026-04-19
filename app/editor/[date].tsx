@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useSharedValue } from 'react-native-reanimated';
 import { View, Text, TextInput, Pressable, ScrollView, PanResponder, StyleSheet, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
@@ -11,8 +12,6 @@ import { useProject } from '../../src/hooks/useProject';
 import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { generateId } from '../../src/utils/id';
 import { formatDuration } from '../../src/utils/time';
-import { Image } from 'react-native';
-import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as Haptics from 'expo-haptics';
 import { PreviewPlayer } from '../../src/components/editor/PreviewPlayer';
 import { TextOverlaySheet } from '../../src/components/editor/TextOverlaySheet';
@@ -30,8 +29,20 @@ import type { AISummary } from '../../src/types/ai';
 import type { ClipItem, TextOverlay, FilterOverlay } from '../../src/types/project';
 
 const CLIP_COLORS = ['#fb7185', '#a78bfa', '#00d9a3', '#fbbf24', '#38bdf8', '#f472b6', '#34d399', '#c084fc'];
+const TRANSITION_SETTLE_TOLERANCE_SEC = 0.12;
+const TRANSITION_EARLY_TOLERANCE_SEC = 0.05;
+const ZERO_START_ACCEPT_WINDOW_SEC = 2;
 
 const NUNITO_FONT: Record<number, string> = { 300: 'Nunito300', 500: 'Nunito500', 700: 'Nunito700' };
+function logPlaybackDebug(message: string, details?: Record<string, unknown>) {
+  if (!__DEV__) return;
+  if (details) {
+    console.log(`[editor playback] ${message}`, details);
+    return;
+  }
+  console.log(`[editor playback] ${message}`);
+}
+
 function getNunitoFont(weight: number): string {
   return NUNITO_FONT[weight] ?? 'Nunito700';
 }
@@ -45,7 +56,7 @@ export default function EditorScreen() {
   const router = useRouter();
   const { entries, reload: reloadEntries } = useEntries(date);
   const { title: dayTitle } = useDayTitle(date);
-  const { project, save, updateClips, updateTextOverlays, updateFilterOverlays } = useProject(date, entries, dayTitle);
+  const { project, save, updateClips, removeClip, updateTextOverlays, updateFilterOverlays } = useProject(date, entries, dayTitle);
 
   useFocusEffect(useCallback(() => { reloadEntries(); }, [reloadEntries]));
 
@@ -113,14 +124,21 @@ export default function EditorScreen() {
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
   const [playheadPos, setPlayheadPos] = useState(0);
+  const playheadPosAnim = useSharedValue(0);
+  const playheadRefPos = useSharedValue(0);
+  const playheadRefTimeMs = useSharedValue(0);
+  const isPlayingSV = useSharedValue(false);
+  const totalDurationMsSV = useSharedValue(0);
+  const canExtrapolateSV = useSharedValue(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [bannerDismissed, setBannerDismissed] = useState(false);
-  const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
   const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
   const [renderingText, setRenderingText] = useState(false);
-  const playRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
   const [previewHeight, setPreviewHeight] = useState(280);
+  const pendingTransitionRef = useRef<{ clipId: string; expectedStartSec: number } | null>(null);
+  const advancedFromClipRef = useRef<string | null>(null);
+  const lastProgressRef = useRef<{ wallMs: number; videoSec: number; clipId: string } | null>(null);
   const heightAtDragStart = useRef(280);
   const currentHeightRef = useRef(280);
   currentHeightRef.current = previewHeight;
@@ -142,48 +160,10 @@ export default function EditorScreen() {
 
   const clips = project?.clips ?? [];
   const textOverlays = project?.textOverlays ?? [];
+  useEffect(() => { isPlayingSV.value = isPlaying; }, [isPlaying, isPlayingSV]);
   const filterOverlays = project?.filterOverlays ?? [];
   const totalDurationSec = clips.reduce((sum, c) => sum + getEffective(c), 0);
-
-  // Pre-extract one thumbnail per clip at its trim midpoint
-  const [clipThumbs, setClipThumbs] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (clips.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      const thumbs: Record<string, string> = {};
-      for (const c of clips) {
-        if (cancelled) return;
-        const midPct = (c.trimStartPct + c.trimEndPct) / 2;
-        const timeMs = Math.max(100, Math.round((c.durationMs * midPct) / 100));
-        try {
-          const r = await VideoThumbnails.getThumbnailAsync(c.clipUri, { time: timeMs, quality: 0.4 });
-          thumbs[c.id] = r.uri;
-        } catch { /* skip */ }
-      }
-      if (!cancelled) setClipThumbs(thumbs);
-    })();
-    return () => { cancelled = true; };
-  }, [clips.map(c => `${c.id}:${c.trimStartPct}:${c.trimEndPct}`).join(',')]);
-
-  // Find current clip at playhead and set its pre-extracted thumbnail
-  const currentClipId = useMemo(() => {
-    if (clips.length === 0 || totalDurationSec === 0) return null;
-    const playheadTimeSec = playheadPos * totalDurationSec;
-    let acc = 0;
-    for (const c of clips) {
-      const eff = getEffective(c);
-      if (playheadTimeSec < acc + eff) return c.id;
-      acc += eff;
-    }
-    return clips[clips.length - 1]?.id ?? null;
-  }, [playheadPos, clips, totalDurationSec]);
-
-  useEffect(() => {
-    if (currentClipId && clipThumbs[currentClipId]) {
-      setThumbnailUri(clipThumbs[currentClipId]);
-    }
-  }, [currentClipId, clipThumbs]);
+  useEffect(() => { totalDurationMsSV.value = totalDurationSec * 1000; }, [totalDurationSec, totalDurationMsSV]);
 
   // Single active filter (first one, or none)
   const activeFilter = filterOverlays[0] ?? null;
@@ -195,37 +175,28 @@ export default function EditorScreen() {
     filterOverlays.some(f => f.startPct !== 0 || f.endPct !== 100)
   );
 
-  // Playhead animation
-  useEffect(() => {
-    if (isPlaying && totalDurationSec > 0) {
-      const start = Date.now();
-      const startPos = playheadPos;
-      const remaining = 1 - startPos;
-      const durationMs = remaining * totalDurationSec * 1000;
-      const tick = () => {
-        const elapsed = Date.now() - start;
-        const progress = startPos + remaining * Math.min(elapsed / durationMs, 1);
-        setPlayheadPos(Math.min(progress, 1));
-        if (elapsed < durationMs) {
-          playRef.current = requestAnimationFrame(tick);
-        } else {
-          setIsPlaying(false);
-        }
-      };
-      playRef.current = requestAnimationFrame(tick);
-      return () => { if (playRef.current) cancelAnimationFrame(playRef.current); };
-    }
-  }, [isPlaying]);
-
   const togglePlay = () => {
     if (isPlaying) {
       setIsPlaying(false);
-      if (playRef.current) cancelAnimationFrame(playRef.current);
     } else {
-      if (playheadPos >= 0.99) setPlayheadPos(0);
+      advancedFromClipRef.current = null;
+      if (playheadPos >= 0.99) { setPlayheadPos(0); playheadPosAnim.value = 0; }
+      playheadRefPos.value = playheadPos >= 0.99 ? 0 : playheadPos;
+      playheadRefTimeMs.value = performance.now();
+      canExtrapolateSV.value = false;
       setIsPlaying(true);
     }
   };
+
+  const clipStartOffsetsSec = useMemo(() => {
+    const offsets = new Map<string, number>();
+    let acc = 0;
+    for (const clip of clips) {
+      offsets.set(clip.id, acc);
+      acc += getEffective(clip);
+    }
+    return offsets;
+  }, [clips]);
 
   const getClipAtPlayhead = (): { clip: ClipItem | null; seekSec: number } => {
     if (totalDurationSec === 0) return { clip: null, seekSec: 0 };
@@ -243,8 +214,163 @@ export default function EditorScreen() {
   };
 
   const { clip: currentClip, seekSec: currentClipSeekSec } = getClipAtPlayhead();
+  // Next clip is preloaded into the PreviewPlayer's second video slot so the
+  // transition is a visual swap rather than a source change + reload.
+  const nextClip = useMemo(() => {
+    if (!currentClip) return null;
+    const idx = clips.findIndex(c => c.id === currentClip.id);
+    if (idx < 0 || idx >= clips.length - 1) return null;
+    return clips[idx + 1];
+  }, [clips, currentClip?.id]);
   const visibleFilter = activeFilter;
   const editingText = textOverlays.find(t => t.id === editingTextId);
+
+  const advanceFromClipEnd = useCallback((clip: ClipItem, reason: 'trim-end' | 'on-end' = 'trim-end') => {
+    if (advancedFromClipRef.current === clip.id) return;
+    advancedFromClipRef.current = clip.id;
+    const clipIndex = clips.findIndex(c => c.id === clip.id);
+    if (clipIndex < 0) return;
+    const trimEndSec = (clip.durationMs / 1000) * clip.trimEndPct / 100;
+    const lastProgress = lastProgressRef.current?.clipId === clip.id ? lastProgressRef.current.videoSec : null;
+    logPlaybackDebug('advance cause', {
+      reason,
+      clipId: clip.id,
+      trimEndSec: Number(trimEndSec.toFixed(3)),
+      lastProgressVideoSec: lastProgress != null ? Number(lastProgress.toFixed(3)) : null,
+      earlyBy: lastProgress != null ? Number((trimEndSec - lastProgress).toFixed(3)) : null,
+    });
+
+    const isLastClip = clipIndex === clips.length - 1;
+    if (isLastClip) {
+      pendingTransitionRef.current = null;
+      playheadPosAnim.value = 1;
+      setPlayheadPos(1);
+      setIsPlaying(false);
+      return;
+    }
+
+    const nextClip = clips[clipIndex + 1];
+    const nextClipStartSec = clipStartOffsetsSec.get(nextClip.id) ?? 0;
+    const nextTrimStartSec = (nextClip.durationMs / 1000) * nextClip.trimStartPct / 100;
+    pendingTransitionRef.current = {
+      clipId: nextClip.id,
+      expectedStartSec: nextTrimStartSec,
+    };
+    logPlaybackDebug('advance from clip end', {
+      fromClipId: clip.id,
+      toClipId: nextClip.id,
+      nextClipStartSec: Number(nextClipStartSec.toFixed(3)),
+      nextTrimStartSec: Number(nextTrimStartSec.toFixed(3)),
+    });
+    const nextGlobalTimeSec = Math.min(totalDurationSec, nextClipStartSec);
+    const nextPos = totalDurationSec > 0 ? nextGlobalTimeSec / totalDurationSec : 0;
+    playheadPosAnim.value = nextPos;
+    playheadRefPos.value = nextPos;
+    playheadRefTimeMs.value = performance.now();
+    canExtrapolateSV.value = false;
+    setPlayheadPos(nextPos);
+  }, [clips, clipStartOffsetsSec, totalDurationSec]);
+
+  const handlePlaybackProgress = useCallback((clipId: string, currentTimeSec: number) => {
+    if (!currentClip || totalDurationSec <= 0) return;
+    if (clipId !== currentClip.id) return;
+    // If we already triggered advance from this clip (e.g., the last clip's onEnd fired),
+    // ignore any further progress events — the video may have looped or restarted.
+    if (advancedFromClipRef.current === clipId) {
+      logPlaybackDebug('ignored post-advance progress', { clipId, currentTimeSec: Number(currentTimeSec.toFixed(3)) });
+      return;
+    }
+
+    const pendingTransition = pendingTransitionRef.current;
+    if (pendingTransition) {
+      if (clipId !== pendingTransition.clipId) return;
+      const expectsZeroStart = pendingTransition.expectedStartSec <= TRANSITION_EARLY_TOLERANCE_SEC;
+      if (expectsZeroStart) {
+        if (currentTimeSec > ZERO_START_ACCEPT_WINDOW_SEC) {
+          logPlaybackDebug('ignored late zero-start progress during transition', {
+            clipId,
+            expectedStartSec: Number(pendingTransition.expectedStartSec.toFixed(3)),
+            currentTimeSec: Number(currentTimeSec.toFixed(3)),
+          });
+          return;
+        }
+        logPlaybackDebug('accepted zero-start progress during transition', {
+          clipId,
+          currentTimeSec: Number(currentTimeSec.toFixed(3)),
+          expectedStartSec: Number(pendingTransition.expectedStartSec.toFixed(3)),
+        });
+        pendingTransitionRef.current = null;
+      } else {
+        if (currentTimeSec < pendingTransition.expectedStartSec - TRANSITION_EARLY_TOLERANCE_SEC) {
+          logPlaybackDebug('ignored early progress during transition', {
+            clipId,
+            currentTimeSec: Number(currentTimeSec.toFixed(3)),
+            expectedStartSec: Number(pendingTransition.expectedStartSec.toFixed(3)),
+          });
+          return;
+        }
+        if (currentTimeSec > pendingTransition.expectedStartSec + TRANSITION_SETTLE_TOLERANCE_SEC) {
+          logPlaybackDebug('ignored late progress during transition', {
+            clipId,
+            expectedStartSec: Number(pendingTransition.expectedStartSec.toFixed(3)),
+            currentTimeSec: Number(currentTimeSec.toFixed(3)),
+          });
+          return;
+        }
+        logPlaybackDebug('accepted first progress during transition', {
+          clipId,
+          currentTimeSec: Number(currentTimeSec.toFixed(3)),
+          expectedStartSec: Number(pendingTransition.expectedStartSec.toFixed(3)),
+        });
+        pendingTransitionRef.current = null;
+      }
+    }
+
+    const clipStartSec = clipStartOffsetsSec.get(currentClip.id) ?? 0;
+    const trimStartSec = (currentClip.durationMs / 1000) * currentClip.trimStartPct / 100;
+    const trimEndSec = (currentClip.durationMs / 1000) * currentClip.trimEndPct / 100;
+    if (currentTimeSec >= trimEndSec - 0.03) {
+      advanceFromClipEnd(currentClip);
+      return;
+    }
+
+    const boundedTimeSec = Math.max(trimStartSec, Math.min(trimEndSec, currentTimeSec));
+    const globalTimeSec = Math.min(totalDurationSec, clipStartSec + Math.max(0, boundedTimeSec - trimStartSec));
+    const nextPlayheadPos = totalDurationSec > 0 ? globalTimeSec / totalDurationSec : 0;
+    const nowMs = performance.now();
+    const last = lastProgressRef.current;
+    let wallDeltaMs: number | null = null;
+    let videoDeltaMs: number | null = null;
+    let rate: number | null = null;
+    if (last && last.clipId === clipId) {
+      wallDeltaMs = Math.round(nowMs - last.wallMs);
+      videoDeltaMs = Math.round((currentTimeSec - last.videoSec) * 1000);
+      rate = wallDeltaMs > 0 ? Number((videoDeltaMs / wallDeltaMs).toFixed(2)) : null;
+    }
+    lastProgressRef.current = { wallMs: nowMs, videoSec: currentTimeSec, clipId };
+    const stutter = wallDeltaMs != null && wallDeltaMs > 120;
+    const offRate = rate != null && (rate < 0.7 || rate > 1.3);
+    logPlaybackDebug('progress applied', {
+      clipId,
+      currentTimeSec: Number(currentTimeSec.toFixed(3)),
+      nextPlayheadPos: Number(nextPlayheadPos.toFixed(4)),
+      wallDeltaMs,
+      videoDeltaMs,
+      rate,
+      flag: stutter ? 'STUTTER' : offRate ? 'OFF_RATE' : undefined,
+    });
+
+    playheadPosAnim.value = nextPlayheadPos;
+    playheadRefPos.value = nextPlayheadPos;
+    playheadRefTimeMs.value = performance.now();
+    canExtrapolateSV.value = true;
+    setPlayheadPos(prev => Math.abs(prev - nextPlayheadPos) > 0.0005 ? nextPlayheadPos : prev);
+  }, [advanceFromClipEnd, clipStartOffsetsSec, currentClip, totalDurationSec]);
+
+  const handlePlaybackEnd = useCallback((clipId: string) => {
+    if (!currentClip || clipId !== currentClip.id) return;
+    advanceFromClipEnd(currentClip, 'on-end');
+  }, [advanceFromClipEnd, currentClip]);
 
   // Clip operations
   const selectClip = (id: string | null) => {
@@ -252,7 +378,7 @@ export default function EditorScreen() {
   };
 
   const deleteClip = (id: string) => {
-    updateClips(prev => prev.filter(c => c.id !== id));
+    removeClip(id);
     if (selectedClipId === id) setSelectedClipId(null);
   };
 
@@ -422,7 +548,7 @@ export default function EditorScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {/* Preview */}
         <Pressable
-          onPress={() => { setSelectedClipId(null); setEditingTextId(null); if (isPlaying) { setIsPlaying(false); if (playRef.current) cancelAnimationFrame(playRef.current); } }}
+          onPress={() => { setSelectedClipId(null); setEditingTextId(null); if (isPlaying) { setIsPlaying(false); } }}
           style={styles.previewContainer}
         >
           <View style={[styles.previewFrame, { width: Math.round(previewHeight * 9 / 16), height: previewHeight }]}>
@@ -430,6 +556,7 @@ export default function EditorScreen() {
               <PreviewPlayer
                 currentClip={currentClip}
                 currentClipSeekSec={currentClipSeekSec}
+                nextClip={nextClip}
                 isPlaying={isPlaying}
                 visibleTexts={[]}
                 visibleFilter={visibleFilter}
@@ -438,6 +565,8 @@ export default function EditorScreen() {
                 onSelectText={() => {}}
                 onUpdateText={() => {}}
                 previewHeight={previewHeight}
+                onPlaybackProgress={handlePlaybackProgress}
+                onPlaybackEnd={handlePlaybackEnd}
               />
             ) : (
               <Icon name="clapperboard" size={32} color={colors.textDimmer} />
@@ -529,6 +658,12 @@ export default function EditorScreen() {
           clips={clips}
           selectedClipId={selectedClipId}
           playheadPos={playheadPos}
+          playheadPosAnim={playheadPosAnim}
+          playheadRefPos={playheadRefPos}
+          playheadRefTimeMs={playheadRefTimeMs}
+          isPlayingSV={isPlayingSV}
+          totalDurationMsSV={totalDurationMsSV}
+          canExtrapolateSV={canExtrapolateSV}
           isPlaying={isPlaying}
           onSelectClip={selectClip}
           onTrimClip={trimClip}
@@ -536,7 +671,10 @@ export default function EditorScreen() {
           onDeleteClip={deleteClip}
           onSplitClip={splitClip}
           onPlayheadDrag={pos => {
-            if (isPlaying) { setIsPlaying(false); if (playRef.current) cancelAnimationFrame(playRef.current); }
+            playheadPosAnim.value = pos;
+            playheadRefPos.value = pos;
+            playheadRefTimeMs.value = performance.now();
+            if (isPlaying) { setIsPlaying(false); }
             setPlayheadPos(pos);
           }}
         />
@@ -552,7 +690,12 @@ export default function EditorScreen() {
         {/* Filter pills */}
         <View style={styles.filterSection}>
           <Text style={styles.sectionLabel}>FILTER</Text>
-          <FilterPills activeFilterId={activeFilterId} onSelect={setFilter} />
+          <FilterPills
+            activeFilterId={activeFilterId}
+            onSelect={setFilter}
+            previewClipUri={clips[0]?.clipUri}
+            previewClipTrimStartMs={clips[0] ? clips[0].durationMs * clips[0].trimStartPct / 100 : 0}
+          />
         </View>
 
 

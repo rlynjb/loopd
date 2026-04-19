@@ -20,8 +20,16 @@ import type { ClipItem, TextOverlay, FilterOverlay, ExportProgress } from '../ty
 import type { RenderedText } from './textRenderer';
 import { FILTERS } from '../constants/filters';
 
+function quoteFFmpegPath(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function quoteConcatPath(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, `'\\''`);
+}
+
 function writeFileList(path: string, files: string[]): void {
-  const content = files.map(f => `file '${f}'`).join('\n');
+  const content = files.map(f => `file '${quoteConcatPath(f)}'`).join('\n');
   const file = new FSFile(`file://${path}`);
   file.write(content);
 }
@@ -84,11 +92,11 @@ export async function runExport(
     const inputPath = uriToPath(clip.clipUri);
 
     await runCommand(
-      `-y -i ${inputPath} -ss ${startSec.toFixed(3)} -to ${endSec.toFixed(3)} ` +
+      `-y -i ${quoteFFmpegPath(inputPath)} -ss ${startSec.toFixed(3)} -to ${endSec.toFixed(3)} ` +
       `-vf scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p ` +
       `-c:v libx264 -preset fast -crf 23 -profile:v baseline -level 3.1 ` +
       `-c:a aac -b:a 128k -ar 44100 -ac 2 ` +
-      outFile,
+      quoteFFmpegPath(outFile),
       `Trim clip ${i + 1}`
     );
 
@@ -102,7 +110,10 @@ export async function runExport(
   const concatFile = `${tempDir}/concat.mp4`;
 
   if (trimmedFiles.length === 1) {
-    await runCommand(`-y -i ${trimmedFiles[0]} -c copy ${concatFile}`, 'Copy single clip');
+    await runCommand(
+      `-y -i ${quoteFFmpegPath(trimmedFiles[0])} -c copy ${quoteFFmpegPath(concatFile)}`,
+      'Copy single clip'
+    );
   } else {
     // Write file list for concat demuxer
     const listPath = `${tempDir}/filelist.txt`;
@@ -110,7 +121,7 @@ export async function runExport(
 
     // Concat demuxer — no re-encoding needed since all clips are normalized
     await runCommand(
-      `-y -f concat -safe 0 -i ${listPath} -c copy ${concatFile}`,
+      `-y -f concat -safe 0 -i ${quoteFFmpegPath(listPath)} -c copy ${quoteFFmpegPath(concatFile)}`,
       'Concatenate'
     );
   }
@@ -152,9 +163,9 @@ export async function runExport(
     }
     const filteredFile = hasText ? `${tempDir}/filtered.mp4` : finalOutput;
     await runCommand(
-      `-y -i ${currentInput} -vf "${vfParts.join(',')}" ` +
+      `-y -i ${quoteFFmpegPath(currentInput)} -vf "${vfParts.join(',')}" ` +
       `-c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart ` +
-      filteredFile,
+      quoteFFmpegPath(filteredFile),
       'Apply filters'
     );
     currentInput = filteredFile;
@@ -172,10 +183,10 @@ export async function runExport(
       const outPath = isLast ? finalOutput : `${tempDir}/text-pass-${i}.mp4`;
 
       await runCommand(
-        `-y -i ${overlayInput} -i ${rt.path} -filter_complex ` +
+        `-y -i ${quoteFFmpegPath(overlayInput)} -i ${quoteFFmpegPath(rt.path)} -filter_complex ` +
         `"[1:v]scale=1080:1920,format=rgba[ovr];[0:v][ovr]overlay=0:0:enable='between(t\\,${startSec}\\,${endSec})'" ` +
         `-c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart ` +
-        outPath,
+        quoteFFmpegPath(outPath),
         `Text overlay ${i + 1}`
       );
       overlayInput = outPath;
@@ -183,7 +194,7 @@ export async function runExport(
   } else if (!hasFilters) {
     // No filters or text — just copy with faststart
     await runCommand(
-      `-y -i ${currentInput} -c copy -movflags +faststart ${finalOutput}`,
+      `-y -i ${quoteFFmpegPath(currentInput)} -c copy -movflags +faststart ${quoteFFmpegPath(finalOutput)}`,
       'Finalize'
     );
   }

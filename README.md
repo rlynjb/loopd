@@ -8,22 +8,37 @@ A daily vlogging app that combines a story journal, habit tracking, and a lightw
 
 - [Node.js](https://nodejs.org/) 18+
 - Java 17
+- Android SDK Platform-Tools (`adb`)
 - [Android Studio](https://developer.android.com/studio) with an emulator or a physical device
 - `ANDROID_HOME` environment variable pointing to your Android SDK
 
+## Fresh Laptop Setup
+
+On a clean macOS laptop, the usual missing pieces are Java 17, Android SDK Platform-Tools (`adb`), shell exports for `JAVA_HOME` / `ANDROID_HOME`, and repo dependencies.
+
+This repo includes a quick Android environment check:
+
+```bash
+npm run android:doctor
+```
+
+It checks Java 17, `JAVA_HOME`, `adb`, `ANDROID_HOME`, `node_modules/`, the generated `android/` project, and whether a USB-connected Android device is authorized.
+
 ### Install Java 17 (macOS)
 
-The Android build requires Java 17. Install via Homebrew:
+The Android build requires Java 17. If you use Homebrew:
 
 ```bash
 brew install --cask zulu@17
 ```
 
-This will prompt for your macOS password. After it completes, add to `~/.zshrc`:
+After it completes, add to `~/.zshrc`:
 
 ```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-17.jdk/Contents/Home
 ```
+
+If you install Java another way, set `JAVA_HOME` to that JDK 17 path instead.
 
 Reload your shell:
 
@@ -38,16 +53,50 @@ java -version
 # openjdk version "17.0.x" ...
 ```
 
+### Install Android SDK + `adb`
+
+Install Android Studio and make sure **SDK Manager** includes:
+
+- Android SDK Platform
+- Android SDK Build-Tools
+- Android SDK Platform-Tools
+
+On macOS the default SDK path is usually:
+
+```bash
+$HOME/Library/Android/sdk
+```
+
+Add this to `~/.zshrc`:
+
+```bash
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+```
+
+Reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+Verify:
+
+```bash
+adb version
+adb devices
+```
+
 ### Set up Android Studio
 
 If you haven't set up Android Studio yet:
 
 1. Install Android Studio
-2. Open it, go to **SDK Manager** and install **Android SDK** (API 34+)
+2. Open it, go to **SDK Manager** and install **Android SDK** (API 34+) plus **Platform-Tools**
 3. Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
    ```bash
    export ANDROID_HOME=$HOME/Library/Android/sdk
-   export PATH=$PATH:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools
+   export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
    ```
 4. Create an emulator via **Virtual Device Manager** or connect a physical phone
 
@@ -59,10 +108,16 @@ If you haven't set up Android Studio yet:
 npm install
 ```
 
+Then run the environment check:
+
+```bash
+npm run android:doctor
+```
+
 ### 2. Prebuild native project
 
 ```bash
-npx expo prebuild --platform android
+npm run prebuild:android
 ```
 
 This generates the `android/` directory. You only need to run this once (or again after adding new native modules).
@@ -75,30 +130,56 @@ Start an Android emulator from Android Studio, then:
 npm run android
 ```
 
-This compiles the native code, installs the app, and starts Metro bundler with hot reload.
+This compiles the native code, installs the app, and starts Metro with hot reload.
 
 ### 4. Run on physical phone (USB)
 
 1. On your phone: **Settings > About Phone > tap Build Number 7 times** to enable Developer Options
 2. **Settings > Developer Options > enable USB Debugging**
 3. Plug in via USB, accept the debugging prompt on your phone
-4. Run:
+4. Verify the device is visible:
 
 ```bash
-npx expo run:android --device
+adb devices
+```
+
+You want to see a line ending in `device`, not `unauthorized`.
+
+5. Run:
+
+```bash
+npm run android:device
 ```
 
 Pick your device from the list. The app installs and connects to Metro for live reload.
+
+### Metro notes
+
+This app uses Expo's Metro bundler. There is no custom `metro.config.*` in the repo right now.
+
+- `npm run android` builds and runs on Android
+- `npm run android:device` targets a USB-connected phone
+- `npm run metro` starts Metro for an already-installed development build
+
+If the app is already installed and only needs the bundler:
+
+```bash
+npm run metro
+```
 
 ## Development Workflow
 
 ### Emulator (local testing)
 
-```bash
-npm run android
-```
+`npm run android`
 
 Use this for testing changes before pushing to your phone. Requires Android Studio emulator running.
+
+### Physical phone (local debug build over USB)
+
+`npm run android:device`
+
+Use this when your phone is plugged into the laptop and visible in `adb devices`.
 
 ### Phone (production testing via EAS)
 
@@ -231,5 +312,11 @@ loopd/
 **"Expo Go is not supported"** — This app uses native modules. You need a development build via `npx expo run:android`.
 
 **"Unable to locate a Java Runtime"** — Java 17 is not installed or not on your PATH. See the [Install Java 17](#install-java-17-macos) section above.
+
+**"`adb` not found"** — Android Platform-Tools are not installed or `$ANDROID_HOME/platform-tools` is not on your `PATH`.
+
+**"`adb devices` shows `unauthorized`"** — Unlock the phone and accept the USB debugging RSA prompt. If needed, revoke USB debugging authorizations on the phone and reconnect.
+
+**"`android/` directory is missing"** — Run `npm run prebuild:android` once before the first native Android build on a fresh clone.
 
 **Build fails after adding a package** — Run `npx expo prebuild --clean --platform android` to regenerate native files.
