@@ -408,7 +408,13 @@ export default function EditorScreen() {
 
   // Clip operations
   const selectClip = (id: string | null) => {
-    setSelectedClipId(id === selectedClipId ? null : id);
+    const next = id === selectedClipId ? null : id;
+    setSelectedClipId(next);
+    // Selecting a clip owns the edit panel — hide TEXT / FILTER if they were open.
+    if (next) {
+      setEditingTextId(null);
+      setShowFilters(false);
+    }
   };
 
   const deleteClip = (id: string) => {
@@ -484,6 +490,7 @@ export default function EditorScreen() {
   // Text overlay operations
   const openTextEditor = (id: string) => {
     setSelectedClipId(null);
+    setShowFilters(false);
     setEditingTextId(id);
   };
 
@@ -718,16 +725,34 @@ export default function EditorScreen() {
           }}
         />
 
-        {/* Edit tabs: TEXT / FILTER */}
+        {/* Edit tabs: CLIP / TEXT / FILTER. CLIP auto-activates when a
+            clip is selected from the timeline; tapping CLIP with no
+            selection picks the clip under the playhead. */}
         <View style={styles.editTabs}>
+          <Pressable
+            onPress={() => {
+              if (selectedClipId) {
+                setSelectedClipId(null);
+              } else if (currentClip) {
+                setEditingTextId(null);
+                setShowFilters(false);
+                setSelectedClipId(currentClip.id);
+              }
+            }}
+            hitSlop={8}
+            style={[styles.editTab, !!selectedClipId && styles.editTabActive]}
+          >
+            <Text style={[styles.editTabText, !!selectedClipId && styles.editTabTextActive]}>CLIP</Text>
+          </Pressable>
           <Pressable
             onPress={() => {
               if (editingTextId) {
                 setEditingTextId(null);
               } else {
                 setShowFilters(false);
+                setSelectedClipId(null);
                 const first = textOverlays[0];
-                if (first) { setSelectedClipId(null); setEditingTextId(first.id); }
+                if (first) setEditingTextId(first.id);
               }
             }}
             hitSlop={8}
@@ -741,6 +766,7 @@ export default function EditorScreen() {
                 setShowFilters(false);
               } else {
                 setEditingTextId(null);
+                setSelectedClipId(null);
                 setShowFilters(true);
               }
             }}
@@ -750,6 +776,28 @@ export default function EditorScreen() {
             <Text style={[styles.editTabText, showFilters && styles.editTabTextActive]}>FILTER</Text>
           </Pressable>
         </View>
+
+        {/* Clip edit actions (move / split / duration / delete) */}
+        {selectedClip && (
+          <View style={styles.clipActions}>
+            <Pressable onPress={() => moveClip(selectedClip.id, -1)} style={styles.actionBtn}>
+              <Icon name="arrowLeft" size={14} color={colors.textMuted} />
+            </Pressable>
+            <Pressable onPress={() => moveClip(selectedClip.id, 1)} style={styles.actionBtn}>
+              <Icon name="arrowRight" size={14} color={colors.textMuted} />
+            </Pressable>
+            <Pressable onPress={() => splitClip(selectedClip.id)} style={styles.actionBtn}>
+              <Icon name="scissors" size={14} color={colors.amber} />
+            </Pressable>
+            <Text style={[styles.clipDurationText, { color: selectedClip.color }]}>
+              {formatDuration(getEffective(selectedClip))}
+            </Text>
+            <View style={{ flex: 1 }} />
+            <Pressable onPress={() => deleteClip(selectedClip.id)} style={styles.clipDeleteBtn}>
+              <Icon name="trash" size={14} color={colors.coral} />
+            </Pressable>
+          </View>
+        )}
 
         {/* Text overlay editor (inline) */}
         {editingText && (
@@ -919,6 +967,38 @@ const styles = StyleSheet.create({
   },
   editTabTextActive: {
     color: colors.accent,
+  },
+  clipActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  actionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clipDeleteBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: 'rgba(251,113,133,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,113,133,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clipDurationText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    marginLeft: 4,
   },
   previewContainer: {
     alignItems: 'center',

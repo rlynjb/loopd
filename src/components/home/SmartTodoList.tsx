@@ -81,7 +81,7 @@ export function SmartTodoList({ entries, today, onChanged }: Props) {
           <View key={t.id} style={styles.row}>
             <Pressable onPress={() => handleToggle(t)} hitSlop={10} style={styles.checkbox}>
               <View style={[styles.check, t.done && styles.checkOn]}>
-                {t.done && <Icon name="checkSquare" size={10} color={colors.bg} />}
+                {t.done && <Icon name="checkSquare" size={14} color={colors.green} />}
               </View>
             </Pressable>
             <View style={styles.body}>
@@ -117,7 +117,7 @@ export function SmartTodoList({ entries, today, onChanged }: Props) {
           the add affordance and the empty state. */}
       <Pressable onPress={() => newInputRef.current?.focus()} style={styles.row}>
         <View style={styles.checkbox}>
-          <View style={styles.check} />
+          <View style={[styles.check, styles.checkPlaceholder]} />
         </View>
         <View style={styles.body}>
           <TextInput
@@ -169,16 +169,20 @@ const styles = StyleSheet.create({
     paddingTop: 2,
   },
   check: {
-    width: 16,
-    height: 16,
+    width: 20,
+    height: 20,
     borderWidth: 1.5,
     borderColor: colors.textDim,
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkOn: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
+    borderColor: colors.green,
+    backgroundColor: `${colors.green}12`,
+  },
+  checkPlaceholder: {
+    borderColor: colors.textDimmer,
+    borderStyle: 'dashed',
   },
   body: {
     flex: 1,

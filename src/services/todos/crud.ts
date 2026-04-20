@@ -9,9 +9,10 @@ import {
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
 
-// Add a todo to an existing entry, or create a fresh today-dated entry holding
-// just this todo if no `entryId` is given. Sets `createdAt` so the ranker can
-// surface newer todos; returns the new TodoItem (with id + createdAt filled).
+// Add a todo to an existing entry (if `entryId` is given) or to today's
+// shared todos-bucket entry. The bucket is a todos-only entry (no text, no
+// clips, no habits) that accumulates all dashboard-added todos for the day —
+// prevents the journal from filling up with one entry per todo.
 export async function addTodo(
   text: string,
   entryId?: string,
@@ -34,8 +35,22 @@ export async function addTodo(
     return { todo, entryId };
   }
 
-  // No target entry — drop this todo into today's journal as a fresh entry.
+  // Find today's todos-only bucket (if any) and append to it.
   const today = getTodayString();
+  const todaysEntries = await getEntriesByDate(today);
+  const bucket = todaysEntries.find(e =>
+    !e.text
+    && e.clips.length === 0
+    && !e.clipUri
+    && e.habits.length === 0
+    && (e.todos?.length ?? 0) > 0,
+  );
+  if (bucket) {
+    await updateEntry({ ...bucket, todos: [...(bucket.todos ?? []), todo] });
+    return { todo, entryId: bucket.id };
+  }
+
+  // No bucket yet — create one.
   const newEntry: Entry = {
     id: generateId('entry'),
     date: today,

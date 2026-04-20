@@ -104,6 +104,27 @@ export default function HomeScreen() {
     return map;
   }, [allEntries, habits, today]);
 
+  // 14-day header cells for the habits heatmap — weekday letter + day-of-
+  // month, one entry per column, Sunday-anchored to match HabitHeatmapRow.
+  const heatmapHeaderCells = useMemo(() => {
+    const letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    const todayDow = new Date(today + 'T12:00:00').getDay();
+    const startDate = new Date(today + 'T12:00:00');
+    startDate.setDate(startDate.getDate() - (todayDow + 7));
+    const out: { letter: string; dayOfMonth: number; isToday: boolean }[] = [];
+    for (let i = 0; i < HEATMAP_DAYS; i++) {
+      const d = new Date(startDate);
+      d.setDate(startDate.getDate() + i);
+      const iso = d.toISOString().slice(0, 10);
+      out.push({
+        letter: letters[d.getDay()],
+        dayOfMonth: d.getDate(),
+        isToday: iso === today,
+      });
+    }
+    return out;
+  }, [today]);
+
   const toggleHabitToday = useCallback(async (habitId: string) => {
     const holder = todayEntries.find(e => e.habits.includes(habitId));
     if (holder) {
@@ -180,6 +201,21 @@ export default function HomeScreen() {
         {habits.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>HABITS</Text>
+            {/* Column header: weekday letter + day-of-month above each
+                heatmap column. Spans the same flex layout as HabitHeatmapRow
+                (80px label spacer, 14 flex:1 cells, 36px count spacer). */}
+            <View style={styles.habitHeaderRow}>
+              <View style={styles.habitHeaderLabelSpacer} />
+              <View style={styles.habitHeaderCells}>
+                {heatmapHeaderCells.map((c, i) => (
+                  <View key={i} style={styles.habitHeaderCell}>
+                    <Text style={[styles.habitHeaderLetter, c.isToday && styles.habitHeaderToday]}>{c.letter}</Text>
+                    <Text style={[styles.habitHeaderNumber, c.isToday && styles.habitHeaderToday]}>{c.dayOfMonth}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.habitHeaderCountSpacer} />
+            </View>
             {habits.map(h => (
               <HabitHeatmapRow
                 key={h.id}
@@ -266,6 +302,42 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: colors.cardBorder,
+  },
+  habitHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 2,
+  },
+  habitHeaderLabelSpacer: {
+    width: 80,
+  },
+  habitHeaderCells: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 2,
+  },
+  habitHeaderCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  habitHeaderLetter: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textDim,
+    letterSpacing: 0.3,
+  },
+  habitHeaderNumber: {
+    fontFamily: fonts.mono,
+    fontSize: 8,
+    color: colors.textDimmer,
+    marginTop: 1,
+  },
+  habitHeaderToday: {
+    color: colors.accent,
+  },
+  habitHeaderCountSpacer: {
+    width: 36,
   },
   sectionLabel: {
     fontFamily: fonts.mono,

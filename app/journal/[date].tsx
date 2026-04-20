@@ -76,10 +76,11 @@ export default function JournalScreen() {
   const isAddingTextRef = useRef(isAddingText);
   isAddingTextRef.current = isAddingText;
 
-  // Reload on focus, save on blur
+  // Reload on focus, save on blur. Also purge truly-empty entries (no text,
+  // no habits, no todos, no clips) left behind by interrupted adds.
   useFocusEffect(
     useCallback(() => {
-      reload();
+      deleteEmptyEntries().then(() => reload()).catch(() => reload());
       reloadTitle();
       return () => {
         // Save pending text when navigating away
@@ -115,7 +116,19 @@ export default function JournalScreen() {
     });
   }, [onSyncComplete, reload, reloadTitle]);
 
+  // Hide todos-only entries — the dashboard's TODOS add flow funnels into a
+  // shared bucket entry per day, and those shouldn't clutter the journal
+  // timeline. Todos added inline from a journal entry (text + todos together)
+  // still render normally since the entry has other content too.
   const sorted = [...entries]
+    .filter(e => {
+      const onlyTodos = (e.todos?.length ?? 0) > 0
+        && !e.text
+        && e.clips.length === 0
+        && !e.clipUri
+        && e.habits.length === 0;
+      return !onlyTodos;
+    })
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
   const handleTapEmptySpace = async () => {

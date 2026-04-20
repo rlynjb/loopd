@@ -332,7 +332,6 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
   );
 
   const scaledPxPerSec = PX_PER_SEC * zoom;
-  const selectedClip = clips.find(c => c.id === selectedClipId);
 
   useEffect(() => {
     totalPxSV.value = totalDurationSec * scaledPxPerSec;
@@ -497,27 +496,7 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
         )}
       </View>
 
-      {/* Selected clip actions */}
-      {selectedClip && (
-        <View style={styles.actions}>
-          <Pressable onPress={() => onMoveClip(selectedClip.id, -1)} style={styles.actionBtn}>
-            <Icon name="arrowLeft" size={14} color={colors.textMuted} />
-          </Pressable>
-          <Pressable onPress={() => onMoveClip(selectedClip.id, 1)} style={styles.actionBtn}>
-            <Icon name="arrowRight" size={14} color={colors.textMuted} />
-          </Pressable>
-          <Pressable onPress={() => onSplitClip(selectedClip.id)} style={styles.actionBtn}>
-            <Icon name="scissors" size={14} color={colors.amber} />
-          </Pressable>
-          <Text style={[styles.trimInfo, { color: selectedClip.color }]}>
-            {formatDuration(getEffective(selectedClip))}
-          </Text>
-          <View style={{ flex: 1 }} />
-          <Pressable onPress={() => onDeleteClip(selectedClip.id)} style={styles.deleteBtn}>
-            <Icon name="trash" size={14} color={colors.coral} />
-          </Pressable>
-        </View>
-      )}
+      {/* Per-clip edit actions moved to the CLIP tab in the editor screen. */}
     </View>
   );
 }

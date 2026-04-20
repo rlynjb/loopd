@@ -61,10 +61,11 @@ export function rankTodos(entries: Entry[], options: RankOptions = {}): RankedTo
     if (priority[a.source] !== priority[b.source]) {
       return priority[a.source] - priority[b.source];
     }
-    // Then newest first.
+    // Then oldest first — matches the journal's inline todo list, where new
+    // items append to the end of the stream rather than bubbling to the top.
     const aTime = new Date(effectiveCreatedAt(a, a.entryCreatedAt)).getTime();
     const bTime = new Date(effectiveCreatedAt(b, b.entryCreatedAt)).getTime();
-    return bTime - aTime;
+    return aTime - bTime;
   });
 
   return flat;
