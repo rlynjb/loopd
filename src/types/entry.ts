@@ -8,6 +8,10 @@ export type TodoItem = {
   text: string;
   done: boolean;
   completedAt: string | null;
+  // Optional on older todos that pre-date the field; falls back to the source
+  // entry's createdAt when ranking.
+  createdAt?: string;
+  pinned?: boolean;
 };
 
 export type Entry = {
