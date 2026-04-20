@@ -161,10 +161,6 @@ export default function HomeScreen() {
               })()}
 
             </Pressable>
-
-            <Pressable onPress={handleStart} style={styles.continueBtn}>
-              <Text style={styles.continueBtnText}>Continue Today's Vlog</Text>
-            </Pressable>
           </View>
         )}
 
@@ -314,18 +310,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-  },
-  continueBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: 0,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  continueBtnText: {
-    fontFamily: fonts.body,
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.bg,
   },
   historySection: {
     marginTop: 8,

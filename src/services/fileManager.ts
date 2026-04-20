@@ -204,7 +204,7 @@ export async function transcodeToProxy(
   }
 }
 
-async function captureToProxy(
+export async function captureToProxy(
   asset: ImagePicker.ImagePickerAsset,
   onHandle?: (handle: TranscodeHandle) => void,
 ): Promise<{ uri: string; durationMs: number }> {
@@ -267,6 +267,22 @@ export async function pickAndCopyClip(
   onProcessing?.();
   // Library picks already live in the user's gallery — no DCIM copy needed.
   return await captureToProxy(result.assets[0], onHandle);
+}
+
+// Multi-select variant: returns the raw picked assets so the caller can spawn
+// N parallel transcodes, each with its own cancel handle and pending placeholder.
+// The transcode queue in this file caps concurrent FFmpeg sessions at 2; the
+// rest wait FIFO.
+export async function pickVideoAssets(
+  multi = true,
+): Promise<ImagePicker.ImagePickerAsset[] | null> {
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['videos'],
+    quality: 1,
+    allowsMultipleSelection: multi,
+  });
+  if (result.canceled || result.assets.length === 0) return null;
+  return result.assets;
 }
 
 export function getExportPath(date: string): string {

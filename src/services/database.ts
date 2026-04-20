@@ -274,17 +274,23 @@ type EntryRow = {
 };
 
 function mapRowToEntry(r: EntryRow): Entry {
-  const rawClips: { uri: string; durationMs: number }[] = r.clips_json
-    ? JSON.parse(r.clips_json)
+  // Once `clips_json` has ever been written for an entry (including the
+  // empty array `'[]'`), it is authoritative. The legacy `clip_uri` column
+  // only comes into play for pre-clips_json entries.
+  const hasClipsJson = r.clips_json != null;
+  const rawClips: { uri: string; durationMs: number }[] = hasClipsJson
+    ? JSON.parse(r.clips_json!)
     : (r.clip_uri ? [{ uri: r.clip_uri, durationMs: r.clip_duration_ms ?? 0 }] : []);
+  const effectiveClipUri = hasClipsJson ? (rawClips[0]?.uri ?? null) : r.clip_uri;
+  const effectiveClipDurationMs = hasClipsJson ? (rawClips[0]?.durationMs ?? null) : r.clip_duration_ms;
   return {
     id: r.id,
     date: r.date,
     text: r.text,
     habits: r.habits_json ? JSON.parse(r.habits_json) : [],
     todos: r.todos_json ? JSON.parse(r.todos_json) : [],
-    clipUri: resolveClipUri(r.clip_uri),
-    clipDurationMs: r.clip_duration_ms,
+    clipUri: resolveClipUri(effectiveClipUri),
+    clipDurationMs: effectiveClipDurationMs,
     clips: rawClips.map(c => ({ ...c, uri: resolveClipUri(c.uri) ?? c.uri })),
     createdAt: r.created_at,
     notionPageId: r.notion_page_id,
@@ -333,10 +339,13 @@ export async function insertEntry(entry: Entry): Promise<void> {
 export async function updateEntry(entry: Entry): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  const { clipsJson } = entryClipsForStorage(entry);
+  const { clipUri, clipsJson } = entryClipsForStorage(entry);
+  // Keep the legacy `clip_uri` / `clip_duration_ms` columns in sync with
+  // clips_json. Otherwise removing all clips leaves the legacy value in the
+  // DB, and mapRowToEntry's fallback resurrects the old clip on next read.
   await db.runAsync(
-    `UPDATE entries SET text = ?, habits_json = ?, todos_json = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
-    [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), clipsJson, now, entry.id]
+    `UPDATE entries SET text = ?, habits_json = ?, todos_json = ?, clip_uri = ?, clip_duration_ms = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
+    [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), clipUri, entry.clipDurationMs, clipsJson, now, entry.id]
   );
 }
 

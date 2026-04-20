@@ -16,7 +16,7 @@ import { useDayTitle } from '../../src/hooks/useDayTitle';
 import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
 import { updateEntry as updateEntryDB, deleteEmptyEntries } from '../../src/services/database';
-import { pickAndCopyClip, TranscodeCancelledError, DiskFullError, type TranscodeHandle } from '../../src/services/fileManager';
+import { pickVideoAssets, captureToProxy, TranscodeCancelledError, DiskFullError, type TranscodeHandle } from '../../src/services/fileManager';
 import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { on } from '../../src/utils/events';
 import type { Entry } from '../../src/types/entry';
@@ -230,39 +230,54 @@ export default function JournalScreen() {
   }, []);
 
   const handleAddClipToEntry = useCallback(async (entry: Entry) => {
-    const pendingId = generateId('pending');
-    const handleRef: { current: TranscodeHandle | null } = { current: null };
-    let attached = false;
-    try {
-      const result = await pickAndCopyClip(date, () => {
-        addPending(entry.id, {
-          pendingId,
-          cancel: () => handleRef.current?.cancel(),
-        });
-        attached = true;
-      }, h => { handleRef.current = h; });
-      if (result) {
+    const assets = await pickVideoAssets(true);
+    if (!assets) return;
+
+    // Start all transcodes in parallel (capped by fileManager's FFmpeg queue),
+    // but commit results in the order the user picked them. If clip 2 finishes
+    // before clip 1, its result waits on tasks[0] before writing to the entry.
+    type Outcome =
+      | { status: 'done'; result: { uri: string; durationMs: number } }
+      | { status: 'failed'; error: unknown };
+    const tasks: Promise<Outcome>[] = assets.map(asset => {
+      const pendingId = generateId('pending');
+      const handleRef: { current: TranscodeHandle | null } = { current: null };
+      addPending(entry.id, {
+        pendingId,
+        cancel: () => handleRef.current?.cancel(),
+      });
+      return captureToProxy(asset, h => { handleRef.current = h; })
+        .then((result): Outcome => ({ status: 'done', result }))
+        .catch((error): Outcome => ({ status: 'failed', error }))
+        .finally(() => removePending(entry.id, pendingId));
+    });
+
+    (async () => {
+      const { getEntryById } = await import('../../src/services/database');
+      for (const task of tasks) {
+        const outcome = await task;
+        if (outcome.status === 'failed') {
+          if (outcome.error instanceof TranscodeCancelledError) continue;
+          if (outcome.error instanceof DiskFullError) Alert.alert('Out of storage', outcome.error.message);
+          else console.warn('[loopd] clip transcode failed:', outcome.error);
+          continue;
+        }
+        const current = await getEntryById(entry.id);
+        if (!current) continue;
         const updated = {
-          ...entry,
-          clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
-          clipUri: entry.clipUri ?? result.uri,
-          clipDurationMs: entry.clipDurationMs ?? result.durationMs,
+          ...current,
+          clips: [...current.clips, { uri: outcome.result.uri, durationMs: outcome.result.durationMs }],
+          clipUri: current.clipUri ?? outcome.result.uri,
+          clipDurationMs: current.clipDurationMs ?? outcome.result.durationMs,
         };
         await editEntry(updated);
-        setEditingEntry(updated);
-        editingEntryRef.current = updated;
+        if (editingEntryRef.current?.id === entry.id) {
+          setEditingEntry(updated);
+          editingEntryRef.current = updated;
+        }
       }
-    } catch (e) {
-      if (e instanceof TranscodeCancelledError) { /* user-initiated */ }
-      else if (e instanceof DiskFullError) {
-        Alert.alert('Out of storage', e.message);
-      } else {
-        throw e;
-      }
-    } finally {
-      if (attached) removePending(entry.id, pendingId);
-    }
-  }, [date, editEntry, addPending, removePending]);
+    })();
+  }, [editEntry, addPending, removePending]);
 
   const handleRemoveHabitFromEntry = useCallback(async (entry: Entry, habitId: string) => {
     const currentText = editingEntryRef.current?.id === entry.id ? (liveTextRef.current.trim() || entry.text) : entry.text;
@@ -322,69 +337,77 @@ export default function JournalScreen() {
         await updateEntryDB({ ...existing, text: liveTextRef.current.trim() });
       }
     }
-    const pendingId = generateId('pending');
-    const handleRef: { current: TranscodeHandle | null } = { current: null };
-    let pendingAttachedTo: string | null = null;
-    try {
-      const result = await pickAndCopyClip(date, () => {
-        // Picker closed — make sure we have a target entry so the placeholder
-        // card has somewhere to render. If no entry existed yet (new-entry flow
-        // from the toolbar), create one now with whatever text is in flight.
-        if (!targetId) {
-          const stub: Entry = {
-            id: generateId('entry'),
-            date,
-            text: liveTextRef.current.trim() || null,
-            habits: [],
-            todos: [],
-            clipUri: null,
-            clipDurationMs: null,
-            clips: [],
-            createdAt: new Date().toISOString(),
-          };
-          addEntry(stub);
-          setEditingEntry(stub);
-          editingEntryRef.current = stub;
-          newEntryIdRef.current = stub.id;
-          targetId = stub.id;
+    const assets = await pickVideoAssets(true);
+    if (!assets) return;
+
+    // Make sure we have a target entry so the placeholder cards have somewhere
+    // to render. If no entry exists yet (new-entry flow from the toolbar),
+    // create one with whatever text is in flight.
+    if (!targetId) {
+      const stub: Entry = {
+        id: generateId('entry'),
+        date,
+        text: liveTextRef.current.trim() || null,
+        habits: [],
+        todos: [],
+        clipUri: null,
+        clipDurationMs: null,
+        clips: [],
+        createdAt: new Date().toISOString(),
+      };
+      addEntry(stub);
+      setEditingEntry(stub);
+      editingEntryRef.current = stub;
+      newEntryIdRef.current = stub.id;
+      targetId = stub.id;
+    }
+    const entryId = targetId;
+    setIsAddingText(false);
+
+    // See handleAddClipToEntry for the parallel-transcode / in-order-commit
+    // pattern used here.
+    type Outcome =
+      | { status: 'done'; result: { uri: string; durationMs: number } }
+      | { status: 'failed'; error: unknown };
+    const tasks: Promise<Outcome>[] = assets.map(asset => {
+      const pendingId = generateId('pending');
+      const handleRef: { current: TranscodeHandle | null } = { current: null };
+      addPending(entryId, {
+        pendingId,
+        cancel: () => handleRef.current?.cancel(),
+      });
+      return captureToProxy(asset, h => { handleRef.current = h; })
+        .then((result): Outcome => ({ status: 'done', result }))
+        .catch((error): Outcome => ({ status: 'failed', error }))
+        .finally(() => removePending(entryId, pendingId));
+    });
+
+    (async () => {
+      const { getEntryById } = await import('../../src/services/database');
+      for (const task of tasks) {
+        const outcome = await task;
+        if (outcome.status === 'failed') {
+          if (outcome.error instanceof TranscodeCancelledError) continue;
+          if (outcome.error instanceof DiskFullError) Alert.alert('Out of storage', outcome.error.message);
+          else console.warn('[loopd] clip transcode failed:', outcome.error);
+          continue;
         }
-        pendingAttachedTo = targetId;
-        addPending(targetId, {
-          pendingId,
-          cancel: () => handleRef.current?.cancel(),
-        });
-      }, h => { handleRef.current = h; });
-      if (result && targetId) {
-        // Re-read entry from DB (state may be stale after picker)
-        const { getEntryById } = await import('../../src/services/database');
-        const entry = await getEntryById(targetId);
-        if (entry) {
-          const updated = {
-            ...entry,
-            clips: [...entry.clips, { uri: result.uri, durationMs: result.durationMs }],
-            clipUri: entry.clipUri ?? result.uri,
-            clipDurationMs: entry.clipDurationMs ?? result.durationMs,
-          };
-          await editEntry(updated);
+        const current = await getEntryById(entryId);
+        if (!current) continue;
+        const updated = {
+          ...current,
+          clips: [...current.clips, { uri: outcome.result.uri, durationMs: outcome.result.durationMs }],
+          clipUri: current.clipUri ?? outcome.result.uri,
+          clipDurationMs: current.clipDurationMs ?? outcome.result.durationMs,
+        };
+        await editEntry(updated);
+        if (editingEntryRef.current?.id === entryId) {
           setEditingEntry(updated);
           editingEntryRef.current = updated;
-          newEntryIdRef.current = null;
-          setIsAddingText(false);
-          return;
         }
+        newEntryIdRef.current = null;
       }
-      // The !targetId fallback is no longer reachable — the picker's onProcessing
-      // callback always creates a stub entry before the transcode starts.
-    } catch (e) {
-      if (e instanceof TranscodeCancelledError) { /* user-initiated */ }
-      else if (e instanceof DiskFullError) {
-        Alert.alert('Out of storage', e.message);
-      } else {
-        throw e;
-      }
-    } finally {
-      if (pendingAttachedTo) removePending(pendingAttachedTo, pendingId);
-    }
+    })();
   }, [date, addEntry, editEntry, addPending, removePending]);
 
   // Final save — updates state and clears editing
