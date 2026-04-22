@@ -466,17 +466,38 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
   );
 }
 
-export async function getSyncDeletions(): Promise<{ entityType: string; entityId: string; notionPageId: string }[]> {
+export async function getSyncDeletions(entityType?: string): Promise<{ entityType: string; entityId: string; notionPageId: string }[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
-    'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions'
-  );
+  const rows = entityType
+    ? await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
+        'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions WHERE entity_type = ?',
+        [entityType],
+      )
+    : await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
+        'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions',
+      );
   return rows.map(r => ({ entityType: r.entity_type, entityId: r.entity_id, notionPageId: r.notion_page_id }));
 }
 
-export async function clearSyncDeletions(): Promise<void> {
+export async function clearSyncDeletions(entityType?: string): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('DELETE FROM sync_deletions');
+  if (entityType) {
+    await db.runAsync('DELETE FROM sync_deletions WHERE entity_type = ?', [entityType]);
+  } else {
+    await db.runAsync('DELETE FROM sync_deletions');
+  }
+}
+
+export async function enqueueSyncDeletion(
+  entityType: string,
+  entityId: string,
+  notionPageId: string,
+): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+    [entityType, entityId, notionPageId, new Date().toISOString()],
+  );
 }
 
 // ── Habit CRUD ──

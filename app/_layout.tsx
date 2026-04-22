@@ -8,7 +8,7 @@ import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
 import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
-import { syncAll } from '../src/services/notion/sync';
+import { syncAll, syncAllTodos } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
@@ -78,7 +78,9 @@ function AppContent() {
       const configured = await isNotionConfigured();
       const autoSync = await isAutoSyncEnabled();
       if (configured && autoSync) {
-        syncAll().catch(err => console.warn('[loopd] Auto-sync failed:', err));
+        syncAll()
+          .then(() => syncAllTodos())
+          .catch(err => console.warn('[loopd] Auto-sync failed:', err));
       }
     })();
   }, [ready]);

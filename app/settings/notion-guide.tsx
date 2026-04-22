@@ -42,13 +42,29 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="3" title="Share with Integration">
+        <Step num="3" title="Create the Todos Database (optional)">
+          <Text style={styles.text}>
+            Create a second full-page Notion database if you want individual todos to sync as their own rows. Property names are case-sensitive:
+          </Text>
+          <Table rows={[
+            ['Name', 'Title (default)'],
+            ['Done', 'Checkbox'],
+            ['loopd ID', 'Text (rich text)'],
+            ['Created At', 'Date'],
+            ['Entry Date', 'Date'],
+          ]} />
+          <Text style={styles.hint}>
+            Skip this step to keep todos embedded on their parent entry only.
+          </Text>
+        </Step>
+
+        <Step num="4" title="Share with Integration">
           <Text style={styles.text}>
             Open each database, click the "..." menu in the top right, select "Connections", search for "loopd", and click "Connect".
           </Text>
         </Step>
 
-        <Step num="4" title="Copy Database IDs">
+        <Step num="5" title="Copy Database IDs">
           <Text style={styles.text}>
             Open your database as a full page. The URL looks like:{'\n\n'}
             notion.so/workspace/{'<'}DATABASE_ID{'>'}?v=...{'\n\n'}
@@ -56,7 +72,7 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="5" title="Connect & Sync">
+        <Step num="6" title="Connect & Sync">
           <Text style={styles.text}>
             Go to Notion Sync in Settings, paste your token and database IDs, tap "Test connection", then "Sync Now".
           </Text>

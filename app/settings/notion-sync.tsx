@@ -8,8 +8,10 @@ import { useNotionSync } from '../../src/hooks/useNotionSync';
 import {
   getNotionToken, setNotionToken,
   getEntriesDbId, setEntriesDbId,
+  getTodosDbId, setTodosDbId,
   isAutoSyncEnabled, setAutoSync,
   clearNotionConfig, setLastSyncTimestamp,
+  setTodosLastSyncTimestamp,
 } from '../../src/services/notion/config';
 import { getDatabase as testNotionDb } from '../../src/services/notion/api';
 
@@ -19,6 +21,7 @@ export default function NotionSyncScreen() {
 
   const [token, setToken] = useState('');
   const [entriesDb, setEntriesDb] = useState('');
+  const [todosDb, setTodosDb] = useState('');
   const [autoSyncOn, setAutoSyncOn] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -29,6 +32,7 @@ export default function NotionSyncScreen() {
       (async () => {
         setToken(await getNotionToken() ?? '');
         setEntriesDb(await getEntriesDbId() ?? '');
+        setTodosDb(await getTodosDbId() ?? '');
         setAutoSyncOn(await isAutoSyncEnabled());
         refresh();
       })();
@@ -38,6 +42,7 @@ export default function NotionSyncScreen() {
   const saveCredentials = async () => {
     await setNotionToken(token.trim());
     await setEntriesDbId(entriesDb.trim());
+    await setTodosDbId(todosDb.trim());
     refresh();
   };
 
@@ -64,6 +69,7 @@ export default function NotionSyncScreen() {
     await clearNotionConfig();
     setToken('');
     setEntriesDb('');
+    setTodosDb('');
     setTestResult(null);
     refresh();
   };
@@ -123,6 +129,13 @@ export default function NotionSyncScreen() {
           <Text style={styles.fieldLabel}>ENTRIES DATABASE ID</Text>
           <TextInput
             value={entriesDb} onChangeText={setEntriesDb} onBlur={saveCredentials}
+            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" placeholderTextColor={colors.textDimmer}
+            autoCapitalize="none" autoCorrect={false} style={styles.input}
+          />
+
+          <Text style={styles.fieldLabel}>TODOS DATABASE ID (optional)</Text>
+          <TextInput
+            value={todosDb} onChangeText={setTodosDb} onBlur={saveCredentials}
             placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" placeholderTextColor={colors.textDimmer}
             autoCapitalize="none" autoCorrect={false} style={styles.input}
           />
@@ -189,13 +202,18 @@ export default function NotionSyncScreen() {
 
           {configured && (
             <Pressable
-              onPress={async () => { await setLastSyncTimestamp(''); refresh(); }}
+              onPress={async () => {
+                await setLastSyncTimestamp('');
+                await setTodosLastSyncTimestamp('');
+                refresh();
+              }}
               style={styles.resetBtn}
             >
               <Text style={styles.resetBtnText}>Reset sync timestamp (force full re-sync)</Text>
             </Pressable>
           )}
         </View>
+
       </ScrollView>
     </View>
   );

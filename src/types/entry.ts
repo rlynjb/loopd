@@ -12,6 +12,9 @@ export type TodoItem = {
   // entry's createdAt when ranking.
   createdAt?: string;
   pinned?: boolean;
+  // Set after the todo has been pushed to Notion as a standalone row.
+  // Unset means "never pushed yet" — push path will create a new page.
+  notionPageId?: string | null;
 };
 
 export type Entry = {

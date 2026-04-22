@@ -1,17 +1,22 @@
 import { queryDatabase, createPage, updatePage, archivePage, getDatabase as getNotionDatabase } from './api';
-import { getNotionToken, getEntriesDbId, getLastSyncTimestamp, setLastSyncTimestamp } from './config';
+import {
+  getNotionToken, getEntriesDbId, getTodosDbId,
+  getLastSyncTimestamp, setLastSyncTimestamp,
+  getTodosLastSyncTimestamp, setTodosLastSyncTimestamp,
+} from './config';
 import { notionPageToEntry, entryToNotionProperties, getTitlePropertyKey } from './mapper';
+import { notionPageToTodo, todoToNotionProperties } from './todosMapper';
 import {
   getUnsyncedEntries, upsertEntryFromNotion, setEntryNotionPageId,
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
-  getSyncDeletions, clearSyncDeletions, getAllEntries,
+  getSyncDeletions, clearSyncDeletions, getAllEntries, updateEntry,
   insertEntry, insertHabit, deleteHabit, getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
   rebuildVlogs,
 } from '../database';
 import { generateId } from '../../utils/id';
 import { addDays, getTodayString, toLocalDateString } from '../../utils/time';
 import { reimportMissingClips } from '../clipMatcher';
-import type { Entry } from '../../types/entry';
+import type { Entry, TodoItem } from '../../types/entry';
 import type { SyncResult } from '../../types/notion';
 
 export async function syncAll(): Promise<SyncResult> {
@@ -69,10 +74,11 @@ export async function syncAll(): Promise<SyncResult> {
 
     // 5. Process deletions (skip on fresh install — no previous sync)
     if (lastSync) {
-      await processDeletions(token);
+      await processDeletions(token, 'entry');
     } else {
-      // Clear any stale deletion records from a previous install
-      await clearSyncDeletions();
+      // Clear any stale entry deletion records from a previous install —
+      // leave 'todo' rows for the todos sync to handle.
+      await clearSyncDeletions('entry');
     }
 
 
@@ -340,17 +346,17 @@ async function cleanUpNotionNames(token: string, dbId: string): Promise<void> {
   }
 }
 
-async function processDeletions(token: string): Promise<void> {
-  const deletions = await getSyncDeletions();
+async function processDeletions(token: string, entityType: string): Promise<void> {
+  const deletions = await getSyncDeletions(entityType);
   for (const del of deletions) {
     try {
       await archivePage(token, del.notionPageId);
     } catch (err) {
-      console.warn('[loopd sync] Delete error for', del.notionPageId, err);
+      console.warn(`[loopd sync] Delete error (${entityType}) for`, del.notionPageId, err);
     }
   }
   if (deletions.length > 0) {
-    await clearSyncDeletions();
+    await clearSyncDeletions(entityType);
   }
 }
 
@@ -459,4 +465,230 @@ function getPropertyDate(page: { properties: Record<string, unknown> }, key: str
   const prop = page.properties[key] as { type: string; date?: { start: string } | null } | undefined;
   if (!prop || prop.type !== 'date' || !prop.date) return null;
   return prop.date.start;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Todos sync — one Notion page per individual TodoItem
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function syncAllTodos(): Promise<SyncResult> {
+  const token = await getNotionToken();
+  const todosDbId = await getTodosDbId();
+  const result: SyncResult = { pulled: 0, pushed: 0, errors: [], debug: [] };
+  if (!token || !todosDbId) return result; // silent no-op when not configured
+
+  const lastSync = await getTodosLastSyncTimestamp();
+
+  try {
+    const pulled = await pullTodos(token, todosDbId, lastSync, result.debug);
+    result.pulled += pulled;
+
+    const pushRes = await pushTodos(token, todosDbId, lastSync);
+    result.pushed += pushRes.count;
+    result.errors.push(...pushRes.errors);
+
+    if (lastSync) {
+      await processDeletions(token, 'todo');
+    } else {
+      await clearSyncDeletions('todo');
+    }
+
+    await setTodosLastSyncTimestamp(new Date().toISOString());
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    result.errors.push(msg);
+    console.error('[loopd todos-sync] Error:', msg);
+  }
+
+  console.log('[loopd todos-sync] Result:', result);
+  return result;
+}
+
+// Walk all entries' todos and return a flat list paired with the source entry
+// so we can emit entry-level updates after modifying todos_json.
+async function flattenLocalTodos(): Promise<{ entry: Entry; todo: TodoItem; index: number }[]> {
+  const entries = await getAllEntries();
+  const out: { entry: Entry; todo: TodoItem; index: number }[] = [];
+  for (const entry of entries) {
+    const todos = entry.todos ?? [];
+    for (let i = 0; i < todos.length; i++) {
+      out.push({ entry, todo: todos[i], index: i });
+    }
+  }
+  return out;
+}
+
+async function pullTodos(
+  token: string,
+  dbId: string,
+  lastSync: string | null,
+  debug: string[],
+): Promise<number> {
+  // Pull recent pages (last 14 days by Created At, or all if filter fails)
+  const cutoff = toLocalDateString(addDays(new Date(), -14));
+  let pages;
+  try {
+    pages = await queryDatabase(token, dbId, {
+      or: [
+        { property: 'Created At', date: { on_or_after: cutoff } },
+        { property: 'Created At', date: { is_empty: true } },
+      ],
+    });
+  } catch {
+    try {
+      pages = await queryDatabase(token, dbId);
+    } catch (err) {
+      debug.push(`todos pull query failed: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    }
+  }
+  debug.push(`Fetched ${pages.length} todos from Notion`);
+
+  const local = await flattenLocalTodos();
+  const byLoopdId = new Map<string, { entry: Entry; todo: TodoItem; index: number }>();
+  for (const row of local) byLoopdId.set(row.todo.id, row);
+
+  // Entries we've mutated this pull — batched to a single updateEntry call
+  // per entry at the end to avoid rewriting the same row multiple times.
+  const touchedEntries = new Map<string, TodoItem[]>();
+
+  let count = 0;
+  for (const page of pages) {
+    if (page.archived) continue;
+    try {
+      const parsed = notionPageToTodo(page);
+      const existing = byLoopdId.get(parsed.loopdId);
+
+      if (existing) {
+        // Last-edit-wins: Notion wins only if its last_edited_time is newer
+        // than the local todo's createdAt (best proxy — we don't track a
+        // per-todo updatedAt).
+        const notionTime = new Date(parsed.notionEditedAt).getTime();
+        const localProxy = existing.todo.completedAt ?? existing.todo.createdAt ?? existing.entry.updatedAt ?? existing.entry.createdAt;
+        const localTime = localProxy ? new Date(localProxy).getTime() : 0;
+        if (notionTime <= localTime) continue;
+
+        const merged: TodoItem = {
+          ...existing.todo,
+          text: parsed.todo.text,
+          done: parsed.todo.done,
+          completedAt: parsed.todo.completedAt,
+          notionPageId: parsed.notionPageId,
+        };
+        const todos = touchedEntries.get(existing.entry.id) ?? [...(existing.entry.todos ?? [])];
+        todos[existing.index] = merged;
+        touchedEntries.set(existing.entry.id, todos);
+        count++;
+      } else {
+        // New todo from Notion. Attach to the entry implied by Entry Date if
+        // we can find one; otherwise drop into today's bucket (matching the
+        // dashboard's addTodo behavior).
+        const targetDate = parsed.entryDate ?? getTodayString();
+        const entriesForDate = await getEntriesByDate(targetDate);
+        let bucket = entriesForDate.find(e =>
+          !e.text
+          && e.clips.length === 0
+          && !e.clipUri
+          && e.habits.length === 0
+          && (e.todos?.length ?? 0) > 0,
+        );
+        if (!bucket) {
+          // Create a fresh bucket entry for this date.
+          bucket = {
+            id: generateId('entry'),
+            date: targetDate,
+            text: null,
+            habits: [],
+            todos: [],
+            clipUri: null,
+            clipDurationMs: null,
+            clips: [],
+            createdAt: parsed.todo.createdAt ?? new Date().toISOString(),
+          };
+          await insertEntry(bucket);
+        }
+        const todos = touchedEntries.get(bucket.id) ?? [...(bucket.todos ?? [])];
+        todos.push({ ...parsed.todo, notionPageId: parsed.notionPageId });
+        touchedEntries.set(bucket.id, todos);
+        count++;
+      }
+    } catch (err) {
+      debug.push(`todos pull error for ${page.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  for (const [entryId, todos] of touchedEntries) {
+    const entry = await getEntryById(entryId);
+    if (!entry) continue;
+    await updateEntry({ ...entry, todos });
+  }
+
+  return count;
+}
+
+async function pushTodos(
+  token: string,
+  dbId: string,
+  lastSync: string | null,
+): Promise<{ count: number; errors: string[] }> {
+  const errors: string[] = [];
+  let count = 0;
+
+  // Detect title column once
+  let titleColumn = 'Name';
+  try {
+    const dbSchema = await getNotionDatabase(token, dbId) as { properties: Record<string, unknown> };
+    titleColumn = getTitlePropertyKey(dbSchema.properties);
+  } catch { /* fallback */ }
+
+  const lastSyncMs = lastSync ? new Date(lastSync).getTime() : 0;
+  const local = await flattenLocalTodos();
+
+  // Group dirty todos by entry so we can persist all notionPageIds together
+  // after creates.
+  const byEntry = new Map<string, { entry: Entry; todos: TodoItem[]; dirtyIndexes: Set<number> }>();
+  for (const { entry, todo, index } of local) {
+    const neverSynced = !todo.notionPageId;
+    const entryUpdatedMs = entry.updatedAt ? new Date(entry.updatedAt).getTime() : 0;
+    const dirty = neverSynced || entryUpdatedMs > lastSyncMs;
+    if (!dirty) continue;
+
+    const row = byEntry.get(entry.id) ?? { entry, todos: [...(entry.todos ?? [])], dirtyIndexes: new Set() };
+    row.dirtyIndexes.add(index);
+    byEntry.set(entry.id, row);
+  }
+
+  for (const { entry, todos, dirtyIndexes } of byEntry.values()) {
+    let mutated = false;
+    for (const index of dirtyIndexes) {
+      const todo = todos[index];
+      if (!todo) continue;
+      try {
+        const props = todoToNotionProperties(todo, entry, titleColumn);
+        if (todo.notionPageId) {
+          await updatePage(token, todo.notionPageId, props);
+        } else {
+          const page = await createPage(token, dbId, props);
+          todos[index] = { ...todo, notionPageId: page.id };
+          mutated = true;
+        }
+        count++;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[loopd todos-sync] Push failed for todo', todo.id, msg);
+        errors.push(`Push: ${msg.slice(0, 100)}`);
+      }
+    }
+    if (mutated) {
+      // Persist the newly-assigned notionPageIds back into the entry.
+      try {
+        const fresh = await getEntryById(entry.id);
+        if (fresh) await updateEntry({ ...fresh, todos });
+      } catch (err) {
+        console.warn('[loopd todos-sync] Failed to persist notionPageIds for entry', entry.id, err);
+      }
+    }
+  }
+
+  return { count, errors };
 }

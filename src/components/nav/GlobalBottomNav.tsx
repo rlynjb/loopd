@@ -21,6 +21,7 @@ export function GlobalBottomNav() {
   const { showHabits: showHabitsParam } = useLocalSearchParams<{ showHabits?: string }>();
   const isHome = pathname === '/' || pathname === '';
   const isJournal = pathname.startsWith('/journal');
+  const isTodos = pathname.startsWith('/todos');
 
   const createClipEntry = async (result: { uri: string; durationMs: number }) => {
     const today = getTodayString();
@@ -76,6 +77,11 @@ export function GlobalBottomNav() {
       <Pressable onPress={() => router.push(`/journal/${getTodayString()}`)} style={styles.tab}>
         <Icon name="penLine" size={18} color={isJournal ? colors.accent : colors.textDim} strokeWidth={2.5} />
         <Text style={[styles.label, isJournal && { color: colors.accent }]}>Journal</Text>
+      </Pressable>
+
+      <Pressable onPress={() => router.push('/todos')} style={styles.tab}>
+        <Icon name="listTodo" size={18} color={isTodos ? colors.accent : colors.textDim} strokeWidth={2.5} />
+        <Text style={[styles.label, isTodos && { color: colors.accent }]}>Todos</Text>
       </Pressable>
     </View>
   );

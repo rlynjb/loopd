@@ -1,5 +1,5 @@
 import {
-  Video, PenLine, CheckSquare, MapPin,
+  Video, PenLine, CheckSquare, ListTodo, MapPin,
   Code, Dumbbell, UtensilsCrossed, Users, User, ShoppingCart,
   BookOpen, Clapperboard, Feather, BookMarked,
   Smile, Frown, Target, Zap,
@@ -20,6 +20,7 @@ export const ICONS = {
   video: Video,
   penLine: PenLine,
   checkSquare: CheckSquare,
+  listTodo: ListTodo,
   mapPin: MapPin,
   // Categories
   code: Code,

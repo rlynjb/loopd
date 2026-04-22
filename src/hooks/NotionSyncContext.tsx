@@ -1,5 +1,5 @@
 import { createContext, useContext, useCallback, useState, useEffect, useRef, type ReactNode } from 'react';
-import { syncAll } from '../services/notion/sync';
+import { syncAll, syncAllTodos } from '../services/notion/sync';
 import { isNotionConfigured, getLastSyncTimestamp } from '../services/notion/config';
 import type { SyncResult, SyncStatus } from '../types/notion';
 
@@ -47,6 +47,17 @@ export function NotionSyncProvider({ children }: { children: ReactNode }) {
     setResult(null);
     try {
       const res = await syncAll();
+      // Run todos sync after entries so bucket-entry creation/deletion is
+      // already settled. Silently no-ops if the Todos DB isn't configured.
+      try {
+        const todosRes = await syncAllTodos();
+        res.pulled += todosRes.pulled;
+        res.pushed += todosRes.pushed;
+        res.errors.push(...todosRes.errors);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.errors.push(`Todos sync: ${msg.slice(0, 100)}`);
+      }
       setStatus(res.errors.length > 0 ? 'error' : 'success');
       setResult(res);
       setLastSynced(new Date().toISOString());
