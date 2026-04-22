@@ -86,6 +86,21 @@ export default function HomeScreen() {
       : sentences + (firstText.includes('.') ? '.' : '');
   }, [todayEntries]);
 
+  // Sum every "<number> kcal" mention across today's entry text. Commas are
+  // treated as thousands separators (1,200 kcal → 1200).
+  const totalKcal = useMemo(() => {
+    const re = /(\d+(?:[.,]\d+)?)\s*kcal\b/gi;
+    let total = 0;
+    for (const e of todayEntries) {
+      if (!e.text) continue;
+      for (const m of e.text.matchAll(re)) {
+        const n = parseFloat(m[1].replace(/,/g, ''));
+        if (Number.isFinite(n)) total += n;
+      }
+    }
+    return total;
+  }, [todayEntries]);
+
   // Map habitId -> set of YYYY-MM-DD where it was logged (last 28 days).
   const checkedDatesByHabit = useMemo(() => {
     const map = new Map<string, Set<string>>();
@@ -194,6 +209,14 @@ export default function HomeScreen() {
               preview={todayPreview}
               onPress={() => router.push(`/journal/${today}`)}
             />
+            {totalKcal > 0 && (
+              <View style={styles.statRow}>
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>total kcal</Text>
+                  <Text style={styles.statValue}>{Math.round(totalKcal).toLocaleString()}</Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
 
@@ -345,5 +368,27 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 1,
     marginBottom: 14,
+  },
+  statRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 24,
+    marginTop: 12,
+  },
+  statItem: {
+    alignItems: 'flex-start',
+  },
+  statLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    color: colors.textDim,
+    letterSpacing: 0.5,
+  },
+  statValue: {
+    fontFamily: fonts.heading,
+    fontSize: 16,
+    color: colors.text,
+    letterSpacing: -0.2,
+    marginTop: 4,
   },
 });
