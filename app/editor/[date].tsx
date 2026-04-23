@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { useSharedValue } from 'react-native-reanimated';
-import { View, Text, TextInput, Pressable, ScrollView, PanResponder, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, Pressable, ScrollView, PanResponder, StyleSheet, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import { saveToDCIMLoopd } from '../../src/services/fileManager';
@@ -123,6 +123,10 @@ export default function EditorScreen() {
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
+  // Separate from editingTextId: only the *focused* overlay renders as a
+  // TextInput (keyboard up). TEXT tab can be open (sheet visible) without
+  // forcing focus into the preview.
+  const [focusedTextId, setFocusedTextId] = useState<string | null>(null);
   const [playheadPos, setPlayheadPos] = useState(0);
   const playheadPosAnim = useSharedValue(0);
   const playheadRefPos = useSharedValue(0);
@@ -135,8 +139,9 @@ export default function EditorScreen() {
   const { progress: exportProgress, isExporting, startExport, cancelExport } = useExport();
   const { renderAll: renderTextOverlays, Renderer: TextRenderer } = useTextRenderer();
   const [renderingText, setRenderingText] = useState(false);
-  const [previewHeight, setPreviewHeight] = useState(280);
-  const [showFilters, setShowFilters] = useState(false);
+  const { height: windowHeight } = useWindowDimensions();
+  const [previewHeight, setPreviewHeight] = useState(() => Math.round(windowHeight * 0.45));
+  const [activeTab, setActiveTab] = useState<'timeline' | 'text' | 'filter'>('timeline');
   const pendingTransitionRef = useRef<{ clipId: string; expectedStartSec: number } | null>(null);
   const advancedFromClipRef = useRef<string | null>(null);
   const lastProgressRef = useRef<{ wallMs: number; videoSec: number; clipId: string } | null>(null);
@@ -154,7 +159,7 @@ export default function EditorScreen() {
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: () => { heightAtDragStart.current = currentHeightRef.current; },
       onPanResponderMove: (_, gs) => {
-        const newHeight = Math.round(Math.max(100, Math.min(500, heightAtDragStart.current + gs.dy)));
+        const newHeight = Math.round(Math.max(100, Math.min(1000, heightAtDragStart.current + gs.dy)));
         if (resizeTimer.current) return;
         resizeTimer.current = setTimeout(() => { resizeTimer.current = null; }, 100);
         setPreviewHeight(newHeight);
@@ -165,6 +170,8 @@ export default function EditorScreen() {
   const clips = project?.clips ?? [];
   const textOverlays = project?.textOverlays ?? [];
   useEffect(() => { isPlayingSV.value = isPlaying; }, [isPlaying, isPlayingSV]);
+  // Dismiss the preview keyboard whenever the user leaves the TEXT tab.
+  useEffect(() => { if (activeTab !== 'text') setFocusedTextId(null); }, [activeTab]);
   const filterOverlays = project?.filterOverlays ?? [];
   const totalDurationSec = clips.reduce((sum, c) => sum + getEffective(c), 0);
   useEffect(() => { totalDurationMsSV.value = totalDurationSec * 1000; }, [totalDurationSec, totalDurationMsSV]);
@@ -410,11 +417,6 @@ export default function EditorScreen() {
   const selectClip = (id: string | null) => {
     const next = id === selectedClipId ? null : id;
     setSelectedClipId(next);
-    // Selecting a clip owns the edit panel — hide TEXT / FILTER if they were open.
-    if (next) {
-      setEditingTextId(null);
-      setShowFilters(false);
-    }
   };
 
   const deleteClip = (id: string) => {
@@ -490,8 +492,10 @@ export default function EditorScreen() {
   // Text overlay operations
   const openTextEditor = (id: string) => {
     setSelectedClipId(null);
-    setShowFilters(false);
+    setActiveTab('text');
     setEditingTextId(id);
+    // User explicitly tapped the overlay → focus for typing.
+    setFocusedTextId(id);
   };
 
   const updateText = (id: string, updates: Partial<TextOverlay>) => {
@@ -567,15 +571,6 @@ export default function EditorScreen() {
         </Pressable>
         <Text style={styles.title}>Vlog Editor</Text>
         <View style={styles.topBarRight}>
-          {/* Regenerate with AI */}
-          <Pressable
-            onPress={handleRegenerate}
-            hitSlop={8}
-            style={[{ padding: 8 }, generating && { opacity: 0.4 }]}
-            disabled={generating}
-          >
-            <Icon name="zap" size={18} color={colors.amber} />
-          </Pressable>
           <Pressable
             onPress={() => clips.length > 0 && !isExporting && handleStartExport()}
             hitSlop={8}
@@ -589,7 +584,7 @@ export default function EditorScreen() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         {/* Preview */}
         <Pressable
-          onPress={() => { setSelectedClipId(null); setEditingTextId(null); if (isPlaying) { setIsPlaying(false); } }}
+          onPress={() => { setSelectedClipId(null); setFocusedTextId(null); if (isPlaying) { setIsPlaying(false); } }}
           style={styles.previewContainer}
         >
           <View style={[styles.previewFrame, { width: Math.round(previewHeight * 9 / 16), height: previewHeight }]}>
@@ -618,15 +613,16 @@ export default function EditorScreen() {
               const pad = Math.round(12 * scale);
               return textOverlays.map(t => {
                 const sz = Math.max(6, Math.round(t.fontSize * scale));
-                const isEditing = t.id === editingTextId;
+                const isFocused = t.id === focusedTextId;
                 const font = getNunitoFont(t.fontWeight);
-                return isEditing ? (
+                return isFocused ? (
                   <TextInput
                     key={t.id}
                     autoFocus
                     multiline
                     value={t.text}
                     onChangeText={text => updateText(t.id, { text })}
+                    onBlur={() => setFocusedTextId(prev => prev === t.id ? null : prev)}
                     placeholder="Type here..."
                     placeholderTextColor="rgba(255,255,255,0.4)"
                     style={[
@@ -694,121 +690,119 @@ export default function EditorScreen() {
           </View>
         )}
 
-        {/* Timeline */}
-        <ClipTimeline
-          clips={clips}
-          selectedClipId={selectedClipId}
-          playheadPos={playheadPos}
-          playheadPosAnim={playheadPosAnim}
-          playheadRefPos={playheadRefPos}
-          playheadRefTimeMs={playheadRefTimeMs}
-          isPlayingSV={isPlayingSV}
-          totalDurationMsSV={totalDurationMsSV}
-          canExtrapolateSV={canExtrapolateSV}
-          isPlaying={isPlaying}
-          onSelectClip={selectClip}
-          onTrimClip={trimClip}
-          onMoveClip={moveClip}
-          onDeleteClip={deleteClip}
-          onSplitClip={splitClip}
-          onPlayheadDrag={pos => {
-            playheadPosAnim.value = pos;
-            playheadRefPos.value = pos;
-            playheadRefTimeMs.value = performance.now();
-            // Scrubbing invalidates any in-flight transition/advance state from the
-            // previous playback session — clear so the next play doesn't reject progress
-            // events that fall outside the old transition window.
-            pendingTransitionRef.current = null;
-            advancedFromClipRef.current = null;
-            if (isPlaying) { setIsPlaying(false); }
-            setPlayheadPos(pos);
-          }}
-        />
-
-        {/* Edit tabs: CLIP / TEXT / FILTER. CLIP auto-activates when a
-            clip is selected from the timeline; tapping CLIP with no
-            selection picks the clip under the playhead. */}
+        {/* Edit tabs: TIMELINE / TEXT / FILTER. TIMELINE is the default. */}
         <View style={styles.editTabs}>
           <Pressable
-            onPress={() => {
-              if (selectedClipId) {
-                setSelectedClipId(null);
-              } else if (currentClip) {
-                setEditingTextId(null);
-                setShowFilters(false);
-                setSelectedClipId(currentClip.id);
-              }
-            }}
+            onPress={() => setActiveTab('timeline')}
             hitSlop={8}
-            style={[styles.editTab, !!selectedClipId && styles.editTabActive]}
+            style={[styles.editTab, activeTab === 'timeline' && styles.editTabActive]}
           >
-            <Text style={[styles.editTabText, !!selectedClipId && styles.editTabTextActive]}>CLIP</Text>
+            <Text style={[styles.editTabText, activeTab === 'timeline' && styles.editTabTextActive]}>TIMELINE</Text>
           </Pressable>
           <Pressable
             onPress={() => {
-              if (editingTextId) {
-                setEditingTextId(null);
-              } else {
-                setShowFilters(false);
-                setSelectedClipId(null);
-                const first = textOverlays[0];
-                if (first) setEditingTextId(first.id);
-              }
+              setActiveTab('text');
+              setSelectedClipId(null);
+              const first = textOverlays[0];
+              if (first) setEditingTextId(first.id);
             }}
             hitSlop={8}
-            style={[styles.editTab, !!editingTextId && styles.editTabActive]}
+            style={[styles.editTab, activeTab === 'text' && styles.editTabActive]}
           >
-            <Text style={[styles.editTabText, !!editingTextId && styles.editTabTextActive]}>TEXT</Text>
+            <Text style={[styles.editTabText, activeTab === 'text' && styles.editTabTextActive]}>TEXT</Text>
           </Pressable>
           <Pressable
             onPress={() => {
-              if (showFilters) {
-                setShowFilters(false);
-              } else {
-                setEditingTextId(null);
-                setSelectedClipId(null);
-                setShowFilters(true);
-              }
+              setActiveTab('filter');
+              setEditingTextId(null);
+              setSelectedClipId(null);
             }}
             hitSlop={8}
-            style={[styles.editTab, showFilters && styles.editTabActive]}
+            style={[styles.editTab, activeTab === 'filter' && styles.editTabActive]}
           >
-            <Text style={[styles.editTabText, showFilters && styles.editTabTextActive]}>FILTER</Text>
+            <Text style={[styles.editTabText, activeTab === 'filter' && styles.editTabTextActive]}>FILTER</Text>
           </Pressable>
         </View>
 
-        {/* Clip edit actions (move / split / duration / delete) */}
-        {selectedClip && (
-          <View style={styles.clipActions}>
-            <Pressable onPress={() => moveClip(selectedClip.id, -1)} style={styles.actionBtn}>
-              <Icon name="arrowLeft" size={14} color={colors.textMuted} />
-            </Pressable>
-            <Pressable onPress={() => moveClip(selectedClip.id, 1)} style={styles.actionBtn}>
-              <Icon name="arrowRight" size={14} color={colors.textMuted} />
-            </Pressable>
-            <Pressable onPress={() => splitClip(selectedClip.id)} style={styles.actionBtn}>
-              <Icon name="scissors" size={14} color={colors.amber} />
-            </Pressable>
-            <Text style={[styles.clipDurationText, { color: selectedClip.color }]}>
-              {formatDuration(getEffective(selectedClip))}
-            </Text>
-            <View style={{ flex: 1 }} />
-            <Pressable onPress={() => deleteClip(selectedClip.id)} style={styles.clipDeleteBtn}>
-              <Icon name="trash" size={14} color={colors.coral} />
-            </Pressable>
-          </View>
+        {/* Timeline tab — clip strip + selected-clip actions */}
+        {activeTab === 'timeline' && (
+          <>
+            <ClipTimeline
+              clips={clips}
+              selectedClipId={selectedClipId}
+              playheadPos={playheadPos}
+              playheadPosAnim={playheadPosAnim}
+              playheadRefPos={playheadRefPos}
+              playheadRefTimeMs={playheadRefTimeMs}
+              isPlayingSV={isPlayingSV}
+              totalDurationMsSV={totalDurationMsSV}
+              canExtrapolateSV={canExtrapolateSV}
+              isPlaying={isPlaying}
+              onSelectClip={selectClip}
+              onTrimClip={trimClip}
+              onMoveClip={moveClip}
+              onDeleteClip={deleteClip}
+              onSplitClip={splitClip}
+              onPlayheadDrag={pos => {
+                playheadPosAnim.value = pos;
+                playheadRefPos.value = pos;
+                playheadRefTimeMs.value = performance.now();
+                // Scrubbing invalidates any in-flight transition/advance state from the
+                // previous playback session — clear so the next play doesn't reject progress
+                // events that fall outside the old transition window.
+                pendingTransitionRef.current = null;
+                advancedFromClipRef.current = null;
+                if (isPlaying) { setIsPlaying(false); }
+                setPlayheadPos(pos);
+              }}
+            />
+            {selectedClip && (
+              <View style={styles.clipActions}>
+                <Pressable onPress={() => moveClip(selectedClip.id, -1)} style={styles.actionBtn}>
+                  <Icon name="arrowLeft" size={14} color={colors.textMuted} />
+                </Pressable>
+                <Pressable onPress={() => moveClip(selectedClip.id, 1)} style={styles.actionBtn}>
+                  <Icon name="arrowRight" size={14} color={colors.textMuted} />
+                </Pressable>
+                <Pressable onPress={() => splitClip(selectedClip.id)} style={styles.actionBtn}>
+                  <Icon name="scissors" size={14} color={colors.amber} />
+                </Pressable>
+                <Text style={[styles.clipDurationText, { color: selectedClip.color }]}>
+                  {formatDuration(getEffective(selectedClip))}
+                </Text>
+                <View style={{ flex: 1 }} />
+                <Pressable onPress={() => deleteClip(selectedClip.id)} style={styles.clipDeleteBtn}>
+                  <Icon name="trash" size={14} color={colors.coral} />
+                </Pressable>
+              </View>
+            )}
+          </>
         )}
 
-        {/* Text overlay editor (inline) */}
-        {editingText && (
-          <TextOverlaySheet
-            overlay={editingText}
-            onUpdate={updates => updateText(editingText.id, updates)}
-          />
+        {/* Text tab — regenerate + overlay editor */}
+        {activeTab === 'text' && editingText && (
+          <>
+            <View style={styles.textTabHeader}>
+              <Pressable
+                onPress={handleRegenerate}
+                disabled={generating}
+                style={[styles.regenerateBtn, generating && { opacity: 0.4 }]}
+              >
+                <Icon name="zap" size={14} color={colors.amber} />
+                <Text style={styles.regenerateBtnText}>
+                  {generating ? 'GENERATING…' : 'REGENERATE WITH AI'}
+                </Text>
+              </Pressable>
+            </View>
+            <TextOverlaySheet
+              overlay={editingText}
+              onUpdate={updates => updateText(editingText.id, updates)}
+            />
+          </>
         )}
 
-        {/* Filter pills */}
-        {showFilters && (
+        {/* Filter tab */}
+        {activeTab === 'filter' && (
           <View style={styles.filterSection}>
             <FilterPills
               activeFilterId={activeFilterId}
@@ -999,6 +993,29 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 10,
     marginLeft: 4,
+  },
+  textTabHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 8,
+  },
+  regenerateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.3)',
+    backgroundColor: 'rgba(251,191,36,0.08)',
+    alignSelf: 'flex-start',
+  },
+  regenerateBtnText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: colors.amber,
+    letterSpacing: 1,
   },
   previewContainer: {
     alignItems: 'center',

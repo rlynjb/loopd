@@ -446,7 +446,6 @@ export function ClipTimeline({ clips, selectedClipId, playheadPos, playheadPosAn
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.sectionLabel}>TIMELINE</Text>
         <Text style={styles.durationLabel}>{formatDuration(totalDurationSec)} · {Math.round(zoom * 100)}%</Text>
       </View>
 
@@ -507,16 +506,10 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
     paddingHorizontal: 20,
     marginBottom: 8,
-  },
-  sectionLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    letterSpacing: 1,
   },
   durationLabel: {
     fontFamily: fonts.mono,
