@@ -123,6 +123,23 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // One-time backfill for "** <food> <n> kcal" nutrition drops in existing
+  // entries. Mirrors the todos backfill — SecureStore-gated, runs once.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { backfillNutritionFromText } = await import('../src/services/nutrition/migrate');
+        const result = await backfillNutritionFromText();
+        if (!result.skipped) {
+          console.log(`[loopd] nutrition backfill scanned ${result.scanned} entries`);
+        }
+      } catch (err) {
+        console.warn('[loopd] nutrition backfill failed:', err);
+      }
+    })();
+  }, [ready]);
+
   // Back-fill 1080p proxies for clips captured before the transcode-on-import
   // change. Runs once per launch if any old-layout clips are still referenced.
   // Safe to re-run (already-migrated URIs are skipped).

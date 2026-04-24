@@ -8,6 +8,7 @@ import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { Icon } from '../../src/components/ui/Icon';
 import { InlineEntry } from '../../src/components/journal/InlineEntry';
 import { InlineTextInput, type InlineTextInputHandle } from '../../src/components/journal/InlineTextInput';
+import { NutritionAutocomplete } from '../../src/components/journal/NutritionAutocomplete';
 import { KeyboardToolbar } from '../../src/components/journal/KeyboardToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
@@ -332,6 +333,61 @@ export default function JournalScreen() {
 
   const inputRef = useRef<InlineTextInputHandle>(null);
 
+  // Nutrition autocomplete state. When the cursor sits on a line that starts
+  // with "** " (optionally with leading whitespace), this holds the partial
+  // query the user has typed after the prefix, plus the absolute range in
+  // the input's text that we'll replace when the user picks a chip.
+  const [nutAutocomplete, setNutAutocomplete] = useState<{
+    query: string;
+    rangeStart: number;
+    rangeEnd: number;
+  } | null>(null);
+
+  const handleCursorChange = useCallback((state: { text: string; selection: { start: number; end: number } }) => {
+    const { text, selection } = state;
+    const cursor = selection.start;
+    // Slice out the line the cursor sits on, then everything up to the cursor.
+    const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+    const lineEndRaw = text.indexOf('\n', cursor);
+    const lineEnd = lineEndRaw === -1 ? text.length : lineEndRaw;
+    const line = text.slice(lineStart, lineEnd);
+    const cursorInLine = cursor - lineStart;
+    const beforeCursor = line.slice(0, cursorInLine);
+
+    // Find the most recent "** " marker that's either at line start or
+    // preceded by whitespace. Supports both new-line-prefixed and inline
+    // usage: "** oatmeal" and "something ** oatmeal" both trigger.
+    // Avoids false positives on markdown bold ("**bold**") — the trailing
+    // space in the pattern means "** " not "**".
+    const markerRe = /(?:^|\s)\*\*\s/g;
+    let markerEnd = -1;
+    let m: RegExpExecArray | null;
+    while ((m = markerRe.exec(beforeCursor)) !== null) {
+      markerEnd = m.index + m[0].length;
+    }
+    if (markerEnd < 0) { setNutAutocomplete(null); return; }
+
+    const query = beforeCursor.slice(markerEnd);
+    // Once a digit appears, the user has moved on to the kcal value. Hide.
+    if (/\d/.test(query)) { setNutAutocomplete(null); return; }
+
+    setNutAutocomplete({
+      query,
+      rangeStart: lineStart + markerEnd,
+      rangeEnd: cursor,
+    });
+  }, []);
+
+  const handleNutritionSelect = useCallback((pick: { name: string; kcal: number }) => {
+    const active = nutAutocomplete;
+    if (!active) return;
+    // Tap inserts "<name> <kcal> kcal " — user can edit the number if today's
+    // portion differs. Trailing space keeps cursor in word-flow position.
+    const replacement = `${pick.name} ${pick.kcal} kcal `;
+    inputRef.current?.replaceRange(active.rangeStart, active.rangeEnd, replacement);
+    setNutAutocomplete(null);
+  }, [nutAutocomplete]);
+
   // Toolbar Todo button: insert a "[] " checkbox-drop marker into whichever
   // input is currently mounted (either the editing-an-entry input or the
   // adding-new-entry input). If neither is active, start a new entry first
@@ -621,6 +677,7 @@ export default function JournalScreen() {
                 onSilentSave={handleEditTextSilent}
                 onCancel={handleEditCancel}
                 liveTextRef={liveTextRef}
+                onCursorChange={handleCursorChange}
               />
               <InlineEntry
                 entry={{ ...entry, text: null, todos: [] }}
@@ -659,6 +716,7 @@ export default function JournalScreen() {
             onCancel={handleCancelNewText}
             onAutoCommit={handleAutoCommitNewText}
             liveTextRef={liveTextRef}
+            onCursorChange={handleCursorChange}
           />
         ) : (
           <Pressable onPress={handleTapEmptySpace} style={styles.emptyTap}>
@@ -668,6 +726,13 @@ export default function JournalScreen() {
 
       </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Nutrition autocomplete — chip bar just above the keyboard toolbar.
+          Active whenever the cursor sits on a "**"-prefixed line. */}
+      <NutritionAutocomplete
+        query={nutAutocomplete?.query ?? null}
+        onSelect={handleNutritionSelect}
+      />
 
       {/* Keyboard toolbar — outside Pressable so taps aren't intercepted */}
       <KeyboardToolbar

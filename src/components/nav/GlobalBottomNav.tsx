@@ -22,6 +22,7 @@ export function GlobalBottomNav() {
   const isHome = pathname === '/' || pathname === '';
   const isJournal = pathname.startsWith('/journal');
   const isTodos = pathname.startsWith('/todos');
+  const isNutrition = pathname.startsWith('/nutrition');
 
   const createClipEntry = async (result: { uri: string; durationMs: number }) => {
     const today = getTodayString();
@@ -82,6 +83,11 @@ export function GlobalBottomNav() {
       <Pressable onPress={() => router.push('/todos')} style={styles.tab}>
         <Icon name="listTodo" size={18} color={isTodos ? colors.accent : colors.textDim} strokeWidth={2.5} />
         <Text style={[styles.label, isTodos && { color: colors.accent }]}>Todos</Text>
+      </Pressable>
+
+      <Pressable onPress={() => router.push('/nutrition')} style={styles.tab}>
+        <Icon name="utensils" size={18} color={isNutrition ? colors.accent : colors.textDim} strokeWidth={2.5} />
+        <Text style={[styles.label, isNutrition && { color: colors.accent }]}>Nutrition</Text>
       </Pressable>
     </View>
   );

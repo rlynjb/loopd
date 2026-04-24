@@ -58,13 +58,29 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="4" title="Share with Integration">
+        <Step num="4" title="Create the Nutrition Database (optional)">
+          <Text style={styles.text}>
+            Create a full-page Notion database if you want to sync nutrition entries. Each "** food N kcal" line in your journal becomes a row here. Property names are case-sensitive:
+          </Text>
+          <Table rows={[
+            ['Name', 'Title (default)'],
+            ['Kcal', 'Number'],
+            ['Entry Date', 'Date'],
+            ['loopd ID', 'Text (rich text)'],
+            ['Created At', 'Date'],
+          ]} />
+          <Text style={styles.hint}>
+            Skip this step to keep nutrition local-only.
+          </Text>
+        </Step>
+
+        <Step num="5" title="Share with Integration">
           <Text style={styles.text}>
             Open each database, click the "..." menu in the top right, select "Connections", search for "loopd", and click "Connect".
           </Text>
         </Step>
 
-        <Step num="5" title="Copy Database IDs">
+        <Step num="6" title="Copy Database IDs">
           <Text style={styles.text}>
             Open your database as a full page. The URL looks like:{'\n\n'}
             notion.so/workspace/{'<'}DATABASE_ID{'>'}?v=...{'\n\n'}
@@ -72,7 +88,7 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="6" title="Connect & Sync">
+        <Step num="7" title="Connect & Sync">
           <Text style={styles.text}>
             Go to Notion Sync in Settings, paste your token and database IDs, tap "Test connection", then "Sync Now".
           </Text>

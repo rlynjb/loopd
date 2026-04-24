@@ -132,6 +132,25 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
   `);
 
+  // Nutrition entries — one row per "** <name> <kcal> kcal" line in prose.
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS nutrition (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kcal INTEGER NOT NULL,
+      entry_id TEXT NOT NULL,
+      entry_date TEXT NOT NULL,
+      source_line INTEGER,
+      notion_page_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_nutrition_entry ON nutrition(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_nutrition_date ON nutrition(entry_date);
+    CREATE INDEX IF NOT EXISTS idx_nutrition_name ON nutrition(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_nutrition_notion ON nutrition(notion_page_id);
+  `);
+
   // AI summaries table
   await database.execAsync(`
     CREATE TABLE IF NOT EXISTS ai_summaries (
@@ -359,7 +378,129 @@ export async function deleteEntry(id: string): Promise<void> {
       ['entry', id, row.notion_page_id, new Date().toISOString()]
     );
   }
+  // Cascade-delete nutrition rows tied to this entry. Notion-synced rows get
+  // queued for archive so the remote copy doesn't orphan.
+  const nutRows = await db.getAllAsync<{ id: string; notion_page_id: string | null }>(
+    'SELECT id, notion_page_id FROM nutrition WHERE entry_id = ?', [id]
+  );
+  for (const n of nutRows) {
+    if (n.notion_page_id) {
+      await db.runAsync(
+        'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+        ['nutrition', n.id, n.notion_page_id, new Date().toISOString()]
+      );
+    }
+  }
+  await db.runAsync('DELETE FROM nutrition WHERE entry_id = ?', [id]);
   await db.runAsync('DELETE FROM entries WHERE id = ?', [id]);
+}
+
+// ── Nutrition CRUD ──
+
+import type { NutritionEntry, NutritionSuggestion } from '../types/nutrition';
+
+function mapRowToNutrition(row: {
+  id: string; name: string; kcal: number; entry_id: string; entry_date: string;
+  source_line: number | null; notion_page_id: string | null; created_at: string; updated_at: string | null;
+}): NutritionEntry {
+  return {
+    id: row.id,
+    name: row.name,
+    kcal: row.kcal,
+    entryId: row.entry_id,
+    entryDate: row.entry_date,
+    sourceLine: row.source_line ?? undefined,
+    notionPageId: row.notion_page_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getNutritionByEntry(entryId: string): Promise<NutritionEntry[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<Parameters<typeof mapRowToNutrition>[0]>(
+    `SELECT id, name, kcal, entry_id, entry_date, source_line, notion_page_id, created_at, updated_at
+     FROM nutrition WHERE entry_id = ? ORDER BY source_line ASC, created_at ASC`,
+    [entryId],
+  );
+  return rows.map(mapRowToNutrition);
+}
+
+export async function insertNutrition(n: NutritionEntry): Promise<void> {
+  const db = await getDatabase();
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `INSERT INTO nutrition (id, name, kcal, entry_id, entry_date, source_line, notion_page_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [n.id, n.name, n.kcal, n.entryId, n.entryDate, n.sourceLine ?? null, n.notionPageId ?? null, n.createdAt, now],
+  );
+}
+
+export async function updateNutrition(
+  id: string,
+  updates: Partial<Pick<NutritionEntry, 'name' | 'kcal' | 'sourceLine'>>,
+): Promise<void> {
+  const db = await getDatabase();
+  const fields: string[] = [];
+  const values: (string | number | null)[] = [];
+  if ('name' in updates) { fields.push('name = ?'); values.push(updates.name ?? ''); }
+  if ('kcal' in updates) { fields.push('kcal = ?'); values.push(updates.kcal ?? 0); }
+  if ('sourceLine' in updates) { fields.push('source_line = ?'); values.push(updates.sourceLine ?? null); }
+  if (fields.length === 0) return;
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(id);
+  await db.runAsync(`UPDATE nutrition SET ${fields.join(', ')} WHERE id = ?`, values);
+}
+
+export async function deleteNutrition(id: string): Promise<void> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
+    'SELECT notion_page_id FROM nutrition WHERE id = ?', [id],
+  );
+  if (row?.notion_page_id) {
+    await db.runAsync(
+      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+      ['nutrition', id, row.notion_page_id, new Date().toISOString()],
+    );
+  }
+  await db.runAsync('DELETE FROM nutrition WHERE id = ?', [id]);
+}
+
+// Autocomplete source: distinct food names matching a prefix, each with its
+// most-recently-logged kcal value. Returns at most `limit` rows, ordered by
+// recency. Case-insensitive LIKE via the idx_nutrition_name COLLATE NOCASE index.
+export async function getNutritionSuggestions(query: string, limit = 8): Promise<NutritionSuggestion[]> {
+  const db = await getDatabase();
+  // Empty query → return the most recently-used foods overall.
+  const like = `${query.trim()}%`;
+  const rows = await db.getAllAsync<{ name: string; kcal: number; created_at: string }>(
+    `SELECT name, kcal, created_at
+     FROM nutrition
+     WHERE ? = '' OR name LIKE ? COLLATE NOCASE
+     ORDER BY created_at DESC
+     LIMIT 200`,
+    [query.trim(), like],
+  );
+  const seen = new Set<string>();
+  const out: NutritionSuggestion[] = [];
+  for (const r of rows) {
+    const key = r.name.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name: r.name, kcal: r.kcal, lastLoggedAt: r.created_at });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export async function getAllNutrition(): Promise<NutritionEntry[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<Parameters<typeof mapRowToNutrition>[0]>(
+    `SELECT id, name, kcal, entry_id, entry_date, source_line, notion_page_id, created_at, updated_at
+     FROM nutrition ORDER BY created_at DESC`,
+  );
+  return rows.map(mapRowToNutrition);
 }
 
 // ── Day title ──

@@ -157,15 +157,15 @@ export default function TodosScreen() {
                   <TextInput
                     value={editText}
                     onChangeText={setEditText}
-                    onSubmitEditing={() => commitEdit(t)}
                     onBlur={() => commitEdit(t)}
                     autoFocus
-                    returnKeyType="done"
+                    multiline
+                    blurOnSubmit={false}
                     style={[styles.text, styles.editInput]}
                   />
                 ) : (
                   <Pressable onPress={() => startEdit(t)}>
-                    <Text style={[styles.text, t.done && styles.textDone]} numberOfLines={3}>
+                    <Text style={[styles.text, t.done && styles.textDone]}>
                       {t.text}
                     </Text>
                   </Pressable>
