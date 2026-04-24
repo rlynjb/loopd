@@ -9,6 +9,7 @@ import {
 } from '../database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
+import { rewriteTodoLine } from './scanTodos';
 
 // Add a todo to an existing entry (if `entryId` is given) or to today's
 // shared todos-bucket entry. The bucket is a todos-only entry (no text, no
@@ -72,11 +73,13 @@ export async function addTodo(
 export async function updateTodo(
   entryId: string,
   todoId: string,
-  updates: Partial<Pick<TodoItem, 'text' | 'done' | 'pinned'>>,
+  updates: Partial<Pick<TodoItem, 'text' | 'done'>>,
 ): Promise<void> {
   const entry = await getEntryById(entryId);
   if (!entry) throw new Error(`Entry ${entryId} not found`);
   const now = new Date().toISOString();
+
+  const targetTodo = (entry.todos ?? []).find(t => t.id === todoId);
   const todos = (entry.todos ?? []).map(t => {
     if (t.id !== todoId) return t;
     const next: TodoItem = { ...t, ...updates };
@@ -85,7 +88,14 @@ export async function updateTodo(
     }
     return next;
   });
-  await updateEntry({ ...entry, todos });
+
+  // Round-trip the done/text change into the source prose so the "[]" line
+  // in the journal reflects the new state next time it's viewed.
+  const nextText = targetTodo
+    ? rewriteTodoLine(entry.text, targetTodo, updates)
+    : entry.text;
+
+  await updateEntry({ ...entry, text: nextText, todos });
 }
 
 // Remove a todo. If the entry becomes empty (no text, no clips, no habits, no

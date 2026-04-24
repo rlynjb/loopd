@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Entry } from '../types/entry';
 import { getEntriesByDate, insertEntry, updateEntry, deleteEntry } from '../services/database';
+import { scanTodosFromText } from '../services/todos/scanTodos';
+
+// Commit-level helper: run the checkbox-drop scan on the entry's text so any
+// "[] foo" / "[x] foo" lines are reflected in todos_json. Silent keystroke
+// saves go straight to updateEntry in the database layer and bypass this —
+// that's intentional so we don't churn todos mid-word.
+function applyTodoScan(entry: Entry): Entry {
+  return { ...entry, todos: scanTodosFromText(entry.text, entry.todos ?? []) };
+}
 
 export function useEntries(date: string) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -18,13 +27,15 @@ export function useEntries(date: string) {
   }, [load]);
 
   const addEntry = useCallback(async (entry: Entry) => {
-    await insertEntry(entry);
-    setEntries(prev => [...prev, entry]);
+    const scanned = applyTodoScan(entry);
+    await insertEntry(scanned);
+    setEntries(prev => [...prev, scanned]);
   }, []);
 
   const editEntry = useCallback(async (entry: Entry) => {
-    await updateEntry(entry);
-    setEntries(prev => prev.map(e => e.id === entry.id ? entry : e));
+    const scanned = applyTodoScan(entry);
+    await updateEntry(scanned);
+    setEntries(prev => prev.map(e => e.id === scanned.id ? scanned : e));
   }, []);
 
   const removeEntry = useCallback(async (id: string) => {

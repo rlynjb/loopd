@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect, memo } from 'react';
+import { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, memo } from 'react';
 import { TextInput, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 
@@ -11,10 +11,21 @@ type Props = {
   liveTextRef?: React.MutableRefObject<string>;
 };
 
-export const InlineTextInput = memo(function InlineTextInput({ initialValue = '', onSave, onSilentSave, onCancel, onAutoCommit, liveTextRef }: Props) {
+// Imperative handle used by the journal screen so the keyboard toolbar's Todo
+// button can inject `[] ` into the currently-focused input without going
+// through state round-trips.
+export type InlineTextInputHandle = {
+  appendText: (text: string) => void;
+};
+
+export const InlineTextInput = memo(forwardRef<InlineTextInputHandle, Props>(function InlineTextInput(
+  { initialValue = '', onSave, onSilentSave, onCancel, onAutoCommit, liveTextRef },
+  ref,
+) {
   const [text, setText] = useState(initialValue);
   const [height, setHeight] = useState(18);
   const textRef = useRef(text);
+  const inputRef = useRef<TextInput>(null);
   const onSaveRef = useRef(onSave);
   const onSilentSaveRef = useRef(onSilentSave);
   const onCancelRef = useRef(onCancel);
@@ -24,24 +35,19 @@ export const InlineTextInput = memo(function InlineTextInput({ initialValue = ''
   onSilentSaveRef.current = onSilentSave;
   onCancelRef.current = onCancel;
   onAutoCommitRef.current = onAutoCommit;
-  onAutoCommitRef.current = onAutoCommit;
+
+  const applyText = useCallback((next: string) => {
+    setText(next);
+    textRef.current = next;
+    if (liveTextRef) liveTextRef.current = next;
+    if (onSilentSaveRef.current) onSilentSaveRef.current(next.trim());
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => { onAutoCommitRef.current?.(); }, 20000);
+  }, [liveTextRef]);
 
   const handleChange = useCallback((newText: string) => {
-    setText(newText);
-    textRef.current = newText;
-    if (liveTextRef) liveTextRef.current = newText;
-
-    // Save to DB immediately on every keystroke (DB only, no re-render)
-    if (onSilentSaveRef.current) {
-      onSilentSaveRef.current(newText.trim());
-    }
-
-    // Auto-commit after 5 seconds of inactivity
-    if (idleTimer.current) clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => {
-      onAutoCommitRef.current?.();
-    }, 20000);
-  }, []);
+    applyText(newText);
+  }, [applyText]);
 
   // Start idle timer on mount (handles empty entries)
   useEffect(() => {
@@ -53,12 +59,25 @@ export const InlineTextInput = memo(function InlineTextInput({ initialValue = ''
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, []);
 
+  useImperativeHandle(ref, () => ({
+    appendText: (append: string) => {
+      const current = textRef.current;
+      // Ensure the appended block starts on its own line so a mid-sentence
+      // Todo tap doesn't create "... something[] foo".
+      const needsBreak = current.length > 0 && !current.endsWith('\n');
+      const next = current + (needsBreak ? '\n' : '') + append;
+      applyText(next);
+      inputRef.current?.focus();
+    },
+  }), [applyText]);
+
   const handleBlur = useCallback(() => {
     // Save handled by parent via liveTextRef
   }, []);
 
   return (
     <TextInput
+      ref={inputRef}
       value={text}
       onChangeText={handleChange}
       onBlur={handleBlur}
@@ -71,7 +90,7 @@ export const InlineTextInput = memo(function InlineTextInput({ initialValue = ''
       style={[styles.input, { height }]}
     />
   );
-});
+}));
 
 const styles = StyleSheet.create({
   input: {

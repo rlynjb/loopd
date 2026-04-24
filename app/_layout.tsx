@@ -105,6 +105,24 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // One-time backfill: scan existing entries' text for "[]" drop markers so
+  // any lines authored before the checkbox-drop scanner shipped are picked
+  // up as todos. Gated by a SecureStore flag — runs once per install.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { backfillTodosFromText } = await import('../src/services/todos/migrate');
+        const result = await backfillTodosFromText();
+        if (!result.skipped) {
+          console.log(`[loopd] drops backfill scanned ${result.scanned} entries, updated ${result.updated}`);
+        }
+      } catch (err) {
+        console.warn('[loopd] drops backfill failed:', err);
+      }
+    })();
+  }, [ready]);
+
   // Back-fill 1080p proxies for clips captured before the transcode-on-import
   // change. Runs once per launch if any old-layout clips are still referenced.
   // Safe to re-run (already-migrated URIs are skipped).

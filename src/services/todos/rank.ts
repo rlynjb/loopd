@@ -1,6 +1,6 @@
 import type { Entry, TodoItem } from '../../types/entry';
 
-export type TodoSource = 'journal' | 'ai' | 'pinned' | 'carried';
+export type TodoSource = 'journal' | 'ai' | 'carried';
 
 export type RankedTodo = TodoItem & {
   entryId: string;
@@ -19,8 +19,8 @@ function effectiveCreatedAt(t: TodoItem, entryCreatedAt: string): string {
 }
 
 // Flatten all todos from all entries and rank them so the most relevant items
-// bubble to the top: pinned first, then carried-from-yesterday, then newest
-// journal-origin todos, then older.
+// bubble to the top: carried-from-yesterday first, then AI-generated, then
+// journal-origin todos, oldest first within each group.
 export function rankTodos(entries: Entry[], options: RankOptions = {}): RankedTodo[] {
   const today = options.today ?? new Date().toISOString().slice(0, 10);
   const keepDoneMs = options.includeDoneOlderThanMs ?? 2000;
@@ -35,8 +35,7 @@ export function rankTodos(entries: Entry[], options: RankOptions = {}): RankedTo
         if (now - completed > keepDoneMs) continue;
       }
       let source: TodoSource = 'journal';
-      if (todo.pinned) source = 'pinned';
-      else if (!todo.done && entry.date < today) source = 'carried';
+      if (!todo.done && entry.date < today) source = 'carried';
       flat.push({
         ...todo,
         entryId: entry.id,
@@ -48,10 +47,9 @@ export function rankTodos(entries: Entry[], options: RankOptions = {}): RankedTo
   }
 
   const priority: Record<TodoSource, number> = {
-    pinned: 0,
-    carried: 1,
-    ai: 2,
-    journal: 3,
+    carried: 0,
+    ai: 1,
+    journal: 2,
   };
 
   flat.sort((a, b) => {

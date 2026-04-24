@@ -11,7 +11,10 @@ export type TodoItem = {
   // Optional on older todos that pre-date the field; falls back to the source
   // entry's createdAt when ranking.
   createdAt?: string;
-  pinned?: boolean;
+  // 0-indexed line in the source entry's text where this todo was last
+  // scanned from. Used by the scanner's two-pass matching to survive text
+  // edits that change the content of a "[]" line in place.
+  sourceLine?: number;
   // Set after the todo has been pushed to Notion as a standalone row.
   // Unset means "never pushed yet" — push path will create a new page.
   notionPageId?: string | null;

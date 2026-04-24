@@ -7,8 +7,7 @@ import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
 import { Icon } from '../../src/components/ui/Icon';
 import { InlineEntry } from '../../src/components/journal/InlineEntry';
-import { InlineTextInput } from '../../src/components/journal/InlineTextInput';
-import { InlineTodoList } from '../../src/components/journal/InlineTodoList';
+import { InlineTextInput, type InlineTextInputHandle } from '../../src/components/journal/InlineTextInput';
 import { KeyboardToolbar } from '../../src/components/journal/KeyboardToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
@@ -143,8 +142,7 @@ export default function JournalScreen() {
       setEditingEntry(null);
       editingEntryRef.current = null;
       setShowHabitPicker(false);
-      setShowTodoInput(false);
-      setIsAddingText(true);
+        setIsAddingText(true);
     }
   };
 
@@ -227,7 +225,6 @@ export default function JournalScreen() {
     }
     liveTextRef.current = entry.text ?? '';
     setIsAddingText(false);
-    setShowTodoInput(false);
     setEditingEntry(entry);
   };
 
@@ -333,10 +330,20 @@ export default function JournalScreen() {
     }
   }, [editEntry]);
 
-  const [showTodoInput, setShowTodoInput] = useState(false);
+  const inputRef = useRef<InlineTextInputHandle>(null);
 
+  // Toolbar Todo button: insert a "[] " checkbox-drop marker into whichever
+  // input is currently mounted (either the editing-an-entry input or the
+  // adding-new-entry input). If neither is active, start a new entry first
+  // so the tap always produces something.
   const handleAddTodoEntry = useCallback(() => {
-    setShowTodoInput(true);
+    if (!editingEntryRef.current && !isAddingTextRef.current) {
+      setIsAddingText(true);
+      // Defer until the input mounts + its forwarded ref is attached.
+      setTimeout(() => inputRef.current?.appendText('[] '), 50);
+      return;
+    }
+    inputRef.current?.appendText('[] ');
   }, []);
 
   const handleAddClipEntry = useCallback(async () => {
@@ -433,7 +440,6 @@ export default function JournalScreen() {
 
   const handleEditCancel = useCallback(() => {
     setEditingEntry(null);
-    setShowTodoInput(false);
   }, []);
 
   const handleAutoCommitEdit = useCallback(async () => {
@@ -457,7 +463,6 @@ export default function JournalScreen() {
     liveTextRef.current = '';
     setEditingEntry(null);
     editingEntryRef.current = null;
-    setShowTodoInput(false);
     Keyboard.dismiss();
   }, [editEntry, removeEntry]);
 
@@ -560,7 +565,6 @@ export default function JournalScreen() {
     }
     Keyboard.dismiss();
     setShowHabitPicker(false);
-    setShowTodoInput(false);
   };
 
   return (
@@ -611,19 +615,13 @@ export default function JournalScreen() {
                 {new Date(entry.createdAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}
               </Text>
               <InlineTextInput
+                ref={inputRef}
                 initialValue={entry.text ?? ''}
                 onSave={handleEditTextSave}
                 onSilentSave={handleEditTextSilent}
                 onCancel={handleEditCancel}
                 liveTextRef={liveTextRef}
               />
-              {(showTodoInput || (entry.todos && entry.todos.length > 0)) && (
-                <InlineTodoList
-                  todos={entry.todos ?? []}
-                  onUpdate={(todos) => handleUpdateTodos(entry, todos)}
-                  editable
-                />
-              )}
               <InlineEntry
                 entry={{ ...entry, text: null, todos: [] }}
                 habits={habits}
@@ -655,6 +653,7 @@ export default function JournalScreen() {
         {/* Add new text entry */}
         {isAddingText ? (
           <InlineTextInput
+            ref={inputRef}
             onSave={handleSaveNewText}
             onSilentSave={handleSilentNewText}
             onCancel={handleCancelNewText}

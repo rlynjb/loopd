@@ -5,7 +5,6 @@ import { File as FSFile } from 'expo-file-system';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { formatDuration } from '../../utils/time';
-import { InlineTodoList } from './InlineTodoList';
 import type { Entry, Habit, TodoItem } from '../../types/entry';
 
 type Props = {
@@ -73,19 +72,10 @@ export function InlineEntry({ entry, habits, onTapToEdit, onAddClip, onRemoveCli
       >
         {/* Text or tappable empty space */}
         {entry.text ? (
-          <Text style={[styles.journalText, (hasTodos || hasHabits || hasClips) && { marginBottom: 10 }]}>{entry.text}</Text>
-        ) : (hasTodos || hasHabits || hasClips) ? (
+          <Text style={[styles.journalText, (hasHabits || hasClips) && { marginBottom: 10 }]}>{entry.text}</Text>
+        ) : (hasHabits || hasClips) ? (
           <View style={styles.emptyTextTap} />
         ) : null}
-
-        {/* Todos */}
-        {hasTodos && (
-          <InlineTodoList
-            todos={entry.todos}
-            onUpdate={(todos) => onUpdateTodos?.(entry, todos)}
-            editable={!!onUpdateTodos}
-          />
-        )}
 
         {/* Habit chips */}
         {hasHabits && (

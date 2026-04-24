@@ -26,7 +26,7 @@ export function SmartTodoList({ entries, today, onChanged }: Props) {
   const addingRef = useRef(false);
 
   const ranked = useMemo(() => rankTodos(entries, { today }), [entries, today]);
-  const visible = ranked.slice(0, MAX_ROWS);
+  const visible = ranked.slice(-MAX_ROWS);
 
   const handleAdd = useCallback(async () => {
     if (addingRef.current) return;

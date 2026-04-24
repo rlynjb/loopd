@@ -6,18 +6,11 @@ import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../src/constants/theme';
 import { Icon } from '../src/components/ui/Icon';
 import { getAllEntries } from '../src/services/database';
 import { addTodo, updateTodo, deleteTodo } from '../src/services/todos/crud';
-import { rankTodos, formatRelativeTime, type RankedTodo, type TodoSource } from '../src/services/todos/rank';
+import { rankTodos, formatRelativeTime, type RankedTodo } from '../src/services/todos/rank';
 import { getTodayString } from '../src/utils/time';
 import type { Entry } from '../src/types/entry';
 
-type Filter = 'all' | 'open' | 'pinned' | 'done';
-
-const SOURCE_BADGE: Record<TodoSource, string> = {
-  journal: '📓',
-  ai: '✦',
-  pinned: '⭐',
-  carried: '🔁',
-};
+type Filter = 'all' | 'open' | 'done';
 
 export default function TodosScreen() {
   const router = useRouter();
@@ -47,7 +40,6 @@ export default function TodosScreen() {
   const filtered = useMemo(() => {
     switch (filter) {
       case 'open': return ranked.filter(t => !t.done);
-      case 'pinned': return ranked.filter(t => t.pinned);
       case 'done': return ranked.filter(t => t.done);
       default: return ranked;
     }
@@ -76,12 +68,6 @@ export default function TodosScreen() {
   const handleDelete = useCallback(async (t: RankedTodo) => {
     try { await deleteTodo(t.entryId, t.id); await load(); } catch (e) {
       console.warn('[todos] delete failed:', e);
-    }
-  }, [load]);
-
-  const handleTogglePin = useCallback(async (t: RankedTodo) => {
-    try { await updateTodo(t.entryId, t.id, { pinned: !t.pinned }); await load(); } catch (e) {
-      console.warn('[todos] pin failed:', e);
     }
   }, [load]);
 
@@ -131,7 +117,7 @@ export default function TodosScreen() {
       )}
 
       <View style={styles.filters}>
-        {(['all', 'open', 'pinned', 'done'] as Filter[]).map(f => (
+        {(['all', 'open', 'done'] as Filter[]).map(f => (
           <Pressable
             key={f}
             onPress={() => setFilter(f)}
@@ -151,8 +137,7 @@ export default function TodosScreen() {
       >
         {filtered.length === 0 && (
           <Text style={styles.emptyText}>
-            {filter === 'pinned' ? 'No pinned todos yet.'
-              : filter === 'done' ? 'Nothing completed yet.'
+            {filter === 'done' ? 'Nothing completed yet.'
               : 'No todos yet. Tap ⊕ Add to create one.'}
           </Text>
         )}
@@ -179,17 +164,16 @@ export default function TodosScreen() {
                     style={[styles.text, styles.editInput]}
                   />
                 ) : (
-                  <Pressable onPress={() => startEdit(t)} onLongPress={() => handleTogglePin(t)}>
+                  <Pressable onPress={() => startEdit(t)}>
                     <Text style={[styles.text, t.done && styles.textDone]} numberOfLines={3}>
                       {t.text}
                     </Text>
                   </Pressable>
                 )}
                 <View style={styles.metaRow}>
-                  <Text style={styles.badge}>{SOURCE_BADGE[t.source]}</Text>
                   <Text style={styles.meta}>{time}</Text>
                   <Pressable onPress={() => router.push(`/journal/${t.entryDate}`)} hitSlop={4}>
-                    <Text style={styles.linkDate}>{t.entryDate}</Text>
+                    <Text style={styles.meta}>{t.entryDate}</Text>
                   </Pressable>
                 </View>
               </View>
@@ -329,18 +313,10 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 2,
   },
-  badge: {
-    fontSize: 10,
-  },
   meta: {
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-  },
-  linkDate: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.accent,
   },
   deleteBtn: {
     padding: 4,
