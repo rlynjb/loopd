@@ -5,7 +5,9 @@ import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { rankTodos, formatRelativeTime, type RankedTodo } from '../../services/todos/rank';
 import { addTodo, updateTodo, deleteTodo } from '../../services/todos/crud';
+import { TypeBadge } from '../todos/TypeBadge';
 import type { Entry } from '../../types/entry';
+import type { TodoMeta } from '../../types/todoMeta';
 
 const MAX_ROWS = 5;
 
@@ -13,9 +15,13 @@ type Props = {
   entries: Entry[];            // all entries (parent owns the query)
   today: string;               // YYYY-MM-DD
   onChanged: () => void;       // fired after any CRUD, so parent can reload entries
+  // Per pushback #1 in the implementation plan: dashboard stays ranked.
+  // Parent owns the meta lookup (hits the DB once per dashboard load) and
+  // passes it down so each row can render its category badge.
+  metas?: Map<string, TodoMeta>;
 };
 
-export function SmartTodoList({ entries, today, onChanged }: Props) {
+export function SmartTodoList({ entries, today, onChanged, metas }: Props) {
   const router = useRouter();
   const [newText, setNewText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -103,6 +109,12 @@ export function SmartTodoList({ entries, today, onChanged }: Props) {
                 </Pressable>
               )}
               <View style={styles.metaRow}>
+                {metas?.get(t.id) && (
+                  <TypeBadge
+                    type={metas.get(t.id)!.type}
+                    confidence={metas.get(t.id)!.classifierConfidence}
+                  />
+                )}
                 <Text style={styles.meta}>{time}</Text>
               </View>
             </View>
@@ -206,7 +218,8 @@ const styles = StyleSheet.create({
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+    flexWrap: 'wrap',
   },
   meta: {
     fontFamily: fonts.mono,

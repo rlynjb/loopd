@@ -52,7 +52,15 @@ export default function NotionGuideScreen() {
             ['loopd ID', 'Text (rich text)'],
             ['Created At', 'Date'],
             ['Entry Date', 'Date'],
+            ['Type', 'Select'],
+            ['Expanded', 'Text (rich text)'],
+            ['Model', 'Select'],
+            ['Confidence', 'Select'],
+            ['User Overridden', 'Checkbox'],
           ]} />
+          <Text style={styles.hint}>
+            Type select options: todo, idea, bug, question, decision, knowledge, content. Confidence options: heuristic, high, medium, low. Don't edit Name in Notion — the loopd journal prose is the canonical source for todo text.
+          </Text>
           <Text style={styles.hint}>
             Skip this step to keep todos embedded on their parent entry only.
           </Text>

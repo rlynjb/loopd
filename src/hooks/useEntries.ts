@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Entry } from '../types/entry';
 import { getEntriesByDate, insertEntry, updateEntry, deleteEntry } from '../services/database';
 import { scanTodosFromText } from '../services/todos/scanTodos';
+import { reconcileTodoMetaForEntry } from '../services/todos/reconcileMeta';
 import { scanNutritionForEntry } from '../services/nutrition/scanNutrition';
 
 // Commit-level helper: run the checkbox-drop scan on the entry's text so any
@@ -17,6 +18,15 @@ function applyTodoScan(entry: Entry): Entry {
 function scheduleNutritionScan(entry: Entry): void {
   scanNutritionForEntry(entry.id, entry.date, entry.text).catch(err => {
     console.warn('[nutrition] scan failed:', err);
+  });
+}
+
+// Same fire-and-forget pattern for the todo_meta reconcile — keeps the
+// 1:1 invariant between todos_json and todo_meta. Self-heals on next
+// commit if it fails mid-reconcile.
+function scheduleTodoMetaReconcile(entry: Entry): void {
+  reconcileTodoMetaForEntry(entry).catch(err => {
+    console.warn('[todo-meta reconcile] schedule failed:', err);
   });
 }
 
@@ -40,6 +50,7 @@ export function useEntries(date: string) {
     await insertEntry(scanned);
     setEntries(prev => [...prev, scanned]);
     scheduleNutritionScan(scanned);
+    scheduleTodoMetaReconcile(scanned);
   }, []);
 
   const editEntry = useCallback(async (entry: Entry) => {
@@ -47,6 +58,7 @@ export function useEntries(date: string) {
     await updateEntry(scanned);
     setEntries(prev => prev.map(e => e.id === scanned.id ? scanned : e));
     scheduleNutritionScan(scanned);
+    scheduleTodoMetaReconcile(scanned);
   }, []);
 
   const removeEntry = useCallback(async (id: string) => {

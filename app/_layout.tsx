@@ -140,6 +140,34 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // One-time backfill for todo_meta rows. Walks every entry, inserts a
+  // paired meta row for each TodoItem in todos_json, runs the heuristic
+  // classifier inline. SecureStore-gated; Phase A (no LLM in backfill).
+  // Phase B's classifier catch-up runs right after — picks up any
+  // heuristic-null rows and runs the LLM classifier (skips done items).
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { backfillTodoMeta, classifyAmbiguousMeta } = await import('../src/services/todos/migrateMeta');
+        const result = await backfillTodoMeta();
+        if (!result.skipped) {
+          console.log(`[loopd] todo_meta backfill scanned ${result.scannedEntries} entries`);
+        }
+        // Phase B catch-up — fire-and-forget, doesn't block other init.
+        classifyAmbiguousMeta()
+          .then(r => {
+            if (!r.skipped && r.classified > 0) {
+              console.log(`[loopd] classified ${r.classified} ambiguous todos`);
+            }
+          })
+          .catch(err => console.warn('[loopd] classify catch-up failed:', err));
+      } catch (err) {
+        console.warn('[loopd] todo_meta backfill failed:', err);
+      }
+    })();
+  }, [ready]);
+
   // Back-fill 1080p proxies for clips captured before the transcode-on-import
   // change. Runs once per launch if any old-layout clips are still referenced.
   // Safe to re-run (already-migrated URIs are skipped).

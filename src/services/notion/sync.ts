@@ -5,14 +5,18 @@ import {
   getTodosLastSyncTimestamp, setTodosLastSyncTimestamp,
 } from './config';
 import { notionPageToEntry, entryToNotionProperties, getTitlePropertyKey } from './mapper';
-import { notionPageToTodo, todoToNotionProperties } from './todosMapper';
+import {
+  notionPageToTodo, todoToNotionProperties, detectMissingTodoProperties,
+} from './todosMapper';
 import {
   getUnsyncedEntries, upsertEntryFromNotion, setEntryNotionPageId,
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
   getSyncDeletions, clearSyncDeletions, getAllEntries, updateEntry,
   insertEntry, insertHabit, deleteHabit, getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
   rebuildVlogs,
+  getAllTodoMetas, getTodoMeta, insertTodoMeta, updateTodoMeta,
 } from '../database';
+import type { TodoMeta } from '../../types/todoMeta';
 import { generateId } from '../../utils/id';
 import { addDays, getTodayString, toLocalDateString } from '../../utils/time';
 import { reimportMissingClips } from '../clipMatcher';
@@ -479,11 +483,27 @@ export async function syncAllTodos(): Promise<SyncResult> {
 
   const lastSync = await getTodosLastSyncTimestamp();
 
+  // One schema fetch per sync — title column + Phase-D property gap detection.
+  // Missing properties are collected so push can skip them and pull can ignore
+  // them; the toast surfaces the upgrade prompt to the user.
+  let titleColumn = 'Name';
+  let missingProperties = new Set<string>();
   try {
-    const pulled = await pullTodos(token, todosDbId, lastSync, result.debug);
+    const dbSchema = await getNotionDatabase(token, todosDbId) as { properties: Record<string, unknown> };
+    titleColumn = getTitlePropertyKey(dbSchema.properties);
+    missingProperties = detectMissingTodoProperties(dbSchema.properties);
+    if (missingProperties.size > 0) {
+      result.debug.push(`Todos DB missing properties: ${[...missingProperties].join(', ')}`);
+    }
+  } catch (err) {
+    result.debug.push(`Todos DB schema fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    const pulled = await pullTodos(token, todosDbId, lastSync, result.debug, missingProperties);
     result.pulled += pulled;
 
-    const pushRes = await pushTodos(token, todosDbId, lastSync);
+    const pushRes = await pushTodos(token, todosDbId, lastSync, titleColumn, missingProperties);
     result.pushed += pushRes.count;
     result.errors.push(...pushRes.errors);
 
@@ -523,6 +543,7 @@ async function pullTodos(
   dbId: string,
   lastSync: string | null,
   debug: string[],
+  missingProperties: Set<string>,
 ): Promise<number> {
   // Pull recent pages (last 14 days by Created At, or all if filter fails)
   const cutoff = toLocalDateString(addDays(new Date(), -14));
@@ -548,9 +569,18 @@ async function pullTodos(
   const byLoopdId = new Map<string, { entry: Entry; todo: TodoItem; index: number }>();
   for (const row of local) byLoopdId.set(row.todo.id, row);
 
+  // Pre-fetch all metas once and key by todoId so the merge step doesn't
+  // hit the DB per-row.
+  const allMetas = await getAllTodoMetas();
+  const metaByTodoId = new Map(allMetas.map(m => [m.todoId, m]));
+
   // Entries we've mutated this pull — batched to a single updateEntry call
   // per entry at the end to avoid rewriting the same row multiple times.
-  const touchedEntries = new Map<string, TodoItem[]>();
+  const touchedEntries = new Map<string, { todos: TodoItem[]; text?: string | null }>();
+
+  // Pending TodoMeta updates / inserts to apply after the entry writes.
+  const metaUpdates: { todoId: string; updates: Partial<TodoMeta> }[] = [];
+  const metaInserts: TodoMeta[] = [];
 
   let count = 0;
   for (const page of pages) {
@@ -560,41 +590,65 @@ async function pullTodos(
       const existing = byLoopdId.get(parsed.loopdId);
 
       if (existing) {
-        // Last-edit-wins: Notion wins only if its last_edited_time is newer
-        // than the local todo's createdAt (best proxy — we don't track a
-        // per-todo updatedAt).
+        // Last-edit-wins on the TodoItem fields: Notion wins only if its
+        // last_edited_time is newer than the local row's updatedAt (best
+        // proxy via the parent entry's updatedAt).
         const notionTime = new Date(parsed.notionEditedAt).getTime();
         const localProxy = existing.todo.completedAt ?? existing.todo.createdAt ?? existing.entry.updatedAt ?? existing.entry.createdAt;
         const localTime = localProxy ? new Date(localProxy).getTime() : 0;
-        if (notionTime <= localTime) continue;
+        const notionWins = notionTime > localTime;
 
-        const merged: TodoItem = {
-          ...existing.todo,
-          text: parsed.todo.text,
-          done: parsed.todo.done,
-          completedAt: parsed.todo.completedAt,
-          notionPageId: parsed.notionPageId,
-        };
-        const todos = touchedEntries.get(existing.entry.id) ?? [...(existing.entry.todos ?? [])];
-        todos[existing.index] = merged;
-        touchedEntries.set(existing.entry.id, todos);
-        count++;
+        if (notionWins) {
+          // Per spec §11.2: TodoItem.text stays prose-canonical — don't pull
+          // down Title edits. We DO pull down done/completedAt/notionPageId.
+          const merged: TodoItem = {
+            ...existing.todo,
+            done: parsed.todo.done,
+            completedAt: parsed.todo.completedAt,
+            notionPageId: parsed.notionPageId,
+          };
+          const touch = touchedEntries.get(existing.entry.id) ?? { todos: [...(existing.entry.todos ?? [])] };
+          touch.todos[existing.index] = merged;
+          touchedEntries.set(existing.entry.id, touch);
+
+          // Reconcile TodoMeta updates only for properties Notion actually
+          // had (skipped for missing-property DBs).
+          const updates: Partial<TodoMeta> = {};
+          const localMeta = metaByTodoId.get(existing.todo.id);
+          if (parsed.meta.type && parsed.meta.type !== localMeta?.type) {
+            // Type changed in Notion — treat as manual override per spec §11.2
+            updates.type = parsed.meta.type;
+            updates.userOverriddenType = true;
+          }
+          if (parsed.meta.expandedMd != null && parsed.meta.expandedMd !== localMeta?.expandedMd) {
+            updates.expandedMd = parsed.meta.expandedMd;
+            updates.expandedAt = new Date().toISOString();
+          }
+          if (parsed.meta.model && parsed.meta.model !== localMeta?.model) {
+            updates.model = parsed.meta.model;
+          }
+          if (parsed.meta.confidence && parsed.meta.confidence !== localMeta?.classifierConfidence) {
+            updates.classifierConfidence = parsed.meta.confidence;
+          }
+          if (Object.keys(updates).length > 0) {
+            metaUpdates.push({ todoId: existing.todo.id, updates });
+          }
+
+          count++;
+        }
       } else {
-        // New todo from Notion. Attach to the entry implied by Entry Date if
-        // we can find one; otherwise drop into today's bucket (matching the
-        // dashboard's addTodo behavior).
+        // New from Notion — append "[]" / "[x]" line to today's most recent
+        // entry per spec §11.3 + plan §4. Prose stays canonical: we mint a
+        // TodoItem with Notion's loopdId so the next scan text-pairs it
+        // back into todos_json on the user's next journal commit.
         const targetDate = parsed.entryDate ?? getTodayString();
         const entriesForDate = await getEntriesByDate(targetDate);
-        let bucket = entriesForDate.find(e =>
-          !e.text
-          && e.clips.length === 0
-          && !e.clipUri
-          && e.habits.length === 0
-          && (e.todos?.length ?? 0) > 0,
-        );
-        if (!bucket) {
-          // Create a fresh bucket entry for this date.
-          bucket = {
+        // Prefer an existing entry on the target date that has text; otherwise
+        // create a fresh entry (kept as a small dedicated entry to avoid
+        // dumping into a random other entry's prose).
+        let target = entriesForDate.find(e => e.text || (e.todos?.length ?? 0) > 0);
+        if (!target) {
+          target = {
             id: generateId('entry'),
             date: targetDate,
             text: null,
@@ -605,11 +659,44 @@ async function pullTodos(
             clips: [],
             createdAt: parsed.todo.createdAt ?? new Date().toISOString(),
           };
-          await insertEntry(bucket);
+          await insertEntry(target);
         }
-        const todos = touchedEntries.get(bucket.id) ?? [...(bucket.todos ?? [])];
-        todos.push({ ...parsed.todo, notionPageId: parsed.notionPageId });
-        touchedEntries.set(bucket.id, todos);
+
+        const newLine = `[${parsed.todo.done ? 'x' : ' '}] ${parsed.todo.text}`;
+        const touch = touchedEntries.get(target.id) ?? {
+          todos: [...(target.todos ?? [])],
+          text: target.text,
+        };
+        const currentText = touch.text ?? target.text ?? '';
+        const nextText = currentText
+          ? (currentText.endsWith('\n') ? `${currentText}${newLine}` : `${currentText}\n${newLine}`)
+          : newLine;
+        touch.text = nextText;
+        const sourceLine = nextText.split('\n').length - 1;
+        touch.todos.push({
+          ...parsed.todo,
+          notionPageId: parsed.notionPageId,
+          sourceLine,
+        });
+        touchedEntries.set(target.id, touch);
+
+        // Mint a paired TodoMeta. Notion-originated → user_overridden_type=1
+        // per spec §11.3 (sticky against future re-classification).
+        const now = new Date().toISOString();
+        metaInserts.push({
+          todoId: parsed.loopdId,
+          entryId: target.id,
+          entryDate: target.date,
+          type: parsed.meta.type ?? 'todo',
+          expandedMd: parsed.meta.expandedMd,
+          expandedAt: parsed.meta.expandedMd ? now : null,
+          model: parsed.meta.model,
+          classifierConfidence: parsed.meta.confidence,
+          classifierModel: parsed.meta.model,
+          userOverriddenType: true,
+          createdAt: parsed.todo.createdAt ?? now,
+          updatedAt: now,
+        });
         count++;
       }
     } catch (err) {
@@ -617,11 +704,40 @@ async function pullTodos(
     }
   }
 
-  for (const [entryId, todos] of touchedEntries) {
+  for (const [entryId, touch] of touchedEntries) {
     const entry = await getEntryById(entryId);
     if (!entry) continue;
-    await updateEntry({ ...entry, todos });
+    const next: Entry = {
+      ...entry,
+      todos: touch.todos,
+      text: touch.text !== undefined ? touch.text : entry.text,
+    };
+    await updateEntry(next);
   }
+
+  for (const meta of metaInserts) {
+    try {
+      // Guard: a paired meta row may already exist if the entry's earlier
+      // commit reconciled it (rare, but the scanner is async).
+      const existing = await getTodoMeta(meta.todoId);
+      if (!existing) await insertTodoMeta(meta);
+    } catch (err) {
+      debug.push(`todo_meta insert failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  for (const { todoId, updates } of metaUpdates) {
+    try {
+      await updateTodoMeta(todoId, updates);
+    } catch (err) {
+      debug.push(`todo_meta update failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Quiet the unused-warning for the missingProperties param — it's read in
+  // todoToNotionProperties via the push path; the pull path tolerates
+  // missing properties at the parser level (notionPageToTodo just returns
+  // null for absent keys), so this signature exists for symmetry/future use.
+  void missingProperties;
 
   return count;
 }
@@ -630,27 +746,37 @@ async function pushTodos(
   token: string,
   dbId: string,
   lastSync: string | null,
+  titleColumn: string,
+  missingProperties: Set<string>,
 ): Promise<{ count: number; errors: string[] }> {
   const errors: string[] = [];
   let count = 0;
 
-  // Detect title column once
-  let titleColumn = 'Name';
-  try {
-    const dbSchema = await getNotionDatabase(token, dbId) as { properties: Record<string, unknown> };
-    titleColumn = getTitlePropertyKey(dbSchema.properties);
-  } catch { /* fallback */ }
+  // Build the set of properties present on the user's DB so the mapper can
+  // skip writes for anything missing — keeps push backwards-compatible.
+  const ALL_PHASE_D = ['Type', 'Expanded', 'Model', 'Confidence', 'User Overridden'];
+  const baseSchema = new Set([
+    titleColumn, 'Done', 'loopd ID', 'Created At', 'Entry Date',
+    ...ALL_PHASE_D.filter(p => !missingProperties.has(p)),
+  ]);
 
   const lastSyncMs = lastSync ? new Date(lastSync).getTime() : 0;
   const local = await flattenLocalTodos();
 
-  // Group dirty todos by entry so we can persist all notionPageIds together
-  // after creates.
+  // Pre-fetch all TodoMeta rows once so the per-row loop joins from a map.
+  const allMetas = await getAllTodoMetas();
+  const metaByTodoId = new Map(allMetas.map(m => [m.todoId, m]));
+
+  // Group dirty todos by entry. A todo is dirty if it's never been synced,
+  // its parent entry was modified after the last sync, OR its meta row
+  // was modified after the last sync (so type/expanded edits push too).
   const byEntry = new Map<string, { entry: Entry; todos: TodoItem[]; dirtyIndexes: Set<number> }>();
   for (const { entry, todo, index } of local) {
     const neverSynced = !todo.notionPageId;
     const entryUpdatedMs = entry.updatedAt ? new Date(entry.updatedAt).getTime() : 0;
-    const dirty = neverSynced || entryUpdatedMs > lastSyncMs;
+    const meta = metaByTodoId.get(todo.id);
+    const metaUpdatedMs = meta?.updatedAt ? new Date(meta.updatedAt).getTime() : 0;
+    const dirty = neverSynced || entryUpdatedMs > lastSyncMs || metaUpdatedMs > lastSyncMs;
     if (!dirty) continue;
 
     const row = byEntry.get(entry.id) ?? { entry, todos: [...(entry.todos ?? [])], dirtyIndexes: new Set() };
@@ -664,7 +790,8 @@ async function pushTodos(
       const todo = todos[index];
       if (!todo) continue;
       try {
-        const props = todoToNotionProperties(todo, entry, titleColumn);
+        const meta = metaByTodoId.get(todo.id) ?? null;
+        const props = todoToNotionProperties(todo, entry, titleColumn, meta, baseSchema);
         if (todo.notionPageId) {
           await updatePage(token, todo.notionPageId, props);
         } else {

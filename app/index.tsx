@@ -9,11 +9,12 @@ import { HabitHeatmapRow } from '../src/components/home/HabitHeatmapRow';
 import { SmartTodoList } from '../src/components/home/SmartTodoList';
 import {
   getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits, getAllEntries,
-  insertEntry, updateEntry,
+  getAllTodoMetas, insertEntry, updateEntry,
 } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { generateId } from '../src/utils/id';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
+import type { TodoMeta } from '../src/types/todoMeta';
 
 const HEATMAP_DAYS = 14;
 
@@ -35,19 +36,22 @@ export default function HomeScreen() {
   const [vlogPreviews, setVlogPreviews] = useState<Record<string, string>>({});
   const [todayTitle, setTodayTitle] = useState('');
   const [habits, setHabits] = useState<Habit[]>([]);
+  const [todoMetas, setTodoMetas] = useState<Map<string, TodoMeta>>(new Map());
 
   const today = getTodayString();
 
   const loadAll = useCallback(async () => {
     await archivePastDays(today);
-    const [entries, h, v] = await Promise.all([
+    const [entries, h, v, allMetas] = await Promise.all([
       getAllEntries(),
       getHabits(),
       getVlogs(),
+      getAllTodoMetas(),
     ]);
     setAllEntries(entries);
     setHabits(h);
     setVlogs(v);
+    setTodoMetas(new Map(allMetas.map(m => [m.todoId, m])));
 
     const titles: Record<string, string> = {};
     const previews: Record<string, string> = {};
@@ -253,7 +257,7 @@ export default function HomeScreen() {
 
         {/* Smart todos */}
         <View style={styles.section}>
-          <SmartTodoList entries={allEntries} today={today} onChanged={loadAll} />
+          <SmartTodoList entries={allEntries} today={today} onChanged={loadAll} metas={todoMetas} />
         </View>
 
         {/* Past vlogs */}

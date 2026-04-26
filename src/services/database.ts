@@ -151,6 +151,34 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_nutrition_notion ON nutrition(notion_page_id);
   `);
 
+  // Todo meta — 1:1 with each TodoItem in entries.todos_json. Holds the
+  // thinking-mode classification + (Phase C) the expansion result. The
+  // scanner enforces the 1:1 invariant by writing both rows in a single
+  // SQLite transaction.
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS todo_meta (
+      todo_id TEXT PRIMARY KEY,
+      entry_id TEXT NOT NULL,
+      entry_date TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'todo',
+      expanded_md TEXT,
+      expanded_at TEXT,
+      model TEXT,
+      classifier_confidence TEXT,
+      classifier_model TEXT,
+      user_overridden_type INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content')),
+      CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_todo_meta_entry ON todo_meta(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_todo_meta_date ON todo_meta(entry_date);
+    CREATE INDEX IF NOT EXISTS idx_todo_meta_type ON todo_meta(type);
+    CREATE INDEX IF NOT EXISTS idx_todo_meta_updated ON todo_meta(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_todo_meta_created ON todo_meta(created_at);
+  `);
+
   // AI summaries table
   await database.execAsync(`
     CREATE TABLE IF NOT EXISTS ai_summaries (
@@ -392,6 +420,8 @@ export async function deleteEntry(id: string): Promise<void> {
     }
   }
   await db.runAsync('DELETE FROM nutrition WHERE entry_id = ?', [id]);
+  // Cascade todo_meta rows tied to this entry's todos.
+  await db.runAsync('DELETE FROM todo_meta WHERE entry_id = ?', [id]);
   await db.runAsync('DELETE FROM entries WHERE id = ?', [id]);
 }
 
@@ -501,6 +531,117 @@ export async function getAllNutrition(): Promise<NutritionEntry[]> {
      FROM nutrition ORDER BY created_at DESC`,
   );
   return rows.map(mapRowToNutrition);
+}
+
+// ── Todo meta CRUD ──
+
+import type { TodoMeta, TodoType, ClassifierConfidence } from '../types/todoMeta';
+
+type TodoMetaRow = {
+  todo_id: string;
+  entry_id: string;
+  entry_date: string;
+  type: string;
+  expanded_md: string | null;
+  expanded_at: string | null;
+  model: string | null;
+  classifier_confidence: string | null;
+  classifier_model: string | null;
+  user_overridden_type: number;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapRowToTodoMeta(row: TodoMetaRow): TodoMeta {
+  return {
+    todoId: row.todo_id,
+    entryId: row.entry_id,
+    entryDate: row.entry_date,
+    type: row.type as TodoType,
+    expandedMd: row.expanded_md,
+    expandedAt: row.expanded_at,
+    model: row.model,
+    classifierConfidence: row.classifier_confidence as ClassifierConfidence | null,
+    classifierModel: row.classifier_model,
+    userOverriddenType: row.user_overridden_type === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function getTodoMeta(todoId: string): Promise<TodoMeta | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<TodoMetaRow>(
+    `SELECT * FROM todo_meta WHERE todo_id = ?`, [todoId],
+  );
+  return row ? mapRowToTodoMeta(row) : null;
+}
+
+export async function getTodoMetasByEntry(entryId: string): Promise<TodoMeta[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<TodoMetaRow>(
+    `SELECT * FROM todo_meta WHERE entry_id = ?`, [entryId],
+  );
+  return rows.map(mapRowToTodoMeta);
+}
+
+export async function getAllTodoMetas(): Promise<TodoMeta[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<TodoMetaRow>(`SELECT * FROM todo_meta`);
+  return rows.map(mapRowToTodoMeta);
+}
+
+// Insert a new meta row. Caller must wrap in a transaction together with the
+// matching todos_json write to honor the 1:1 lifecycle invariant.
+export async function insertTodoMeta(meta: TodoMeta): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT INTO todo_meta (
+       todo_id, entry_id, entry_date, type, expanded_md, expanded_at,
+       model, classifier_confidence, classifier_model, user_overridden_type,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      meta.todoId, meta.entryId, meta.entryDate, meta.type,
+      meta.expandedMd, meta.expandedAt, meta.model,
+      meta.classifierConfidence, meta.classifierModel,
+      meta.userOverriddenType ? 1 : 0,
+      meta.createdAt, meta.updatedAt,
+    ],
+  );
+}
+
+export async function updateTodoMeta(
+  todoId: string,
+  updates: Partial<Omit<TodoMeta, 'todoId' | 'createdAt'>>,
+): Promise<void> {
+  const db = await getDatabase();
+  const fields: string[] = [];
+  const values: (string | number | null)[] = [];
+  if ('entryId' in updates) { fields.push('entry_id = ?'); values.push(updates.entryId ?? ''); }
+  if ('entryDate' in updates) { fields.push('entry_date = ?'); values.push(updates.entryDate ?? ''); }
+  if ('type' in updates) { fields.push('type = ?'); values.push(updates.type ?? 'todo'); }
+  if ('expandedMd' in updates) { fields.push('expanded_md = ?'); values.push(updates.expandedMd ?? null); }
+  if ('expandedAt' in updates) { fields.push('expanded_at = ?'); values.push(updates.expandedAt ?? null); }
+  if ('model' in updates) { fields.push('model = ?'); values.push(updates.model ?? null); }
+  if ('classifierConfidence' in updates) { fields.push('classifier_confidence = ?'); values.push(updates.classifierConfidence ?? null); }
+  if ('classifierModel' in updates) { fields.push('classifier_model = ?'); values.push(updates.classifierModel ?? null); }
+  if ('userOverriddenType' in updates) { fields.push('user_overridden_type = ?'); values.push(updates.userOverriddenType ? 1 : 0); }
+  if (fields.length === 0) return;
+  fields.push('updated_at = ?');
+  values.push(new Date().toISOString());
+  values.push(todoId);
+  await db.runAsync(`UPDATE todo_meta SET ${fields.join(', ')} WHERE todo_id = ?`, values);
+}
+
+export async function deleteTodoMeta(todoId: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM todo_meta WHERE todo_id = ?`, [todoId]);
+}
+
+export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(`DELETE FROM todo_meta WHERE entry_id = ?`, [entryId]);
 }
 
 // ── Day title ──

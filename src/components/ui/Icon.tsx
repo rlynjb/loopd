@@ -11,6 +11,7 @@ import {
   Bold, Type, Italic,
   Save, Download, Upload, Camera, LayoutDashboard, Film,
   House,
+  Lightbulb, Bug, HelpCircle, GitBranch,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -71,6 +72,11 @@ export const ICONS = {
   dashboard: LayoutDashboard,
   film: Film,
   house: House,
+  // Thinking-mode badges
+  lightbulb: Lightbulb,
+  bug: Bug,
+  helpCircle: HelpCircle,
+  gitBranch: GitBranch,
 } as const;
 
 export type IconName = keyof typeof ICONS;
