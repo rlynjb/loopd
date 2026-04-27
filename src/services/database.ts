@@ -113,6 +113,12 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumn('day_meta', 'updated_at', 'TEXT');
   await addColumn('habits', 'updated_at', 'TEXT');
   await addColumn('projects', 'removed_clip_source_keys_json', 'TEXT');
+  // Lifecycle stage on todo_meta — added 2026-04-26. Defaults to 'todo'
+  // for every existing row.
+  await addColumn('todo_meta', 'stage', `TEXT NOT NULL DEFAULT 'todo'`);
+  // User-set position on todo_meta — added 2026-04-26. NULL by default;
+  // populated lazily on first reorder action via ensureAllTodoPositions().
+  await addColumn('todo_meta', 'position', 'INTEGER');
 
   // Sync deletions tracking table
   await database.execAsync(`
@@ -161,15 +167,18 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       entry_id TEXT NOT NULL,
       entry_date TEXT NOT NULL,
       type TEXT NOT NULL DEFAULT 'todo',
+      stage TEXT NOT NULL DEFAULT 'todo',
       expanded_md TEXT,
       expanded_at TEXT,
       model TEXT,
       classifier_confidence TEXT,
       classifier_model TEXT,
       user_overridden_type INTEGER NOT NULL DEFAULT 0,
+      position INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content')),
+      CHECK (stage IN ('todo','in_progress','backlog')),
       CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
     );
     CREATE INDEX IF NOT EXISTS idx_todo_meta_entry ON todo_meta(entry_id);
@@ -535,19 +544,21 @@ export async function getAllNutrition(): Promise<NutritionEntry[]> {
 
 // ── Todo meta CRUD ──
 
-import type { TodoMeta, TodoType, ClassifierConfidence } from '../types/todoMeta';
+import type { TodoMeta, TodoType, TodoStage, ClassifierConfidence } from '../types/todoMeta';
 
 type TodoMetaRow = {
   todo_id: string;
   entry_id: string;
   entry_date: string;
   type: string;
+  stage: string | null;
   expanded_md: string | null;
   expanded_at: string | null;
   model: string | null;
   classifier_confidence: string | null;
   classifier_model: string | null;
   user_overridden_type: number;
+  position: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -558,12 +569,14 @@ function mapRowToTodoMeta(row: TodoMetaRow): TodoMeta {
     entryId: row.entry_id,
     entryDate: row.entry_date,
     type: row.type as TodoType,
+    stage: (row.stage ?? 'todo') as TodoStage,
     expandedMd: row.expanded_md,
     expandedAt: row.expanded_at,
     model: row.model,
     classifierConfidence: row.classifier_confidence as ClassifierConfidence | null,
     classifierModel: row.classifier_model,
     userOverriddenType: row.user_overridden_type === 1,
+    position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -597,15 +610,16 @@ export async function insertTodoMeta(meta: TodoMeta): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
     `INSERT INTO todo_meta (
-       todo_id, entry_id, entry_date, type, expanded_md, expanded_at,
+       todo_id, entry_id, entry_date, type, stage, expanded_md, expanded_at,
        model, classifier_confidence, classifier_model, user_overridden_type,
-       created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       position, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      meta.todoId, meta.entryId, meta.entryDate, meta.type,
+      meta.todoId, meta.entryId, meta.entryDate, meta.type, meta.stage,
       meta.expandedMd, meta.expandedAt, meta.model,
       meta.classifierConfidence, meta.classifierModel,
       meta.userOverriddenType ? 1 : 0,
+      meta.position ?? null,
       meta.createdAt, meta.updatedAt,
     ],
   );
@@ -621,12 +635,14 @@ export async function updateTodoMeta(
   if ('entryId' in updates) { fields.push('entry_id = ?'); values.push(updates.entryId ?? ''); }
   if ('entryDate' in updates) { fields.push('entry_date = ?'); values.push(updates.entryDate ?? ''); }
   if ('type' in updates) { fields.push('type = ?'); values.push(updates.type ?? 'todo'); }
+  if ('stage' in updates) { fields.push('stage = ?'); values.push(updates.stage ?? 'todo'); }
   if ('expandedMd' in updates) { fields.push('expanded_md = ?'); values.push(updates.expandedMd ?? null); }
   if ('expandedAt' in updates) { fields.push('expanded_at = ?'); values.push(updates.expandedAt ?? null); }
   if ('model' in updates) { fields.push('model = ?'); values.push(updates.model ?? null); }
   if ('classifierConfidence' in updates) { fields.push('classifier_confidence = ?'); values.push(updates.classifierConfidence ?? null); }
   if ('classifierModel' in updates) { fields.push('classifier_model = ?'); values.push(updates.classifierModel ?? null); }
   if ('userOverriddenType' in updates) { fields.push('user_overridden_type = ?'); values.push(updates.userOverriddenType ? 1 : 0); }
+  if ('position' in updates) { fields.push('position = ?'); values.push(updates.position ?? null); }
   if (fields.length === 0) return;
   fields.push('updated_at = ?');
   values.push(new Date().toISOString());

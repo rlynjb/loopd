@@ -13,6 +13,13 @@ export type TodoType =
 
 export type ClassifierConfidence = 'high' | 'medium' | 'low' | 'heuristic';
 
+// Lifecycle stage independent of `done` (which round-trips via the [] / [x]
+// checkbox in prose) and `type` (the thinking-mode classification).
+//   - 'todo'        → active, default
+//   - 'in_progress' → currently being worked on
+//   - 'backlog'     → de-prioritized but not abandoned
+export type TodoStage = 'todo' | 'in_progress' | 'backlog';
+
 // One row in `todo_meta` per TodoItem. Lifecycle invariant: every TodoItem
 // in entries.todos_json has exactly one paired meta row, inserted/deleted
 // in the same SQLite transaction by the scanner.
@@ -25,12 +32,17 @@ export type TodoMeta = {
   entryId: string;
   entryDate: string;
   type: TodoType;
+  stage: TodoStage;
   expandedMd: string | null;
   expandedAt: string | null;
   model: string | null;
   classifierConfidence: ClassifierConfidence | null;
   classifierModel: string | null;
   userOverriddenType: boolean;
+  // User-set ordering. NULL until the user has explicitly reordered any
+  // todo; once reorder is invoked, every row gets a dense integer assigned
+  // and the sort flips from createdAt-DESC to position-ASC.
+  position: number | null;
   createdAt: string;
   updatedAt: string;
 };

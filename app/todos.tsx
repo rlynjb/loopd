@@ -6,19 +6,22 @@ import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../src/constants/theme';
 import { Icon } from '../src/components/ui/Icon';
 import { TypeBadge } from '../src/components/todos/TypeBadge';
 import { TypeChangePicker } from '../src/components/todos/TypeChangePicker';
+import { StageBadge } from '../src/components/todos/StageBadge';
+import { StageChangePicker } from '../src/components/todos/StageChangePicker';
 import { getAllEntries, getAllTodoMetas, updateTodoMeta } from '../src/services/database';
 import { addTodo, updateTodo, deleteTodo } from '../src/services/todos/crud';
 import { TYPE_META, TYPES_IN_ORDER } from '../src/services/todos/typeMeta';
 import { formatRelativeTime } from '../src/services/todos/rank';
+import { ensureAllTodoPositions, swapTodoPositions } from '../src/services/todos/reorder';
 import {
   isClassifierAvailable, getClassifyInFlight, CLASSIFY_PROGRESS_EVENT,
 } from '../src/services/todos/classify';
 import { countAmbiguousNotDone } from '../src/services/todos/migrateMeta';
 import { on } from '../src/utils/events';
 import type { Entry, TodoItem } from '../src/types/entry';
-import type { TodoMeta, TodoType } from '../src/types/todoMeta';
+import type { TodoMeta, TodoType, TodoStage } from '../src/types/todoMeta';
 
-type Status = 'all' | 'open' | 'done';
+type Status = 'all' | 'open' | 'done' | 'in_progress' | 'backlog';
 type CategoryFilter = 'all' | TodoType;
 
 // Flat row shape used by the list — joins TodoItem with its parent entry's
@@ -35,12 +38,14 @@ function defaultMeta(todo: TodoItem, entry: Entry): TodoMeta {
     entryId: entry.id,
     entryDate: entry.date,
     type: 'todo',
+    stage: 'todo',
     expandedMd: null,
     expandedAt: null,
     model: null,
     classifierConfidence: null,
     classifierModel: null,
     userOverriddenType: false,
+    position: null,
     createdAt: todo.createdAt ?? entry.createdAt,
     updatedAt: todo.createdAt ?? entry.createdAt,
   };
@@ -50,13 +55,14 @@ export default function TodosScreen() {
   const router = useRouter();
   const [entries, setEntries] = useState<Entry[]>([]);
   const [metas, setMetas] = useState<Map<string, TodoMeta>>(new Map());
-  const [status, setStatus] = useState<Status>('all');
+  const [status, setStatus] = useState<Status>('open');
   const [category, setCategory] = useState<CategoryFilter>('all');
   const [adding, setAdding] = useState(false);
   const [newText, setNewText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [pickerFor, setPickerFor] = useState<Row | null>(null);
+  const [stagePickerFor, setStagePickerFor] = useState<Row | null>(null);
   const [classifyInFlight, setClassifyInFlight] = useState(0);
   const [ambiguousCount, setAmbiguousCount] = useState(0);
   const [aiAvailable, setAiAvailable] = useState(true);
@@ -143,18 +149,42 @@ export default function TodosScreen() {
         });
       }
     }
+    // Sort: NULL positions first (newest captures land at the top, ordered
+    // by createdAt DESC) then positioned rows in ASC order. Once the user
+    // has reordered, every row gets a position assigned and the createdAt
+    // tiebreak stops mattering.
     out.sort((a, b) => {
-      const aTime = new Date(a.createdAt ?? a.meta.createdAt).getTime();
-      const bTime = new Date(b.createdAt ?? b.meta.createdAt).getTime();
-      return aTime - bTime;
+      const aPos = a.meta.position;
+      const bPos = b.meta.position;
+      if (aPos == null && bPos == null) {
+        const aTime = new Date(a.createdAt ?? a.meta.createdAt).getTime();
+        const bTime = new Date(b.createdAt ?? b.meta.createdAt).getTime();
+        return bTime - aTime;
+      }
+      if (aPos == null) return -1;
+      if (bPos == null) return 1;
+      return aPos - bPos;
     });
     return out;
   }, [entries, metas]);
 
   const filtered = useMemo(() => {
     return allRows.filter(r => {
-      if (status === 'open' && r.done) return false;
-      if (status === 'done' && !r.done) return false;
+      // Status filter is a single-select that conflates done with stage:
+      //   - 'all'         → no status filter (everything, any done/stage)
+      //   - 'open'        → not done AND stage='todo' (the default workflow state)
+      //   - 'in_progress' → not done AND stage='in_progress'
+      //   - 'backlog'     → not done AND stage='backlog'
+      //   - 'done'        → done (any stage)
+      if (status === 'all') {
+        // no-op
+      } else if (status === 'done') {
+        if (!r.done) return false;
+      } else {
+        if (r.done) return false;
+        const expected = status === 'open' ? 'todo' : status;
+        if (r.meta.stage !== expected) return false;
+      }
       if (category !== 'all' && r.meta.type !== category) return false;
       return true;
     });
@@ -219,10 +249,44 @@ export default function TodosScreen() {
     }
   }, [pickerFor, load]);
 
+  const handleMove = useCallback(async (row: Row, direction: -1 | 1) => {
+    const idx = filtered.findIndex(r => r.id === row.id);
+    if (idx < 0) return;
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= filtered.length) return;
+    const target = filtered[targetIdx];
+    try {
+      // First-reorder side effect — populate positions for every row.
+      await ensureAllTodoPositions(filtered);
+      // Re-fetch so swap operates on the freshly-assigned positions.
+      const fresh = await getAllTodoMetas();
+      const freshById = new Map(fresh.map(m => [m.todoId, m]));
+      const a = { id: row.id, meta: { position: freshById.get(row.id)?.position ?? null } };
+      const b = { id: target.id, meta: { position: freshById.get(target.id)?.position ?? null } };
+      await swapTodoPositions(a, b);
+      await load();
+    } catch (e) {
+      console.warn('[todos] move failed:', e);
+    }
+  }, [filtered, load]);
+
+  const handleStagePick = useCallback(async (newStage: TodoStage) => {
+    if (!stagePickerFor) return;
+    const target = stagePickerFor;
+    setStagePickerFor(null);
+    if (newStage === target.meta.stage) return;
+    try {
+      await updateTodoMeta(target.id, { stage: newStage });
+      await load();
+    } catch (e) {
+      console.warn('[todos] stage change failed:', e);
+    }
+  }, [stagePickerFor, load]);
+
   const subtitle = useMemo(() => {
     const total = allRows.length;
     const shown = filtered.length;
-    if (total === shown) return `${total} total · oldest first`;
+    if (total === shown) return `${total} total · newest first`;
     return `${shown} of ${total} shown`;
   }, [allRows.length, filtered.length]);
 
@@ -271,29 +335,40 @@ export default function TodosScreen() {
         </Pressable>
       )}
 
-      {/* Status filter */}
-      <View style={styles.filters}>
-        {(['all', 'open', 'done'] as Status[]).map(s => (
-          <Pressable
-            key={s}
-            onPress={() => setStatus(s)}
-            style={[styles.pill, status === s && styles.pillActive]}
-          >
-            <Text style={[styles.pillText, status === s && styles.pillTextActive]}>
-              {s.toUpperCase()}
-            </Text>
-          </Pressable>
-        ))}
+      {/* Status filter — single-select across done + stage. */}
+      <View style={styles.filterRow}>
+        <Text style={styles.filterLabel}>Status:</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.statusScroll}
+          contentContainerStyle={styles.filters}
+          keyboardShouldPersistTaps="handled"
+        >
+          {(['all', 'open', 'in_progress', 'done', 'backlog'] as Status[]).map(s => (
+            <Pressable
+              key={s}
+              onPress={() => setStatus(s)}
+              style={[styles.pill, status === s && styles.pillActive]}
+            >
+              <Text style={[styles.pillText, status === s && styles.pillTextActive]}>
+                {s === 'in_progress' ? 'IN PROGRESS' : s.toUpperCase()}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
       </View>
 
       {/* Category filter — horizontal scroll for the 8 chips */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.catScroll}
-        contentContainerStyle={styles.catFilters}
-        keyboardShouldPersistTaps="handled"
-      >
+      <View style={[styles.filterRow, styles.catFilterWrap]}>
+        <Text style={styles.filterLabel}>Drops:</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.catScroll}
+          contentContainerStyle={styles.catFilters}
+          keyboardShouldPersistTaps="handled"
+        >
         <Pressable
           onPress={() => setCategory('all')}
           style={[styles.catPill, category === 'all' && styles.catPillActive]}
@@ -328,7 +403,8 @@ export default function TodosScreen() {
             </Pressable>
           );
         })}
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       <ScrollView
         style={styles.scroll}
@@ -377,6 +453,10 @@ export default function TodosScreen() {
                     confidence={r.meta.classifierConfidence}
                     onPress={() => setPickerFor(r)}
                   />
+                  <StageBadge
+                    stage={r.meta.stage}
+                    onPress={() => setStagePickerFor(r)}
+                  />
                   {r.meta.type !== 'todo' && r.meta.expandedMd && (
                     <Pressable
                       onPress={() => router.push({ pathname: '/todos/[id]', params: { id: r.id, text: r.text } })}
@@ -399,9 +479,19 @@ export default function TodosScreen() {
                   </Pressable>
                 </View>
               </View>
-              <Pressable onPress={() => handleDelete(r)} hitSlop={10} style={styles.deleteBtn}>
-                <Icon name="x" size={14} color={colors.textDim} />
-              </Pressable>
+              <View style={styles.rightStack}>
+                <Pressable onPress={() => handleDelete(r)} hitSlop={10} style={styles.deleteBtn}>
+                  <Icon name="x" size={14} color={colors.coral} />
+                </Pressable>
+                <View style={styles.reorderRow}>
+                  <Pressable onPress={() => handleMove(r, -1)} hitSlop={6} style={styles.reorderBtn}>
+                    <Icon name="arrowUp" size={11} color={colors.textDim} />
+                  </Pressable>
+                  <Pressable onPress={() => handleMove(r, 1)} hitSlop={6} style={styles.reorderBtn}>
+                    <Icon name="arrowDown" size={11} color={colors.textDim} />
+                  </Pressable>
+                </View>
+              </View>
             </View>
           );
         })}
@@ -413,6 +503,14 @@ export default function TodosScreen() {
         currentType={pickerFor?.meta.type ?? 'todo'}
         onCancel={() => setPickerFor(null)}
         onPick={handleTypePick}
+      />
+
+      <StageChangePicker
+        visible={!!stagePickerFor}
+        todoText={stagePickerFor?.text ?? ''}
+        currentStage={stagePickerFor?.meta.stage ?? 'todo'}
+        onCancel={() => setStagePickerFor(null)}
+        onPick={handleStagePick}
       />
 
       {toastVisible && (
@@ -508,11 +606,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     textAlign: 'center',
   },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 20,
+  },
+  filterLabel: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDim,
+    letterSpacing: 0.5,
+    marginRight: 8,
+  },
+  statusScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
   filters: {
     flexDirection: 'row',
     gap: 8,
-    paddingHorizontal: 20,
+    paddingRight: 20,
     paddingVertical: 12,
+    alignItems: 'center',
   },
   pill: {
     paddingVertical: 4,
@@ -535,14 +650,19 @@ const styles = StyleSheet.create({
   },
   catScroll: {
     flexGrow: 0,
-    flexShrink: 0,
+    flexShrink: 1,
   },
   catFilters: {
-    paddingHorizontal: 20,
-    paddingBottom: 12,
+    paddingRight: 20,
+    paddingVertical: 6,
     gap: 6,
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  // Spacing below the drops row, applied to the wrapper instead of the
+  // chip area's content container so chip vertical-centering stays clean.
+  catFilterWrap: {
+    paddingBottom: 6,
   },
   catPill: {
     flexDirection: 'row',
@@ -640,6 +760,26 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.accent,
     letterSpacing: 0.4,
+  },
+  // Right-side stack: arrows pinned top-right, red delete pinned bottom-right.
+  // alignSelf:'stretch' overrides the row's flex-start alignItems so this
+  // column inherits the row's full height; minHeight gives short rows a
+  // forced gap between the arrows and the destructive delete button.
+  rightStack: {
+    alignSelf: 'stretch',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingLeft: 4,
+    minHeight: 70,
+  },
+  reorderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  reorderBtn: {
+    paddingVertical: 3,
+    paddingHorizontal: 4,
   },
   expandedTag: {
     fontFamily: fonts.mono,
