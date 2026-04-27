@@ -6,8 +6,24 @@ A category-by-category preparation guide for defending this project at the senio
 
 > loopd is a native Android journaling and AI-assisted vlog editor I built solo in React Native + Expo. The interesting parts are the architecture: prose is the canonical source of truth, structured records (todos, nutrition) are *derived* from inline markers via a two-pass scanner, and three cost-tiered LLM integrations (Haiku for classification, Sonnet for expansion, primary for vlog summary) are gated by heuristics-first cost discipline. SQLite is local-first; Notion is an optional bidirectional sync target with field-level merge rules and schema-gap tolerance. Roughly 11k lines of TS, 9 SQLite tables, 4-phase ship plan for the latest feature.
 
+## Table of contents
+
+1. [System design](#system-design)
+2. [Frontend engineering](#frontend-engineering)
+3. [Backend / API](#backend-api)
+4. [AI engineering](#ai-engineering)
+5. [Data modelling](#data-modelling)
+6. [Reliability](#reliability)
+7. [Developer process](#developer-process)
+8. [Ownership + judgment](#ownership-judgment)
+9. [Weaknesses + objections](#weaknesses)
+10. [Refactoring + improvement areas](#refactoring)
+11. [The AI-assisted development angle](#ai-assisted)
+12. [DSA — Three coding problems](#dsa)
+
 ---
 
+<a id="system-design"></a>
 ## 1. System design
 
 ### Q1.1 [senior] Walk me through the data flow when a user types `[] call mom` in the journal.
@@ -22,8 +38,54 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** Three things break first. (1) **The Notion API as a sync backbone caps at ~3 req/s per integration** — at scale I'd put a server-side sync service in front, fanning out per user with proper backpressure. The existing module-level rate-limiter ([notion/api.ts:7](../src/services/notion/api.ts#L7)) is the right shape but only sufficient for one client. (2) **SQLite-first means no multi-device.** I'd move to a CRDT or operational-transform layer for entries.text and todos_json so multiple devices can edit concurrently and converge. The two-pass matching I built is a building block toward this but not sufficient on its own. (3) **The LLM cost path needs metering and quotas per user.** Right now `MAX_CONCURRENT=3` ([expand.ts:25](../src/services/todos/expand.ts#L25)) is a per-device cap; at scale it becomes a per-user-per-window quota with billing integration. The architectural pattern that doesn't change: cost-tiered model selection (cheap classifier, primary expansion). That principle scales.
 
+### Diagram — request flow on entry save
+
+```
+  User types in InlineTextInput
+            │
+            ▼
+   onSilentSave (every keystroke)
+            │
+            ▼
+   updateEntryDB → SQLite
+            │
+   ────  bytes are durable here  ────
+            │
+            ▼
+   ┌────  user blurs / navigates  ────┐
+   │                                  │
+   ▼                                  ▼
+  useEntries.editEntry          (no other side effects
+            │                    on keystroke path)
+            ├──► applyTodoScan (pure parser, in-memory)
+            │           └─► todos_json updated
+            │
+            ├──► scheduleNutritionScan (fire-and-forget)
+            │           └─► nutrition table reconciled
+            │
+            └──► scheduleTodoMetaReconcile (fire-and-forget)
+                        │
+                        ├─► insert paired todo_meta row
+                        ├─► run heuristicClassify (free, sync)
+                        │
+                        └─► if heuristic null AND !todo.done:
+                                    │
+                                    ▼
+                            scheduleClassify (LLM, async)
+                                    │
+                                    ▼
+                            updateTodoMeta(type, confidence)
+                                    │
+                                    ▼
+                            emit('classify-progress')
+                                    │
+                                    ▼
+                            /todos toast updates
+```
+
 ---
 
+<a id="frontend-engineering"></a>
 ## 2. Frontend engineering
 
 ### Q2.1 [mid] How is state managed in the journal editor?
@@ -38,8 +100,37 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** Honest answer: I haven't optimized for that scale and probably need to. The current scanner is `O(lines + existing_todos)` per pass, which is fine. But the *render* path on `/todos` flattens every todo across every entry on every focus change, sorts in JavaScript, and renders a non-virtualized `ScrollView`. For ≤500 todos this is invisible; at 5,000 it would jank. **What I'd do:** (1) replace `ScrollView` with `FlashList` from Shopify (the React Native virtualized-list-of-record); (2) move the sort + filter to a `useMemo` keyed by `entries.length + metas.size + status + category` so it doesn't re-run on unrelated state changes; (3) do incremental scans — track `entries.updated_at` and only re-scan changed entries. The principle here: I should profile before I optimize. Right now my data set is small enough that I'd be optimizing speculatively.
 
+### Diagram — three-tier state on every keystroke
+
+```
+                  User types one character
+                            │
+                            ▼
+                ┌────  TextInput onChangeText  ────┐
+                │                                  │
+        ┌───────┴──────┐                  ┌────────┴──────┐
+        ▼              ▼                  ▼               ▼
+  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐
+  │  React   │  │ liveTextRef  │  │   SQLite     │  │  scanner   │
+  │  state   │  │    (ref)     │  │ (silentSave) │  │  triggers? │
+  │          │  │              │  │              │  │            │
+  └──────────┘  └──────────────┘  └──────────────┘  └────────────┘
+       │              │                  │                │
+       ▼              ▼                  ▼                ▼
+   triggers       pending value      bytes safe        NO  — scanners
+   re-render      for blur logic     even if React     only fire on
+   of <Text>      (cleanup safe)     unmounts mid-     commit (blur,
+                                     word               navigate)
+
+  Refs and SQLite write *before* React state.
+  Past data-loss bugs were races between focus cleanup
+  and idle timers — both writing through React state
+  out-of-order. DB-first writes ended that class of bug.
+```
+
 ---
 
+<a id="backend-api"></a>
 ## 3. Backend / API
 
 ### Q3.1 [senior] Walk me through how Notion sync handles a network failure mid-write.
@@ -54,8 +145,55 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** Today loopd polls — it pulls Notion on app open and on manual sync. To go push-driven, I'd insert a thin server in front: a webhook receiver that Notion posts to, and loopd connects to via WebSocket/SSE for "your data changed, pull now" notifications. The receiver doesn't store body — it just dispatches. The body still pulls through the existing `pullEntries` / `pullTodos` paths. **The architectural insight:** the cleanest reactive system makes pull idempotent and uses push only as a wakeup signal, not a data delivery mechanism. That way a missed webhook is recoverable on next poll. I'd also need to think about ordering — Notion might fire a webhook while pull is mid-flight; the existing `last_edited_time` per-field merge ([sync.ts pullTodos](../src/services/notion/sync.ts)) gives us a natural conflict resolution.
 
+### Diagram — Notion sync push/pull with rate limit + deletion queue
+
+```
+  Local SQLite                                  api.notion.com
+       │                                              │
+       │   ┌──────────────────────────────┐           │
+       │   │  rate-limit() — 350ms gap    │           │
+       │   │  module-level lastRequestTime│           │
+       │   └──────────────┬───────────────┘           │
+       │                  │                           │
+       │  PUSH: dirty rows (updated_at > lastSync)   │
+       ├──► entries ──┐                              │
+       │              ├─► HTTPS PATCH ──────────────►│
+       ├──► todos ────┤                               │
+       │              │                               │
+       ├──► nutrition ┘                               │
+       │                                              │
+       │  PUSH: deletions (FIFO drain of queue)       │
+       │   ┌─────────────────────────┐                │
+       └──►│ sync_deletions          │── archivePage ►│
+           │ entity_type discriminator│                │
+           │ ('entry'|'todo'|'habit'  │                │
+           │  |'nutrition')           │                │
+           └─────────────────────────┘                │
+                                                      │
+                                                      │
+                                                      │
+       PULL ────────────────────────────────────────  │
+       │                                              │
+       │ queryDatabase (last 14 days)                 │
+       │◄────────────────── pages[] ──────────────────┤
+       │                                              │
+       │ field-level merge per spec §11.2:           │
+       │   text     → prose-canonical (drop)          │
+       │   done     → bidirectional (last-edit-wins)  │
+       │   type     → pull AND set userOverridden=1   │
+       │   expanded → pull only when local empty      │
+       │                                              │
+       ▼
+  Update todos_json + todo_meta in single tx
+
+  On 429: Retry-After header → exponential backoff
+  On schema gap: detectMissingTodoProperties skips
+                 absent fields silently (tolerant reader)
+```
+
 ---
 
+<a id="ai-engineering"></a>
 ## 4. AI engineering
 
 ### Q4.1 [senior] You have three different LLM integrations. Walk me through why each uses a different model.
@@ -70,8 +208,73 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** Three layers. **(1) Schema validation** — [`validateExpansion`](../src/services/todos/expand.ts#L77-L142) checks the parsed JSON against a per-type shape, returns `null` on mismatch rather than letting bad data into the DB. **(2) One-shot retry** — if the first call returns null, [`callOnce`](../src/services/todos/expand.ts#L228-L247) is invoked again with an additional system instruction: *"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."* This catches ~95% of fence-wrapped or preamble-laden outputs. **(3) Discriminated-union result type** — [`ExpandResult`](../src/services/todos/expand.ts#L201-L203) is `{ ok: true, ... } | { ok: false, reason: 'no-ai' | 'in-flight-cap' | 'wrong-type' | 'malformed' | 'network' | 'not-found' }` so the caller can map each failure to a precise UI message. **What I deliberately didn't do:** retry more than once. More retries would burn budget on cases where the model is fundamentally confused; better to surface "AI returned an invalid response" and let the user re-trigger with the explicit `[try again]` button. **Tradeoff named:** I trade a small percentage of total failures for predictable bounded cost. At scale, I'd layer in tool-use / function-calling mode (OpenAI's `response_format: 'json_object'` is already in [classify.ts:51](../src/services/todos/classify.ts#L51); Anthropic's tool-use would replace the JSON-parsing for expansion) to push malformed-output rates to near-zero.
 
+### Diagram — cost-tiered LLM dispatch
+
+```
+                        New todo committed
+                              │
+                              ▼
+                  ┌─────────────────────────┐
+                  │ heuristicClassify(text) │
+                  │ ~50 verbs + modal +     │
+                  │ deadline patterns       │
+                  │ ~0.1ms, FREE            │
+                  └────────────┬────────────┘
+                               │
+                ┌──────────────┴──────────────┐
+                ▼                             ▼
+          returns 'todo'                 returns null
+          (~70-80% of cases)             (the ambiguous 20%)
+                │                             │
+                │                             │  (skip if todo.done — never
+                │                             │   burn tokens on completed)
+                │                             ▼
+                │              ┌────────────────────────────────┐
+                │              │ scheduleClassify (async)       │
+                │              │ Tier 1: Haiku 4.5 / 4o-mini    │
+                │              │ ~$0.0001 per call              │
+                │              │ ~50 tokens out, JSON validated │
+                │              └──────────┬─────────────────────┘
+                │                         │
+                ▼                         ▼
+          stop here                  type assigned
+          confidence='heuristic'     classifier_confidence='high|medium|low'
+                                          │
+                                          │
+                                          │
+                              ──── user taps [expand] ────
+                                          │
+                                          ▼
+                              ┌────────────────────────────────┐
+                              │ expandTodo                     │
+                              │ Tier 2: Sonnet 4.6 / GPT-4o    │
+                              │ ~$0.04 per call                │
+                              │ MAX_CONCURRENT=3 cap           │
+                              │ Auto-retry once on bad JSON    │
+                              └──────────┬─────────────────────┘
+                                         │
+                              ┌──────────┴──────────┐
+                              ▼                     ▼
+                       valid JSON            malformed
+                              │                     │
+                              ▼                     ▼
+                       serialize MD         retry with stricter
+                       write to DB          system instruction
+                                                    │
+                                                    ▼
+                                     if STILL bad → ExpandResult.malformed
+                                                    → modal shows [try again]
+
+  Three tiers, three cost points, three failure modes.
+  Heuristic abstains → cheap LLM picks. Cheap LLM is wrong → user
+  override locks the row. Expensive LLM is wrong → bounded retry,
+  user-visible error. Manual-only on the expensive path so the user
+  always knows when they're spending money.
+```
+
 ---
 
+<a id="data-modelling"></a>
 ## 5. Data modelling
 
 ### Q5.1 [mid] Walk me through the schema. Why nine tables instead of fewer?
@@ -86,8 +289,67 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** SQLite CHECK constraints. [database.ts:155-179](../src/services/database.ts#L155-L179) shows three on `todo_meta`: `type IN ('todo','idea','bug',...)`, `stage IN ('todo','in_progress','backlog')`, and a nullable check on `classifier_confidence`. These are kept in lockstep with the TS literal-union types in [todoMeta.ts](../src/types/todoMeta.ts). **The principle I chose to follow:** push validation as close to storage as possible. A typo like `'in-progress'` (with a dash) won't pass typecheck *and* won't pass the INSERT — which means a new contributor or a future-me bug fails in dev, not at render time when a badge mysteriously doesn't appear. **What I didn't do:** I don't enforce CHECK constraints on Notion-side enum values (Type, Confidence selects). Notion doesn't expose a way to constrain select options programmatically, so I do best-effort validation in the [todosMapper](../src/services/notion/todosMapper.ts) — `parseTodoType` and `parseConfidence` reject unknown values. That's the "tolerant reader" pattern: accept what we know, ignore the rest, never crash.
 
+### Diagram — 9-table schema with the 1:1 invariant
+
+```
+        ┌────────────┐                            ┌──────────────────┐
+        │  habits    │◄── habits_json (id refs)──│     entries      │
+        │  (vocab)   │                            │  CANONICAL:      │
+        └────────────┘                            │  text + json     │
+                                                  └────────┬─────────┘
+        ┌────────────┐                                     │
+        │ day_meta   │◄── date PK ────────────────────────►│
+        │ (per-day   │                                     │
+        │  title)    │                                     │
+        └────────────┘                                     │
+                                                           │
+   ┌────────────┬───────────────┬─────────────┬────────────┤
+   ▼            ▼               ▼             ▼            ▼
+┌─────────┐ ┌──────────┐ ┌─────────────┐ ┌──────────┐ ┌─────────┐
+│todo_meta│ │nutrition │ │  projects   │ │  vlogs   │ │ai_summa-│
+│         │ │ (1 row   │ │ (editor     │ │ (export  │ │ ries    │
+│ 1:1 w/  │ │  per "** │ │  state per  │ │  archive)│ │ (LLM    │
+│ each    │ │  N kcal" │ │  date)      │ │          │ │  cache, │
+│ TodoItem│ │  line)   │ │             │ │          │ │  date PK│
+│ in      │ │          │ │             │ │          │ │         │
+│ todos_  │ │          │ │             │ │          │ │         │
+│ json    │ │          │ │             │ │          │ │         │
+│         │ │          │ │             │ │          │ │         │
+│ type,   │ │ name,    │ │             │ │          │ │         │
+│ stage,  │ │ kcal,    │ │             │ │          │ │         │
+│ position│ │ source_  │ │             │ │          │ │         │
+│ classi- │ │ line     │ │             │ │          │ │         │
+│ fier_*, │ │          │ │             │ │          │ │         │
+│ user_   │ │          │ │             │ │          │ │         │
+│ over-   │ │          │ │             │ │          │ │         │
+│ ridden  │ │          │ │             │ │          │ │         │
+└─────────┘ └──────────┘ └─────────────┘ └──────────┘ └─────────┘
+   │             │
+   │             │
+   └──────┬──────┘
+          ▼
+  ┌─────────────────────────┐
+  │  sync_deletions         │
+  │  (FIFO outbox queue)    │
+  │                         │
+  │  entity_type ←──────────│ discriminator: many producers,
+  │  entity_id              │              one queue
+  │  notion_page_id         │
+  │  deleted_at             │
+  └─────────────────────────┘
+
+  Invariants:
+  • prose in entries.text is canonical for todos / nutrition
+  • todo_meta is 1:1 with each TodoItem (enforced by reconcileMeta)
+  • CHECK constraints validate enums at INSERT time
+  • notion_page_id lives on TodoItem only — todo_meta has no
+    duplicate field; sync code joins TodoItem ↔ TodoMeta and
+    uses the single id (avoids drift)
+```
+
 ---
 
+<a id="reliability"></a>
 ## 6. Reliability
 
 ### Q6.1 [senior] What happens if a backfill migration crashes halfway through?
@@ -102,8 +364,53 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** **The Notion API contract.** It's a third-party REST API I don't control, and the schema-gap tolerance I built ([detectMissingTodoProperties](../src/services/notion/todosMapper.ts)) is defensive *for users on older schemas* — it doesn't protect against *Notion* changing their API. If they change the rich-text response shape, my parser breaks. The mitigation is the principle that the local SQLite is canonical: even if Notion sync stops working, every existing piece of data is intact locally, deletions are queued, and the user keeps using the app. **The architectural decision I'm proudest of here:** I deliberately treat sync as additive, not as the source of truth. A "cloud-first" version of this app would have been faster to build but would die the day Notion changed an API. By making SQLite primary, I bought independence — at the cost of having to write all the merge logic by hand.
 
+### Diagram — backfill crash recovery
+
+```
+  App boot
+     │
+     ▼
+  Read SecureStore: 'todo_meta_backfill_v1_done'
+     │
+     ├──► flag set ──► skip backfill, return early
+     │
+     └──► flag unset
+              │
+              ▼
+        ┌───────────────────────────────┐
+        │ for each entry in DB:         │
+        │   reconcileTodoMetaForEntry   │ ◄── idempotent per-entry
+        │   - INSERT missing meta rows  │     (re-run is no-op)
+        │   - DELETE orphaned meta rows │
+        └────────────────┬──────────────┘
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+      crash mid-loop          loop completes
+              │                     │
+              │                     ▼
+        flag NEVER set        SecureStore.setItemAsync(KEY)
+              │                     │
+              ▼                     ▼
+        next boot:              next boot:
+        runs full pass          flag set → skip
+        again                   (no double-work)
+              │
+              ▼
+        per-entry idempotency
+        means already-done
+        entries no-op; only
+        the unfinished tail
+        actually does work
+
+  Pattern: mark-after-success + per-item idempotency.
+  Cost on retry: full re-walk (cheap because per-entry is no-op).
+  Win: zero rollback logic, zero partial-state cleanup.
+```
+
 ---
 
+<a id="developer-process"></a>
 ## 7. Developer process
 
 ### Q7.1 [mid] How do you test this code?
@@ -118,8 +425,51 @@ A category-by-category preparation guide for defending this project at the senio
 
 **Model answer.** I write specs before code, and I phase big features. [docs/spec.md](./spec.md) is the living architectural reference; major features get a separate plan document — the thinking-modes feature shipped via a 4-phase plan (foundation → classifier → expansion → Notion sync) where each phase was independently shippable, documented in [docs/loopd-thinking-modes-spec.md](./loopd-thinking-modes-spec.md). When I disagreed with a spec the AI assistant produced — like the original drops spec assuming a Next.js / Netlify stack instead of RN/Expo — I rewrote the plan from scratch with the right substrate before any code. **The principle:** big features die in long branches. Slice by *value-delivery*, not by *layer*. Phase A of thinking-modes gave me categorized todos with no LLM at all (heuristic + manual override + new UI); Phase B added the classifier; Phase C added expansion; Phase D added Notion sync. Each phase shipped a complete feature. **The thing I'd improve:** I don't have post-ship retros documented anywhere. The "what surprised me" loop happens in my head; at a job I'd write it down.
 
+### Diagram — build/install loop
+
+```
+  edit source code
+       │
+       ▼
+  ┌──────────────────────────────────┐
+  │  npx tsc --noEmit                │  ~3-5s
+  │  (catch type errors before       │  (every change)
+  │   any rebuild)                   │
+  └──────────────────┬───────────────┘
+                     │
+                     ▼
+  ┌──────────────────────────────────┐
+  │  cd android && ./gradlew         │  ~25-50s incremental
+  │    :app:assembleRelease          │  ~3-5min cold build
+  │                                  │
+  │  release builds, not dev —       │
+  │  matches what users actually run │
+  └──────────────────┬───────────────┘
+                     │
+                     ▼
+  ┌──────────────────────────────────┐
+  │  adb install -r                  │  ~10s
+  │    app/build/outputs/apk/...     │
+  └──────────────────┬───────────────┘
+                     │
+                     ▼
+  ┌──────────────────────────────────┐
+  │  Manual smoke-test on physical   │
+  │  Samsung device — actual user    │
+  │  flow, end-to-end                │
+  └──────────────────────────────────┘
+
+  Round trip: ~30s for incremental builds.
+  Tradeoff: lose hot reload, gain "what users actually run."
+  Mitigation: batch 2-5 related edits per cycle.
+
+  No CI today. At a job, npx tsc + emulator smoke test
+  would gate every PR.
+```
+
 ---
 
+<a id="ownership-judgment"></a>
 ## 8. Ownership + judgment
 
 ### Q8.1 [senior] What's a decision you made that you'd defend even though it goes against common practice?
@@ -136,6 +486,7 @@ A category-by-category preparation guide for defending this project at the senio
 
 ---
 
+<a id="weaknesses"></a>
 ## 9. Weaknesses + objections
 
 | Likely objection | How to respond |
@@ -152,6 +503,7 @@ A category-by-category preparation guide for defending this project at the senio
 
 ---
 
+<a id="refactoring"></a>
 ## 10. Refactoring + improvement areas
 
 | Improvement | Cost | Worth it now? | How to articulate it |
@@ -169,6 +521,7 @@ A category-by-category preparation guide for defending this project at the senio
 
 ---
 
+<a id="ai-assisted"></a>
 ## 11. The AI-assisted development angle
 
 The hardest interview tightrope. The goal is to demonstrate that **you architected, judged, debugged, and owned** the product, while being honest that AI wrote a lot of the code.
@@ -195,6 +548,7 @@ The hardest interview tightrope. The goal is to demonstrate that **you architect
 
 ---
 
+<a id="dsa"></a>
 ## 12. DSA — Three coding problems derived from this codebase
 
 ### Problem 1 (array / list): Sparse-position reorder
