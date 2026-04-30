@@ -6,6 +6,8 @@ What separates a senior engineer from someone who just shipped a working app is 
 
 Three decisions in this codebase are the kind that will land on an interviewer's whiteboard. First, removing the `pinned` feature when the new thinking-modes architecture made it redundant. Second, rewriting the original drops spec from scratch when the AI proposed a Next.js / Netlify stack that didn't match the actual platform. Third, keeping the dashboard ranked while flattening only `/todos` — going against the implementation plan that suggested flattening both. None of these were obvious. All of them are defensible. All three are documented in the spec docs and in this guide so the reasoning survives me.
 
+The habits-and-threads feature (shipped 2026-04-29) added another four. I dropped the archive action from habits but kept it on threads — asymmetry that bothered me until I traced the cascade rules and saw it was correct. I changed unknown `#tag` slugs from "silently dropped" to "auto-create on save" mid-implementation after one round of UX pushback at my own dogfood loop. I wrote a manual-touch path on the dashboard that puts NULL `entry_id` and NULL `todo_id` rows into `thread_mentions` — an explicit, documented deviation from Principle 11. And I refused to let `#tag` mentions paint the dashboard's 14-cell `activeDates` strip even though it would have been one extra UNION in the query. Those four decisions are all defended below.
+
 The pattern across all three: I made the call after the easier path was visible, with full awareness of what I was giving up. That's the senior signature — willingness to delete features when they're subsumed, willingness to push back on a plan when the plan is wrong, willingness to keep complexity in one place so simplicity wins somewhere else.
 
 ```
@@ -95,7 +97,19 @@ The reason I haven't fixed it: at solo-app scale, my "test" is dogfooding on my 
 
 Owning the tradeoff: I made it deliberately because the cost of a bug at solo-scale is bounded — I'm the only user, I can fix forward. At a job, this is non-negotiable. The right time to write parser tests isn't when you have time; it's the day before someone else needs to refactor your parser.
 
-### Q3 [arch] If you started over today, what would you change?
+### Q3 [senior] Walk me through a decision from the 2026-04-29 habits-and-threads ship that you'd defend.
+
+I'll take the manual-touch deviation from Principle 11 because it's the most interesting one — and the easiest to mis-understand.
+
+Principle 11 says "mentions are derived from prose." Threads, todos, and entries link via `thread_mentions` rows scanned from `#tag` markers in journal text. By that rule, every row should have either an `entry_id` or a `todo_id`.
+
+The dashboard tracker breaks that rule. Tapping a thread row writes a `thread_mentions` with both NULL — pure manual intent, no prose anchor. The reason I let myself: the schema permitted it (the constraint was app-level, not a DB CHECK), all consumers already aggregated mentions uniformly so adding the manual case required zero downstream changes, and toggling off only deletes the manual row, so prose mentions on the same day stay intact.
+
+The piece I had to be deliberate about was the dashboard's `activeDates` strip on each thread row — the visual that lights up days the thread was "done." When prose mentions also satisfy `entry_date >= cutoff`, the natural query would have been `SELECT DISTINCT entry_date FROM thread_mentions WHERE thread_id = ? AND entry_date >= ?`. That would mix prose mentions and manual touches into the strip. I refused that path. The query filters on `entry_id IS NULL AND todo_id IS NULL` so only manual touches paint the strip. The reasoning: the strip means "user explicitly marked done," not "the thread came up in conversation." Conflating those two would have made the strip lie.
+
+Defending this is asking me to defend a documented deviation. The signal of seniority isn't refusing to deviate — it's deviating with full awareness of what you're giving up and writing the deviation down so the next person knows it's deliberate.
+
+### Q4 [arch] If you started over today, what would you change?
 
 Three things, in priority order.
 

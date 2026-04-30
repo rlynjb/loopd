@@ -2,7 +2,7 @@
 
 Per-operation Big-O for everything significant in loopd. Use this in coding-round-style questions where the interviewer asks "and what's the complexity of that?" or "where does this break at scale?"
 
-*N* = total entries, *T* = total todos across all entries, *M* = total `todo_meta` rows (= *T*).
+*N* = total entries, *T* = total todos across all entries, *M* = total `todo_meta` rows (= *T*), *Th* = total threads, *Mn* = total `thread_mentions` rows.
 
 | Operation | Time | Space | At scale | Notes |
 |---|---|---|---|---|
@@ -14,15 +14,27 @@ Per-operation Big-O for everything significant in loopd. Use this in coding-roun
 | `moveTodoUp/Down()` | O(T) on first reorder, O(1) thereafter | O(1) | OK to ~1000 todos | First call runs `ensureAllTodoPositions` (O(T) bulk write) |
 | `scanTodosFromText(text, existing)` | O(L + E) | O(L + E) | Fine | *L* = lines in text, *E* = existing todos for entry |
 | `reconcileTodoMetaForEntry(entry)` | O(T_e + M_e) | O(M_e) | Fine | Per-entry counts (single digits typical) |
+| `parseTags(text)` | O(L) regex pass + O(L) code-mask | O(matches) | Fine | Multi-line code-block masking is the cost driver |
+| `scanThreadsForEntry(...)` | O(parsedTags + Th + existingMentions) | O(parsedTags) | Fine | Two-pass reconcile per entry; per-todo runs separately |
+| `resolveTagsToThreadIds(parsed)` | O(parsed × log Th) for slug lookup; auto-create on miss = O(insert) | O(parsed) | Fine | Auto-create can race; recovers via `slug-taken` re-fetch |
+| `getThreadCards(now)` | O(Th × Mn) for last-mention map + O(Th log Th) sort | O(Th + Mn) | Fine to ~100 threads, ~10k mentions | Single SQL aggregate per query type; in-memory join afterwards |
+| `getThreadDetail(threadId)` | O(Mn_t + N + T) (per-thread mentions + global entries/metas) | O(Mn_t + T) | Fine to ~100 threads, ~10k todos | Cap at 1000 mentions per query |
+| `toggleThreadTouchToday(...)` | O(1) read + O(1) insert OR delete | O(1) | Fine | Single-row idempotent toggle |
 | `pullTodos(notion)` | O(P + T) where P = Notion pages | O(P) | Fine; bounded by Notion API page size | Builds `byLoopdId` Map first |
 | `pushTodos(notion, dirty)` | O(d × 350ms) where d = dirty rows | O(d) | Bounded by rate limit | One Notion API call per dirty row, serialized |
+| `pullHabits(notion)` | O(P) | O(P) | Fine; usually small (~10–50 habits) | Slug-rejected-on-pull adds a log warning per rejected diff |
+| `pushHabits(notion, dirty)` | O(d × 350ms) | O(d) | Fine | Habits CRUD is low-frequency |
+| `pullThreads(notion)` | O(P) | O(P) | Fine; usually small (~10–50 threads) | Slug also rejected on pull here |
+| `pushThreads(notion, dirty)` | O(d × 350ms) | O(d) | Fine | Threads CRUD is low-frequency |
 | `classifyTodo(text)` | 1 LLM call (~1-3s) | O(1) | Cost-bounded | Module-level in-flight counter |
 | `expandTodo(id, text)` | 1-2 LLM calls (~5-15s) | O(1) | Bounded by `MAX_CONCURRENT=3` | Auto-retry once on malformed JSON |
 | `backfillTodoMeta()` | O(N × T_avg) | O(1) | One-time per install | SecureStore-gated |
+| `backfillThreadMentions()` | O(N + T) — walk every entry + todo and re-scan tags | O(1) per iter | One-time per install (lazy) | SecureStore-gated; short-circuits if zero threads exist (re-checks on next boot) |
 | `classifyAmbiguousMeta()` | O(K × LLM) where K = unclassified | O(K) | Boot-time, fire-and-forget | Skips done-or-overridden rows |
 | `getNutritionSuggestions(query)` | O(R) read + O(R) dedupe | O(D) where D = distinct names | Fine to ~5k nutrition rows | Could push DISTINCT to SQL |
-| `processDeletions(token, type)` | O(d × 350ms) | O(d) | Bounded by rate limit | FIFO drain of `sync_deletions` |
-| Notion sync overall | O(rate-limit × dirty count) | O(d) | Acceptable up to ~1000 dirty rows | Past that, user waits noticeably |
+| `getThreadSuggestions(query, limit)` | O(Th + Mn) for LEFT-JOIN aggregate; LIMIT N | O(N) | Fine to ~100 threads | Recency-sorted via `MAX(created_at)` per thread |
+| `processDeletions(token, type)` | O(d × 350ms) | O(d) | Bounded by rate limit | FIFO drain of `sync_deletions` (now 5 entity types) |
+| Notion sync overall (4-stage chain) | O(rate-limit × total-dirty) | O(d) | Acceptable up to ~1000 dirty rows total | `syncAll → syncAllTodos → syncAllHabits → syncAllThreads`; later stages no-op when their DB ID isn't set |
 
 ## Where the cliffs are
 
@@ -36,6 +48,10 @@ Four places that break first under load, ranked by which would hurt the user soo
 
 **LLM expansion latency without streaming.** 5-15 seconds per call is fine UX-wise *with* a loading state, but if a user taps 10 expand buttons at once they see queueing behavior. Already handled by `MAX_CONCURRENT=3` cap, but a streaming response would feel snappier. Solution: stream the LLM response token-by-token into the modal. Effort: a day per provider (Anthropic and OpenAI have different stream shapes). Worth it: yes once expansion becomes a frequent operation; today it's manual-only and infrequent.
 
+**Thread mention backfill on a heavy entries table.** Walking every entry + todo to scan for `#tag` matches is O(N + T) regex passes. At ~10k entries with averaged-50-line entries that's still single-digit seconds, but the lazy gate (skip when zero threads exist) means it doesn't run on fresh installs anyway. The cliff is users with thousands of pre-existing entries who create their first thread late — the backfill pause is briefly noticeable. Solution: chunk the backfill in 100-entry batches with `requestAnimationFrame` yields between chunks. Effort: half a day. Worth it: only for users with 1000+ entries.
+
+**`getThreadCards()` aggregation.** Today it issues several distinct SQL aggregates and joins them in JS — fine when threads × mentions is small (current shape). At 100+ threads × 10k+ mentions, the LEFT JOIN-then-GROUP-BY for last-mention-per-thread becomes the dominant cost. Solution: cache the aggregate or push the entire dashboard query into a single SQL with derived tables. Effort: a day. Worth it: once dashboard load time exceeds 100ms in profiling.
+
 ## Where you should NOT optimize prematurely
 
 Three places where the current implementation is correct as-is and reaching for optimization would be theater:
@@ -45,6 +61,10 @@ Three places where the current implementation is correct as-is and reaching for 
 **Module-level rate limiter** is correct as-is. Don't reach for token buckets until you have multiple workers.
 
 **Heuristic classifier** is `O(L)` regex scan — already as cheap as it gets without sacrificing accuracy.
+
+**`#tag` parser** is also `O(L)` per scan with a single regex pass and code-block masking. The auto-create path adds one INSERT per unknown slug per scan — bounded by the number of distinct unknown slugs (typically 0–1).
+
+**`toggleThreadTouchToday`** is two SELECT-or-INSERT/DELETE queries, both indexed. The dashboard re-render after toggle costs more than the DB write.
 
 ## How to use this in an interview
 

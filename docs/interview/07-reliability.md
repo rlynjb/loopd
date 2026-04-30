@@ -8,7 +8,9 @@ The first pattern is **DB-first writes**. Every keystroke in the journal writes 
 
 The second pattern is **self-healing reconcile**. Instead of trying to keep `todos_json` and `todo_meta` transactionally consistent, I let them drift slightly and patch the diff on the next commit. [`reconcileTodoMetaForEntry`](../../src/services/todos/reconcileMeta.ts) is idempotent: re-running on the same input is a no-op. A failed mid-loop run leaves a deterministic gap that the next run closes. This is the Kubernetes-controller pattern at small scale.
 
-The third pattern is **module-level rate-limiter serialization**. Every Notion API call across all features goes through a single `lastRequestTime` module variable at [`notion/api.ts:7`](../../src/services/notion/api.ts#L7). Concurrent calls from `syncAll` and `syncAllTodos` automatically serialize. There's no "choreograph the syncs" code; the choke point handles it.
+The third pattern is **module-level rate-limiter serialization**. Every Notion API call across all features goes through a single `lastRequestTime` module variable at [`notion/api.ts:7`](../../src/services/notion/api.ts#L7). Concurrent calls from `syncAll`, `syncAllTodos`, `syncAllHabits`, and `syncAllThreads` automatically serialize. There's no "choreograph the syncs" code; the choke point handles it.
+
+The threads scanner shipped in 2026-04-29 follows the same self-healing pattern: [`scanThreadsForEntry`](../../src/services/threads/scanThreads.ts) runs fire-and-forget after `scanTodos` (because `[]`-line tag attribution needs the final todo IDs), is idempotent on re-run, and lazy-backfills via the `thread_mentions_backfill_v1_done` flag with an extra short-circuit: skip if zero threads exist locally. Without that guard, a fresh install would walk every entry to find no matches; with it, the backfill defers until a thread is created and re-checks on the next boot.
 
 ```
               Backfill crash recovery — pattern in detail
@@ -84,11 +86,25 @@ Where I haven't implemented locking and probably should: the on-commit scanner r
 
 The Notion API contract.
 
-It's a third-party REST API I don't control, and the schema-gap tolerance I built — [`detectMissingTodoProperties`](../../src/services/notion/todosMapper.ts) — is defensive *for users on older Notion DB schemas*, not for *Notion changing their API*. If they ship a breaking change to the rich-text response shape, my parser at [`todosMapper.ts`](../../src/services/notion/todosMapper.ts) breaks.
+It's a third-party REST API I don't control, and the schema-gap tolerance I built — `detectMissingTodoProperties` / `detectMissingHabitProperties` / `detectMissingThreadProperties` across the four mappers — is defensive *for users on older Notion DB schemas*, not for *Notion changing their API*. If they ship a breaking change to the rich-text response shape, all four mappers break.
 
-The mitigation is the architectural principle that local SQLite is canonical: even if Notion sync stops working entirely, every existing piece of data is intact locally, deletions are queued in `sync_deletions`, and the user keeps using the app. The sync layer is *additive*, not load-bearing.
+The mitigation is the architectural principle that local SQLite is canonical: even if Notion sync stops working entirely, every existing piece of data is intact locally, deletions are queued in `sync_deletions` (now including `'thread'`), and the user keeps using the app. The sync layer is *additive*, not load-bearing.
 
-I'm proudest of this decision specifically because it cost me real work. A "cloud-first" version of this app would have been faster to build but would die the day Notion changed an API. By making SQLite primary, I bought independence — at the cost of writing all the merge logic, the deletion queue, and the schema-gap tolerance by hand. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
+I'm proudest of this decision specifically because it cost me real work. A "cloud-first" version of this app would have been faster to build but would die the day Notion changed an API. By making SQLite primary, I bought independence — at the cost of writing all the merge logic, the deletion queue, the schema-gap tolerance, and the slug-rejected-on-pull rules by hand. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
+
+A small example of how the rule pays off: when I added the threads sync, "what happens if a user renames a slug in Notion" wasn't a bug to fix — it was a question I had to answer at design time. The answer is *we drop it on pull and log a warning*, because mention reconciliation is keyed on slug and a remote rename would orphan every existing `thread_mentions` row. Catching that as a deliberate rule rather than a runtime crash is what local-canonical buys you.
+
+### Q4 [senior] You documented Principle 11 — "mentions are derived" — with one explicit deviation. Why?
+
+The dashboard's "Daily Schedule" tracker lets users tap a thread row to mark it touched today. That tap writes a `thread_mentions` row with `entry_id IS NULL AND todo_id IS NULL`. By Principle 11, mentions should ONLY be derived from prose, so a manual touch is a deviation.
+
+Three reasons it's the right call here:
+
+1. **Schema permits it.** Both `entry_id` and `todo_id` are nullable in the original DDL. The "at least one is set" constraint was app-level (not a CHECK), so I'm not bending the schema, just bending the convention.
+2. **Composability.** All mention queries already aggregate uniformly — staleness math, the 14-day strip, entries-this-week — none of them care whether a row came from a scanner or a tap. Adding the manual case didn't require any consumer changes.
+3. **Deletion is local.** Toggling off only deletes the manual row; prose-derived mentions for the same day stay intact. There's no risk of a manual toggle clobbering scanner output.
+
+What makes it tolerable as a deviation rather than a bug: it's documented inline at [`services/threads/touch.ts`](../../src/services/threads/touch.ts), the dashboard `activeDates` set is deliberately filtered to manual-only so prose mentions don't accidentally light up the strip, and the principle's existence as a stated rule means anyone adding the *next* feature has a tripwire — if you're tempted to bypass derivation, you have to argue for it the way I argued for this one.
 
 ## The hard question
 
