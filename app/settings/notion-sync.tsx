@@ -9,10 +9,15 @@ import {
   getNotionToken, setNotionToken,
   getEntriesDbId, setEntriesDbId,
   getTodosDbId, setTodosDbId,
+  getHabitsDbId, setHabitsDbId,
+  getThreadsDbId, setThreadsDbId,
   isAutoSyncEnabled, setAutoSync,
   clearNotionConfig, setLastSyncTimestamp,
   setTodosLastSyncTimestamp,
+  setHabitsLastSyncTimestamp,
+  setThreadsLastSyncTimestamp,
 } from '../../src/services/notion/config';
+import { syncAllHabits, syncAllThreads } from '../../src/services/notion/sync';
 import { getDatabase as testNotionDb } from '../../src/services/notion/api';
 
 export default function NotionSyncScreen() {
@@ -22,7 +27,11 @@ export default function NotionSyncScreen() {
   const [token, setToken] = useState('');
   const [entriesDb, setEntriesDb] = useState('');
   const [todosDb, setTodosDb] = useState('');
+  const [habitsDb, setHabitsDb] = useState('');
+  const [threadsDb, setThreadsDb] = useState('');
   const [autoSyncOn, setAutoSyncOn] = useState(false);
+  const [extraSyncing, setExtraSyncing] = useState<null | 'habits' | 'threads'>(null);
+  const [extraResult, setExtraResult] = useState<null | { kind: 'habits' | 'threads'; ok: boolean; msg: string }>(null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [showToken, setShowToken] = useState(false);
@@ -33,6 +42,8 @@ export default function NotionSyncScreen() {
         setToken(await getNotionToken() ?? '');
         setEntriesDb(await getEntriesDbId() ?? '');
         setTodosDb(await getTodosDbId() ?? '');
+        setHabitsDb(await getHabitsDbId() ?? '');
+        setThreadsDb(await getThreadsDbId() ?? '');
         setAutoSyncOn(await isAutoSyncEnabled());
         refresh();
       })();
@@ -43,7 +54,45 @@ export default function NotionSyncScreen() {
     await setNotionToken(token.trim());
     await setEntriesDbId(entriesDb.trim());
     await setTodosDbId(todosDb.trim());
+    await setHabitsDbId(habitsDb.trim());
+    await setThreadsDbId(threadsDb.trim());
     refresh();
+  };
+
+  const handleSyncHabits = async () => {
+    setExtraSyncing('habits');
+    setExtraResult(null);
+    try {
+      const r = await syncAllHabits();
+      setExtraResult({
+        kind: 'habits',
+        ok: r.errors.length === 0,
+        msg: r.errors.length > 0 ? r.errors[0] : `${r.pulled} pulled, ${r.pushed} pushed`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setExtraResult({ kind: 'habits', ok: false, msg });
+    } finally {
+      setExtraSyncing(null);
+    }
+  };
+
+  const handleSyncThreads = async () => {
+    setExtraSyncing('threads');
+    setExtraResult(null);
+    try {
+      const r = await syncAllThreads();
+      setExtraResult({
+        kind: 'threads',
+        ok: r.errors.length === 0,
+        msg: r.errors.length > 0 ? r.errors[0] : `${r.pulled} pulled, ${r.pushed} pushed`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setExtraResult({ kind: 'threads', ok: false, msg });
+    } finally {
+      setExtraSyncing(null);
+    }
   };
 
   const handleTestConnection = async () => {
@@ -70,7 +119,10 @@ export default function NotionSyncScreen() {
     setToken('');
     setEntriesDb('');
     setTodosDb('');
+    setHabitsDb('');
+    setThreadsDb('');
     setTestResult(null);
+    setExtraResult(null);
     refresh();
   };
 
@@ -140,6 +192,20 @@ export default function NotionSyncScreen() {
             autoCapitalize="none" autoCorrect={false} style={styles.input}
           />
 
+          <Text style={styles.fieldLabel}>HABITS DATABASE ID (optional)</Text>
+          <TextInput
+            value={habitsDb} onChangeText={setHabitsDb} onBlur={saveCredentials}
+            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" placeholderTextColor={colors.textDimmer}
+            autoCapitalize="none" autoCorrect={false} style={styles.input}
+          />
+
+          <Text style={styles.fieldLabel}>THREADS DATABASE ID (optional)</Text>
+          <TextInput
+            value={threadsDb} onChangeText={setThreadsDb} onBlur={saveCredentials}
+            placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" placeholderTextColor={colors.textDimmer}
+            autoCapitalize="none" autoCorrect={false} style={styles.input}
+          />
+
 
           {testResult && (
             <View style={[styles.testResult, testResult.ok ? styles.testSuccess : styles.testFail]}>
@@ -205,6 +271,8 @@ export default function NotionSyncScreen() {
               onPress={async () => {
                 await setLastSyncTimestamp('');
                 await setTodosLastSyncTimestamp('');
+                await setHabitsLastSyncTimestamp('');
+                await setThreadsLastSyncTimestamp('');
                 refresh();
               }}
               style={styles.resetBtn}
@@ -213,6 +281,45 @@ export default function NotionSyncScreen() {
             </Pressable>
           )}
         </View>
+
+        {/* Habits + Threads — separate sync triggers (optional, opt-in) */}
+        {configured && (habitsDb || threadsDb) && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Habits & Threads</Text>
+            <Text style={styles.cardSub}>
+              Optional dedicated databases. When configured, habit cadence and thread metadata
+              sync bidirectionally. Mentions are not synced (derived from prose).
+            </Text>
+
+            {habitsDb ? (
+              <Pressable
+                onPress={extraSyncing ? undefined : handleSyncHabits}
+                style={[styles.syncBtn, { marginTop: 6 }, extraSyncing && { opacity: 0.4 }]}
+              >
+                {extraSyncing === 'habits'
+                  ? <ActivityIndicator size="small" color={colors.bg} />
+                  : <Text style={styles.syncBtnText}>Sync habits now</Text>}
+              </Pressable>
+            ) : null}
+
+            {threadsDb ? (
+              <Pressable
+                onPress={extraSyncing ? undefined : handleSyncThreads}
+                style={[styles.syncBtn, { marginTop: 8 }, extraSyncing && { opacity: 0.4 }]}
+              >
+                {extraSyncing === 'threads'
+                  ? <ActivityIndicator size="small" color={colors.bg} />
+                  : <Text style={styles.syncBtnText}>Sync threads now</Text>}
+              </Pressable>
+            ) : null}
+
+            {extraResult && (
+              <Text style={[styles.resultText, { color: extraResult.ok ? colors.green : colors.coral }]}>
+                {extraResult.kind}: {extraResult.msg}
+              </Text>
+            )}
+          </View>
+        )}
 
       </ScrollView>
     </View>

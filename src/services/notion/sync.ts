@@ -1,27 +1,41 @@
 import { queryDatabase, createPage, updatePage, archivePage, getDatabase as getNotionDatabase } from './api';
 import {
-  getNotionToken, getEntriesDbId, getTodosDbId,
+  getNotionToken, getEntriesDbId, getTodosDbId, getHabitsDbId, getThreadsDbId,
   getLastSyncTimestamp, setLastSyncTimestamp,
   getTodosLastSyncTimestamp, setTodosLastSyncTimestamp,
+  getHabitsLastSyncTimestamp, setHabitsLastSyncTimestamp,
+  getThreadsLastSyncTimestamp, setThreadsLastSyncTimestamp,
 } from './config';
 import { notionPageToEntry, entryToNotionProperties, getTitlePropertyKey } from './mapper';
 import {
   notionPageToTodo, todoToNotionProperties, detectMissingTodoProperties,
 } from './todosMapper';
 import {
+  notionPageToHabit, habitToNotionProperties, detectMissingHabitProperties,
+  getTitlePropertyKey as getHabitsTitleKey,
+} from './habitsMapper';
+import {
+  notionPageToThread, threadToNotionProperties, detectMissingThreadProperties,
+  getTitlePropertyKey as getThreadsTitleKey,
+} from './threadsMapper';
+import {
   getUnsyncedEntries, upsertEntryFromNotion, setEntryNotionPageId,
   getEntryById, getEntryByNotionPageId, getEntriesByDate, getHabits,
   getSyncDeletions, clearSyncDeletions, getAllEntries, updateEntry,
-  insertEntry, insertHabit, deleteHabit, getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
+  insertEntry, insertHabit, deleteHabit, updateHabit, getHabitById,
+  getDayTitle, getDayTitleWithTimestamp, setDayTitle, setDayTitleFromSync,
   rebuildVlogs,
   getAllTodoMetas, getTodoMeta, insertTodoMeta, updateTodoMeta,
+  getThreads, insertThread, updateThread, getThreadBySlug, getThreadById,
 } from '../database';
 import type { TodoMeta } from '../../types/todoMeta';
 import { generateId } from '../../utils/id';
 import { addDays, getTodayString, toLocalDateString } from '../../utils/time';
 import { reimportMissingClips } from '../clipMatcher';
-import type { Entry, TodoItem } from '../../types/entry';
+import type { Entry, Habit, TodoItem } from '../../types/entry';
+import type { Thread } from '../../types/thread';
 import type { SyncResult } from '../../types/notion';
+import { slugify } from '../habits/migrate';
 
 export async function syncAll(): Promise<SyncResult> {
   const token = await getNotionToken();
@@ -819,5 +833,336 @@ async function pushTodos(
     }
   }
 
+  return { count, errors };
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Habits sync — optional dedicated DB carrying cadence + archived metadata.
+// No-ops silently when HABITS_DB_ID isn't configured. Habit identity is
+// still governed by the Entries-DB multi-select options (see
+// syncHabitsFromNotionSchema above) — this orchestrator only reflects the
+// per-habit cadence + metadata.
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function syncAllHabits(): Promise<SyncResult> {
+  const token = await getNotionToken();
+  const habitsDbId = await getHabitsDbId();
+  const result: SyncResult = { pulled: 0, pushed: 0, errors: [], debug: [] };
+  if (!token || !habitsDbId) return result; // silent no-op when not configured
+
+  const lastSync = await getHabitsLastSyncTimestamp();
+
+  let titleColumn = 'Name';
+  let missingProperties = new Set<string>();
+  try {
+    const dbSchema = await getNotionDatabase(token, habitsDbId) as { properties: Record<string, unknown> };
+    titleColumn = getHabitsTitleKey(dbSchema.properties);
+    missingProperties = detectMissingHabitProperties(dbSchema.properties);
+    if (missingProperties.size > 0) {
+      result.debug.push(`Habits DB missing properties: ${[...missingProperties].join(', ')}`);
+    }
+  } catch (err) {
+    result.debug.push(`Habits DB schema fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    result.pulled += await pullHabits(token, habitsDbId, result.debug);
+    const pushRes = await pushHabits(token, habitsDbId, lastSync, titleColumn, missingProperties);
+    result.pushed += pushRes.count;
+    result.errors.push(...pushRes.errors);
+
+    if (lastSync) {
+      await processDeletions(token, 'habit');
+    } else {
+      await clearSyncDeletions('habit');
+    }
+    await setHabitsLastSyncTimestamp(new Date().toISOString());
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    result.errors.push(msg);
+    console.error('[loopd habits-sync] Error:', msg);
+  }
+
+  console.log('[loopd habits-sync] Result:', result);
+  return result;
+}
+
+async function pullHabits(token: string, dbId: string, debug: string[]): Promise<number> {
+  let pages;
+  try {
+    pages = await queryDatabase(token, dbId);
+  } catch (err) {
+    debug.push(`habits pull failed: ${err instanceof Error ? err.message : String(err)}`);
+    return 0;
+  }
+  let count = 0;
+  for (const page of pages) {
+    if (page.archived) continue;
+    try {
+      const parsed = notionPageToHabit(page);
+      // Match by loopd ID first, falling back to slug or label-derived id.
+      let local: Habit | null = null;
+      if (parsed.loopdId) local = await getHabitById(parsed.loopdId);
+      if (!local && parsed.slug) {
+        const all = await getHabits();
+        local = all.find(h => h.slug === parsed.slug) ?? null;
+      }
+      if (!local) {
+        // Match by deterministic id derived from name (matches the existing
+        // multi-select identity convention).
+        const candidateId = parsed.name.toLowerCase().replace(/\s+/g, '-');
+        local = await getHabitById(candidateId);
+      }
+
+      const notionTime = new Date(parsed.notionEditedAt).getTime();
+      const localTime = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+
+      if (local && notionTime > localTime) {
+        // Last-edit-wins. Preserve local slug (option (b) per plan decision #3).
+        await updateHabit({
+          ...local,
+          // Name is bidirectional. cadence + archived bidirectional. Slug local-only.
+          label: parsed.name || local.label,
+          cadenceType: parsed.cadenceType ?? local.cadenceType ?? 'daily',
+          cadenceDays: parsed.cadenceDays ?? local.cadenceDays ?? null,
+          cadenceCount: parsed.cadenceCount ?? local.cadenceCount ?? null,
+          timeOfDay: parsed.timeOfDay ?? local.timeOfDay ?? 'anytime',
+          icon: parsed.icon ?? local.icon ?? null,
+          color: parsed.color ?? local.color ?? null,
+          notionPageId: page.id,
+          notionLastSynced: new Date().toISOString(),
+        });
+        count++;
+      } else if (!local) {
+        // New habit from Notion — derive id and slug locally.
+        const id = parsed.name.toLowerCase().replace(/\s+/g, '-') || generateId('habit');
+        const slug = parsed.slug || slugify(parsed.name) || id;
+        await insertHabit({
+          id,
+          label: parsed.name,
+          sortOrder: 999, // appended at the end; user can reorder later
+          slug,
+          icon: parsed.icon,
+          color: parsed.color,
+          cadenceType: parsed.cadenceType ?? 'daily',
+          cadenceDays: parsed.cadenceDays ?? null,
+          cadenceCount: parsed.cadenceCount ?? null,
+          timeOfDay: parsed.timeOfDay ?? 'anytime',
+          notionPageId: page.id,
+          notionLastSynced: new Date().toISOString(),
+        });
+        count++;
+      }
+    } catch (err) {
+      debug.push(`habits pull error for ${page.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return count;
+}
+
+async function pushHabits(
+  token: string,
+  dbId: string,
+  lastSync: string | null,
+  titleColumn: string,
+  missingProperties: Set<string>,
+): Promise<{ count: number; errors: string[] }> {
+  const errors: string[] = [];
+  let count = 0;
+  const lastSyncMs = lastSync ? new Date(lastSync).getTime() : 0;
+
+  // Build the "available properties" set (for backward-compat schema-gap tolerance).
+  const ALL = ['Name', 'loopd ID', 'Slug', 'Cadence Type', 'Cadence Days', 'Cadence Count', 'Time of Day', 'Icon', 'Color'];
+  const baseSchema = new Set([titleColumn, ...ALL.filter(p => !missingProperties.has(p))]);
+
+  const habits = await getHabits();
+  for (const habit of habits) {
+    const updatedMs = habit.updatedAt ? new Date(habit.updatedAt).getTime() : 0;
+    const dirty = !habit.notionPageId || updatedMs > lastSyncMs;
+    if (!dirty) continue;
+    try {
+      const props = habitToNotionProperties(habit, titleColumn, baseSchema);
+      if (habit.notionPageId) {
+        await updatePage(token, habit.notionPageId, props);
+      } else {
+        const page = await createPage(token, dbId, props);
+        await updateHabit({ ...habit, notionPageId: page.id, notionLastSynced: new Date().toISOString() });
+      }
+      count++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[loopd habits-sync] Push failed for habit', habit.id, msg);
+      errors.push(`Push: ${msg.slice(0, 100)}`);
+    }
+  }
+  return { count, errors };
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Threads sync — bidirectional metadata only. Mentions are NOT synced
+// (principle 11: derived from prose, entries/todos already sync). Slug
+// edits in Notion are rejected on pull (plan decision #3) because
+// changing slugs invalidates existing #tag mention reconciliation.
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function syncAllThreads(): Promise<SyncResult> {
+  const token = await getNotionToken();
+  const threadsDbId = await getThreadsDbId();
+  const result: SyncResult = { pulled: 0, pushed: 0, errors: [], debug: [] };
+  if (!token || !threadsDbId) return result; // silent no-op when not configured
+
+  const lastSync = await getThreadsLastSyncTimestamp();
+
+  let titleColumn = 'Name';
+  let missingProperties = new Set<string>();
+  try {
+    const dbSchema = await getNotionDatabase(token, threadsDbId) as { properties: Record<string, unknown> };
+    titleColumn = getThreadsTitleKey(dbSchema.properties);
+    missingProperties = detectMissingThreadProperties(dbSchema.properties);
+    if (missingProperties.size > 0) {
+      result.debug.push(`Threads DB missing properties: ${[...missingProperties].join(', ')}`);
+    }
+  } catch (err) {
+    result.debug.push(`Threads DB schema fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
+    result.pulled += await pullThreads(token, threadsDbId, result.debug);
+    const pushRes = await pushThreads(token, threadsDbId, lastSync, titleColumn, missingProperties);
+    result.pushed += pushRes.count;
+    result.errors.push(...pushRes.errors);
+
+    if (lastSync) {
+      await processDeletions(token, 'thread');
+    } else {
+      await clearSyncDeletions('thread');
+    }
+    await setThreadsLastSyncTimestamp(new Date().toISOString());
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    result.errors.push(msg);
+    console.error('[loopd threads-sync] Error:', msg);
+  }
+
+  console.log('[loopd threads-sync] Result:', result);
+  return result;
+}
+
+async function pullThreads(token: string, dbId: string, debug: string[]): Promise<number> {
+  let pages;
+  try {
+    pages = await queryDatabase(token, dbId);
+  } catch (err) {
+    debug.push(`threads pull failed: ${err instanceof Error ? err.message : String(err)}`);
+    return 0;
+  }
+  let count = 0;
+  for (const page of pages) {
+    if (page.archived) continue;
+    try {
+      const parsed = notionPageToThread(page);
+      // Match: loopd ID → slug → derived from name.
+      let local: Thread | null = null;
+      if (parsed.loopdId) local = await getThreadById(parsed.loopdId);
+      if (!local && parsed.slug) local = await getThreadBySlug(parsed.slug);
+
+      const notionTime = new Date(parsed.notionEditedAt).getTime();
+      const localTime = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
+
+      if (local) {
+        // Slug-rejected-on-pull: if Notion's slug differs, log and keep local.
+        if (parsed.slug && parsed.slug !== local.slug) {
+          console.warn(
+            `[loopd threads-sync] Slug edit rejected for "${local.name}": Notion="${parsed.slug}" local="${local.slug}". ` +
+            `Edit slug from the loopd Threads CRUD instead.`
+          );
+          debug.push(`Rejected slug edit on Notion for ${local.slug}`);
+        }
+        if (notionTime > localTime) {
+          await updateThread({
+            ...local,
+            // name + everything-but-slug are bidirectional.
+            name: parsed.name || local.name,
+            icon: parsed.icon ?? local.icon ?? null,
+            color: parsed.color ?? local.color ?? null,
+            targetCadenceDays: parsed.targetCadenceDays ?? local.targetCadenceDays,
+            archived: parsed.archived ?? local.archived,
+            pinned: parsed.pinned ?? local.pinned,
+            timeOfDay: parsed.timeOfDay ?? local.timeOfDay ?? 'anytime',
+            // slug stays local.
+            notionPageId: page.id,
+            notionLastSynced: new Date().toISOString(),
+          });
+          count++;
+        }
+      } else {
+        // New thread from Notion. Derive slug locally; collisions get -1/-2.
+        const baseSlug = parsed.slug || slugify(parsed.name) || generateId('thread');
+        let slug = baseSlug;
+        let n = 1;
+        while (await getThreadBySlug(slug)) slug = `${baseSlug}-${n++}`;
+        const now = new Date().toISOString();
+        await insertThread({
+          id: generateId('thread'),
+          name: parsed.name,
+          slug,
+          icon: parsed.icon,
+          color: parsed.color,
+          targetCadenceDays: parsed.targetCadenceDays,
+          archived: parsed.archived ?? false,
+          pinned: parsed.pinned ?? false,
+          timeOfDay: parsed.timeOfDay ?? 'anytime',
+          notionPageId: page.id,
+          notionLastSynced: now,
+          createdAt: now,
+          updatedAt: now,
+        });
+        count++;
+      }
+    } catch (err) {
+      debug.push(`threads pull error for ${page.id}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return count;
+}
+
+async function pushThreads(
+  token: string,
+  dbId: string,
+  lastSync: string | null,
+  titleColumn: string,
+  missingProperties: Set<string>,
+): Promise<{ count: number; errors: string[] }> {
+  const errors: string[] = [];
+  let count = 0;
+  const lastSyncMs = lastSync ? new Date(lastSync).getTime() : 0;
+
+  const ALL = ['Name', 'loopd ID', 'Slug', 'Icon', 'Color', 'Target Cadence (days)', 'Archived', 'Pinned', 'Time of Day'];
+  const baseSchema = new Set([titleColumn, ...ALL.filter(p => !missingProperties.has(p))]);
+
+  const threads = await getThreads(true);
+  for (const thread of threads) {
+    const updatedMs = thread.updatedAt ? new Date(thread.updatedAt).getTime() : 0;
+    const dirty = !thread.notionPageId || updatedMs > lastSyncMs;
+    if (!dirty) continue;
+    try {
+      const props = threadToNotionProperties(thread, titleColumn, baseSchema);
+      if (thread.notionPageId) {
+        await updatePage(token, thread.notionPageId, props);
+      } else {
+        const page = await createPage(token, dbId, props);
+        await updateThread({
+          ...thread,
+          notionPageId: page.id,
+          notionLastSynced: new Date().toISOString(),
+        });
+      }
+      count++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[loopd threads-sync] Push failed for thread', thread.id, msg);
+      errors.push(`Push: ${msg.slice(0, 100)}`);
+    }
+  }
   return { count, errors };
 }

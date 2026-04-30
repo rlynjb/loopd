@@ -82,13 +82,53 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="5" title="Share with Integration">
+        <Step num="5" title="Create the Habits Database (optional)">
+          <Text style={styles.text}>
+            Create a full-page Notion database if you want habit cadence and metadata to sync bidirectionally. Property names are case-sensitive:
+          </Text>
+          <Table rows={[
+            ['Name', 'Title (default)'],
+            ['loopd ID', 'Text (rich text)'],
+            ['Slug', 'Text (rich text)'],
+            ['Cadence Type', 'Select'],
+            ['Cadence Days', 'Multi-select'],
+            ['Cadence Count', 'Number'],
+            ['Time of Day', 'Select'],
+            ['Icon', 'Text (rich text)'],
+            ['Color', 'Text (rich text)'],
+          ]} />
+          <Text style={styles.hint}>
+            Cadence Type options: daily, weekdays, weekly, specific_days, n_per_week. Cadence Days (Mon, Tue, ..., Sun) only used for weekly and specific_days. Cadence Count is the N for n_per_week. Time of Day options: morning, midday, evening, anytime — drives dashboard ordering. The Habits multi-select on the Entries DB still governs habit identity — this DB carries the cadence + metadata.
+          </Text>
+        </Step>
+
+        <Step num="6" title="Create the Threads Database (optional)">
+          <Text style={styles.text}>
+            Create a full-page Notion database to sync project threads bidirectionally. Mentions ("#tag" occurrences in entries/todos) are NOT synced — they're derived from prose, and the entries/todos already sync. Property names are case-sensitive:
+          </Text>
+          <Table rows={[
+            ['Name', 'Title (default)'],
+            ['loopd ID', 'Text (rich text)'],
+            ['Slug', 'Text (rich text)'],
+            ['Icon', 'Text (rich text)'],
+            ['Color', 'Text (rich text)'],
+            ['Target Cadence (days)', 'Number'],
+            ['Archived', 'Checkbox'],
+            ['Pinned', 'Checkbox'],
+            ['Time of Day', 'Select'],
+          ]} />
+          <Text style={styles.hint}>
+            Slug is local-only — editing it in Notion is rejected to preserve mention reconciliation. Rename slugs from the loopd Threads CRUD instead. Everything else (name, icon, color, target cadence, archived, pinned, time of day) syncs both ways. Time of Day options: morning, midday, evening, anytime — drives dashboard ordering.
+          </Text>
+        </Step>
+
+        <Step num="7" title="Share with Integration">
           <Text style={styles.text}>
             Open each database, click the "..." menu in the top right, select "Connections", search for "loopd", and click "Connect".
           </Text>
         </Step>
 
-        <Step num="6" title="Copy Database IDs">
+        <Step num="8" title="Copy Database IDs">
           <Text style={styles.text}>
             Open your database as a full page. The URL looks like:{'\n\n'}
             notion.so/workspace/{'<'}DATABASE_ID{'>'}?v=...{'\n\n'}
@@ -96,7 +136,7 @@ export default function NotionGuideScreen() {
           </Text>
         </Step>
 
-        <Step num="7" title="Connect & Sync">
+        <Step num="9" title="Connect & Sync">
           <Text style={styles.text}>
             Go to Notion Sync in Settings, paste your token and database IDs, tap "Test connection", then "Sync Now".
           </Text>

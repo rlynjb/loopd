@@ -11,10 +11,14 @@ import {
   getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits, getAllEntries,
   getAllTodoMetas, insertEntry, updateEntry,
 } from '../src/services/database';
+import { getThreadCards } from '../src/services/threads/getThreadCards';
+import { toggleThreadTouchToday } from '../src/services/threads/touch';
+import { Icon } from '../src/components/ui/Icon';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { generateId } from '../src/utils/id';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 import type { TodoMeta } from '../src/types/todoMeta';
+import type { ThreadCard } from '../src/types/thread';
 
 const HEATMAP_DAYS = 14;
 
@@ -37,21 +41,24 @@ export default function HomeScreen() {
   const [todayTitle, setTodayTitle] = useState('');
   const [habits, setHabits] = useState<Habit[]>([]);
   const [todoMetas, setTodoMetas] = useState<Map<string, TodoMeta>>(new Map());
+  const [threadCards, setThreadCards] = useState<ThreadCard[]>([]);
 
   const today = getTodayString();
 
   const loadAll = useCallback(async () => {
     await archivePastDays(today);
-    const [entries, h, v, allMetas] = await Promise.all([
+    const [entries, h, v, allMetas, cards] = await Promise.all([
       getAllEntries(),
       getHabits(),
       getVlogs(),
       getAllTodoMetas(),
+      getThreadCards(),
     ]);
     setAllEntries(entries);
     setHabits(h);
     setVlogs(v);
     setTodoMetas(new Map(allMetas.map(m => [m.todoId, m])));
+    setThreadCards(cards);
 
     const titles: Record<string, string> = {};
     const previews: Record<string, string> = {};
@@ -196,7 +203,7 @@ export default function HomeScreen() {
 
         {/* Today's vlog — same card style as past vlogs */}
         {hasToday && (
-          <View style={styles.section}>
+          <View style={[styles.section, styles.sectionFirst]}>
             <Text style={styles.sectionLabel}>TODAY'S VLOG</Text>
             <PastVlogCard
               vlog={{
@@ -224,13 +231,17 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Habits */}
-        {habits.length > 0 && (
+        {/* TRACKER — combined habits + threads grouped by time-of-day.
+            Within each bucket: habits first, then threads. Adaptive
+            mini-headers when 2+ buckets are populated by either type. */}
+        {(habits.length > 0 || threadCards.length > 0) && (
           <View style={styles.section}>
-            <Text style={styles.sectionLabel}>HABITS</Text>
-            {/* Column header: weekday letter + day-of-month above each
-                heatmap column. Spans the same flex layout as HabitHeatmapRow
-                (80px label spacer, 14 flex:1 cells, 36px count spacer). */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionLabel}>DAILY SCHEDULE</Text>
+              <Pressable onPress={() => router.push('/more')} hitSlop={6}>
+                <Text style={styles.sectionLink}>manage →</Text>
+              </Pressable>
+            </View>
             <View style={styles.habitHeaderRow}>
               <View style={styles.habitHeaderLabelSpacer} />
               <View style={styles.habitHeaderCells}>
@@ -243,15 +254,47 @@ export default function HomeScreen() {
               </View>
               <View style={styles.habitHeaderCountSpacer} />
             </View>
-            {habits.map(h => (
-              <HabitHeatmapRow
-                key={h.id}
-                habit={h}
-                checkedDates={checkedDatesByHabit.get(h.id) ?? new Set()}
-                today={today}
-                onToggleToday={() => toggleHabitToday(h.id)}
-              />
-            ))}
+            {(() => {
+              const habitBuckets: Record<string, typeof habits> = {
+                morning: [], midday: [], evening: [], anytime: [],
+              };
+              for (const h of habits) habitBuckets[h.timeOfDay ?? 'anytime'].push(h);
+              const threadBuckets: Record<string, typeof threadCards> = {
+                morning: [], midday: [], evening: [], anytime: [],
+              };
+              for (const c of threadCards) threadBuckets[c.thread.timeOfDay ?? 'anytime'].push(c);
+              const order: Array<'morning' | 'midday' | 'evening' | 'anytime'> = [
+                'morning', 'midday', 'evening', 'anytime',
+              ];
+              const occupied = order.filter(b => habitBuckets[b].length > 0 || threadBuckets[b].length > 0);
+              const showHeaders = occupied.length >= 2;
+              return occupied.map(bucket => (
+                <View key={bucket}>
+                  {showHeaders && <Text style={styles.bucketHeader}>{bucket}</Text>}
+                  {habitBuckets[bucket].map(h => (
+                    <HabitHeatmapRow
+                      key={h.id}
+                      habit={h}
+                      checkedDates={checkedDatesByHabit.get(h.id) ?? new Set()}
+                      today={today}
+                      onToggleToday={() => toggleHabitToday(h.id)}
+                    />
+                  ))}
+                  {threadBuckets[bucket].map(card => (
+                    <ThreadHeatmapRow
+                      key={card.thread.id}
+                      card={card}
+                      today={today}
+                      onToggleToday={async () => {
+                        await toggleThreadTouchToday(card.thread.id, card.thread.slug, today);
+                        loadAll();
+                      }}
+                      onView={() => router.push(`/threads/${card.thread.id}`)}
+                    />
+                  ))}
+                </View>
+              ));
+            })()}
           </View>
         )}
 
@@ -277,6 +320,69 @@ export default function HomeScreen() {
         )}
       </ScrollView>
     </View>
+  );
+}
+
+// ── Thread row ──
+// Layout matches HabitHeatmapRow: 80px name | flex:1 14-cell strip |
+// 28px nav icon. Tapping the row toggles a "touched today" mention
+// (see services/threads/touch.ts). The arrow icon is its own Pressable
+// that routes to /threads/[id] for the detail view.
+
+function ThreadHeatmapRow({
+  card, today, onToggleToday, onView,
+}: {
+  card: ThreadCard;
+  today: string;
+  onToggleToday: () => void;
+  onView: () => void;
+}) {
+  const { thread, staleness } = card;
+  const activeDates = card.activeDates ?? new Set<string>();
+  const accent =
+    thread.color ||
+    (staleness === 'fresh' ? colors.green
+      : staleness === 'aging' ? colors.amber
+      : staleness === 'stale' ? colors.coral
+      : colors.textDim);
+
+  // Same Sunday-anchored 14-day window as HabitHeatmapRow.
+  const heatmapCells = (() => {
+    const todayDow = new Date(today + 'T12:00:00').getDay();
+    const start = (() => {
+      const d = new Date(today + 'T12:00:00');
+      d.setDate(d.getDate() - (todayDow + 7));
+      return d;
+    })();
+    const out: { date: string; active: boolean; isToday: boolean }[] = [];
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const iso = d.toISOString().slice(0, 10);
+      out.push({ date: iso, active: activeDates.has(iso), isToday: iso === today });
+    }
+    return out;
+  })();
+
+  return (
+    <Pressable onPress={onToggleToday} style={styles.threadRow} hitSlop={4}>
+      <Text style={styles.threadRowName} numberOfLines={1}>{thread.name}</Text>
+      <View style={styles.threadRowHeatmap}>
+        {heatmapCells.map((c, i) => (
+          <View
+            key={`${c.date}-${i}`}
+            style={[
+              styles.threadRowCell,
+              c.active ? { backgroundColor: accent } : styles.threadRowCellOff,
+              c.isToday && !c.active && styles.threadRowCellToday,
+            ]}
+          />
+        ))}
+      </View>
+      <Pressable onPress={onView} hitSlop={10} style={styles.threadRowNavBtn}>
+        <Icon name="arrowRight" size={14} color={colors.textDim} />
+      </Pressable>
+    </Pressable>
   );
 }
 
@@ -329,6 +435,12 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     borderTopWidth: 1,
     borderTopColor: colors.cardBorder,
+  },
+  sectionFirst: {
+    // First section after the greeting/date block — drop the top divider so
+    // the title flows directly into TODAY'S VLOG without a visible line.
+    borderTopWidth: 0,
+    paddingTop: 8,
   },
   habitHeaderRow: {
     flexDirection: 'row',
@@ -394,5 +506,63 @@ const styles = StyleSheet.create({
     color: colors.text,
     letterSpacing: -0.2,
     marginTop: 4,
+  },
+  // Anchors + Threads (folded in from former Today page)
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  sectionLink: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.accent,
+  },
+  // Thread row — mirrors HabitHeatmapRow layout exactly so columns line
+  // up: 80px name, flex:1 14-cell strip, 36px right-side count.
+  threadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  threadRowName: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    color: colors.text,
+    width: 80,
+  },
+  threadRowHeatmap: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 2,
+    alignItems: 'center',
+  },
+  threadRowCell: {
+    flex: 1,
+    height: 11,
+    borderRadius: 2,
+  },
+  threadRowCellOff: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  threadRowCellToday: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  threadRowNavBtn: {
+    width: 36,
+    alignItems: 'flex-end',
+    paddingVertical: 4,
+  },
+  bucketHeader: {
+    fontFamily: fonts.mono,
+    fontSize: 9,
+    color: colors.textDimmer,
+    letterSpacing: 1.4,
+    marginTop: 14,
+    marginBottom: 4,
   },
 });

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import type { Habit } from '../../types/entry';
+import { getCellState, computeStreak, type CellState } from '../../services/habits/streaks';
 
 const DAYS = 14;
 
@@ -19,7 +20,7 @@ function addDays(baseISO: string, delta: number): string {
 }
 
 export function HabitHeatmapRow({ habit, checkedDates, today, onToggleToday }: Props) {
-  const { loggedDays, cells, checkedToday } = useMemo(() => {
+  const { cells, streak } = useMemo(() => {
     // Anchor to a Sunday so each column is the same weekday across rows and
     // weeks. Start = the Sunday of the week containing (today - 7 days), i.e.
     // the Sunday of the previous calendar week. That gives exactly 2 full
@@ -27,20 +28,19 @@ export function HabitHeatmapRow({ habit, checkedDates, today, onToggleToday }: P
     // in its own weekday column (not always the last cell).
     const todayDow = new Date(today + 'T12:00:00').getDay(); // 0 = Sunday
     const start = addDays(today, -(todayDow + 7));
-    const list: { date: string; checked: boolean }[] = [];
-    let hits = 0;
+    const list: { date: string; state: CellState }[] = [];
     for (let i = 0; i < DAYS; i++) {
       const d = addDays(start, i);
+      const dateObj = new Date(d + 'T12:00:00');
       const checked = checkedDates.has(d);
-      if (checked) hits++;
-      list.push({ date: d, checked });
+      const state = getCellState(habit, dateObj, checked, today);
+      list.push({ date: d, state });
     }
     return {
-      loggedDays: hits,
       cells: list,
-      checkedToday: checkedDates.has(today),
+      streak: computeStreak(habit, today, checkedDates),
     };
-  }, [checkedDates, today]);
+  }, [habit, checkedDates, today]);
 
   return (
     <Pressable onPress={onToggleToday} style={styles.row} hitSlop={4}>
@@ -51,14 +51,15 @@ export function HabitHeatmapRow({ habit, checkedDates, today, onToggleToday }: P
             key={`${c.date}-${i}`}
             style={[
               styles.cell,
-              c.checked ? styles.cellOn : styles.cellOff,
-              c.date === today && styles.cellToday,
-              c.date === today && checkedToday && styles.cellTodayOn,
+              c.state === 'completed' && styles.cellCompleted,
+              c.state === 'missed' && styles.cellMissed,
+              c.state === 'neutral' && styles.cellNeutral,
+              c.state === 'today-pending' && styles.cellTodayPending,
             ]}
           />
         ))}
       </View>
-      <Text style={styles.count}>{loggedDays}/{DAYS}</Text>
+      <Text style={styles.count}>{streak}</Text>
     </Pressable>
   );
 }
@@ -87,18 +88,19 @@ const styles = StyleSheet.create({
     height: 11,
     borderRadius: 2,
   },
-  cellOn: {
+  cellCompleted: {
     backgroundColor: colors.green,
   },
-  cellOff: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
+  cellMissed: {
+    backgroundColor: 'rgba(224,85,85,0.18)',
   },
-  cellToday: {
+  cellNeutral: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  cellTodayPending: {
+    backgroundColor: 'rgba(255,255,255,0.06)',
     borderWidth: 1,
     borderColor: colors.accent,
-  },
-  cellTodayOn: {
-    borderColor: colors.green,
   },
   count: {
     fontFamily: fonts.mono,

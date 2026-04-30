@@ -8,8 +8,14 @@ import { TypeBadge } from '../src/components/todos/TypeBadge';
 import { TypeChangePicker } from '../src/components/todos/TypeChangePicker';
 import { StageBadge } from '../src/components/todos/StageBadge';
 import { StageChangePicker } from '../src/components/todos/StageChangePicker';
-import { getAllEntries, getAllTodoMetas, updateTodoMeta } from '../src/services/database';
+import { TagAutocomplete } from '../src/components/journal/TagAutocomplete';
+import {
+  getAllEntries, getAllTodoMetas, updateTodoMeta,
+  getThreads, getTodoThreadLinks,
+} from '../src/services/database';
 import { addTodo, updateTodo, deleteTodo } from '../src/services/todos/crud';
+import { createThread } from '../src/services/threads/crud';
+import type { Thread } from '../src/types/thread';
 import { TYPE_META, TYPES_IN_ORDER } from '../src/services/todos/typeMeta';
 import { formatRelativeTime } from '../src/services/todos/rank';
 import { ensureAllTodoPositions, swapTodoPositions } from '../src/services/todos/reorder';
@@ -23,6 +29,7 @@ import type { TodoMeta, TodoType, TodoStage } from '../src/types/todoMeta';
 
 type Status = 'all' | 'open' | 'done' | 'in_progress' | 'backlog';
 type CategoryFilter = 'all' | TodoType;
+type ThreadFilter = 'all' | string; // 'all' or a thread ID
 
 // Flat row shape used by the list — joins TodoItem with its parent entry's
 // id/date and the matching todo_meta row (default placeholder if missing).
@@ -57,10 +64,33 @@ export default function TodosScreen() {
   const [metas, setMetas] = useState<Map<string, TodoMeta>>(new Map());
   const [status, setStatus] = useState<Status>('open');
   const [category, setCategory] = useState<CategoryFilter>('all');
+  const [threadFilter, setThreadFilter] = useState<ThreadFilter>('all');
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [todoThreadLinks, setTodoThreadLinks] = useState<Map<string, Set<string>>>(new Map());
   const [adding, setAdding] = useState(false);
   const [newText, setNewText] = useState('');
+  // Cursor tracking for the tag autocomplete strip. Mirrors the journal
+  // editor's pattern — detect `#xyz` immediately before the cursor on the
+  // current line and surface the chip strip above the keyboard.
+  const [newSelection, setNewSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  // Ref carries the live text across the gap between onChangeText and the
+  // onSelectionChange that follows — without this, the selection handler
+  // sees stale `newText` from the previous render.
+  const newTextRef = useRef('');
+  const [tagAutocomplete, setTagAutocomplete] = useState<{
+    query: string;
+    rangeStart: number;
+    rangeEnd: number;
+  } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [editSelection, setEditSelection] = useState<{ start: number; end: number }>({ start: 0, end: 0 });
+  const editTextRef = useRef('');
+  const [editTagAutocomplete, setEditTagAutocomplete] = useState<{
+    query: string;
+    rangeStart: number;
+    rangeEnd: number;
+  } | null>(null);
   const [pickerFor, setPickerFor] = useState<Row | null>(null);
   const [stagePickerFor, setStagePickerFor] = useState<Row | null>(null);
   const [classifyInFlight, setClassifyInFlight] = useState(0);
@@ -70,16 +100,20 @@ export default function TodosScreen() {
   const addingRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [allEntries, allMetas, ambiguous, ai] = await Promise.all([
+    const [allEntries, allMetas, ambiguous, ai, allThreads, links] = await Promise.all([
       getAllEntries(),
       getAllTodoMetas(),
       countAmbiguousNotDone(),
       isClassifierAvailable(),
+      getThreads(),
+      getTodoThreadLinks(),
     ]);
     setEntries(allEntries);
     setMetas(new Map(allMetas.map(m => [m.todoId, m])));
     setAmbiguousCount(ambiguous);
     setAiAvailable(ai);
+    setThreads(allThreads);
+    setTodoThreadLinks(links);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -186,9 +220,24 @@ export default function TodosScreen() {
         if (r.meta.stage !== expected) return false;
       }
       if (category !== 'all' && r.meta.type !== category) return false;
+      if (threadFilter !== 'all') {
+        const linkedThreadIds = todoThreadLinks.get(r.id);
+        if (!linkedThreadIds || !linkedThreadIds.has(threadFilter)) return false;
+      }
       return true;
     });
-  }, [allRows, status, category]);
+  }, [allRows, status, category, threadFilter, todoThreadLinks]);
+
+  // Per-thread counts so the chip can show "loopd 5" etc.
+  const threadCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of allRows) {
+      const ids = todoThreadLinks.get(r.id);
+      if (!ids) continue;
+      for (const tid of ids) counts.set(tid, (counts.get(tid) ?? 0) + 1);
+    }
+    return counts;
+  }, [allRows, todoThreadLinks]);
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<TodoType, number>();
@@ -203,12 +252,69 @@ export default function TodosScreen() {
     if (addingRef.current) return;
     addingRef.current = true;
     const text = newText.trim();
+    newTextRef.current = '';
     setNewText('');
     setAdding(false);
+    setTagAutocomplete(null);
     if (!text) { addingRef.current = false; return; }
     try { await addTodo(text); await load(); } catch (e) { console.warn('[todos] add failed:', e); }
     finally { addingRef.current = false; }
   }, [newText, load]);
+
+  // Tag autocomplete: detect "#xyz" immediately before the cursor on the
+  // current line. Same regex as the journal editor.
+  const detectTag = useCallback((text: string, cursor: number) => {
+    const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+    const beforeCursor = text.slice(lineStart, cursor);
+    const tagRe = /(?:^|[^\w#-])#([a-zA-Z][a-zA-Z0-9-]*)?$/;
+    const m = tagRe.exec(beforeCursor);
+    if (!m) { setTagAutocomplete(null); return; }
+    const tagBody = m[1] ?? '';
+    const matchStart = m.index + (m[0].startsWith('#') ? 0 : 1);
+    setTagAutocomplete({
+      query: tagBody,
+      rangeStart: lineStart + matchStart,
+      rangeEnd: cursor,
+    });
+  }, []);
+
+  const handleNewTextChange = useCallback((t: string) => {
+    newTextRef.current = t;
+    setNewText(t);
+    // For the new-todo input, the user is virtually always typing at the
+    // end. Using t.length as the cursor avoids reading a stale selection
+    // closure during the onChangeText → onSelectionChange interleave.
+    detectTag(t, t.length);
+  }, [detectTag]);
+
+  const handleNewSelectionChange = useCallback((e: { nativeEvent: { selection: { start: number; end: number } } }) => {
+    const { start, end } = e.nativeEvent.selection;
+    setNewSelection({ start, end });
+    // Read latest text from ref; React state may still be stale.
+    detectTag(newTextRef.current, start);
+  }, [detectTag]);
+
+  const replaceTagRange = useCallback((replacement: string) => {
+    if (!tagAutocomplete) return;
+    const { rangeStart, rangeEnd } = tagAutocomplete;
+    const current = newTextRef.current;
+    const next = current.slice(0, rangeStart) + replacement + current.slice(rangeEnd);
+    const cursor = rangeStart + replacement.length;
+    newTextRef.current = next;
+    setNewText(next);
+    setNewSelection({ start: cursor, end: cursor });
+    setTagAutocomplete(null);
+  }, [tagAutocomplete]);
+
+  const handleTagSelectExisting = useCallback((thread: Thread) => {
+    replaceTagRange(`#${thread.slug} `);
+  }, [replaceTagRange]);
+
+  const handleTagCreateNew = useCallback(async (slug: string) => {
+    const result = await createThread({ name: slug, slug });
+    const finalSlug = result.ok ? result.thread.slug : slug;
+    replaceTagRange(`#${finalSlug} `);
+  }, [replaceTagRange]);
 
   const handleToggle = useCallback(async (r: Row) => {
     try { await updateTodo(r.entryId, r.id, { done: !r.done }); await load(); } catch (e) {
@@ -225,16 +331,74 @@ export default function TodosScreen() {
   const startEdit = useCallback((r: Row) => {
     setEditingId(r.id);
     setEditText(r.text);
+    editTextRef.current = r.text;
+    setEditSelection({ start: r.text.length, end: r.text.length });
+    setEditTagAutocomplete(null);
   }, []);
 
   const commitEdit = useCallback(async (r: Row) => {
     const text = editText.trim();
     setEditingId(null);
+    setEditTagAutocomplete(null);
     if (!text || text === r.text) return;
     try { await updateTodo(r.entryId, r.id, { text }); await load(); } catch (e) {
       console.warn('[todos] edit failed:', e);
     }
   }, [editText, load]);
+
+  // Edit-mode equivalents of the new-todo tag handlers. The shared
+  // TagAutocomplete dispatches to whichever pair is active based on
+  // `editingId`.
+  const handleEditTextChange = useCallback((t: string) => {
+    editTextRef.current = t;
+    setEditText(t);
+    detectTagInEditor(t, t.length);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleEditSelectionChange = useCallback((e: { nativeEvent: { selection: { start: number; end: number } } }) => {
+    const { start, end } = e.nativeEvent.selection;
+    setEditSelection({ start, end });
+    detectTagInEditor(editTextRef.current, start);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function detectTagInEditor(text: string, cursor: number) {
+    const lineStart = text.lastIndexOf('\n', cursor - 1) + 1;
+    const beforeCursor = text.slice(lineStart, cursor);
+    const tagRe = /(?:^|[^\w#-])#([a-zA-Z][a-zA-Z0-9-]*)?$/;
+    const m = tagRe.exec(beforeCursor);
+    if (!m) { setEditTagAutocomplete(null); return; }
+    const tagBody = m[1] ?? '';
+    const matchStart = m.index + (m[0].startsWith('#') ? 0 : 1);
+    setEditTagAutocomplete({
+      query: tagBody,
+      rangeStart: lineStart + matchStart,
+      rangeEnd: cursor,
+    });
+  }
+
+  const replaceEditTagRange = useCallback((replacement: string) => {
+    if (!editTagAutocomplete) return;
+    const { rangeStart, rangeEnd } = editTagAutocomplete;
+    const current = editTextRef.current;
+    const next = current.slice(0, rangeStart) + replacement + current.slice(rangeEnd);
+    const cursor = rangeStart + replacement.length;
+    editTextRef.current = next;
+    setEditText(next);
+    setEditSelection({ start: cursor, end: cursor });
+    setEditTagAutocomplete(null);
+  }, [editTagAutocomplete]);
+
+  const handleEditTagSelectExisting = useCallback((thread: Thread) => {
+    replaceEditTagRange(`#${thread.slug} `);
+  }, [replaceEditTagRange]);
+
+  const handleEditTagCreateNew = useCallback(async (slug: string) => {
+    const result = await createThread({ name: slug, slug });
+    const finalSlug = result.ok ? result.thread.slug : slug;
+    replaceEditTagRange(`#${finalSlug} `);
+  }, [replaceEditTagRange]);
 
   const handleTypePick = useCallback(async (newType: TodoType) => {
     if (!pickerFor) return;
@@ -313,7 +477,9 @@ export default function TodosScreen() {
           <TextInput
             ref={inputRef}
             value={newText}
-            onChangeText={setNewText}
+            selection={newSelection}
+            onChangeText={handleNewTextChange}
+            onSelectionChange={handleNewSelectionChange}
             onSubmitEditing={handleAdd}
             onBlur={handleAdd}
             placeholder="Something to do…"
@@ -406,6 +572,44 @@ export default function TodosScreen() {
         </ScrollView>
       </View>
 
+      {/* Threads filter — only renders if at least one thread exists. */}
+      {threads.length > 0 && (
+        <View style={[styles.filterRow, styles.catFilterWrap]}>
+          <Text style={styles.filterLabel}>Threads:</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.catScroll}
+            contentContainerStyle={styles.catFilters}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Pressable
+              onPress={() => setThreadFilter('all')}
+              style={[styles.catPill, threadFilter === 'all' && styles.catPillActive]}
+            >
+              <Text style={[styles.catPillText, threadFilter === 'all' && styles.catPillTextActive]}>
+                ALL
+              </Text>
+            </Pressable>
+            {threads.map(t => {
+              const active = threadFilter === t.id;
+              const count = threadCounts.get(t.id) ?? 0;
+              return (
+                <Pressable
+                  key={t.id}
+                  onPress={() => setThreadFilter(t.id)}
+                  style={[styles.catPill, active && styles.catPillActive]}
+                >
+                  <Text style={[styles.catPillText, active && styles.catPillTextActive]}>
+                    #{t.slug} {count}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
@@ -433,7 +637,9 @@ export default function TodosScreen() {
                 {isEditing ? (
                   <TextInput
                     value={editText}
-                    onChangeText={setEditText}
+                    selection={editSelection}
+                    onChangeText={handleEditTextChange}
+                    onSelectionChange={handleEditSelectionChange}
                     onBlur={() => commitEdit(r)}
                     autoFocus
                     multiline
@@ -496,6 +702,16 @@ export default function TodosScreen() {
           );
         })}
       </ScrollView>
+
+      {/* Tag autocomplete strip — sibling to the keyboard, same pattern as
+          the journal editor. Routes to either the new-todo input or the
+          inline edit input based on which is currently focused (only one
+          can be focused at a time). */}
+      <TagAutocomplete
+        query={editingId ? (editTagAutocomplete?.query ?? null) : (tagAutocomplete?.query ?? null)}
+        onSelectExisting={editingId ? handleEditTagSelectExisting : handleTagSelectExisting}
+        onCreateNew={editingId ? handleEditTagCreateNew : handleTagCreateNew}
+      />
 
       <TypeChangePicker
         visible={!!pickerFor}

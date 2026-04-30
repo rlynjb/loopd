@@ -34,11 +34,28 @@ export type Entry = {
   updatedAt?: string | null;
 };
 
+export type CadenceType = 'daily' | 'weekdays' | 'weekly' | 'specific_days' | 'n_per_week';
+
+// Time-of-day bucket. Sort order on the dashboard:
+// morning → midday → evening → anytime. "anytime" is the default catch-all.
+export type TimeOfDay = 'morning' | 'midday' | 'evening' | 'anytime';
+
 export type Habit = {
   id: string;
   label: string;
   sortOrder: number;
+  // Cadence + metadata (added 2026-04-29). All optional on the type so existing
+  // call sites that construct minimal Habit objects keep compiling; the DB
+  // layer fills sensible defaults (cadence_type='daily', time_of_day='anytime').
+  slug?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  cadenceType?: CadenceType;
+  cadenceDays?: number[] | null;
+  cadenceCount?: number | null;
+  timeOfDay?: TimeOfDay;
   notionPageId?: string | null;
+  notionLastSynced?: string | null;
   updatedAt?: string | null;
 };
 

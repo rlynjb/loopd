@@ -2,10 +2,10 @@ import { useCallback, useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
-import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../src/constants/theme';
-import { Icon } from '../src/components/ui/Icon';
-import { getAllNutrition } from '../src/services/database';
-import type { NutritionEntry } from '../src/types/nutrition';
+import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
+import { Icon } from '../../src/components/ui/Icon';
+import { getAllNutrition } from '../../src/services/database';
+import type { NutritionEntry } from '../../src/types/nutrition';
 
 export default function NutritionScreen() {
   const router = useRouter();

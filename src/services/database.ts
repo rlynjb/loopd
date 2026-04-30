@@ -113,6 +113,21 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await addColumn('day_meta', 'updated_at', 'TEXT');
   await addColumn('habits', 'updated_at', 'TEXT');
   await addColumn('projects', 'removed_clip_source_keys_json', 'TEXT');
+  // Habits cadence + metadata — added 2026-04-29 for the today/threads feature.
+  // CHECK on cadence_type is omitted here (SQLite ALTER TABLE limitation);
+  // TS literal-union enforces the same set at the API boundary.
+  await addColumn('habits', 'slug', 'TEXT');
+  await addColumn('habits', 'icon', 'TEXT');
+  await addColumn('habits', 'color', 'TEXT');
+  await addColumn('habits', 'cadence_type', `TEXT NOT NULL DEFAULT 'daily'`);
+  await addColumn('habits', 'cadence_days', 'TEXT');
+  await addColumn('habits', 'cadence_count', 'INTEGER');
+  await addColumn('habits', 'archived', 'INTEGER NOT NULL DEFAULT 0');
+  await addColumn('habits', 'notion_last_synced', 'TEXT');
+  // Time-of-day bucket — morning / midday / evening / anytime. Default
+  // 'anytime' so existing habits land in the catch-all bucket. CHECK
+  // omitted (ALTER TABLE limitation); TS literal-union enforces.
+  await addColumn('habits', 'time_of_day', `TEXT NOT NULL DEFAULT 'anytime'`);
   // Lifecycle stage on todo_meta — added 2026-04-26. Defaults to 'todo'
   // for every existing row.
   await addColumn('todo_meta', 'stage', `TEXT NOT NULL DEFAULT 'todo'`);
@@ -136,6 +151,8 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_entries_notion ON entries(notion_page_id);
     CREATE INDEX IF NOT EXISTS idx_entries_updated ON entries(updated_at);
     CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
+    CREATE INDEX IF NOT EXISTS idx_habits_archived ON habits(archived);
+    CREATE INDEX IF NOT EXISTS idx_habits_slug ON habits(slug);
   `);
 
   // Nutrition entries — one row per "** <name> <kcal> kcal" line in prose.
@@ -196,6 +213,53 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       generated_at TEXT NOT NULL,
       model TEXT NOT NULL
     );
+  `);
+
+  // Threads — lightweight project-attribution metadata. Mirrors habits.
+  // The `slug` column is the matching key for #tag mentions in prose; UNIQUE
+  // is enforced by the index. `archived` and `pinned` stored as 0/1.
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      icon TEXT,
+      color TEXT,
+      target_cadence_days INTEGER,
+      archived INTEGER NOT NULL DEFAULT 0,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      time_of_day TEXT NOT NULL DEFAULT 'anytime',
+      notion_page_id TEXT,
+      notion_last_synced TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_slug ON threads(slug);
+    CREATE INDEX IF NOT EXISTS idx_threads_archived ON threads(archived);
+    CREATE INDEX IF NOT EXISTS idx_threads_notion ON threads(notion_page_id);
+  `);
+  // Migration for existing installs that already have threads without time_of_day.
+  await addColumn('threads', 'time_of_day', `TEXT NOT NULL DEFAULT 'anytime'`);
+
+  // Thread mentions — junction between threads and entries/todos. One row
+  // per #tag occurrence. Constraint: every mention has either an entry_id
+  // or a todo_id (enforced in the scanner; SQLite CHECK omitted because
+  // partial indexes / partial CHECK is awkward to evolve).
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS thread_mentions (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL,
+      entry_id TEXT,
+      entry_date TEXT NOT NULL,
+      todo_id TEXT,
+      source_line INTEGER NOT NULL DEFAULT 0,
+      tag_text TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_mentions_thread ON thread_mentions(thread_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_thread_mentions_entry ON thread_mentions(entry_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_mentions_todo ON thread_mentions(todo_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_mentions_date ON thread_mentions(entry_date);
   `);
 
   // Migration: drop dead columns (type, mood, category) from entries
@@ -310,12 +374,70 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
 
 // ── Habits ──
 
+import type { CadenceType, TimeOfDay } from '../types/entry';
+
+type HabitRow = {
+  id: string;
+  label: string;
+  sort_order: number;
+  slug: string | null;
+  icon: string | null;
+  color: string | null;
+  cadence_type: string | null;
+  cadence_days: string | null;
+  cadence_count: number | null;
+  time_of_day: string | null;
+  notion_page_id: string | null;
+  notion_last_synced: string | null;
+  updated_at: string | null;
+};
+
+function mapRowToHabit(r: HabitRow): Habit {
+  let cadenceDays: number[] | null = null;
+  if (r.cadence_days) {
+    try { cadenceDays = JSON.parse(r.cadence_days); } catch { cadenceDays = null; }
+  }
+  return {
+    id: r.id,
+    label: r.label,
+    sortOrder: r.sort_order,
+    slug: r.slug,
+    icon: r.icon,
+    color: r.color,
+    cadenceType: (r.cadence_type ?? 'daily') as CadenceType,
+    cadenceDays,
+    cadenceCount: r.cadence_count,
+    timeOfDay: (r.time_of_day ?? 'anytime') as TimeOfDay,
+    notionPageId: r.notion_page_id,
+    notionLastSynced: r.notion_last_synced,
+    updatedAt: r.updated_at,
+  };
+}
+
+// SQL-side bucket sort: morning(0) → midday(1) → evening(2) → anytime(3),
+// then sort_order ASC within bucket. Done in SQL so the dashboard doesn't
+// need to re-sort.
+const TIME_OF_DAY_ORDER_SQL = `
+  CASE COALESCE(time_of_day, 'anytime')
+    WHEN 'morning' THEN 0
+    WHEN 'midday' THEN 1
+    WHEN 'evening' THEN 2
+    ELSE 3
+  END
+`;
+
 export async function getHabits(): Promise<Habit[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<{ id: string; label: string; sort_order: number }>(
-    'SELECT * FROM habits ORDER BY sort_order'
+  const rows = await db.getAllAsync<HabitRow>(
+    `SELECT * FROM habits ORDER BY ${TIME_OF_DAY_ORDER_SQL}, sort_order`
   );
-  return rows.map(r => ({ id: r.id, label: r.label, sortOrder: r.sort_order }));
+  return rows.map(mapRowToHabit);
+}
+
+export async function getHabitById(id: string): Promise<Habit | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<HabitRow>('SELECT * FROM habits WHERE id = ?', [id]);
+  return row ? mapRowToHabit(row) : null;
 }
 
 // ── Row mapper ──
@@ -660,6 +782,241 @@ export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
   await db.runAsync(`DELETE FROM todo_meta WHERE entry_id = ?`, [entryId]);
 }
 
+// ── Threads ──
+
+import type { Thread, ThreadMention } from '../types/thread';
+
+type ThreadRow = {
+  id: string;
+  name: string;
+  slug: string;
+  icon: string | null;
+  color: string | null;
+  target_cadence_days: number | null;
+  archived: number;
+  pinned: number;
+  time_of_day: string | null;
+  notion_page_id: string | null;
+  notion_last_synced: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+function mapRowToThread(r: ThreadRow): Thread {
+  return {
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    icon: r.icon,
+    color: r.color,
+    targetCadenceDays: r.target_cadence_days,
+    archived: r.archived === 1,
+    pinned: r.pinned === 1,
+    timeOfDay: (r.time_of_day ?? 'anytime') as TimeOfDay,
+    notionPageId: r.notion_page_id,
+    notionLastSynced: r.notion_last_synced,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+// Reusable bucket-order CASE — keep in sync with TIME_OF_DAY_ORDER_SQL above.
+const THREAD_TIME_OF_DAY_ORDER_SQL = `
+  CASE COALESCE(time_of_day, 'anytime')
+    WHEN 'morning' THEN 0
+    WHEN 'midday' THEN 1
+    WHEN 'evening' THEN 2
+    ELSE 3
+  END
+`;
+
+export async function getThreads(includeArchived = false): Promise<Thread[]> {
+  const db = await getDatabase();
+  // Sort: pinned first, then by time-of-day bucket, then alphabetic within.
+  const rows = await db.getAllAsync<ThreadRow>(
+    includeArchived
+      ? `SELECT * FROM threads ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
+      : `SELECT * FROM threads WHERE archived = 0 ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
+  );
+  return rows.map(mapRowToThread);
+}
+
+export async function getThreadBySlug(slug: string): Promise<Thread | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<ThreadRow>(
+    'SELECT * FROM threads WHERE slug = ? COLLATE NOCASE',
+    [slug]
+  );
+  return row ? mapRowToThread(row) : null;
+}
+
+export async function getThreadById(id: string): Promise<Thread | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<ThreadRow>('SELECT * FROM threads WHERE id = ?', [id]);
+  return row ? mapRowToThread(row) : null;
+}
+
+export async function insertThread(thread: Thread): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT INTO threads (
+       id, name, slug, icon, color, target_cadence_days,
+       archived, pinned, time_of_day, notion_page_id, notion_last_synced,
+       created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      thread.id, thread.name, thread.slug,
+      thread.icon ?? null, thread.color ?? null, thread.targetCadenceDays,
+      thread.archived ? 1 : 0, thread.pinned ? 1 : 0,
+      thread.timeOfDay ?? 'anytime',
+      thread.notionPageId ?? null, thread.notionLastSynced ?? null,
+      thread.createdAt, thread.updatedAt,
+    ]
+  );
+}
+
+export async function updateThread(thread: Thread): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `UPDATE threads SET
+       name = ?, slug = ?, icon = ?, color = ?, target_cadence_days = ?,
+       archived = ?, pinned = ?, time_of_day = ?,
+       notion_page_id = ?, notion_last_synced = ?,
+       updated_at = ?
+     WHERE id = ?`,
+    [
+      thread.name, thread.slug, thread.icon ?? null, thread.color ?? null,
+      thread.targetCadenceDays,
+      thread.archived ? 1 : 0, thread.pinned ? 1 : 0,
+      thread.timeOfDay ?? 'anytime',
+      thread.notionPageId ?? null, thread.notionLastSynced ?? null,
+      new Date().toISOString(),
+      thread.id,
+    ]
+  );
+}
+
+export async function deleteThread(id: string): Promise<void> {
+  const db = await getDatabase();
+  // Track deletion for sync if it had a notion_page_id.
+  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
+    'SELECT notion_page_id FROM threads WHERE id = ?', [id]
+  );
+  if (row?.notion_page_id) {
+    await db.runAsync(
+      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+      ['thread', id, row.notion_page_id, new Date().toISOString()]
+    );
+  }
+  // Cascade: drop all mentions for this thread.
+  await db.runAsync('DELETE FROM thread_mentions WHERE thread_id = ?', [id]);
+  await db.runAsync('DELETE FROM threads WHERE id = ?', [id]);
+}
+
+// ── Thread mentions ──
+
+type ThreadMentionRow = {
+  id: string;
+  thread_id: string;
+  entry_id: string | null;
+  entry_date: string;
+  todo_id: string | null;
+  source_line: number;
+  tag_text: string;
+  created_at: string;
+};
+
+function mapRowToMention(r: ThreadMentionRow): ThreadMention {
+  return {
+    id: r.id,
+    threadId: r.thread_id,
+    entryId: r.entry_id,
+    entryDate: r.entry_date,
+    todoId: r.todo_id,
+    sourceLine: r.source_line,
+    tagText: r.tag_text,
+    createdAt: r.created_at,
+  };
+}
+
+export async function getMentionsByEntry(entryId: string): Promise<ThreadMention[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ThreadMentionRow>(
+    'SELECT * FROM thread_mentions WHERE entry_id = ?', [entryId]
+  );
+  return rows.map(mapRowToMention);
+}
+
+export async function getMentionsByTodo(todoId: string): Promise<ThreadMention[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ThreadMentionRow>(
+    'SELECT * FROM thread_mentions WHERE todo_id = ?', [todoId]
+  );
+  return rows.map(mapRowToMention);
+}
+
+export async function getMentionsByThread(threadId: string, limit = 100): Promise<ThreadMention[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<ThreadMentionRow>(
+    'SELECT * FROM thread_mentions WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?',
+    [threadId, limit]
+  );
+  return rows.map(mapRowToMention);
+}
+
+// Map: todoId → Set<threadId>. Used by the /todos page thread filter.
+// Single SQL query reads all (todo_id, thread_id) pairs from thread_mentions.
+export async function getTodoThreadLinks(): Promise<Map<string, Set<string>>> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ todo_id: string; thread_id: string }>(
+    `SELECT DISTINCT todo_id, thread_id FROM thread_mentions WHERE todo_id IS NOT NULL`
+  );
+  const out = new Map<string, Set<string>>();
+  for (const r of rows) {
+    let set = out.get(r.todo_id);
+    if (!set) { set = new Set(); out.set(r.todo_id, set); }
+    set.add(r.thread_id);
+  }
+  return out;
+}
+
+// Most-recent mention timestamp per thread. Used by Today view's staleness sort.
+export async function getLastMentionByThread(): Promise<Map<string, string>> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ thread_id: string; max_at: string }>(
+    'SELECT thread_id, MAX(created_at) AS max_at FROM thread_mentions GROUP BY thread_id'
+  );
+  return new Map(rows.map(r => [r.thread_id, r.max_at]));
+}
+
+export async function insertMention(m: ThreadMention): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync(
+    `INSERT INTO thread_mentions (
+       id, thread_id, entry_id, entry_date, todo_id, source_line, tag_text, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      m.id, m.threadId, m.entryId, m.entryDate, m.todoId,
+      m.sourceLine, m.tagText, m.createdAt,
+    ]
+  );
+}
+
+export async function updateMentionTagText(id: string, tagText: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE thread_mentions SET tag_text = ? WHERE id = ?', [tagText, id]);
+}
+
+export async function updateMentionSourceLine(id: string, sourceLine: number): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('UPDATE thread_mentions SET source_line = ? WHERE id = ?', [sourceLine, id]);
+}
+
+export async function deleteMention(id: string): Promise<void> {
+  const db = await getDatabase();
+  await db.runAsync('DELETE FROM thread_mentions WHERE id = ?', [id]);
+}
+
 // ── Day title ──
 
 export async function getDayTitle(date: string): Promise<string> {
@@ -800,24 +1157,73 @@ export async function enqueueSyncDeletion(
 
 // ── Habit CRUD ──
 
+// Note: the `archived` column still exists on the habits table (added in the
+// initial Phase A migration). We keep writing 0 to it on insert so the
+// NOT NULL constraint is satisfied, but no read path consults it.
 export async function insertHabit(habit: Habit): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    'INSERT INTO habits (id, label, sort_order, notion_page_id, updated_at) VALUES (?, ?, ?, ?, ?)',
-    [habit.id, habit.label, habit.sortOrder, habit.notionPageId ?? null, new Date().toISOString()]
+    `INSERT INTO habits (
+       id, label, sort_order, slug, icon, color,
+       cadence_type, cadence_days, cadence_count, archived, time_of_day,
+       notion_page_id, notion_last_synced, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+    [
+      habit.id,
+      habit.label,
+      habit.sortOrder,
+      habit.slug ?? null,
+      habit.icon ?? null,
+      habit.color ?? null,
+      habit.cadenceType ?? 'daily',
+      habit.cadenceDays ? JSON.stringify(habit.cadenceDays) : null,
+      habit.cadenceCount ?? null,
+      habit.timeOfDay ?? 'anytime',
+      habit.notionPageId ?? null,
+      habit.notionLastSynced ?? null,
+      new Date().toISOString(),
+    ]
   );
 }
 
 export async function updateHabit(habit: Habit): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    'UPDATE habits SET label = ?, sort_order = ?, updated_at = ? WHERE id = ?',
-    [habit.label, habit.sortOrder, new Date().toISOString(), habit.id]
+    `UPDATE habits SET
+       label = ?, sort_order = ?, slug = ?, icon = ?, color = ?,
+       cadence_type = ?, cadence_days = ?, cadence_count = ?, time_of_day = ?,
+       notion_page_id = ?, notion_last_synced = ?, updated_at = ?
+     WHERE id = ?`,
+    [
+      habit.label,
+      habit.sortOrder,
+      habit.slug ?? null,
+      habit.icon ?? null,
+      habit.color ?? null,
+      habit.cadenceType ?? 'daily',
+      habit.cadenceDays ? JSON.stringify(habit.cadenceDays) : null,
+      habit.cadenceCount ?? null,
+      habit.timeOfDay ?? 'anytime',
+      habit.notionPageId ?? null,
+      habit.notionLastSynced ?? null,
+      new Date().toISOString(),
+      habit.id,
+    ]
   );
 }
 
 export async function deleteHabit(id: string): Promise<void> {
   const db = await getDatabase();
+  // Track deletion for Notion sync if it had a page id.
+  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
+    'SELECT notion_page_id FROM habits WHERE id = ?', [id]
+  );
+  if (row?.notion_page_id) {
+    await db.runAsync(
+      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
+      ['habit', id, row.notion_page_id, new Date().toISOString()]
+    );
+  }
   await db.runAsync('DELETE FROM habits WHERE id = ?', [id]);
 }
 

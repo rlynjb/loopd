@@ -8,7 +8,7 @@ import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
 import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
 import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
-import { syncAll, syncAllTodos } from '../src/services/notion/sync';
+import { syncAll, syncAllTodos, syncAllHabits, syncAllThreads } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
@@ -80,6 +80,8 @@ function AppContent() {
       if (configured && autoSync) {
         syncAll()
           .then(() => syncAllTodos())
+          .then(() => syncAllHabits())
+          .then(() => syncAllThreads())
           .catch(err => console.warn('[loopd] Auto-sync failed:', err));
       }
     })();
@@ -164,6 +166,43 @@ function AppContent() {
           .catch(err => console.warn('[loopd] classify catch-up failed:', err));
       } catch (err) {
         console.warn('[loopd] todo_meta backfill failed:', err);
+      }
+    })();
+  }, [ready]);
+
+  // Lazy backfill for thread #tag mentions. Short-circuits when no threads
+  // exist yet (so a fresh install doesn't burn cycles scanning prose with
+  // no slugs to match against). Once the user creates their first thread,
+  // the next boot picks it up and scans.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { backfillThreadMentions } = await import('../src/services/threads/migrate');
+        const result = await backfillThreadMentions();
+        if (!result.skipped) {
+          console.log(`[loopd] threads backfill scanned ${result.scanned} entries`);
+        }
+      } catch (err) {
+        console.warn('[loopd] threads backfill failed:', err);
+      }
+    })();
+  }, [ready]);
+
+  // One-time backfill for habits cadence + slug. Adds default cadence_type
+  // ('daily') is handled by the ALTER TABLE default; this fills in the slug
+  // derived from each habit's label. SecureStore-gated, runs once.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { backfillHabitsCadence } = await import('../src/services/habits/migrate');
+        const result = await backfillHabitsCadence();
+        if (!result.skipped) {
+          console.log(`[loopd] habits cadence backfill scanned ${result.scanned}, slugged ${result.slugged}`);
+        }
+      } catch (err) {
+        console.warn('[loopd] habits cadence backfill failed:', err);
       }
     })();
   }, [ready]);

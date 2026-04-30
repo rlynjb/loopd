@@ -1,14 +1,13 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { useRouter, usePathname, useLocalSearchParams } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { pickAndCopyClip, recordClip } from '../../services/fileManager';
+import { recordClip } from '../../services/fileManager';
 import { insertEntry } from '../../services/database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
 import type { Entry } from '../../types/entry';
-import { emit } from '../../utils/events';
 
 export function GlobalBottomNav() {
   const router = useRouter();
@@ -18,14 +17,15 @@ export function GlobalBottomNav() {
   // Hide on editor and settings screens
   if (pathname.startsWith('/editor') || pathname.startsWith('/settings')) return null;
 
-  const { showHabits: showHabitsParam } = useLocalSearchParams<{ showHabits?: string }>();
   const isHome = pathname === '/' || pathname === '';
   const isJournal = pathname.startsWith('/journal');
   const isTodos = pathname.startsWith('/todos');
-  const isNutrition = pathname.startsWith('/nutrition');
+  const isMore = pathname.startsWith('/more');
 
-  const createClipEntry = async (result: { uri: string; durationMs: number }) => {
+  const handleRecord = async () => {
     const today = getTodayString();
+    const result = await recordClip(today);
+    if (!result) return;
     const entry: Entry = {
       id: generateId('entry'),
       date: today,
@@ -38,27 +38,6 @@ export function GlobalBottomNav() {
       createdAt: new Date().toISOString(),
     };
     await insertEntry(entry);
-  };
-
-  const handleRecord = async () => {
-    const today = getTodayString();
-    const result = await recordClip(today);
-    if (result) await createClipEntry(result);
-  };
-
-  const handleClip = async () => {
-    const today = getTodayString();
-    const result = await pickAndCopyClip(today);
-    if (result) await createClipEntry(result);
-  };
-
-  const handleHabit = () => {
-    const today = getTodayString();
-    if (pathname.startsWith('/journal')) {
-      emit('toggleHabitPicker');
-    } else {
-      router.push(`/journal/${today}?showHabits=1`);
-    }
   };
 
   return (
@@ -85,9 +64,9 @@ export function GlobalBottomNav() {
         <Text style={[styles.label, isTodos && { color: colors.accent }]}>Todos</Text>
       </Pressable>
 
-      <Pressable onPress={() => router.push('/nutrition')} style={styles.tab}>
-        <Icon name="utensils" size={18} color={isNutrition ? colors.accent : colors.textDim} strokeWidth={2.5} />
-        <Text style={[styles.label, isNutrition && { color: colors.accent }]}>Nutrition</Text>
+      <Pressable onPress={() => router.push('/more')} style={styles.tab}>
+        <Icon name="settings" size={18} color={isMore ? colors.accent : colors.textDim} strokeWidth={2.5} />
+        <Text style={[styles.label, isMore && { color: colors.accent }]}>More</Text>
       </Pressable>
     </View>
   );

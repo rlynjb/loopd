@@ -4,6 +4,7 @@ import { getEntriesByDate, insertEntry, updateEntry, deleteEntry } from '../serv
 import { scanTodosFromText } from '../services/todos/scanTodos';
 import { reconcileTodoMetaForEntry } from '../services/todos/reconcileMeta';
 import { scanNutritionForEntry } from '../services/nutrition/scanNutrition';
+import { scanThreadsForEntry } from '../services/threads/scanThreads';
 
 // Commit-level helper: run the checkbox-drop scan on the entry's text so any
 // "[] foo" / "[x] foo" lines are reflected in todos_json. Silent keystroke
@@ -30,6 +31,15 @@ function scheduleTodoMetaReconcile(entry: Entry): void {
   });
 }
 
+// Threads scanner runs *after* scanTodos because it needs final todo IDs to
+// attribute mentions inside [] lines. Fire-and-forget — scanner failure
+// can't break the journal save.
+function scheduleThreadsScan(entry: Entry): void {
+  scanThreadsForEntry(entry.id, entry.date, entry.text, entry.todos ?? []).catch(err => {
+    console.warn('[threads] scan failed:', err);
+  });
+}
+
 export function useEntries(date: string) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +61,7 @@ export function useEntries(date: string) {
     setEntries(prev => [...prev, scanned]);
     scheduleNutritionScan(scanned);
     scheduleTodoMetaReconcile(scanned);
+    scheduleThreadsScan(scanned);
   }, []);
 
   const editEntry = useCallback(async (entry: Entry) => {
@@ -59,6 +70,7 @@ export function useEntries(date: string) {
     setEntries(prev => prev.map(e => e.id === scanned.id ? scanned : e));
     scheduleNutritionScan(scanned);
     scheduleTodoMetaReconcile(scanned);
+    scheduleThreadsScan(scanned);
   }, []);
 
   const removeEntry = useCallback(async (id: string) => {
