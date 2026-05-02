@@ -62,14 +62,19 @@ export function autoCompose(summary: AISummary, entries: Entry[], date: string, 
     });
   }
 
-  // Text overlay — journal title + AI summary, one sentence per line
+  // Text overlay — journal title + the relatable caption (preferred) or
+  // a sentence-broken fallback from the structured summary. The caption is
+  // already 2–4 lines with intentional `\n` breaks per the spec, so we
+  // pass it through unchanged.
   const title = dayTitle?.trim() ?? '';
-  const sentences = summary.summary
+  const captionBody = summary.caption?.trim();
+  const fallbackBody = summary.summary
     .replace(/([.!?])\s+/g, '$1\n')
     .trim();
+  const body = captionBody || fallbackBody;
   const overlayText = title
-    ? `${title}\n\n${sentences}`
-    : sentences;
+    ? `${title}\n\n${body}`
+    : body;
   const textOverlays: TextOverlay[] = [{
     id: generateId('txt'),
     text: overlayText,

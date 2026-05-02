@@ -1372,3 +1372,26 @@ export async function upsertAISummary(date: string, summaryJson: string, model: 
     [date, summaryJson, now, model]
   );
 }
+
+// Pull recent AI summaries strictly before `beforeDate`, newest first.
+// Used by the relatable-caption generator to feed `recentCaptions` into the
+// prompt for tonal continuity and anti-repetition.
+export async function getRecentAISummaries(
+  beforeDate: string,
+  limit = 5,
+): Promise<{ date: string; summaryJson: string; generatedAt: string; model: string }[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<{ date: string; summary_json: string; generated_at: string; model: string }>(
+    `SELECT date, summary_json, generated_at, model FROM ai_summaries
+     WHERE date < ?
+     ORDER BY date DESC
+     LIMIT ?`,
+    [beforeDate, limit],
+  );
+  return rows.map(r => ({
+    date: r.date,
+    summaryJson: r.summary_json,
+    generatedAt: r.generated_at,
+    model: r.model,
+  }));
+}

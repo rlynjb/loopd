@@ -62,6 +62,15 @@ export function validateSummary(
     }));
   }
 
+  // Preserve relatable-caption fields if present on the parsed object.
+  // The summarize() chain populates these in a second LLM call AFTER
+  // validateSummary runs, so for fresh summaries these will be undefined
+  // here and get added downstream. For cached re-parses (when the editor
+  // re-validates a previously-saved summary on load) they round-trip.
+  const caption = typeof obj.caption === 'string' ? obj.caption : undefined;
+  const captionAlternate = typeof obj.captionAlternate === 'string' ? obj.captionAlternate : undefined;
+  const captionTheme = typeof obj.captionTheme === 'string' ? obj.captionTheme : undefined;
+
   return {
     valid: errors.length === 0,
     summary: {
@@ -72,6 +81,9 @@ export function validateSummary(
       clipTrims,
       textOverlays,
       filterPreset,
+      caption,
+      captionAlternate,
+      captionTheme,
       generatedAt: new Date().toISOString(),
     },
     errors,

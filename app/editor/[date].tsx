@@ -61,6 +61,19 @@ export default function EditorScreen() {
   useFocusEffect(useCallback(() => { reloadEntries(); }, [reloadEntries]));
 
   const [generating, setGenerating] = useState(false);
+  // Cached AI summary held alongside the project so the TEXT-tab variant
+  // chips can read `caption` / `captionAlternate` / `summary` without
+  // re-querying ai_summaries on every render.
+  const [aiSummary, setAiSummary] = useState<AISummary | null>(null);
+  // Which variant is currently rendered into the active text overlay:
+  //   'primary'   — the relatable 2–4 line caption (default after regen)
+  //   'alternate' — the shorter 2-line variant
+  //   'summary'   — the original structured summary, sentence-broken
+  //                 (kept as an escape hatch if the relatable caption
+  //                 doesn't feel authentic on a given day)
+  // Reset to 'primary' any time we regenerate or auto-compose.
+  type CaptionVariant = 'primary' | 'alternate' | 'summary';
+  const [captionVariant, setCaptionVariant] = useState<CaptionVariant>('primary');
 
   // Auto-compose from AI or fallback on mount
   useEffect(() => {
@@ -81,6 +94,10 @@ export default function EditorScreen() {
           if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
           if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
         }
+        if (!cancelled) {
+          setAiSummary(summary);
+          setCaptionVariant('primary');
+        }
       } else if (aiConfigured) {
         setGenerating(true);
         const result = await summarize(date);
@@ -91,6 +108,8 @@ export default function EditorScreen() {
             if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
             if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
           }
+          setAiSummary(result.summary);
+          setCaptionVariant('primary');
         }
         setGenerating(false);
       }
@@ -112,6 +131,8 @@ export default function EditorScreen() {
             const composed = autoCompose(result.summary, entries, date, dayTitle);
             // Only update text overlay — preserve user's clip trims/splits
             if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
+            setAiSummary(result.summary);
+            setCaptionVariant('primary');
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } else {
             Alert.alert('Failed', result.error ?? 'Could not generate summary');
@@ -120,6 +141,36 @@ export default function EditorScreen() {
       },
     ]);
   };
+
+  // Switch the active text overlay between the three caption variants.
+  // Title preserved at the top with a blank-line separator (matches the
+  // format autoCompose produces). Overwrites any manual edits the user
+  // made to the overlay text — same caveat as REGENERATE WITH AI, which
+  // already overwrites it.
+  const handleSelectCaptionVariant = useCallback((variant: CaptionVariant) => {
+    if (!aiSummary || variant === captionVariant) return;
+    const body = (() => {
+      switch (variant) {
+        case 'primary':
+          return aiSummary.caption?.trim() ?? '';
+        case 'alternate':
+          return aiSummary.captionAlternate?.trim() ?? '';
+        case 'summary':
+          // Same sentence-break shaping autoCompose's fallback uses, so
+          // the overlay reads cleanly across multiple lines.
+          return aiSummary.summary.replace(/([.!?])\s+/g, '$1\n').trim();
+      }
+    })();
+    if (!body) return; // chosen variant is empty — no-op
+    const title = dayTitle?.trim() ?? '';
+    const overlayText = title ? `${title}\n\n${body}` : body;
+    // Update every text overlay's `text`. Today autoCompose only ever
+    // produces one overlay, but if a future change adds more we still want
+    // the swap to apply consistently.
+    updateTextOverlays(prev => prev.map(t => ({ ...t, text: overlayText })));
+    setCaptionVariant(variant);
+    Haptics.selectionAsync();
+  }, [aiSummary, captionVariant, dayTitle, updateTextOverlays]);
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -779,7 +830,7 @@ export default function EditorScreen() {
           </>
         )}
 
-        {/* Text tab — regenerate + overlay editor */}
+        {/* Text tab — regenerate + (optional) swap caption + overlay editor */}
         {activeTab === 'text' && editingText && (
           <>
             <View style={styles.textTabHeader}>
@@ -793,6 +844,61 @@ export default function EditorScreen() {
                   {generating ? 'GENERATING…' : 'REGENERATE WITH AI'}
                 </Text>
               </Pressable>
+              {/* Variant chips — pick which body text fills the overlay.
+                  PRIMARY/ALT come from the relatable-caption pass; SUMMARY
+                  is the original structured summary as an escape hatch.
+                  Older cached summaries pre-dating the caption feature
+                  will only show SUMMARY. */}
+              {aiSummary && (
+                <View style={styles.variantChipGroup}>
+                  {aiSummary.caption && (
+                    <Pressable
+                      onPress={() => handleSelectCaptionVariant('primary')}
+                      disabled={generating}
+                      style={[
+                        styles.variantChip,
+                        captionVariant === 'primary' && styles.variantChipActive,
+                        generating && { opacity: 0.4 },
+                      ]}
+                    >
+                      <Text style={[
+                        styles.variantChipText,
+                        captionVariant === 'primary' && styles.variantChipTextActive,
+                      ]}>PRIMARY</Text>
+                    </Pressable>
+                  )}
+                  {aiSummary.captionAlternate && (
+                    <Pressable
+                      onPress={() => handleSelectCaptionVariant('alternate')}
+                      disabled={generating}
+                      style={[
+                        styles.variantChip,
+                        captionVariant === 'alternate' && styles.variantChipActive,
+                        generating && { opacity: 0.4 },
+                      ]}
+                    >
+                      <Text style={[
+                        styles.variantChipText,
+                        captionVariant === 'alternate' && styles.variantChipTextActive,
+                      ]}>ALT</Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    onPress={() => handleSelectCaptionVariant('summary')}
+                    disabled={generating}
+                    style={[
+                      styles.variantChip,
+                      captionVariant === 'summary' && styles.variantChipActive,
+                      generating && { opacity: 0.4 },
+                    ]}
+                  >
+                    <Text style={[
+                      styles.variantChipText,
+                      captionVariant === 'summary' && styles.variantChipTextActive,
+                    ]}>SUMMARY</Text>
+                  </Pressable>
+                </View>
+              )}
             </View>
             <TextOverlaySheet
               overlay={editingText}
@@ -995,6 +1101,10 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   textTabHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
     paddingHorizontal: 20,
     paddingTop: 4,
     paddingBottom: 8,
@@ -1016,6 +1126,32 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.amber,
     letterSpacing: 1,
+  },
+  variantChipGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  variantChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  variantChipActive: {
+    borderColor: 'rgba(251,191,36,0.5)',
+    backgroundColor: 'rgba(251,191,36,0.12)',
+  },
+  variantChipText: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.textMuted,
+    letterSpacing: 1,
+  },
+  variantChipTextActive: {
+    color: colors.amber,
   },
   previewContainer: {
     alignItems: 'center',

@@ -1,8 +1,10 @@
 import { getAnthropicKey, getOpenAIKey, getProvider } from './config';
 import { buildPrompt } from './prompt';
 import { validateSummary } from './validate';
-import { getEntriesByDate, upsertAISummary } from '../database';
-import type { AISummary } from '../../types/ai';
+import { generateCaption } from './caption';
+import { getEntriesByDate, getRecentAISummaries, upsertAISummary } from '../database';
+import type { AISummary, CaptionInput } from '../../types/ai';
+import type { Entry } from '../../types/entry';
 
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
@@ -75,6 +77,23 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
     const { summary, errors } = validateSummary(parsed, clipIds, clipDurations);
     if (errors.length > 0) console.warn('[loopd ai] Validation warnings:', errors);
 
+    // Second LLM call: relatable caption per docs/relatable-caption-spec.md.
+    // Independent of the structured summary — kept in its own call so the
+    // caption prompt can stay strict on its forbidden patterns. Failures
+    // here don't fail the whole summarize chain; the editor falls back to
+    // summary.summary for the text overlay.
+    try {
+      const captionInput = await buildCaptionInput(date, entries, summary.mood);
+      const { output: captionOut } = await generateCaption(captionInput);
+      if (captionOut) {
+        summary.caption = captionOut.caption;
+        summary.captionAlternate = captionOut.alternate;
+        summary.captionTheme = captionOut.detectedTheme;
+      }
+    } catch (err) {
+      console.warn('[loopd ai] Caption skipped:', err instanceof Error ? err.message : err);
+    }
+
     await upsertAISummary(date, JSON.stringify(summary), model);
     return { summary };
   } catch (err) {
@@ -82,6 +101,64 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
     console.warn('[loopd ai] Summarize error:', msg);
     return { summary: null, error: msg };
   }
+}
+
+// Build the caption-generator input from a day's entries.
+// rawLog = entry text + done todos (each as its own bullet); ideas/open
+// todos folded into the "things I noticed" framing so the model can apply
+// the spec's "ideas → noticing" reframe rule (§10).
+async function buildCaptionInput(
+  date: string,
+  entries: Entry[],
+  mood: AISummary['mood'],
+): Promise<CaptionInput> {
+  const rawLog: string[] = [];
+  for (const e of entries) {
+    if (e.text) {
+      // Split by sentence-ish boundaries; keep non-empty trimmed pieces.
+      const pieces = e.text.split(/(?:[.!?]\s+|\n+)/).map(s => s.trim()).filter(Boolean);
+      rawLog.push(...pieces);
+    }
+    for (const t of e.todos ?? []) {
+      if (t.done) rawLog.push(t.text);
+    }
+  }
+
+  // Pull last 5 cached captions for tonal continuity / anti-repetition.
+  // Falls back to the structured `summary` field on older rows that
+  // pre-date the caption feature.
+  const recentRows = await getRecentAISummaries(date, 5);
+  const recentCaptions: string[] = [];
+  for (const row of recentRows) {
+    try {
+      const parsed = JSON.parse(row.summaryJson) as Partial<AISummary>;
+      if (parsed.caption) recentCaptions.push(parsed.caption);
+    } catch {
+      /* skip malformed */
+    }
+  }
+
+  // Map structured mood → spec-flavored mood string. The spec accepts an
+  // open-text mood, so this is just a translation that gives the model a
+  // useful starting impression rather than a forced enum.
+  const moodLabel = (() => {
+    switch (mood) {
+      case 'flat': return 'flat / low energy';
+      case 'ok': return 'steady';
+      case 'good': return 'good';
+      case 'great': return 'great';
+      case 'fired': return 'fired up';
+      default: return undefined;
+    }
+  })();
+
+  return {
+    date,
+    rawLog,
+    recentCaptions: recentCaptions.length > 0 ? recentCaptions : undefined,
+    mood: moodLabel,
+    themeHint: null,
+  };
 }
 
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
