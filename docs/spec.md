@@ -107,7 +107,7 @@ Dynamic route keyed by `YYYY-MM-DD`. Inline entries with text + habits + clips. 
 ### `app/editor/[date].tsx` — vlog editor
 Three tabs under a resizable preview (`windowHeight * 0.45` default, draggable 100–1000):
 - **TIMELINE** (default on load): clip strip with playhead + per-clip trim/split/reorder/delete controls.
-- **TEXT**: selects an overlay → `TextOverlaySheet`. Header button: **REGENERATE WITH AI**.
+- **TEXT**: selects an overlay → `TextOverlaySheet`. Header row: **REGENERATE WITH AI** button + a **variant chip group** (`PRIMARY` / `ALT` / `SUMMARY`) that swaps which body text fills the active overlay. PRIMARY and ALT only render when the cached `AISummary` carries the relatable-caption fields (older summaries pre-dating that feature show only SUMMARY); SUMMARY is always present and acts as the escape hatch when the relatable caption doesn't feel authentic. Active chip is highlighted in amber. Driven by `captionVariant` state + `handleSelectCaptionVariant`, which rewrites every text overlay's `text` (preserving the day-title + blank-line prefix) and re-resets to `'primary'` on regenerate / auto-compose.
 - **FILTER**: single active filter (brightness / contrast / saturate preset).
 
 Auto-compose on mount; export pipeline renders text overlays to a Skia canvas → FFmpeg transcode → writes to `exports/[date]/…mp4` and `DCIM/loopd/` → offers `Sharing.shareAsync`.
@@ -195,7 +195,7 @@ Eleven tables in `loopd.db`.
 | `vlogs` | `id` | `date`, `clip_count`, `habit_count`, `caption`, `duration_seconds`, `export_uri`, `created_at` | Archive of exported vlogs |
 | `day_meta` | `date` | `title`, `updated_at` | Per-day user-rename title |
 | `sync_deletions` | `id` autoinc | `entity_type` (`'entry'`\|`'todo'`\|`'habit'`\|`'nutrition'`\|`'thread'`), `entity_id`, `notion_page_id`, `deleted_at` | Queue of deletions to archive in Notion on next sync |
-| `ai_summaries` | `date` | `summary_json`, `generated_at`, `model` | Cached AI composition per date |
+| `ai_summaries` | `date` | `summary_json`, `generated_at`, `model` | Cached AI composition per date. `summary_json` carries both the structured `AISummary` fields and the optional relatable-caption fields; `getRecentAISummaries(beforeDate, limit)` is the helper that feeds prior captions into the next caption pass for tonal continuity / anti-repetition |
 | `nutrition` | `id` | `name`, `kcal`, `entry_id`, `entry_date`, `source_line`, `notion_page_id`, `created_at`, `updated_at` | Per-line nutrition records, derived from `** food N kcal` prose |
 | `todo_meta` | `todo_id` | `entry_id`, `entry_date`, `type`, `stage`, `expanded_md`, `expanded_at`, `model`, `classifier_confidence`, `classifier_model`, `user_overridden_type`, `position`, `created_at`, `updated_at` | 1:1 with each `TodoItem` in `todos_json`. CHECK enforces enums on `type` (7 values), `stage` (3 values), `classifier_confidence` (4 values + null) |
 | `threads` | `id` | `name`, `slug` UNIQUE, `icon`, `color`, `target_cadence_days`, `archived`, `pinned`, `time_of_day`, `notion_page_id`, `notion_last_synced`, `created_at`, `updated_at` | Project metadata. `slug` is the matching key for `#tag` mentions; UNIQUE enforces case-insensitive uniqueness |
@@ -215,7 +215,8 @@ Indexes: `entries(date)`, `entries(notion_page_id)`, `entries(updated_at)`, `pro
 - **`NutritionSuggestion`** — autocomplete row shape.
 - **`ClipItem`** ([project.ts](../src/types/project.ts)) — `{ id, entryId, clipUri, caption?, durationMs, trimStartPct, trimEndPct, order, color }`.
 - **`TextOverlay`** / **`FilterOverlay`** / **`EditorProject`** — editor types.
-- **`AISummary`** ([ai.ts](../src/types/ai.ts)).
+- **`AISummary`** ([ai.ts](../src/types/ai.ts)) — structured composition output. Core fields: `headline`, `summary`, `mood`, `clipOrder`, `clipTrims`, `textOverlays`, `filterPreset`, `generatedAt`. Optional relatable-caption fields populated by the second LLM pass: `caption?`, `captionAlternate?`, `captionTheme?` (kept optional so older cached rows still parse).
+- **`CaptionInput`** / **`CaptionOutput`** / **`CaptionTheme`** ([ai.ts](../src/types/ai.ts)) — input/output shapes for `generateCaption`. `CaptionTheme` is the closed enum `'growth' | 'discipline' | 'clarity' | 'struggle' | 'shift' | 'curiosity'`; the stored `captionTheme` is normalized to one of these (fallback `'clarity'`).
 - **`TodoType`** ([todoMeta.ts](../src/types/todoMeta.ts)) — `'todo' | 'idea' | 'bug' | 'question' | 'decision' | 'knowledge' | 'content'`.
 - **`TodoStage`** — `'todo' | 'in_progress' | 'backlog'`. Internal value `'todo'` surfaces as **"Open"** in the UI.
 - **`ClassifierConfidence`** — `'high' | 'medium' | 'low' | 'heuristic'`.
@@ -323,7 +324,14 @@ Implementation details:
 - Stale `currentTime=0` progress events after scrub→play are suppressed.
 
 ### 6.9 AI composition (vlog summary)
-[src/services/ai/](../src/services/ai/) — provider-agnostic (Sonnet 4.6 or GPT-4o). `summarize.ts` produces a structured `AISummary`; `compose.ts` maps it onto `ClipItem[]` + `TextOverlay[]` + `FilterOverlay[]`. Cached in `ai_summaries` per date.
+[src/services/ai/](../src/services/ai/) — provider-agnostic (Sonnet 4.6 or GPT-4o). Two-call chain orchestrated by `summarize.ts`:
+
+1. **Structured summary call** — produces a typed `AISummary` (headline, summary, mood, clip order/trims, text overlays, filter preset). `validate.ts` clamps clip ranges, drops unknown clip IDs, slots missing IDs at the end.
+2. **Relatable caption call** ([caption.ts](../src/services/ai/caption.ts)) — second LLM pass implementing [docs/relatable-caption-spec.md](./relatable-caption-spec.md). Emits a 2–4 line primary `caption`, a 2-line `alternate`, and a `detectedTheme` (one of six). Input is a `CaptionInput` (date + flattened `rawLog` from entry text + done-todos + last 5 cached captions for tonal continuity via `getRecentAISummaries`). Wrapped in try/catch so a caption failure logs `console.warn` but does **not** fail the structured summary — the editor falls back to `summary.summary` for the overlay body.
+
+`compose.ts` maps `AISummary` → `ClipItem[]` + `TextOverlay[]` + `FilterOverlay[]`. The text-overlay body prefers `summary.caption` (the relatable pass) and falls back to a sentence-broken `summary.summary` when the caption is empty. The day-title prefixes the body with a blank-line separator.
+
+Both calls cache the merged `AISummary` (with caption fields appended) into the `ai_summaries` table per date, so re-mounting the editor restores all three variants without re-calling the LLM. The TEXT tab's variant chips (§4 editor) read from this cached row.
 
 ### 6.10 Media Pipeline
 Full details in [docs/media-pipeline.md](./media-pipeline.md). 1080p H.264 proxy transcode on import (CRF 23) via `@wokcito/ffmpeg-kit-react-native`. Parallel-transcode + in-order-commit. Missing clips re-imported via `clipMatcher.ts`.
@@ -390,7 +398,8 @@ Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`
 | `threads/touch.ts` | `toggleThreadTouchToday` — idempotent dashboard toggle that writes a manual mention with NULL entry_id + todo_id (deviation from Principle 11, documented inline) |
 | `threads/migrate.ts` | Lazy `thread_mentions_backfill_v1_done`: scans every entry + todo for `#tag` matches; short-circuits if user has zero threads (re-checks on next boot) |
 | `ai/config.ts` | Claude/OpenAI key + provider storage |
-| `ai/prompt.ts`, `ai/summarize.ts`, `ai/compose.ts`, `ai/validate.ts` | Vlog summary prompts, LLM calls, compose, validation |
+| `ai/prompt.ts`, `ai/summarize.ts`, `ai/compose.ts`, `ai/validate.ts` | Vlog summary prompts, structured-summary LLM call, compose to editor types, validation/clamping |
+| `ai/caption.ts` | Second LLM pass per [docs/relatable-caption-spec.md](./relatable-caption-spec.md). `generateCaption(input)` returns `{ caption, alternate, detectedTheme }`. Failures swallowed by `summarize.ts` so the structured summary still ships. |
 | `notion/api.ts` | `queryDatabase`, `createPage`, `updatePage`, `archivePage`; module-singleton 350ms rate-limiter + 429 retry |
 | `notion/config.ts` | Token, DB IDs (Entries / Todos / Habits / Threads), per-sync timestamps, auto-sync flag |
 | `notion/mapper.ts` | Entries DB bidirectional property mapping |
