@@ -116,4 +116,30 @@ export const entriesSyncable: SyncableTable<EntryLocalRow, EntryCloudRow> = {
     const db = await getDatabase();
     await db.runAsync('UPDATE entries SET synced_at = ? WHERE id = ?', [syncedAt, id]);
   },
+
+  async localUpsert(row) {
+    const db = await getDatabase();
+    await db.runAsync(
+      `INSERT INTO entries (
+         id, date, text, habits_json, todos_json, clip_uri, clip_duration_ms,
+         clips_json, created_at, notion_page_id, updated_at, synced_at, deleted_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         date = excluded.date,
+         text = excluded.text,
+         habits_json = excluded.habits_json,
+         todos_json = excluded.todos_json,
+         clip_uri = excluded.clip_uri,
+         clip_duration_ms = excluded.clip_duration_ms,
+         clips_json = excluded.clips_json,
+         updated_at = excluded.updated_at,
+         synced_at = excluded.synced_at,
+         deleted_at = excluded.deleted_at`,
+      [
+        row.id, row.date, row.text, row.habits_json, row.todos_json,
+        row.clip_uri, row.clip_duration_ms, row.clips_json,
+        row.created_at, row.notion_page_id, row.updated_at, row.synced_at, row.deleted_at,
+      ],
+    );
+  },
 };

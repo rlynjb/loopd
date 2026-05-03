@@ -6,15 +6,18 @@ import { useEffect, useState } from 'react';
 import { colors, fonts } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
 import { isCloudConfigured } from '../../src/services/sync/client';
-import { pushAll } from '../../src/services/sync/orchestrator';
+import { pushAll, pullAll } from '../../src/services/sync/orchestrator';
 import { getAllSyncMeta, type SyncMetaRow } from '../../src/services/sync/syncMeta';
 import type { PushResult } from '../../src/services/sync/types';
+import type { PullResult } from '../../src/services/sync/pull';
 
 export default function CloudSyncScreen() {
   const router = useRouter();
   const [configured] = useState(isCloudConfigured());
   const [pushing, setPushing] = useState(false);
-  const [results, setResults] = useState<PushResult[] | null>(null);
+  const [pulling, setPulling] = useState(false);
+  const [pushResults, setPushResults] = useState<PushResult[] | null>(null);
+  const [pullResults, setPullResults] = useState<PullResult[] | null>(null);
   const [meta, setMeta] = useState<SyncMetaRow[]>([]);
 
   const refreshMeta = async () => {
@@ -30,9 +33,17 @@ export default function CloudSyncScreen() {
   const handlePush = async () => {
     setPushing(true);
     const r = await pushAll();
-    setResults(r);
+    setPushResults(r);
     await refreshMeta();
     setPushing(false);
+  };
+
+  const handlePull = async () => {
+    setPulling(true);
+    const r = await pullAll();
+    setPullResults(r);
+    await refreshMeta();
+    setPulling(false);
   };
 
   return (
@@ -58,21 +69,31 @@ export default function CloudSyncScreen() {
           )}
         </View>
 
-        <Pressable
-          onPress={handlePush}
-          disabled={!configured || pushing}
-          style={[styles.pushBtn, (!configured || pushing) && { opacity: 0.4 }]}
-        >
-          <Icon name="upload" size={16} color={colors.amber} />
-          <Text style={styles.pushBtnText}>{pushing ? 'PUSHING…' : 'PUSH ALL NOW'}</Text>
-        </Pressable>
+        <View style={styles.btnRow}>
+          <Pressable
+            onPress={handlePush}
+            disabled={!configured || pushing || pulling}
+            style={[styles.pushBtn, (!configured || pushing || pulling) && { opacity: 0.4 }]}
+          >
+            <Icon name="upload" size={16} color={colors.amber} />
+            <Text style={styles.pushBtnText}>{pushing ? 'PUSHING…' : 'PUSH'}</Text>
+          </Pressable>
+          <Pressable
+            onPress={handlePull}
+            disabled={!configured || pushing || pulling}
+            style={[styles.pullBtn, (!configured || pushing || pulling) && { opacity: 0.4 }]}
+          >
+            <Icon name="download" size={16} color={colors.accent2} />
+            <Text style={styles.pullBtnText}>{pulling ? 'PULLING…' : 'PULL'}</Text>
+          </Pressable>
+        </View>
 
-        {results && (
+        {pushResults && (
           <View style={styles.resultsCard}>
             <Text style={styles.statusLabel}>LAST PUSH</Text>
-            {results.length === 0
+            {pushResults.length === 0
               ? <Text style={styles.hint}>No tables registered.</Text>
-              : results.map(r => (
+              : pushResults.map(r => (
                 <View key={r.tableName} style={styles.resultRow}>
                   <Text style={styles.tableName}>{r.tableName}</Text>
                   <Text style={[
@@ -84,6 +105,24 @@ export default function CloudSyncScreen() {
                   {r.error && <Text style={styles.errorText}>{r.error}</Text>}
                 </View>
               ))}
+          </View>
+        )}
+
+        {pullResults && (
+          <View style={styles.resultsCard}>
+            <Text style={styles.statusLabel}>LAST PULL</Text>
+            {pullResults.map(r => (
+              <View key={r.tableName} style={styles.resultRow}>
+                <Text style={styles.tableName}>{r.tableName}</Text>
+                <Text style={[
+                  styles.resultText,
+                  { color: r.error ? colors.coral : r.applied > 0 ? colors.green : colors.textDim },
+                ]}>
+                  {r.fetched === 0 ? 'nothing new' : `${r.applied} applied · ${r.skipped} skipped (of ${r.fetched})`}
+                </Text>
+                {r.error && <Text style={styles.errorText}>{r.error}</Text>}
+              </View>
+            ))}
           </View>
         )}
 
@@ -116,12 +155,21 @@ const styles = StyleSheet.create({
   statusLabel: { fontFamily: fonts.mono, fontSize: 10, color: colors.textDim, letterSpacing: 1 },
   statusValue: { fontFamily: fonts.mono, fontSize: 14, letterSpacing: 1 },
   hint: { fontFamily: fonts.body, fontSize: 12, color: colors.textMuted, lineHeight: 18 },
+  btnRow: { flexDirection: 'row', gap: 8 },
   pushBtn: {
+    flex: 1,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
     paddingVertical: 14, borderRadius: colors.radiusLg,
     borderWidth: 1, borderColor: 'rgba(251,191,36,0.3)', backgroundColor: 'rgba(251,191,36,0.08)',
   },
   pushBtnText: { fontFamily: fonts.mono, fontSize: 12, color: colors.amber, letterSpacing: 1 },
+  pullBtn: {
+    flex: 1,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    paddingVertical: 14, borderRadius: colors.radiusLg,
+    borderWidth: 1, borderColor: `${colors.accent2}40`, backgroundColor: `${colors.accent2}14`,
+  },
+  pullBtnText: { fontFamily: fonts.mono, fontSize: 12, color: colors.accent2, letterSpacing: 1 },
   resultsCard: { backgroundColor: colors.bg2, borderWidth: 1, borderColor: colors.cardBorder, borderRadius: colors.radiusLg, padding: 16, gap: 8 },
   resultRow: { gap: 2 },
   tableName: { fontFamily: fonts.mono, fontSize: 11, color: colors.text, letterSpacing: 0.5 },

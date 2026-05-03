@@ -367,9 +367,15 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     await addColumn(t, 'synced_at', 'TEXT');
     await addColumn(t, 'deleted_at', 'TEXT');
   }
+  // Tables that never had updated_at locally need it now so the sync layer
+  // can use a single "dirty since X" query shape across every table.
+  // Backfill from created_at / generated_at so existing rows stamp correctly.
   await addColumn('ai_summaries', 'updated_at', 'TEXT');
-  // Backfill ai_summaries.updated_at from generated_at on first run.
+  await addColumn('vlogs', 'updated_at', 'TEXT');
+  await addColumn('thread_mentions', 'updated_at', 'TEXT');
   await database.execAsync(`UPDATE ai_summaries SET updated_at = generated_at WHERE updated_at IS NULL`);
+  await database.execAsync(`UPDATE vlogs SET updated_at = created_at WHERE updated_at IS NULL`);
+  await database.execAsync(`UPDATE thread_mentions SET updated_at = created_at WHERE updated_at IS NULL`);
 
   // sync_meta — per-table sync-state ledger. NOT itself synced.
   // Eleven rows after first run (one per synced table; sync_deletions excluded).
@@ -1023,23 +1029,29 @@ export async function insertMention(m: ThreadMention): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
     `INSERT INTO thread_mentions (
-       id, thread_id, entry_id, entry_date, todo_id, source_line, tag_text, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       id, thread_id, entry_id, entry_date, todo_id, source_line, tag_text, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       m.id, m.threadId, m.entryId, m.entryDate, m.todoId,
-      m.sourceLine, m.tagText, m.createdAt,
+      m.sourceLine, m.tagText, m.createdAt, m.createdAt,
     ]
   );
 }
 
 export async function updateMentionTagText(id: string, tagText: string): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('UPDATE thread_mentions SET tag_text = ? WHERE id = ?', [tagText, id]);
+  await db.runAsync(
+    'UPDATE thread_mentions SET tag_text = ?, updated_at = ? WHERE id = ?',
+    [tagText, new Date().toISOString(), id],
+  );
 }
 
 export async function updateMentionSourceLine(id: string, sourceLine: number): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('UPDATE thread_mentions SET source_line = ? WHERE id = ?', [sourceLine, id]);
+  await db.runAsync(
+    'UPDATE thread_mentions SET source_line = ?, updated_at = ? WHERE id = ?',
+    [sourceLine, new Date().toISOString(), id],
+  );
 }
 
 export async function deleteMention(id: string): Promise<void> {
@@ -1374,11 +1386,11 @@ export async function rebuildVlogs(): Promise<void> {
 export async function insertVlog(vlog: Vlog): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
-    `INSERT INTO vlogs (id, date, clip_count, habit_count, caption, duration_seconds, export_uri, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO vlogs (id, date, clip_count, habit_count, caption, duration_seconds, export_uri, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       vlog.id, vlog.date, vlog.clipCount, vlog.habitCount,
-      vlog.caption, vlog.durationSeconds, vlog.exportUri, vlog.createdAt,
+      vlog.caption, vlog.durationSeconds, vlog.exportUri, vlog.createdAt, vlog.createdAt,
     ]
   );
 }
