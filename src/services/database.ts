@@ -3,6 +3,7 @@ import { File as FSFile, Paths } from 'expo-file-system';
 import type { Entry, Habit, Vlog } from '../types/entry';
 import type { EditorProject } from '../types/project';
 import { normalizeClipUriForStorage, resolveClipUri } from './fileManager';
+import { schedulePush } from './sync/schedulePush';
 
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -548,6 +549,7 @@ export async function insertEntry(entry: Entry): Promise<void> {
       clipsJson, entry.createdAt, entry.notionPageId ?? null, now,
     ]
   );
+  schedulePush();
 }
 
 export async function updateEntry(entry: Entry): Promise<void> {
@@ -561,6 +563,7 @@ export async function updateEntry(entry: Entry): Promise<void> {
     `UPDATE entries SET text = ?, habits_json = ?, todos_json = ?, clip_uri = ?, clip_duration_ms = ?, clips_json = ?, updated_at = ? WHERE id = ?`,
     [entry.text, JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []), clipUri, entry.clipDurationMs, clipsJson, now, entry.id]
   );
+  schedulePush();
 }
 
 // Soft-delete: stamp deleted_at + bump updated_at so the row stays in the
@@ -613,6 +616,7 @@ export async function deleteEntry(id: string): Promise<void> {
     'UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
   );
+  schedulePush();
 }
 
 // ── Nutrition CRUD ──
@@ -654,6 +658,7 @@ export async function insertNutrition(n: NutritionEntry): Promise<void> {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [n.id, n.name, n.kcal, n.entryId, n.entryDate, n.sourceLine ?? null, n.notionPageId ?? null, n.createdAt, now],
   );
+  schedulePush();
 }
 
 export async function updateNutrition(
@@ -671,6 +676,7 @@ export async function updateNutrition(
   values.push(new Date().toISOString());
   values.push(id);
   await db.runAsync(`UPDATE nutrition SET ${fields.join(', ')} WHERE id = ?`, values);
+  schedulePush();
 }
 
 export async function deleteNutrition(id: string): Promise<void> {
@@ -689,6 +695,7 @@ export async function deleteNutrition(id: string): Promise<void> {
     'UPDATE nutrition SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
   );
+  schedulePush();
 }
 
 // Autocomplete source: distinct food names matching a prefix, each with its
@@ -808,6 +815,7 @@ export async function insertTodoMeta(meta: TodoMeta): Promise<void> {
       meta.createdAt, meta.updatedAt,
     ],
   );
+  schedulePush();
 }
 
 export async function updateTodoMeta(
@@ -833,6 +841,7 @@ export async function updateTodoMeta(
   values.push(new Date().toISOString());
   values.push(todoId);
   await db.runAsync(`UPDATE todo_meta SET ${fields.join(', ')} WHERE todo_id = ?`, values);
+  schedulePush();
 }
 
 export async function deleteTodoMeta(todoId: string): Promise<void> {
@@ -842,6 +851,7 @@ export async function deleteTodoMeta(todoId: string): Promise<void> {
     `UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE todo_id = ?`,
     [now, now, todoId],
   );
+  schedulePush();
 }
 
 export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
@@ -851,6 +861,7 @@ export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
     `UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL`,
     [now, now, entryId],
   );
+  schedulePush();
 }
 
 // ── Threads ──
@@ -944,6 +955,7 @@ export async function insertThread(thread: Thread): Promise<void> {
       thread.createdAt, thread.updatedAt,
     ]
   );
+  schedulePush();
 }
 
 export async function updateThread(thread: Thread): Promise<void> {
@@ -965,6 +977,7 @@ export async function updateThread(thread: Thread): Promise<void> {
       thread.id,
     ]
   );
+  schedulePush();
 }
 
 export async function deleteThread(id: string): Promise<void> {
@@ -988,6 +1001,7 @@ export async function deleteThread(id: string): Promise<void> {
     'UPDATE threads SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
   );
+  schedulePush();
 }
 
 // ── Thread mentions ──
@@ -1077,6 +1091,7 @@ export async function insertMention(m: ThreadMention): Promise<void> {
       m.sourceLine, m.tagText, m.createdAt, m.createdAt,
     ]
   );
+  schedulePush();
 }
 
 export async function updateMentionTagText(id: string, tagText: string): Promise<void> {
@@ -1085,6 +1100,7 @@ export async function updateMentionTagText(id: string, tagText: string): Promise
     'UPDATE thread_mentions SET tag_text = ?, updated_at = ? WHERE id = ?',
     [tagText, new Date().toISOString(), id],
   );
+  schedulePush();
 }
 
 export async function updateMentionSourceLine(id: string, sourceLine: number): Promise<void> {
@@ -1093,6 +1109,7 @@ export async function updateMentionSourceLine(id: string, sourceLine: number): P
     'UPDATE thread_mentions SET source_line = ?, updated_at = ? WHERE id = ?',
     [sourceLine, new Date().toISOString(), id],
   );
+  schedulePush();
 }
 
 export async function deleteMention(id: string): Promise<void> {
@@ -1102,6 +1119,7 @@ export async function deleteMention(id: string): Promise<void> {
     'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
   );
+  schedulePush();
 }
 
 // ── Day title ──
@@ -1127,6 +1145,7 @@ export async function setDayTitle(date: string, title: string): Promise<void> {
   );
   // Touch all entries for this date so they get re-synced with the new title
   await db.runAsync('UPDATE entries SET updated_at = ? WHERE date = ?', [now, date]);
+  schedulePush();
 }
 
 export async function setDayTitleFromSync(date: string, title: string, notionEditTime?: string): Promise<void> {
@@ -1137,6 +1156,7 @@ export async function setDayTitleFromSync(date: string, title: string, notionEdi
     'INSERT INTO day_meta (date, title, updated_at) VALUES (?, ?, ?) ON CONFLICT(date) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at',
     [date, title, ts]
   );
+  schedulePush();
 }
 
 // ── Sync queries ──
@@ -1188,6 +1208,8 @@ export async function getEntryById(id: string): Promise<Entry | null> {
 export async function setEntryNotionPageId(entryId: string, notionPageId: string): Promise<void> {
   const db = await getDatabase();
   await db.runAsync('UPDATE entries SET notion_page_id = ? WHERE id = ?', [notionPageId, entryId]);
+  // No schedulePush — only the Notion-linkage column changed; doesn't need
+  // to flow to cloud (the cloud mirror doesn't carry notion_page_id).
 }
 
 export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
@@ -1206,6 +1228,7 @@ export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
       JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
     ]
   );
+  schedulePush();
 }
 
 export async function getSyncDeletions(entityType?: string): Promise<{ entityType: string; entityId: string; notionPageId: string }[]> {
@@ -1271,6 +1294,7 @@ export async function insertHabit(habit: Habit): Promise<void> {
       new Date().toISOString(),
     ]
   );
+  schedulePush();
 }
 
 export async function updateHabit(habit: Habit): Promise<void> {
@@ -1297,6 +1321,7 @@ export async function updateHabit(habit: Habit): Promise<void> {
       habit.id,
     ]
   );
+  schedulePush();
 }
 
 export async function deleteHabit(id: string): Promise<void> {
@@ -1362,6 +1387,7 @@ export async function upsertProject(project: EditorProject): Promise<void> {
       JSON.stringify(project.textOverlays), JSON.stringify(project.filterOverlays), project.exportUri, project.updatedAt,
     ]
   );
+  schedulePush();
 }
 
 // ── Vlogs ──
@@ -1441,6 +1467,7 @@ export async function insertVlog(vlog: Vlog): Promise<void> {
       vlog.caption, vlog.durationSeconds, vlog.exportUri, vlog.createdAt, vlog.createdAt,
     ]
   );
+  schedulePush();
 }
 
 // ── AI Summaries ──
@@ -1461,6 +1488,7 @@ export async function upsertAISummary(date: string, summaryJson: string, model: 
      ON CONFLICT(date) DO UPDATE SET summary_json = excluded.summary_json, generated_at = excluded.generated_at, model = excluded.model`,
     [date, summaryJson, now, model]
   );
+  schedulePush();
 }
 
 // Pull recent AI summaries strictly before `beforeDate`, newest first.

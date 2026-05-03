@@ -87,6 +87,30 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // Cloud sync (Supabase) — runs alongside Notion sync during the dual-run
+  // window (M4–M6). Bootstrap detects initial-push vs first-pull on the first
+  // cold start after the feature ships; subsequent boots run pullAll → pushAll.
+  // Edits push automatically via schedulePush() debounced 5s — see
+  // src/services/sync/schedulePush.ts.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { bootstrapCloudSync, isBootstrapDone } = await import('../src/services/sync/bootstrap');
+        const { pullAll, pushAll } = await import('../src/services/sync/orchestrator');
+        if (await isBootstrapDone()) {
+          await pullAll();
+          await pushAll();
+        } else {
+          const decision = await bootstrapCloudSync();
+          console.log('[loopd sync] bootstrap decision:', decision);
+        }
+      } catch (err) {
+        console.warn('[loopd] Cloud sync boot failed:', err instanceof Error ? err.message : err);
+      }
+    })();
+  }, [ready]);
+
   // Auto-generate AI summary for yesterday on app open
   useEffect(() => {
     if (!ready) return;
