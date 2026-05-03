@@ -91,6 +91,19 @@ export default function SettingsMenu() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.title}>Settings</Text>
 
+        {/* Cloud Sync (Supabase) — M1 personal infrastructure. M5 fleshes
+            it out; this entry is here so the dev can trigger pushAll() from
+            the app while iterating on the sync layer. */}
+        <Pressable onPress={() => router.push('/settings/cloud-sync')} style={styles.menuItem}>
+          <View style={styles.menuIcon}>
+            <Icon name="upload" size={18} color={colors.amber} />
+          </View>
+          <View style={styles.menuInfo}>
+            <Text style={styles.menuLabel}>Cloud Sync</Text>
+            <Text style={styles.menuSub}>Personal Supabase backup (Phase A)</Text>
+          </View>
+        </Pressable>
+
         {/* Notion Sync */}
         <Pressable onPress={() => router.push('/settings/notion-sync')} style={styles.menuItem}>
           <View style={styles.menuIcon}>
