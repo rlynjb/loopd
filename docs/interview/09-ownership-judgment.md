@@ -59,20 +59,26 @@ The pattern across all three: I made the call after the easier path was visible,
                        │
                        ▼
   ┌─────────────────────────────────────────────────────┐
-  │ Phase D — Notion sync extension                     │
+  │ Phase D — Notion sync extension (later DELETED)     │
   │  • Mapper handles 5 new properties                   │
   │  • Schema-gap tolerance (older DBs still sync)       │
   │  • Per-field merge rules (Title prose-canonical)     │
   │                                                      │
   │  Ship: thinking-mode fields round-trip to Notion    │
   │  Time: ~5-8h                                         │
+  │                                                      │
+  │  Outcome: shipped, used for weeks, then replaced     │
+  │  by the cloud-sync (Supabase) work below — Notion   │
+  │  had hit its limits (rate caps, schema drift) and    │
+  │  the migration to Postgres deleted ~2,200 lines.     │
   └─────────────────────────────────────────────────────┘
 
   Each phase shipped a complete, defensible feature.
   After Phase A, no LLM cost incurred yet — but the feature works.
   After Phase B, automation lands without changing the UI shape.
   After Phase C, the expensive AI feature is opt-in (user-tap only).
-  After Phase D, persistence story is complete.
+  After Phase D, persistence story was complete (since superseded
+  by the cloud-sync work — see docs/loopd-cloud-sync-plan.md, M0–M7).
 
   The discipline: slice by value-delivery, not by layer.
 ```
@@ -117,9 +123,11 @@ Three things, in priority order.
 
 **A tighter type-state coupling.** Today `TodoType`, `TodoStage`, and `ClassifierConfidence` are TS string-literal unions, and CHECK constraints in SQLite mirror them — but the link is *manual*. If I added a new value I'd need to update both. I'd extract a single source of truth — one TypeScript file that exports both the union and the SQL CHECK string, with codegen producing the migration fragment. This is a 2-3 hour refactor that I haven't done because I add types rarely. At any larger scale, with multiple contributors adding types, this would be Day-1 work.
 
-**A queue worker for Notion writes.** Right now `syncAllTodos` is a synchronous loop that pushes everything dirty in one call. At any meaningful scale, that's a cliff. I'd refactor to a `drop_write_queue` pattern (which I outlined in the original drops plan but didn't ship) where each Notion write is a queued op processed asynchronously, with retry-after backoff and dead-letter handling for permanently-failed writes.
+**Cloud sync from day one.** I shipped Notion sync first because that was the available "cloud" surface at the time (paste an integration token, get bidirectional sync via REST). Then I migrated to Supabase across 7 milestones — see [`docs/loopd-cloud-sync-plan.md`](../loopd-cloud-sync-plan.md). The Supabase architecture (incremental push/pull, soft delete, server-clock cursors, last-write-wins) is what I would have built if I'd known on day one this was where the project was going. Notion sync was real work that delivered real value while it ran, but the migration deleted ~2,200 lines and replaced them with ~1,500 cleaner lines. Cheap lesson at solo scale; expensive lesson at any larger scale. If I started over, I'd skip straight to the Postgres mirror.
 
 What I *wouldn't* change: the prose-canonical drops idiom and the heuristic-first classifier. Those are the two non-obvious decisions that make this app feel different from a normal todo tracker, and I'd defend them at any scale. Prose-canonical is the difference between "capture is filing" and "capture is a separate step." Heuristic-first is the difference between "AI is the path" and "AI is the fallback."
+
+I'd also keep the **local-canonical** decision (Architectural Principle 12) without question. It's the design choice that survived the Notion-to-Supabase swap with zero changes to read paths. Same architecture, different cloud — a backend swap that would have been a rewrite if the cloud were the canonical source.
 
 The architectural thing I'm most proud of is that the spec docs make all this defensible *without me being in the room*. [`docs/spec.md`](../spec.md), [`docs/concepts.md`](../concepts.md), and the chapters in this folder all encode the reasoning. A new contributor could read them and understand not just *what* the code does but *why* it's shaped that way. That's the artifact I'd carry forward to any new project.
 
@@ -135,7 +143,7 @@ The implementation plan for thinking-modes recommended flattening *both* the das
 
 The ExpansionModal as a bottom-sheet was the AI's first cut. I shipped it, opened it on the device, realized it overlapped the Android system gesture bar, and decided the modal was the wrong primitive. Converted it to a full-page route at `app/todos/[id].tsx`. The AI wrote the refactor faster than I would have, but the *judgment* — recognizing the UX problem on the device, deciding the modal was wrong, directing the change to a route — was mine.
 
-The phasing of thinking-modes into 4 ship-able phases was my call against an originally-monolithic 33-50h plan. The decision to use heuristic-first instead of just calling the LLM on every classification was my call. The decision to remove `pinned` was my call. The decision to keep `notionPageId` only on `TodoItem` and not duplicate it on `TodoMeta` (avoiding drift) was my call.
+The phasing of thinking-modes into 4 ship-able phases was my call against an originally-monolithic 33-50h plan. The decision to use heuristic-first instead of just calling the LLM on every classification was my call. The decision to remove `pinned` was my call. The decision to phase the cloud-sync migration into 7 milestones (with each one independently revertible and Notion staying live until M7) was my call — see [`docs/loopd-cloud-sync-plan.md`](../loopd-cloud-sync-plan.md). The judgment that "now" was the right time to delete Notion (after a week of dual-running, not before) was my call. The AI wrote the SyncableTable interface; I drew the line between "shadow mode" and "live alongside Notion" and "Notion deleted."
 
 The general pattern: I'm fluent in TypeScript and React, so the AI was leverage in those areas — fast code generation following my direction. I'm not fluent in FFmpeg or Reanimated, and the AI's output in those areas needed much more verification because I couldn't catch subtle wrongness. The takeaway from building this: AI amplifies the skills you already have more than it expands the skills you don't. The skills still have to be there. The judgment still has to be there. I read every diff before I commit; if I don't understand a function, it doesn't ship.
 

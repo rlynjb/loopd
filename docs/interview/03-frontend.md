@@ -8,6 +8,8 @@ The model is three-tier. Refs hold ephemeral state — the cursor position, the 
 
 The dashboard added a second axis of complexity in late April: the **DAILY SCHEDULE** tracker (§6.7 of the spec) renders habits and threads as a single list of structurally identical rows — 80px name + flex 14-cell strip + 36px right-side affordance — bucketed by `time_of_day`. Habit cells distinguish four states (`completed`, `missed`, `today-pending`, `neutral`) instead of the old two; thread cells light up only on manual-touch toggles. Two row types, one layout, one mental model.
 
+The vlog editor's TEXT tab adds a third pattern worth naming: a **3-way variant chip group** (`PRIMARY` / `ALT` / `SUMMARY`) that swaps which body text fills the active overlay. The chip group is driven by a single `captionVariant` state; tapping a chip rewrites every text overlay's body while preserving the day-title prefix. Chips render conditionally based on which variants exist on the cached `AISummary` — older summaries pre-dating the relatable-caption feature show only `SUMMARY`, newer ones show all three. Active chip highlights in amber. The reason this is interesting: the state owner is the editor screen, but the chip group is a child component that needs to know which variants are available without owning the data fetch. The split is a clean handle pattern (parent owns state + handler, child renders chips and calls the handler with the variant id).
+
 ```
               State on every keystroke + the autocomplete handle
 

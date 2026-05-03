@@ -2,7 +2,9 @@
 
 > **Eleven tables, but only four architecturally interesting ones.** This chapter tells you which four matter and why the schema is shaped the way it is.
 
-The schema in [`src/services/database.ts`](../../src/services/database.ts) is eleven tables: `entries`, `habits`, `projects`, `vlogs`, `day_meta`, `sync_deletions`, `ai_summaries`, `nutrition`, `todo_meta`, `threads`, `thread_mentions`. A lot of those exist because each represents a distinct *concept with its own lifecycle* — they're not normalization choices, they're domain boundaries. The four that matter architecturally are `entries`, `todo_meta`, `thread_mentions`, and `sync_deletions`. Everything else falls out of those.
+The schema in [`src/services/database.ts`](../../src/services/database.ts) is eleven tables: `entries`, `habits`, `projects`, `vlogs`, `day_meta`, `sync_deletions`, `ai_summaries`, `nutrition`, `todo_meta`, `threads`, `thread_mentions` — plus a twelfth, `sync_meta`, added when cloud sync shipped. A lot of those exist because each represents a distinct *concept with its own lifecycle* — they're not normalization choices, they're domain boundaries. The four that matter architecturally are `entries`, `todo_meta`, `thread_mentions`, and the cloud-sync columns layered on top of every table. Everything else falls out of those.
+
+Two columns were added to every synced table when the cloud-sync work landed: `deleted_at` (soft-delete timestamp; rows hide via `WHERE deleted_at IS NULL` instead of being removed) and `synced_at` (last successful push timestamp; local-only, the cloud doesn't carry it). Plus `sync_meta` is a separate local-only ledger keyed by `table_name` that tracks `last_pull_at`, `last_push_at`, and `last_error` per table. None of those carry into the Postgres mirror — they're the local sync state. The old `sync_deletions` table is now schema cruft: it backed the Notion outbox queue, no longer written to since soft-delete propagates as a normal sync event. Kept around because dropping a SQLite table on every install adds risk for no real benefit.
 
 `entries` is the canonical source. Prose text, habits-by-id, a JSON column for clip references, a JSON column for todos. The JSON columns are deliberate. I could have normalized todos into a separate table with foreign keys back to entries, and at first glance that's what an interviewer expects. I chose not to, because the entry-edit path is the hot loop in this app — every keystroke writes through it — and I didn't want autosave to fight a relational lock. The JSON column is one column write per entry update; a normalized todos table would be N inserts/deletes plus the entry update, all in one transaction.
 
@@ -12,7 +14,7 @@ The schema in [`src/services/database.ts`](../../src/services/database.ts) is el
 
 `habits` grew up too. It now carries `slug`, `icon`, `color`, `cadence_type` ('daily' | 'weekdays' | 'weekly' | 'specific_days' | 'n_per_week'), `cadence_days` (JSON array of weekday indices), `cadence_count` (for `n_per_week`), `archived` (still on the row but not surfaced in UI), `time_of_day` ('morning' | 'midday' | 'evening' | 'anytime'), and `notion_last_synced`. The cadence engine in [`habits/cadence.ts`](../../src/services/habits/cadence.ts) is a pure function over those columns; the dashboard buckets habits + threads by `time_of_day` into a single DAILY SCHEDULE strip.
 
-`sync_deletions` is the outbox. When a synced row is locally deleted, the body is gone but the Notion page still exists; we capture the `notion_page_id` in this queue with an `entity_type` discriminator ('entry' | 'todo' | 'habit' | 'nutrition' | 'thread') so one queue serves all five entity classes cleanly. The discriminator pattern means new entity types add zero schema; they just push rows with their new type tag. Adding `'thread'` was a one-line change.
+`sync_deletions` was the Notion-era outbox. When the Notion sync still ran, locally-deleted rows would leave a row here keyed by `notion_page_id` with an `entity_type` discriminator so one queue served all five entity classes. The discriminator pattern was nice — new entity types added zero schema; adding `'thread'` was a one-line change. The whole table is **deprecated** now. Cloud sync replaces it with soft delete: every CRUD delete in [`database.ts`](../../src/services/database.ts) stamps `deleted_at` and bumps `updated_at`, so the deletion propagates through the regular sync push as a row update. No separate queue, no archive operation, no discriminator. The table itself stays in the schema (dropping a SQLite table mid-flight adds risk; a future migration can clean it up).
 
 ```
               loopd schema — 11 tables, 1:1 invariant enforced
@@ -82,14 +84,24 @@ The schema in [`src/services/database.ts`](../../src/services/database.ts) is el
      └─────┬─────┴──────────────────────┘
            ▼
   ┌─────────────────────────┐
-  │  sync_deletions         │
-  │  (FIFO outbox queue)    │
-  │                         │
-  │  entity_type ←──────────│ discriminator: many producers,
-  │  entity_id              │   one queue. Now: 'entry'|'todo'|
-  │  notion_page_id         │   'habit'|'nutrition'|'thread'
-  │  deleted_at             │
+  │  sync_deletions         │ DEPRECATED
+  │  (Notion-era outbox;    │ replaced by soft delete
+  │   no longer written)    │ (deleted_at on every table)
   └─────────────────────────┘
+
+  ┌─────────────────────────┐
+  │  sync_meta              │ LOCAL-ONLY (not in Postgres)
+  │                         │
+  │  table_name PK          │ per-table ledger driving
+  │  last_pull_at           │ incremental cloud sync.
+  │  last_push_at           │ updated by sync/syncMeta.ts.
+  │  pending_pushes         │
+  │  last_error / _at       │
+  └─────────────────────────┘
+
+  Cloud-sync columns added to EVERY synced table:
+    synced_at   — last successful push timestamp (LOCAL ONLY)
+    deleted_at  — soft-delete timestamp; reads filter NULL
 
   Invariants:
   • prose in entries.text is canonical for todos / nutrition / mentions
@@ -98,10 +110,11 @@ The schema in [`src/services/database.ts`](../../src/services/database.ts) is el
     EXCEPT for the manual-touch deviation (both NULL, written by
     toggleThreadTouchToday from the dashboard tracker)
   • CHECK constraints validate enums at INSERT time
-  • notion_page_id lives on TodoItem only — todo_meta has no
-    duplicate field; sync code joins TodoItem ↔ TodoMeta and
-    uses the single id (avoids drift)
   • threads.slug UNIQUE — case-insensitive enforced at the index
+  • Cloud mirror PK is composite (user_id, id) — Postgres-side; local
+    SQLite has just id since there's only one user
+  • Reads filter WHERE deleted_at IS NULL on every synced table;
+    sync layer queries skip the filter (need to see deletions)
 ```
 
 ## Interview questions
@@ -118,7 +131,7 @@ Each table represents a distinct *concept*, not a normalization choice. Let me n
 
 `nutrition` is row-per-line for `** food N kcal` lines in entry text — a separate table because it's queryable independently and indexed by name with `COLLATE NOCASE` for the autocomplete. `projects` holds editor scratch state per date (clip trims, text overlays). `vlogs` is the export archive after a vlog renders.
 
-`sync_deletions` is an outbox queue with `entity_type` discriminator — entries, todos, habits, nutrition, AND threads all enqueue here when locally deleted. `ai_summaries` caches LLM-generated daily summaries by date so the vlog editor's auto-compose doesn't re-call the LLM on every render.
+`sync_deletions` is dead code from the Notion era — soft delete replaced it (every synced table has a `deleted_at` column now; deletions propagate via the normal cloud-sync push). `sync_meta` is the new local-only ledger that tracks `last_pull_at` / `last_push_at` per synced table for the incremental cloud-sync layer. `ai_summaries` caches LLM-generated daily summaries by date so the vlog editor's auto-compose doesn't re-call the LLM on every render.
 
 The number isn't the point; the *boundaries* are. Each table has its own lifecycle and its own queries. Combining them would create the kind of god-table that's annoying to migrate.
 
@@ -148,7 +161,7 @@ There's a related, deliberate scoping decision on the dashboard side: the `Threa
 
 **Case-insensitive slug uniqueness.** The `threads.slug` column has a UNIQUE index, and slugs are stored lowercased on insert (via `crud.ts`). The scanner in [`scanThreads.ts`](../../src/services/threads/scanThreads.ts) lowercases the captured tag before lookup, so `#Loopd`, `#loopd`, `#LOOPD` all resolve to the same row. The display name (`tag_text` on the mention, `name` on the thread) preserves the user's original casing for rendering. This is the "fold case at the *boundary*, render at the *edge*" idiom — the storage layer canonicalizes, the UI layer respects user intent. It also keeps the UNIQUE index simple: a plain index on a lowercased column, no `COLLATE NOCASE` shenanigans, no surprise ordering quirks.
 
-The only thing the slug column is NOT bidirectional with is Notion — slug edits in the Threads DB are rejected on pull (logged as a warning) because changing a slug would invalidate every existing `thread_mentions` row's matching key. Slug is *local-canonical*: name and color and cadence sync, slug stays put.
+Slug is *local-canonical* in the cloud-sync flow too. The Postgres mirror does store the slug column (it has to — the UNIQUE index `idx_threads_user_slug` on `(user_id, LOWER(slug))` enforces case-insensitive uniqueness server-side too), but the slug is never *meaningfully* edited from the cloud side. If a future device were to pull a thread row with a different slug than local has, the LWW conflict resolution would let cloud win — but the manual-touch deviation and the prose-derived mentions still match by `thread_id`, not slug, so the existing rows survive the rename. The Notion-era "reject slug edits on pull" rule was about a sync target where humans could edit text fields directly (Notion's UI); Postgres doesn't have that surface.
 
 ### `Thread`, `ThreadMention`, `ThreadCard`, `Staleness` — the type surface
 

@@ -11,9 +11,9 @@ Written from the seat of a staff engineer who built this thing — first person,
 | 01 | [Preface — what this project is really about](./01-preface.md) | The architectural pitch in 60 seconds |
 | 02 | [System architecture](./02-system-architecture.md) | Request flow, layered design, scalability ceiling |
 | 03 | [Frontend engineering](./03-frontend.md) | State strategy, ref vs state vs DB, perf reality check |
-| 04 | [Backend and API design](./04-backend-api.md) | Notion as backend, rate limiting, deletion queue, schema-gap tolerance |
-| 05 | [AI engineering](./05-ai-engineering.md) | Three-tier LLM dispatch, heuristic-first, JSON validation + retry |
-| 06 | [Data modelling](./06-data-modelling.md) | 9-table schema, 1:1 invariant, CHECK constraints, JSON-vs-normalized |
+| 04 | [Backend and API design](./04-backend-api.md) | Supabase push/pull, soft delete, conflict resolution, bootstrap detection |
+| 05 | [AI engineering](./05-ai-engineering.md) | Four LLM calls / three cost tiers, heuristic-first, JSON validation + retry, relatable-caption pass |
+| 06 | [Data modelling](./06-data-modelling.md) | 12-table schema, 1:1 invariant, soft-delete columns, JSON-vs-normalized |
 | 07 | [Reliability and error handling](./07-reliability.md) | DB-first writes, self-healing reconcile, idempotent backfills |
 | 08 | [Developer process](./08-developer-process.md) | Spec-driven phased shipping, build/install loop, why no test suite |
 | 09 | [Ownership and judgment](./09-ownership-judgment.md) | The decisions that weren't obvious — most important chapter |
@@ -41,7 +41,7 @@ Written from the seat of a staff engineer who built this thing — first person,
 
 ## Re-running this guide
 
-The guide is only as accurate as the codebase it's written against. After any significant feature change — a Postgres migration, a CRDT layer, a new sync target — chapters 4, 6, and 7 will need updates. Each chapter is a separate file so the regen is focused: rewrite just chapter 6, leave the others intact.
+The guide is only as accurate as the codebase it's written against. After any significant feature change — a CRDT layer, a new sync target, an auth + RLS rollout for Phase B — chapters 4, 6, and 7 will need updates. Each chapter is a separate file so the regen is focused: rewrite just chapter 6, leave the others intact. (The Notion-to-Supabase migration in 2026-05 was the most recent example — chapters 02, 04, 06, 07, 09, 12, 99 were refreshed; the others took surgical patches.)
 
 The other docs in `docs/` serve different purposes and don't overlap:
 

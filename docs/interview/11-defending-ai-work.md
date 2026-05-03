@@ -51,7 +51,7 @@ A template gives you starter code. This codebase has *decisions*. Concretely:
 - **Prose-canonical drops with two-pass matching** is a non-obvious architectural choice. No template would do that; in fact most production templates do the opposite (structured fields). The decision is documented in [`docs/spec.md`](../spec.md) and the reasoning is in [`docs/concepts.md`](../concepts.md).
 - **Cost-tiered LLM strategy with heuristic-first fallback** is a non-obvious AI-engineering choice. Templates that use AI just call one model. I have three at three cost tiers, gated by a deterministic classifier.
 - **The 1:1 invariant between `todos_json` and `todo_meta`** without a real foreign key is a deliberate normalization tradeoff. Templates default to either fully-normalized or fully-JSON; I picked a hybrid because the entry-edit path is the hot loop and full normalization would fight autosave.
-- **The `sync_deletions` queue with `entity_type` discriminator** is a CQRS-style pattern I learned and applied here. Templates don't tell you to do this — you have to know to reach for it.
+- **The local-canonical with cloud-as-mirror split** (Architectural Principle 12) is a non-obvious choice that survived a backend swap. The codebase had a Notion-sync layer that was deleted in commit `dc8483a` and replaced with Supabase Postgres across 7 milestones — and *zero read paths changed*. That's the design call. Templates default to "the cloud IS the database"; I argued for the opposite and proved it under change.
 
 The simplest test: ask me about any decision in this codebase, and I'll tell you (a) what I chose, (b) what I rejected, (c) what I'd do at scale. A template-user can't do that. They tell you what the template did and they're stuck when you ask why.
 

@@ -4,11 +4,11 @@
 
 When a new engineer clones loopd and opens the project, the first thing they should look at is `src/services/` — that's where the work happens. The UI in `app/` is mostly file-routed Expo screens that call into hooks in `src/hooks/`, which call into services. This is layered architecture done deliberately: each layer only depends on the ones below it, and the boundaries are obvious from the import graph alone.
 
-The interesting part isn't the layering. The interesting part is the *commit-time split* — the design decision that everything else falls out of. When the user types in the journal, every keystroke writes to SQLite immediately, no React state involved. The bytes are durable from keystroke one. When the user blurs the input or navigates away, *that's* when the parsers run and the AI fires and the Notion sync queues. The save path and the derive-state path are separate by design. Past data-loss bugs came from React state being out of sync with what the user typed when navigation interrupted, and the keystroke-to-DB write fixed that whole class of bug.
+The interesting part isn't the layering. The interesting part is the *commit-time split* — the design decision that everything else falls out of. When the user types in the journal, every keystroke writes to SQLite immediately, no React state involved. The bytes are durable from keystroke one. When the user blurs the input or navigates away, *that's* when the parsers run and the AI fires and the cloud-sync push gets debounced. The save path and the derive-state path are separate by design. Past data-loss bugs came from React state being out of sync with what the user typed when navigation interrupted, and the keystroke-to-DB write fixed that whole class of bug.
 
 The commit-time split is also what made it cheap to add a *third* drop type. The original two were `[]` (todos → `todos_json` + `todo_meta`) and `** food N kcal` (nutrition → `nutrition` table). On 2026-04-29 I shipped `#tag` (threads → `thread_mentions`) using exactly the same shape: prose-canonical, two-pass reconciler, fire-and-forget on commit. The scanner runs *after* the todo scan because `#tag` lines inside `[]` todos need the final todo IDs for attribution — that ordering constraint is the only new wrinkle in the journal commit path.
 
-The other interesting part is what's *not* there. There's no backend in the conventional sense. There's no server, no auth layer, no API gateway. The only network dependency is the Notion REST API, and even that is treated as additive — if Notion goes away, the app keeps working with locally-canonical data. This shapes everything: there's no auth code to discuss, but there's also a lot of merge logic I had to write by hand because I didn't get a sync engine for free.
+The other interesting part is what's *not* there. There's no backend in the conventional sense — no auth layer, no API gateway. The cloud is Supabase Postgres acting as a sync mirror. Local SQLite stays canonical (Architectural Principle 12: "cloud is a sync mirror, never the canonical source"); reads always hit local, writes always commit local first, and the cloud lags by 5s via debounced push. The previous version of this app synced to Notion as a backup; that whole layer was deleted in commit `dc8483a` once Supabase was stable — about 2,200 lines of mapper/rate-limiter/queue code that just went away.
 
 The bottom nav is five tabs (Home / Record / Journal / Todos / More). I prototyped a sixth — a dedicated **Today** tab for the daily-schedule tracker — and folded it back into the Home dashboard once it was clear the tracker wanted to live next to the greeting and `SmartTodoList`. The dashboard's **DAILY SCHEDULE** section now combines habits + threads, bucketed by `time_of_day`, and the More tab is the management hub for nutrition / habits / threads CRUD.
 
@@ -62,16 +62,35 @@ The bottom nav is five tabs (Home / Record / Journal / Todos / More). I prototyp
                         └─► two-pass reconcile thread_mentions
                                 (entry_id pass + todo_id pass)
 
-  Separately, on next user-initiated sync or boot auto-sync:
+  Cloud sync (Supabase Postgres) — runs on boot AND on a 5s
+  debounced push after every write. Both sides paginated.
             │
-            ▼
-   syncAll → syncAllTodos → syncAllHabits → syncAllThreads
-            │         │             │             │
-            ▼         ▼             ▼             ▼
-        Notion    Notion        Notion        Notion
-       (entries) (todos)       (habits,      (threads,
-                              opt-in DB)    opt-in DB)
-       — all share the same module-level 350ms rate limiter —
+            ├─► boot:    bootstrap.detect → pullAll → pushAll
+            │            (initial-push vs first-pull vs no-op
+            │             gated by SecureStore flag once)
+            │
+            └─► writes:  schedulePush() (5s debounce coalesces
+                         bursts of edits into one push)
+
+       pushAll(): every synced table in dependency order
+                  (entries → projects → day_meta → vlogs →
+                   ai_summaries → todo_meta → nutrition →
+                   habits → threads → thread_mentions)
+                  · query rows where updated_at > synced_at
+                  · ON CONFLICT (user_id, id) DO UPDATE
+                  · stamp synced_at on success
+
+       pullAll(): same registry, different pull order
+                  · get_server_time() RPC for clock-skew-safe
+                    last_pull_at
+                  · paginate by updated_at ASC (page 200)
+                  · chooseWinner(local, cloud) by updated_at
+                  · cloud row wins → upsert local + stamp synced_at
+
+       Soft delete: every CRUD delete stamps deleted_at +
+                    bumps updated_at; reads filter
+                    WHERE deleted_at IS NULL; deletion
+                    propagates as a normal sync event.
 
        Dashboard composition (Home / DAILY SCHEDULE):
             getThreadCards.ts ─┐
@@ -111,22 +130,24 @@ That decision is the one documented deviation from Principle 11 ("mentions are d
 
 ### Q3 [arch] If this needed to support 100k users with multi-device sync, what changes?
 
-Three things break first. **First**, the Notion API as a sync backbone caps at ~3 req/s per integration, and the boot chain just got longer — `syncAll → syncAllTodos → syncAllHabits → syncAllThreads`. The module-level rate limiter at [`notion/api.ts:7`](../../src/services/notion/api.ts#L7) is the right shape but only sufficient for one client. At scale I'd put a server-side sync gateway in front of Notion, fanning out per user with per-user backpressure and a token-bucket rate model.
+Three things break first. **First**, auth. Phase A hardcodes a single `user_id = '00000000-0000-0000-0000-000000000001'` in [`sync/client.ts`](../../src/services/sync/client.ts). At scale, real auth via Supabase Auth + flipping `ENABLE ROW LEVEL SECURITY` on every table — the policies are already authored in [`supabase/migrations/0002_rls_policies.sql`](../../supabase/migrations/0002_rls_policies.sql) but disabled. Cost: ~80% UX work (auth screens, signup, payment), 20% data-layer (`user_id = auth.uid()` instead of the dummy).
 
-**Second**, SQLite-first means no multi-device. Two devices editing the same entry will diverge, and the `#tag` system makes this worse because thread auto-creation on save means two devices typing `#family` in the same minute will mint two `threads` rows with the same slug and racing UNIQUE-constraint failures on the second one. I'd move to a CRDT layer for `entries.text`, `todos_json`, and the thread/mention tables so concurrent edits converge. The two-pass matching is a sane substrate for this; the actual merge would be CRDT-driven, not hand-rolled.
+**Second**, conflict resolution. Today's last-write-wins by `updated_at` is honest about its limits — concurrent edits to the same entry on two devices lose one of them. Solo use doesn't hit this; multi-user does. I'd move to a CRDT layer for `entries.text` and `todos_json` so concurrent prose edits converge. The two-pass matching pattern (exact match → line-index fallback) is a sane substrate for this; the actual merge becomes CRDT-driven instead of hand-rolled. Plus the `#tag` system has a related issue: two devices typing `#family` in the same minute auto-create two `threads` rows. The `UNIQUE (user_id, LOWER(slug))` index in Postgres catches the race on push, but the second device's local copy is now orphaned. CRDT-level slug coordination fixes it.
 
 **Third**, the LLM cost path needs metering and quotas per user. `MAX_CONCURRENT=3` at [`expand.ts:25`](../../src/services/todos/expand.ts#L25) is a per-device cap; at scale it becomes a per-user-per-window quota with billing integration. Cost-tiered model selection (cheap classifier, primary expansion) is the principle that doesn't change. That principle scales fine.
 
-The pattern that scales least well is the JS-side flatten + sort on `/todos`, now with a third filter axis (Threads). At 5k+ todos per user and a few dozen threads, the three-way AND filter becomes a render cliff. Solution is virtualized lists (`FlashList`) plus pushing the filter to SQL with computed indexes on `todo_meta(stage, position)` joined against `thread_mentions(thread_id)`.
+The pattern that scales least well is the JS-side flatten + sort on `/todos`, now with a third filter axis (Threads). At 5k+ todos per user and a few dozen threads, the three-way AND filter becomes a render cliff. Solution is virtualized lists (`FlashList`) plus pushing the filter to SQL with computed indexes on `todo_meta(stage, position)` joined against `thread_mentions(thread_id)` — both already exist locally, would replicate cleanly to Postgres.
 
 ## The hard question
 
 > "What's the riskiest dependency in this system?"
 
-The Notion API contract. It's a third-party REST API I don't control, and the schema-gap tolerance I built in [`detectMissingTodoProperties`](../../src/services/notion/todosMapper.ts) (and now `detectMissingHabitProperties` / `detectMissingThreadProperties` for the two new opt-in DBs) is defensive *for users on older schemas* — it doesn't protect against *Notion* changing their API shape. If they change the rich-text response format, my parsers at [`todosMapper.ts`](../../src/services/notion/todosMapper.ts), `habitsMapper.ts`, and `threadsMapper.ts` all break at once.
+Supabase. Notion was the answer until commit `dc8483a` deleted that integration; today it's the cloud sync provider. If Supabase has an outage, raises pricing, or changes the JS SDK in a breaking way, my push/pull layer at [`sync/push.ts`](../../src/services/sync/push.ts) and [`sync/pull.ts`](../../src/services/sync/pull.ts) is exposed.
 
-The mitigation is the architectural principle that the local SQLite is canonical: even if Notion sync stops working entirely, every existing piece of data is intact locally, deletions are already queued in `sync_deletions` (now with `'thread'` joining `entry`/`todo`/`habit`/`nutrition`), and the user keeps using the app. The sync layer is *additive*, not load-bearing. Mentions specifically are *not* synced to Notion at all — they're derived from entries/todos which already sync, so a Notion outage doesn't even cost me a sync surface there.
+The mitigation is the same architectural principle as before — local SQLite is canonical (Principle 12). If Supabase disappears entirely, every existing piece of data is intact locally, every read path filters `WHERE deleted_at IS NULL` against local, and the user keeps using the app offline-first. The cloud sync layer is the safety net you opt into; it isn't on the read path. Edits durably hit SQLite from keystroke one (the commit-time split discussed above); Supabase lags by 5s via the debounced push.
 
-I'm proud of this decision specifically because it cost me real work. A "cloud-first" version of this app would have been faster to build but would die the day Notion changed an API. By making SQLite primary, I bought independence — at the cost of having to write all the merge logic by hand. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
+What I'd lose if Supabase went away: the cross-device replication path (Phase B's reason to exist), and any data that was created on a device that subsequently dies before pulling locally. The clip files (`Documents/loopd/clips/<date>/*.mp4`) aren't in Supabase Storage anyway — they're a known gap (see [docs/backlog.md](../backlog.md)) — so Supabase's outage doesn't make that worse.
+
+I'm proud of the local-canonical decision because it survived a backend swap. The same architecture that previously protected against Notion changing their API now protects against Supabase changing theirs. The cost is the same: I write all the merge logic by hand. The benefit is the same: every cloud is replaceable. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
 
 → [03 — Frontend engineering](./03-frontend.md)

@@ -10,7 +10,7 @@ Here are the three. Memorize them. They are the project, in priority order.
 
 **The second experiment is heuristic-first cost-tiered AI.** Every `[]` line is classified into one of seven thinking modes (todo, idea, bug, question, decision, knowledge, content). A free deterministic classifier — about 50 imperative verbs and modal phrases — handles the obvious 70-80%. Only the genuinely ambiguous 20% goes to a cheap LLM (Haiku or GPT-4o-mini, ~$0.0001 per call). When the user explicitly taps "expand" on a non-todo, a primary-tier LLM (Sonnet 4.6 or GPT-4o, ~$0.04 per call) produces a structured per-type analysis. Three cost tiers, three jobs, deliberately different model selections. The architectural principle is simple: AI is expensive and slow; build the cheap deterministic path first; use the LLM only where the heuristic abstains.
 
-**The third experiment is local-first SQLite with optional bidirectional Notion sync.** The local database is canonical for everything — entries, todos, nutrition, AI summaries, expansion outputs. Notion is an *additive* sync target. If Notion's API breaks tomorrow, every captured byte is intact locally and the user keeps using the app. The sync layer has to do real work: per-field merge rules, schema-gap tolerance for users on older Notion DB versions, a sync-deletion queue with an `entity_type` discriminator, and a module-level rate limiter that serializes every Notion call regardless of which feature triggered it. None of this is template code.
+**The third experiment is local-first SQLite with Supabase Postgres as a sync mirror.** The local database is canonical for everything — entries, todos, nutrition, AI summaries, expansion outputs, threads, mentions. Cloud is the safety net you opt into; reads always hit local; writes always commit local first; the cloud lags by 5 seconds via a debounced push (Architectural Principle 12). The previous version of this app synced to Notion as the cloud target — that whole layer was deleted in commit `dc8483a` once the Supabase migration stabilized, removing ~2,200 lines of mappers/rate-limiter/outbox-queue code. The migration shipped across 7 milestones with Notion staying live alongside Supabase from M2 through M6 as a safety net, then deleted in one satisfying commit. The sync layer does real work: incremental push/pull paginated by `updated_at`, server-clock-anchored cursors via a `get_server_time()` Postgres RPC, soft delete via `deleted_at` columns that propagate as normal sync events, and last-write-wins conflict resolution. None of this is template code.
 
 ```
                        What loopd actually is
@@ -45,14 +45,17 @@ Here are the three. Memorize them. They are the project, in priority order.
   │                                                             │
   ├─────────────────────────────────────────────────────────────┤
   │                                                             │
-  │   3. Local-first SQLite, additive Notion sync               │
+  │   3. Local-first SQLite, Supabase as sync mirror            │
   │                                                             │
-  │      SQLite (canonical) ─── push dirty rows ───► Notion     │
+  │      SQLite (canonical)                                     │
+  │             │   debounced push ───► Supabase Postgres       │
+  │             │   (5s after every write + on boot)            │
   │             ▲                                       │       │
-  │             └─── pull merge per-field rules ────────┘       │
+  │             └─── incremental pull (updated_at ASC) ─┘       │
+  │             chooseWinner = LWW by updated_at                │
   │                                                             │
-  │      If Notion breaks: app keeps working                    │
-  │      If SQLite breaks: there is no app                      │
+  │      If cloud breaks: app keeps working offline-first       │
+  │      If SQLite breaks: cloud restores via firstPullAll      │
   │                                                             │
   └─────────────────────────────────────────────────────────────┘
 ```
@@ -61,15 +64,15 @@ What this project shows about me as an engineer is that I can hold all three of 
 
 A few stats so the rough scope is grounded:
 
-- ~11k lines of TypeScript
-- 9 SQLite tables (one of them — `todo_meta` — has a 1:1 invariant with each TodoItem in `entries.todos_json` enforced by application logic, not foreign key)
-- 4-phase ship plan for the latest feature (thinking-modes), each phase independently shippable
-- 3 LLM model integrations across 3 cost tiers, multi-provider (Anthropic + OpenAI)
+- ~12k lines of TypeScript (after the cloud-sync migration deleted ~2,200 of Notion-era code)
+- 12 SQLite tables — 11 entity tables plus `sync_meta` (local-only ledger). The `todo_meta` table holds a 1:1 invariant with each TodoItem in `entries.todos_json`, enforced by application logic since SQLite can't FK to a JSON-array element.
+- 7-milestone ship plan for the most recent major migration (Notion → Supabase Postgres), each milestone independently revertible — see [`docs/loopd-cloud-sync-plan.md`](../loopd-cloud-sync-plan.md).
+- 4 LLM calls across 3 cost tiers, multi-provider (Anthropic + OpenAI)
 - React Native + Expo, Android-only (the prebuilt `android/` directory is committed)
 - Solo-developed with substantial AI-assisted code generation, all decisions mine
 
 I built this because I wanted a journaling app I'd actually use, but more than that, I wanted a project where the architectural decisions were mine and I could defend every one of them. Read the rest of this guide and you should leave able to do the same.
 
-The next chapter is system architecture — request flow from the moment a user taps the keyboard to the moment a Notion page exists.
+The next chapter is system architecture — request flow from the moment a user taps the keyboard to the moment a row lands in Supabase.
 
 → [02 — System architecture](./02-system-architecture.md)

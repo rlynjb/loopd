@@ -20,12 +20,13 @@ Per-operation Big-O for everything significant in loopd. Use this in coding-roun
 | `getThreadCards(now)` | O(Th × Mn) for last-mention map + O(Th log Th) sort | O(Th + Mn) | Fine to ~100 threads, ~10k mentions | Single SQL aggregate per query type; in-memory join afterwards |
 | `getThreadDetail(threadId)` | O(Mn_t + N + T) (per-thread mentions + global entries/metas) | O(Mn_t + T) | Fine to ~100 threads, ~10k todos | Cap at 1000 mentions per query |
 | `toggleThreadTouchToday(...)` | O(1) read + O(1) insert OR delete | O(1) | Fine | Single-row idempotent toggle |
-| `pullTodos(notion)` | O(P + T) where P = Notion pages | O(P) | Fine; bounded by Notion API page size | Builds `byLoopdId` Map first |
-| `pushTodos(notion, dirty)` | O(d × 350ms) where d = dirty rows | O(d) | Bounded by rate limit | One Notion API call per dirty row, serialized |
-| `pullHabits(notion)` | O(P) | O(P) | Fine; usually small (~10–50 habits) | Slug-rejected-on-pull adds a log warning per rejected diff |
-| `pushHabits(notion, dirty)` | O(d × 350ms) | O(d) | Fine | Habits CRUD is low-frequency |
-| `pullThreads(notion)` | O(P) | O(P) | Fine; usually small (~10–50 threads) | Slug also rejected on pull here |
-| `pushThreads(notion, dirty)` | O(d × 350ms) | O(d) | Fine | Threads CRUD is low-frequency |
+| `pushTable<T>(table)` (Supabase) | O(d) batches of 50 | O(d) | Fine to ~10k dirty rows per push | Generic batched upsert via `ON CONFLICT (user_id, id) DO UPDATE`; stamps `synced_at` on success |
+| `pullTable<T>(table)` (Supabase) | O(p × 200) paginated by `updated_at ASC`; *p* = pages | O(page) | Fine to ~10k changes since last pull | Calls `get_server_time()` RPC once per pull for clock-skew-safe `last_pull_at` |
+| `pushAll()` orchestrator | O(t × push) where *t* = synced tables (10) | O(d) | Acceptable to ~10k total dirty rows | Walks registry in `pushOrder` (FK-aware: parents before children) |
+| `pullAll()` orchestrator | O(t × pull) | O(page) | Fine | Walks registry in `pullOrder` (different from push: habits/threads before todo_meta/nutrition) |
+| `firstPullAll()` (recovery) | O(N + T + Mn) full restore | O(page) | Bounded by total cloud rows | Resets `sync_meta` then runs `pullAll()` from epoch — fresh-device path |
+| `chooseWinner(local, cloud)` | O(1) timestamp compare | O(1) | Fine | Pure function — last-write-wins by `updated_at` |
+| `schedulePush()` | O(1) timer reset | O(1) | Fine | 5s debounce; coalesces a burst of edits into one `pushAll()` |
 | `classifyTodo(text)` | 1 LLM call (~1-3s) | O(1) | Cost-bounded | Module-level in-flight counter |
 | `expandTodo(id, text)` | 1-2 LLM calls (~5-15s) | O(1) | Bounded by `MAX_CONCURRENT=3` | Auto-retry once on malformed JSON |
 | `backfillTodoMeta()` | O(N × T_avg) | O(1) | One-time per install | SecureStore-gated |
@@ -33,8 +34,8 @@ Per-operation Big-O for everything significant in loopd. Use this in coding-roun
 | `classifyAmbiguousMeta()` | O(K × LLM) where K = unclassified | O(K) | Boot-time, fire-and-forget | Skips done-or-overridden rows |
 | `getNutritionSuggestions(query)` | O(R) read + O(R) dedupe | O(D) where D = distinct names | Fine to ~5k nutrition rows | Could push DISTINCT to SQL |
 | `getThreadSuggestions(query, limit)` | O(Th + Mn) for LEFT-JOIN aggregate; LIMIT N | O(N) | Fine to ~100 threads | Recency-sorted via `MAX(created_at)` per thread |
-| `processDeletions(token, type)` | O(d × 350ms) | O(d) | Bounded by rate limit | FIFO drain of `sync_deletions` (now 5 entity types) |
-| Notion sync overall (4-stage chain) | O(rate-limit × total-dirty) | O(d) | Acceptable up to ~1000 dirty rows total | `syncAll → syncAllTodos → syncAllHabits → syncAllThreads`; later stages no-op when their DB ID isn't set |
+| Soft-delete cascade (e.g. `deleteEntry`) | O(1) entry + O(C) child rows where C = nutrition + todo_meta + thread_mentions for that entry | O(1) | Fine | All cascades are `UPDATE … SET deleted_at = ?` on already-indexed columns |
+| Read-path filter (`WHERE deleted_at IS NULL`) | O(1) per query (uses partial index) | O(1) | Fine | Applied to every getter on every synced table |
 
 ## Where the cliffs are
 
@@ -42,7 +43,7 @@ Four places that break first under load, ranked by which would hurt the user soo
 
 **`/todos` JS-side sort + filter.** At 5k+ todos starts to jank during scroll. Solution: virtualize the list (`FlashList`) and push sort/filter into a `useMemo` keyed only by inputs that affect them. Effort: half a day. Worth it: when you see jank in profiling, not before.
 
-**Notion sync at high dirty counts.** At >1000 dirty rows per sync, 350ms × 1000 = 5+ minutes of serial pushes. Solution: batch where Notion supports it (it doesn't for individual page creates), or accept the wall-clock cost with a progress UI. Effort: progress UI is half a day; true batching requires Notion API changes I don't control. Worth it: progress UI yes, batching wait-and-see.
+**Cloud sync at high dirty counts.** Push batches at 50 rows per upsert call; ~10k dirty rows = 200 batches × supabase-js round trip (~150ms typical) = ~30s of wall clock. Acceptable on cold-start initial-push but visible as a foreground freeze if it ever runs interactively. Solution: keep the 5s debounce honest (the existing `schedulePush()` already coalesces bursts), and at any larger scale move the push to a worker thread. Effort: worker thread is a day; better debouncing is already in. Worth it: worker thread when push starts blocking the UI.
 
 **First reorder bulk write.** O(T) `updateTodoMeta` calls, each a SQL UPDATE. At 1000+ todos this is a noticeable pause when the user first taps the up arrow. Solution: wrap in a single SQLite transaction, or implement Linear-style sparse fractional indexing so positions never need bulk reassignment. Effort: transaction wrapper is an hour; fractional indexing is two-three days. Worth it: transaction wrapper yes, fractional indexing only if reorder becomes a hot operation.
 
@@ -58,7 +59,7 @@ Three places where the current implementation is correct as-is and reaching for 
 
 **Single-entry scan** is `O(L + E)` where both are typically <50. No optimization needed at any realistic scale.
 
-**Module-level rate limiter** is correct as-is. Don't reach for token buckets until you have multiple workers.
+**5-second push debounce** is correct as-is. Don't reach for adaptive backoff or token buckets until the cloud-sync layer has visible problems in production traffic.
 
 **Heuristic classifier** is `O(L)` regex scan — already as cheap as it gets without sacrificing accuracy.
 
