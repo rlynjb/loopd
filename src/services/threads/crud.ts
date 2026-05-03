@@ -115,8 +115,9 @@ export async function getThreadSuggestions(query: string, limit = 8): Promise<Th
   const rows = await db.getAllAsync<Row>(
     `SELECT t.id AS id, MAX(m.created_at) AS last_at
      FROM threads t
-     LEFT JOIN thread_mentions m ON m.thread_id = t.id
+     LEFT JOIN thread_mentions m ON m.thread_id = t.id AND m.deleted_at IS NULL
      WHERE t.archived = 0
+       AND t.deleted_at IS NULL
        AND (? = '' OR t.slug LIKE ? COLLATE NOCASE)
      GROUP BY t.id
      ORDER BY last_at DESC NULLS LAST, t.name COLLATE NOCASE ASC

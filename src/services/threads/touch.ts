@@ -21,6 +21,7 @@ export async function isThreadTouchedToday(threadId: string, dateStr: string): P
     `SELECT id FROM thread_mentions
      WHERE thread_id = ? AND entry_date = ?
        AND entry_id IS NULL AND todo_id IS NULL
+       AND deleted_at IS NULL
      LIMIT 1`,
     [threadId, dateStr],
   );

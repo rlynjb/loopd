@@ -394,8 +394,8 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
 
-  // Seed habits if empty
-  const count = await database.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM habits');
+  // Seed habits if empty (don't re-seed if user has soft-deleted them all)
+  const count = await database.getFirstAsync<{ c: number }>('SELECT COUNT(*) as c FROM habits WHERE deleted_at IS NULL');
   if (count && count.c === 0) {
     await database.execAsync(`
       INSERT INTO habits (id, label, sort_order) VALUES
@@ -465,14 +465,14 @@ const TIME_OF_DAY_ORDER_SQL = `
 export async function getHabits(): Promise<Habit[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<HabitRow>(
-    `SELECT * FROM habits ORDER BY ${TIME_OF_DAY_ORDER_SQL}, sort_order`
+    `SELECT * FROM habits WHERE deleted_at IS NULL ORDER BY ${TIME_OF_DAY_ORDER_SQL}, sort_order`
   );
   return rows.map(mapRowToHabit);
 }
 
 export async function getHabitById(id: string): Promise<Habit | null> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<HabitRow>('SELECT * FROM habits WHERE id = ?', [id]);
+  const row = await db.getFirstAsync<HabitRow>('SELECT * FROM habits WHERE id = ? AND deleted_at IS NULL', [id]);
   return row ? mapRowToHabit(row) : null;
 }
 
@@ -528,7 +528,7 @@ function entryClipsForStorage(entry: Entry): {
 export async function getEntriesByDate(date: string): Promise<Entry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<EntryRow>(
-    'SELECT * FROM entries WHERE date = ? ORDER BY created_at ASC', [date]
+    'SELECT * FROM entries WHERE date = ? AND deleted_at IS NULL ORDER BY created_at ASC', [date]
   );
 
   return rows.map(r => mapRowToEntry(r));
@@ -563,33 +563,56 @@ export async function updateEntry(entry: Entry): Promise<void> {
   );
 }
 
+// Soft-delete: stamp deleted_at + bump updated_at so the row stays in the
+// DB (hidden from reads via WHERE deleted_at IS NULL) and propagates to
+// cloud as a normal sync event. The 30-day vacuum (M4) hard-deletes later.
+// During the Notion dual-run we also still write to sync_deletions so the
+// Notion archival path keeps working until M7 removes that code.
 export async function deleteEntry(id: string): Promise<void> {
   const db = await getDatabase();
-  // Track deletion for sync if it had a notion_page_id
+  const now = new Date().toISOString();
+
+  // Notion archival queue (dual-run only — drops in M7).
   const row = await db.getFirstAsync<{ notion_page_id: string | null }>('SELECT notion_page_id FROM entries WHERE id = ?', [id]);
   if (row?.notion_page_id) {
     await db.runAsync(
       'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['entry', id, row.notion_page_id, new Date().toISOString()]
+      ['entry', id, row.notion_page_id, now]
     );
   }
-  // Cascade-delete nutrition rows tied to this entry. Notion-synced rows get
-  // queued for archive so the remote copy doesn't orphan.
+  // Cascade soft-delete nutrition + queue for Notion archive.
   const nutRows = await db.getAllAsync<{ id: string; notion_page_id: string | null }>(
-    'SELECT id, notion_page_id FROM nutrition WHERE entry_id = ?', [id]
+    'SELECT id, notion_page_id FROM nutrition WHERE entry_id = ? AND deleted_at IS NULL', [id]
   );
   for (const n of nutRows) {
     if (n.notion_page_id) {
       await db.runAsync(
         'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-        ['nutrition', n.id, n.notion_page_id, new Date().toISOString()]
+        ['nutrition', n.id, n.notion_page_id, now]
       );
     }
   }
-  await db.runAsync('DELETE FROM nutrition WHERE entry_id = ?', [id]);
-  // Cascade todo_meta rows tied to this entry's todos.
-  await db.runAsync('DELETE FROM todo_meta WHERE entry_id = ?', [id]);
-  await db.runAsync('DELETE FROM entries WHERE id = ?', [id]);
+  await db.runAsync(
+    'UPDATE nutrition SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
+    [now, now, id],
+  );
+  // Cascade soft-delete todo_meta.
+  await db.runAsync(
+    'UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
+    [now, now, id],
+  );
+  // Cascade soft-delete thread_mentions referencing this entry. Local schema
+  // never had this cascade; soft delete makes it explicit so cloud sync sees
+  // a consistent view (no mention left dangling against a deleted entry).
+  await db.runAsync(
+    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
+    [now, now, id],
+  );
+  // Soft-delete the entry itself.
+  await db.runAsync(
+    'UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?',
+    [now, now, id],
+  );
 }
 
 // ── Nutrition CRUD ──
@@ -617,7 +640,7 @@ export async function getNutritionByEntry(entryId: string): Promise<NutritionEnt
   const db = await getDatabase();
   const rows = await db.getAllAsync<Parameters<typeof mapRowToNutrition>[0]>(
     `SELECT id, name, kcal, entry_id, entry_date, source_line, notion_page_id, created_at, updated_at
-     FROM nutrition WHERE entry_id = ? ORDER BY source_line ASC, created_at ASC`,
+     FROM nutrition WHERE entry_id = ? AND deleted_at IS NULL ORDER BY source_line ASC, created_at ASC`,
     [entryId],
   );
   return rows.map(mapRowToNutrition);
@@ -652,16 +675,20 @@ export async function updateNutrition(
 
 export async function deleteNutrition(id: string): Promise<void> {
   const db = await getDatabase();
+  const now = new Date().toISOString();
   const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
     'SELECT notion_page_id FROM nutrition WHERE id = ?', [id],
   );
   if (row?.notion_page_id) {
     await db.runAsync(
       'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['nutrition', id, row.notion_page_id, new Date().toISOString()],
+      ['nutrition', id, row.notion_page_id, now],
     );
   }
-  await db.runAsync('DELETE FROM nutrition WHERE id = ?', [id]);
+  await db.runAsync(
+    'UPDATE nutrition SET deleted_at = ?, updated_at = ? WHERE id = ?',
+    [now, now, id],
+  );
 }
 
 // Autocomplete source: distinct food names matching a prefix, each with its
@@ -674,7 +701,7 @@ export async function getNutritionSuggestions(query: string, limit = 8): Promise
   const rows = await db.getAllAsync<{ name: string; kcal: number; created_at: string }>(
     `SELECT name, kcal, created_at
      FROM nutrition
-     WHERE ? = '' OR name LIKE ? COLLATE NOCASE
+     WHERE deleted_at IS NULL AND (? = '' OR name LIKE ? COLLATE NOCASE)
      ORDER BY created_at DESC
      LIMIT 200`,
     [query.trim(), like],
@@ -695,7 +722,7 @@ export async function getAllNutrition(): Promise<NutritionEntry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<Parameters<typeof mapRowToNutrition>[0]>(
     `SELECT id, name, kcal, entry_id, entry_date, source_line, notion_page_id, created_at, updated_at
-     FROM nutrition ORDER BY created_at DESC`,
+     FROM nutrition WHERE deleted_at IS NULL ORDER BY created_at DESC`,
   );
   return rows.map(mapRowToNutrition);
 }
@@ -743,7 +770,7 @@ function mapRowToTodoMeta(row: TodoMetaRow): TodoMeta {
 export async function getTodoMeta(todoId: string): Promise<TodoMeta | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<TodoMetaRow>(
-    `SELECT * FROM todo_meta WHERE todo_id = ?`, [todoId],
+    `SELECT * FROM todo_meta WHERE todo_id = ? AND deleted_at IS NULL`, [todoId],
   );
   return row ? mapRowToTodoMeta(row) : null;
 }
@@ -751,14 +778,14 @@ export async function getTodoMeta(todoId: string): Promise<TodoMeta | null> {
 export async function getTodoMetasByEntry(entryId: string): Promise<TodoMeta[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<TodoMetaRow>(
-    `SELECT * FROM todo_meta WHERE entry_id = ?`, [entryId],
+    `SELECT * FROM todo_meta WHERE entry_id = ? AND deleted_at IS NULL`, [entryId],
   );
   return rows.map(mapRowToTodoMeta);
 }
 
 export async function getAllTodoMetas(): Promise<TodoMeta[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<TodoMetaRow>(`SELECT * FROM todo_meta`);
+  const rows = await db.getAllAsync<TodoMetaRow>(`SELECT * FROM todo_meta WHERE deleted_at IS NULL`);
   return rows.map(mapRowToTodoMeta);
 }
 
@@ -810,12 +837,20 @@ export async function updateTodoMeta(
 
 export async function deleteTodoMeta(todoId: string): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync(`DELETE FROM todo_meta WHERE todo_id = ?`, [todoId]);
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE todo_id = ?`,
+    [now, now, todoId],
+  );
 }
 
 export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync(`DELETE FROM todo_meta WHERE entry_id = ?`, [entryId]);
+  const now = new Date().toISOString();
+  await db.runAsync(
+    `UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL`,
+    [now, now, entryId],
+  );
 }
 
 // ── Threads ──
@@ -871,8 +906,8 @@ export async function getThreads(includeArchived = false): Promise<Thread[]> {
   // Sort: pinned first, then by time-of-day bucket, then alphabetic within.
   const rows = await db.getAllAsync<ThreadRow>(
     includeArchived
-      ? `SELECT * FROM threads ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
-      : `SELECT * FROM threads WHERE archived = 0 ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
+      ? `SELECT * FROM threads WHERE deleted_at IS NULL ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
+      : `SELECT * FROM threads WHERE archived = 0 AND deleted_at IS NULL ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
   );
   return rows.map(mapRowToThread);
 }
@@ -880,7 +915,7 @@ export async function getThreads(includeArchived = false): Promise<Thread[]> {
 export async function getThreadBySlug(slug: string): Promise<Thread | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<ThreadRow>(
-    'SELECT * FROM threads WHERE slug = ? COLLATE NOCASE',
+    'SELECT * FROM threads WHERE slug = ? COLLATE NOCASE AND deleted_at IS NULL',
     [slug]
   );
   return row ? mapRowToThread(row) : null;
@@ -888,7 +923,7 @@ export async function getThreadBySlug(slug: string): Promise<Thread | null> {
 
 export async function getThreadById(id: string): Promise<Thread | null> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<ThreadRow>('SELECT * FROM threads WHERE id = ?', [id]);
+  const row = await db.getFirstAsync<ThreadRow>('SELECT * FROM threads WHERE id = ? AND deleted_at IS NULL', [id]);
   return row ? mapRowToThread(row) : null;
 }
 
@@ -934,19 +969,25 @@ export async function updateThread(thread: Thread): Promise<void> {
 
 export async function deleteThread(id: string): Promise<void> {
   const db = await getDatabase();
-  // Track deletion for sync if it had a notion_page_id.
+  const now = new Date().toISOString();
   const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
     'SELECT notion_page_id FROM threads WHERE id = ?', [id]
   );
   if (row?.notion_page_id) {
     await db.runAsync(
       'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['thread', id, row.notion_page_id, new Date().toISOString()]
+      ['thread', id, row.notion_page_id, now]
     );
   }
-  // Cascade: drop all mentions for this thread.
-  await db.runAsync('DELETE FROM thread_mentions WHERE thread_id = ?', [id]);
-  await db.runAsync('DELETE FROM threads WHERE id = ?', [id]);
+  // Cascade soft-delete all mentions for this thread.
+  await db.runAsync(
+    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE thread_id = ? AND deleted_at IS NULL',
+    [now, now, id],
+  );
+  await db.runAsync(
+    'UPDATE threads SET deleted_at = ?, updated_at = ? WHERE id = ?',
+    [now, now, id],
+  );
 }
 
 // ── Thread mentions ──
@@ -978,7 +1019,7 @@ function mapRowToMention(r: ThreadMentionRow): ThreadMention {
 export async function getMentionsByEntry(entryId: string): Promise<ThreadMention[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE entry_id = ?', [entryId]
+    'SELECT * FROM thread_mentions WHERE entry_id = ? AND deleted_at IS NULL', [entryId]
   );
   return rows.map(mapRowToMention);
 }
@@ -986,7 +1027,7 @@ export async function getMentionsByEntry(entryId: string): Promise<ThreadMention
 export async function getMentionsByTodo(todoId: string): Promise<ThreadMention[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE todo_id = ?', [todoId]
+    'SELECT * FROM thread_mentions WHERE todo_id = ? AND deleted_at IS NULL', [todoId]
   );
   return rows.map(mapRowToMention);
 }
@@ -994,7 +1035,7 @@ export async function getMentionsByTodo(todoId: string): Promise<ThreadMention[]
 export async function getMentionsByThread(threadId: string, limit = 100): Promise<ThreadMention[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?',
+    'SELECT * FROM thread_mentions WHERE thread_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?',
     [threadId, limit]
   );
   return rows.map(mapRowToMention);
@@ -1005,7 +1046,7 @@ export async function getMentionsByThread(threadId: string, limit = 100): Promis
 export async function getTodoThreadLinks(): Promise<Map<string, Set<string>>> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{ todo_id: string; thread_id: string }>(
-    `SELECT DISTINCT todo_id, thread_id FROM thread_mentions WHERE todo_id IS NOT NULL`
+    `SELECT DISTINCT todo_id, thread_id FROM thread_mentions WHERE todo_id IS NOT NULL AND deleted_at IS NULL`
   );
   const out = new Map<string, Set<string>>();
   for (const r of rows) {
@@ -1020,7 +1061,7 @@ export async function getTodoThreadLinks(): Promise<Map<string, Set<string>>> {
 export async function getLastMentionByThread(): Promise<Map<string, string>> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<{ thread_id: string; max_at: string }>(
-    'SELECT thread_id, MAX(created_at) AS max_at FROM thread_mentions GROUP BY thread_id'
+    'SELECT thread_id, MAX(created_at) AS max_at FROM thread_mentions WHERE deleted_at IS NULL GROUP BY thread_id'
   );
   return new Map(rows.map(r => [r.thread_id, r.max_at]));
 }
@@ -1056,20 +1097,24 @@ export async function updateMentionSourceLine(id: string, sourceLine: number): P
 
 export async function deleteMention(id: string): Promise<void> {
   const db = await getDatabase();
-  await db.runAsync('DELETE FROM thread_mentions WHERE id = ?', [id]);
+  const now = new Date().toISOString();
+  await db.runAsync(
+    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE id = ?',
+    [now, now, id],
+  );
 }
 
 // ── Day title ──
 
 export async function getDayTitle(date: string): Promise<string> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ title: string }>('SELECT title FROM day_meta WHERE date = ?', [date]);
+  const row = await db.getFirstAsync<{ title: string }>('SELECT title FROM day_meta WHERE date = ? AND deleted_at IS NULL', [date]);
   return row?.title ?? '';
 }
 
 export async function getDayTitleWithTimestamp(date: string): Promise<{ title: string; updatedAt: string | null }> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<{ title: string; updated_at: string | null }>('SELECT title, updated_at FROM day_meta WHERE date = ?', [date]);
+  const row = await db.getFirstAsync<{ title: string; updated_at: string | null }>('SELECT title, updated_at FROM day_meta WHERE date = ? AND deleted_at IS NULL', [date]);
   return { title: row?.title ?? '', updatedAt: row?.updated_at ?? null };
 }
 
@@ -1098,14 +1143,14 @@ export async function setDayTitleFromSync(date: string, title: string, notionEdi
 
 export async function getAllEntries(): Promise<Entry[]> {
   const db = await getDatabase();
-  const rows = await db.getAllAsync<EntryRow>('SELECT * FROM entries ORDER BY created_at ASC');
+  const rows = await db.getAllAsync<EntryRow>('SELECT * FROM entries WHERE deleted_at IS NULL ORDER BY created_at ASC');
   return rows.map(mapRowToEntry);
 }
 
 export async function deleteEmptyEntries(): Promise<number> {
   const db = await getDatabase();
   const empty = await db.getAllAsync<{ id: string; date: string; text: string | null }>(
-    "SELECT id, date, text FROM entries WHERE (text IS NULL OR text = '') AND (habits_json IS NULL OR habits_json = '[]') AND (todos_json IS NULL OR todos_json = '[]') AND (clips_json IS NULL OR clips_json = '[]')"
+    "SELECT id, date, text FROM entries WHERE deleted_at IS NULL AND (text IS NULL OR text = '') AND (habits_json IS NULL OR habits_json = '[]') AND (todos_json IS NULL OR todos_json = '[]') AND (clips_json IS NULL OR clips_json = '[]')"
   );
   console.log('[loopd] deleteEmptyEntries:', empty.length, empty.map(e => ({ id: e.id, date: e.date, text: e.text })));
   for (const e of empty) {
@@ -1136,7 +1181,7 @@ export async function getEntryByNotionPageId(pageId: string): Promise<Entry | nu
 
 export async function getEntryById(id: string): Promise<Entry | null> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE id = ?', [id]);
+  const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL', [id]);
   return row ? mapRowToEntry(row) : null;
 }
 
@@ -1256,17 +1301,20 @@ export async function updateHabit(habit: Habit): Promise<void> {
 
 export async function deleteHabit(id: string): Promise<void> {
   const db = await getDatabase();
-  // Track deletion for Notion sync if it had a page id.
+  const now = new Date().toISOString();
   const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
     'SELECT notion_page_id FROM habits WHERE id = ?', [id]
   );
   if (row?.notion_page_id) {
     await db.runAsync(
       'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['habit', id, row.notion_page_id, new Date().toISOString()]
+      ['habit', id, row.notion_page_id, now]
     );
   }
-  await db.runAsync('DELETE FROM habits WHERE id = ?', [id]);
+  await db.runAsync(
+    'UPDATE habits SET deleted_at = ?, updated_at = ? WHERE id = ?',
+    [now, now, id],
+  );
 }
 
 // ── Projects ──
@@ -1278,7 +1326,7 @@ export async function getProjectByDate(date: string): Promise<EditorProject | nu
     removed_clip_source_keys_json: string | null;
     clips_json: string | null; text_overlays_json: string | null;
     filter_overlays_json: string | null; export_uri: string | null; updated_at: string;
-  }>('SELECT * FROM projects WHERE date = ?', [date]);
+  }>('SELECT * FROM projects WHERE date = ? AND deleted_at IS NULL', [date]);
 
   if (!row) return null;
 
@@ -1324,7 +1372,7 @@ export async function getVlogs(): Promise<Vlog[]> {
     id: string; date: string; clip_count: number; habit_count: number;
     caption: string | null;
     duration_seconds: number; export_uri: string | null; created_at: string;
-  }>('SELECT * FROM vlogs ORDER BY created_at DESC');
+  }>('SELECT * FROM vlogs WHERE deleted_at IS NULL ORDER BY created_at DESC');
 
   return rows.map(r => ({
     id: r.id,
@@ -1345,8 +1393,8 @@ export async function archivePastDays(todayStr: string): Promise<void> {
   // Find dates with entries that are before today and don't have a vlog record
   const rows = await db.getAllAsync<{ date: string }>(
     `SELECT DISTINCT e.date FROM entries e
-     LEFT JOIN vlogs v ON e.date = v.date
-     WHERE v.id IS NULL AND e.date < ?`,
+     LEFT JOIN vlogs v ON e.date = v.date AND v.deleted_at IS NULL
+     WHERE v.id IS NULL AND e.date < ? AND e.deleted_at IS NULL`,
     [todayStr]
   );
 
@@ -1400,7 +1448,7 @@ export async function insertVlog(vlog: Vlog): Promise<void> {
 export async function getAISummary(date: string): Promise<{ summaryJson: string; generatedAt: string; model: string } | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ summary_json: string; generated_at: string; model: string }>(
-    'SELECT summary_json, generated_at, model FROM ai_summaries WHERE date = ?', [date]
+    'SELECT summary_json, generated_at, model FROM ai_summaries WHERE date = ? AND deleted_at IS NULL', [date]
   );
   return row ? { summaryJson: row.summary_json, generatedAt: row.generated_at, model: row.model } : null;
 }
@@ -1425,7 +1473,7 @@ export async function getRecentAISummaries(
   const db = await getDatabase();
   const rows = await db.getAllAsync<{ date: string; summary_json: string; generated_at: string; model: string }>(
     `SELECT date, summary_json, generated_at, model FROM ai_summaries
-     WHERE date < ?
+     WHERE date < ? AND deleted_at IS NULL
      ORDER BY date DESC
      LIMIT ?`,
     [beforeDate, limit],

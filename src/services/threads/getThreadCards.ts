@@ -40,7 +40,8 @@ export async function getThreadCards(now: Date = new Date()): Promise<ThreadCard
      FROM thread_mentions
      WHERE entry_date >= ?
        AND entry_id IS NULL
-       AND todo_id IS NULL`,
+       AND todo_id IS NULL
+       AND deleted_at IS NULL`,
     [activityCutoff],
   );
   const activeDatesByThread = new Map<string, Set<string>>();
@@ -56,7 +57,7 @@ export async function getThreadCards(now: Date = new Date()): Promise<ThreadCard
   const weekRows = await db.getAllAsync<WeekRow>(
     `SELECT thread_id, COUNT(DISTINCT entry_id) AS cnt
      FROM thread_mentions
-     WHERE entry_id IS NOT NULL AND entry_date >= ?
+     WHERE entry_id IS NOT NULL AND entry_date >= ? AND deleted_at IS NULL
      GROUP BY thread_id`,
     [weekStartISO],
   );
@@ -65,7 +66,7 @@ export async function getThreadCards(now: Date = new Date()): Promise<ThreadCard
   // Distinct todo IDs mentioned per thread (so we can join to todo_meta).
   type TodoLinkRow = { thread_id: string; todo_id: string };
   const todoLinkRows = await db.getAllAsync<TodoLinkRow>(
-    `SELECT DISTINCT thread_id, todo_id FROM thread_mentions WHERE todo_id IS NOT NULL`,
+    `SELECT DISTINCT thread_id, todo_id FROM thread_mentions WHERE todo_id IS NOT NULL AND deleted_at IS NULL`,
   );
   const todoIdsByThread = new Map<string, Set<string>>();
   for (const r of todoLinkRows) {
