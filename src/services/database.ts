@@ -354,6 +354,36 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     console.warn('[loopd] Habits emoji migration error:', e);
   }
 
+  // ── Cloud sync (Supabase) — M0 schema additions ──
+  // Every synced table gains:
+  //   - synced_at TEXT  — last successful push timestamp (LOCAL ONLY)
+  //   - deleted_at TEXT — soft-delete timestamp; row hidden when set
+  // Both are nullable. Read paths gain `WHERE deleted_at IS NULL` in M3.
+  // ai_summaries also gains `updated_at` so the sync layer can treat every
+  // table uniformly (its existing `generated_at` is the data event; the new
+  // `updated_at` mirrors it and is what sync compares against).
+  for (const t of ['entries', 'projects', 'vlogs', 'day_meta', 'ai_summaries',
+                   'nutrition', 'habits', 'todo_meta', 'threads', 'thread_mentions']) {
+    await addColumn(t, 'synced_at', 'TEXT');
+    await addColumn(t, 'deleted_at', 'TEXT');
+  }
+  await addColumn('ai_summaries', 'updated_at', 'TEXT');
+  // Backfill ai_summaries.updated_at from generated_at on first run.
+  await database.execAsync(`UPDATE ai_summaries SET updated_at = generated_at WHERE updated_at IS NULL`);
+
+  // sync_meta — per-table sync-state ledger. NOT itself synced.
+  // Eleven rows after first run (one per synced table; sync_deletions excluded).
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS sync_meta (
+      table_name TEXT PRIMARY KEY,
+      last_pull_at TEXT,
+      last_push_at TEXT,
+      pending_pushes INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      last_error_at TEXT
+    );
+  `);
+
   // Backfill updated_at
   await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
