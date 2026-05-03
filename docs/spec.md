@@ -17,7 +17,7 @@ loopd turns everyday captures (short clips, text jots, habit checkmarks, marked-
 3. Todos get a thinking-mode classification (heuristic-first, LLM fallback). Non-todo modes (idea / bug / question / decision / knowledge / content) gain a tap-to-expand affordance that produces structured AI output via per-type prompts.
 4. End of day: tap into the editor — AI auto-composes clip order, trims, and text overlays from the day's entries.
 5. Tweak in the editor (timeline / text / filter tabs), export to MP4 (saved to `DCIM/loopd/` and sharable).
-6. Optional: Notion syncs entries + todos always; habits cadence and threads bidirectionally when their respective DB IDs are configured.
+6. Cloud sync (Supabase Postgres) backs every table up automatically. Local SQLite stays canonical; sync runs on boot and on a 5s debounce after every edit. See [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) for the full design.
 
 Native-only (React Native / Expo), runs on a development build — not Expo Go, not web. **Android only** — the prebuilt `android/` directory is committed; iOS is not currently supported.
 
@@ -66,9 +66,9 @@ Nutrition / Habits / Threads CRUD live under `/more/{nutrition,habits,threads}`.
 
 ### `app/_layout.tsx` — root
 Runs on app boot:
-- Initializes SQLite (`useDatabase`), loads fonts, wraps in error boundary + `NotionSyncProvider` + gesture root.
+- Initializes SQLite (`useDatabase`), loads fonts, wraps in error boundary + gesture root.
 - Checks `expo-updates` for OTA updates; prompts user to restart if one is fetched.
-- If Notion configured and auto-sync enabled: runs `syncAll → syncAllTodos → syncAllHabits → syncAllThreads` (later stages no-op when their respective DB IDs aren't set).
+- Cloud sync: on first cold start `bootstrapCloudSync()` decides initial-push vs first-pull vs no-op (gated by SecureStore `cloud_initial_push_done`); subsequent boots run `pullAll → pushAll`. Edits trigger a 5s-debounced `pushAll` via `schedulePush()`.
 - If AI configured: auto-summarizes yesterday's entries.
 - Migrates any pre-transcode clips to 1080p proxies in the background.
 - **Backfill migrations**, all SecureStore-gated:
@@ -175,8 +175,7 @@ List of all threads (active + archived tabs). Editor sheet exposes name, slug (a
 ### `app/settings/`
 - [`index.tsx`](../app/settings/index.tsx) — menu.
 - [`ai.tsx`](../app/settings/ai.tsx) — provider toggle (Claude Sonnet 4.6 or GPT-4o), API-key input, Test Connection.
-- [`notion-sync.tsx`](../app/settings/notion-sync.tsx) — manual full-sync, Entries / Todos / Habits / Threads DB ID inputs, auto-sync toggle, reset-sync-timestamp. Per-DB "Sync now" buttons appear conditionally for Habits + Threads (separate from the main Sync Now).
-- [`notion-guide.tsx`](../app/settings/notion-guide.tsx) — nine-step setup guide. Covers Entries DB, Todos DB (optional), Nutrition DB (optional), Habits DB (optional), Threads DB (optional), share-with-integration, copy DB IDs, connect, sync.
+- [`cloud-sync.tsx`](../app/settings/cloud-sync.tsx) — Supabase status + manual PUSH/PULL + per-table sync ledger. Long-press the title for a hidden dev menu (force push all / reset cloud / reset local from cloud).
 - [`updates.tsx`](../app/settings/updates.tsx) — manual OTA check.
 
 ---
@@ -334,26 +333,17 @@ Implementation details:
 Both calls cache the merged `AISummary` (with caption fields appended) into the `ai_summaries` table per date, so re-mounting the editor restores all three variants without re-calling the LLM. The TEXT tab's variant chips (§4 editor) read from this cached row.
 
 ### 6.10 Media Pipeline
-Full details in [docs/media-pipeline.md](./media-pipeline.md). 1080p H.264 proxy transcode on import (CRF 23) via `@wokcito/ffmpeg-kit-react-native`. Parallel-transcode + in-order-commit. Missing clips re-imported via `clipMatcher.ts`.
+Full details in [docs/media-pipeline.md](./media-pipeline.md). 1080p H.264 proxy transcode on import (CRF 23) via `@wokcito/ffmpeg-kit-react-native`. Parallel-transcode + in-order-commit.
 
-### 6.11 Notion Sync
-[src/services/notion/sync.ts](../src/services/notion/sync.ts) — four orchestrators. The boot-time auto-sync chain (when configured AND auto-sync enabled): `syncAll → syncAllTodos → syncAllHabits → syncAllThreads`.
+### 6.11 Cloud Sync (Supabase Postgres)
+Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and the working plan in [`docs/loopd-cloud-sync-plan.md`](./loopd-cloud-sync-plan.md). Local SQLite stays canonical (Architectural Principle 12); Supabase is a sync mirror.
 
-- **`syncAll()`** — Entries DB. Pulls + pushes entries, merges habits vocabulary (multi-select options on Entries DB still govern habit identity), archives queued deletions, runs `reimportMissingClips`.
-- **`syncAllTodos()`** — Optional second DB. Single schema fetch at start; thread title-column + missing-property set through pull + push.
-  - **`text`** — prose-canonical; Notion edits to Title are dropped.
-  - **`done`** — bidirectional (last-edited-time merge).
-  - **`type`** — Notion change → flip `userOverriddenType=1` (treated as manual override).
-  - **`expanded_md`** — pull-down on diff (Notion is read-canonical when local is empty).
-  - **`model` / `classifier_confidence` / `user_overridden_type`** — pull-down on diff.
-  - **New-from-Notion** — appends `[]` / `[x]` line to today's most recent entry's prose, mints `TodoItem` with Notion's loopdId so the next scan text-pairs cleanly. Paired `TodoMeta` inserted with `userOverriddenType=true`.
-- **`syncAllHabits()`** — Optional Habits DB (separate from the Entries-DB multi-select that governs identity). Carries cadence + time-of-day + slug + icon/color metadata bidirectionally. Slug is **local-only** (Notion edits rejected on pull, log warning). Schema-gap tolerance via `detectMissingHabitProperties`. Silent no-op when the DB ID is unset.
-- **`syncAllThreads()`** — Optional Threads DB. Bidirectional for `name`, `icon`, `color`, `target_cadence_days`, `archived`, `pinned`, `time_of_day`. Slug is **local-only** (rejected on pull because changing it would invalidate existing mention reconciliation). Mentions are **NOT** synced — they're derived from entries/todos which already sync. New rows from Notion auto-derive a slug if blank, with `-1`/`-2` collision suffixes.
-- Schema-gap detection via `detectMissingTodoProperties` / `detectMissingHabitProperties` / `detectMissingThreadProperties`; missing properties listed in `result.debug` (existing DBs without new fields continue to sync, just without the new fields).
-- `expanded_md` is split across multiple rich-text blocks for Notion's 2000-char-per-block cap.
-- Module-level rate limiter at [`notion/api.ts`](../src/services/notion/api.ts) (350ms gap, 429 retry) serializes ALL Notion calls across all four orchestrators.
-
-Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`, `nutrition`, `thread`).
+- **Push** — every write to a synced table calls `schedulePush()` which fires a 5s-debounced `pushAll()`. Per-table batched upsert with `ON CONFLICT (user_id, id) DO UPDATE`; stamps local `synced_at` on success.
+- **Pull** — incremental, paginated by `updated_at ASC`. `last_pull_at` is set from a `get_server_time()` Postgres RPC to avoid clock skew. Conflict resolution is last-write-wins by `updated_at`.
+- **Soft delete** — every CRUD delete stamps `deleted_at + updated_at`; reads filter `WHERE deleted_at IS NULL`; the deletion propagates to cloud as a normal sync event. (No 30-day vacuum yet — soft-deleted rows accumulate. v1.x candidate.)
+- **Bootstrap** — `bootstrapCloudSync()` runs once (gated by `cloud_initial_push_done` SecureStore flag). Decides initial-push vs first-pull vs no-op vs initial-push fallback for the both-populated case.
+- **Tables synced** — every entity table from §5: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`. (`sync_deletions` was a Notion-era queue; no longer used.)
+- **Phase A** — single hardcoded `user_id = '00000000-0000-0000-0000-000000000001'`, RLS disabled. Phase B (paid tier) flips RLS on and adds auth.
 
 ### 6.12 OTA Updates
 `expo-updates` checks on every app open. Background fetch + restart prompt.
@@ -364,17 +354,16 @@ Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`
 
 | Path | Purpose |
 |---|---|
-| `database.ts` | SQLite schema, migrations, CRUD for all 11 tables; sync-deletion queue; AI summary cache |
+| `database.ts` | SQLite schema, migrations, CRUD for all 11 tables; AI summary cache. Every write to a synced table calls `sync/schedulePush`; every read filters `WHERE deleted_at IS NULL`. |
 | `fileManager.ts` | Pick / record / copy clip; DCIM save; ensure app dirs |
 | `ffmpeg.ts`, `ffmpegCommand.ts` | FFmpeg wrapper + 1080p H.264 transcode command builder |
 | `clipMigration.ts` | Backfills 1080p proxies for pre-transcode clips |
-| `clipMatcher.ts` | Re-sources missing clips from camera roll |
 | `exportPipeline.ts` | Final vlog transcode & mux |
 | `textBitmap.ts`, `textRenderer.tsx` | Rasterizes text overlays via Skia |
 | `todos/scanTodos.ts` | `[]`/`[x]` parser; two-pass merge against `todos_json`; `rewriteTodoLine` for dashboard round-trip |
 | `todos/migrate.ts` | One-time backfill of `[]` markers in pre-existing entries (SecureStore-gated) |
 | `todos/rank.ts` | Ranking + relative-time formatting for the dashboard `SmartTodoList` |
-| `todos/crud.ts` | Entry-scoped todo CRUD; round-trips done/text into prose; enqueues `sync_deletion`; fires threads scan after writes so `#tags` register on save |
+| `todos/crud.ts` | Entry-scoped todo CRUD; round-trips done/text into prose; fires threads scan after writes so `#tags` register on save |
 | `todos/typeMeta.ts` | Single source for type icon/label/color/order |
 | `todos/heuristicClassify.ts` | Free heuristic — text → `'todo'` \| null |
 | `todos/classify.ts` | Cheapest-model LLM classifier; module in-flight counter |
@@ -400,13 +389,18 @@ Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`
 | `ai/config.ts` | Claude/OpenAI key + provider storage |
 | `ai/prompt.ts`, `ai/summarize.ts`, `ai/compose.ts`, `ai/validate.ts` | Vlog summary prompts, structured-summary LLM call, compose to editor types, validation/clamping |
 | `ai/caption.ts` | Second LLM pass per [docs/relatable-caption-spec.md](./relatable-caption-spec.md). `generateCaption(input)` returns `{ caption, alternate, detectedTheme }`. Failures swallowed by `summarize.ts` so the structured summary still ships. |
-| `notion/api.ts` | `queryDatabase`, `createPage`, `updatePage`, `archivePage`; module-singleton 350ms rate-limiter + 429 retry |
-| `notion/config.ts` | Token, DB IDs (Entries / Todos / Habits / Threads), per-sync timestamps, auto-sync flag |
-| `notion/mapper.ts` | Entries DB bidirectional property mapping |
-| `notion/todosMapper.ts` | Todos DB mapping; reads/writes thinking-mode fields with missing-property tolerance via `availableProperties` set; `detectMissingTodoProperties` for schema-gap detection |
-| `notion/habitsMapper.ts` | Optional Habits DB mapping: cadence type/days/count, time-of-day select, slug + icon + color. Slug edits in Notion rejected on pull (log warning) |
-| `notion/threadsMapper.ts` | Optional Threads DB mapping: name + icon + color + target cadence + archived + pinned + time-of-day. Slug local-only (Notion edits rejected); mentions never synced |
-| `notion/sync.ts` | Orchestrators `syncAll`, `syncAllTodos`, `syncAllHabits`, `syncAllThreads` |
+| `sync/client.ts` | Supabase singleton + hardcoded Phase A `user_id`; reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `.env`. |
+| `sync/types.ts` | `SyncableTable<TLocal, TCloud>` interface — every synced table implements it. |
+| `sync/syncMeta.ts` | CRUD for the local `sync_meta` ledger (per-table last_pull_at / last_push_at / last_error). |
+| `sync/conflict.ts` | Pure `chooseWinner(local, cloud)` returning `'local' \| 'cloud' \| 'tie'` by `updated_at`. |
+| `sync/push.ts` | Batched push (50/batch), `ON CONFLICT (user_id, id) DO UPDATE`, stamps `synced_at` on success. |
+| `sync/pull.ts` | Incremental pull paginated by `updated_at ASC`; uses `get_server_time` RPC for clock-skew-safe `last_pull_at`. |
+| `sync/firstPull.ts` | Resets sync_meta and runs full pull from epoch — recovery path for fresh devices. |
+| `sync/orchestrator.ts` | `pushAll()` and `pullAll()` walk the registry in `pushOrder` / `pullOrder` (different per spec §4.4). |
+| `sync/bootstrap.ts` | First-cold-start detection: initial-push vs first-pull vs no-op. SecureStore-gated by `cloud_initial_push_done`. |
+| `sync/schedulePush.ts` | 5-second debounced trigger; called from every database.ts write to push edits to cloud. |
+| `sync/devActions.ts` | Force push, reset cloud, reset local-from-cloud — backs the hidden dev menu. |
+| `sync/tables/*.ts` | Ten thin per-table SyncableTable implementations (one per synced table). |
 
 ---
 
@@ -416,11 +410,11 @@ Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`
 |---|---|---|
 | Anthropic | `@anthropic-ai/sdk` (v0.90.0), `claude-sonnet-4-6` (primary) / `claude-haiku-4-5-20251001` (classifier) | Vlog summary, expansion, classifier |
 | OpenAI | `fetch` to `api.openai.com`, `gpt-4o` (primary) / `gpt-4o-mini` (classifier) | Alt provider |
-| Notion | `fetch` to `api.notion.com/v1` | Two-way sync of entries + todos (with thinking-mode fields); optional opt-in DBs for habits + threads |
+| Supabase | `@supabase/supabase-js` (v2.105+) + `react-native-url-polyfill` | Cloud sync (Postgres mirror of every synced table; `get_server_time` RPC for clock-skew-safe pulls) |
 | FFmpeg | `@wokcito/ffmpeg-kit-react-native` (v6.1.2) | 1080p proxy transcode + final export |
 | DCIM | `expo-media-library` | Save exports to `DCIM/loopd/` |
 | Camera roll | `expo-image-picker` / `expo-document-picker` / `expo-media-library` | Clip import |
-| Secrets | `expo-secure-store` | Notion token, AI keys, backfill flags |
+| Secrets | `expo-secure-store` | AI keys, backfill flags, `cloud_initial_push_done` flag |
 
 ---
 
@@ -444,6 +438,7 @@ Deletions queued in `sync_deletions` per `entity_type` (`entry`, `todo`, `habit`
 | Updates | `expo-updates` 55.0.15 + EAS Update |
 | Icons | `lucide-react-native` 0.475.0 |
 | AI SDK | `@anthropic-ai/sdk` 0.90.0 |
+| Cloud sync | `@supabase/supabase-js` 2.105+ + `react-native-url-polyfill` |
 | FFmpeg | `@wokcito/ffmpeg-kit-react-native` 6.1.2 |
 | Secrets | `expo-secure-store` 55.0.9 |
 | Fonts (bundled) | DM Serif Display, DM Mono, Instrument Sans, Nunito |
@@ -455,7 +450,7 @@ Target platform: **Android only** (the prebuilt `android/` directory is committe
 ## 10. Architectural Principles
 
 1. **DB is the single source of truth.** UI displays exactly what's in SQLite — no frontend filtering, no hiding via conditional rendering.
-2. **Prose is canonical for drops.** `[]` lines, `** … kcal` lines, and `#tag` mentions in `entries.text` are the source; `todos_json`, `todo_meta`, the `nutrition` table, and `thread_mentions` are derived. Round-trips (e.g. dashboard toggle → prose rewrite) keep prose authoritative. Notion never edits source prose — Title-field edits in the Todos DB are dropped on next push.
+2. **Prose is canonical for drops.** `[]` lines, `** … kcal` lines, and `#tag` mentions in `entries.text` are the source; `todos_json`, `todo_meta`, the `nutrition` table, and `thread_mentions` are derived. Round-trips (e.g. dashboard toggle → prose rewrite) keep prose authoritative.
 3. **Save to DB on every keystroke.** Silent, no-state-update DB writes. Refs hold pending values for focus logic only. **Scanners do not run on keystroke** — only at commit (focus blur, screen leave, explicit save).
 4. **Always read DB before deleting.** Auto-commit timers and cleanup effects must verify the latest row state before deciding anything destructive.
 5. **Never clear live refs in focus cleanup.** `useFocusEffect` cleanups can race idle timers; clearing `liveTextRef` during cleanup caused past data loss.
@@ -465,5 +460,6 @@ Target platform: **Android only** (the prebuilt `android/` directory is committe
 9. **Classifier output is editable; user override is permanent.** Any AI-assigned attribute on a derived row must be overridable by the user, and the override must lock that attribute from future AI mutation. The `user_overridden_type` flag pattern is the template.
 10. **Heuristic before LLM.** When a feature needs classification, scoring, or routing, try a deterministic heuristic first. Only fall through to an LLM call when the heuristic is uncertain. Cheaper, faster, and more debuggable.
 11. **Mentions are derived; metadata is stored.** When a feature creates a relationship between two objects (here: threads ↔ entries via `#tag`s), the relationship rows are *derived* from a canonical source (prose) and rebuilt at scan time. The metadata about the relationship subject (here: thread name, color, target cadence) is stored in its own table and survives between scans. **One documented deviation:** the dashboard tracker's manual "touch today" toggle writes a `thread_mentions` row with NULL entry/todo (see [services/threads/touch.ts](../src/services/threads/touch.ts)) so users can mark threads done without typing in prose. Justified because (a) the schema permits it, (b) staleness + activity math compose uniformly across mention shapes, (c) toggling off only deletes that manual row.
+12. **Cloud is a sync mirror, never the canonical source.** Read paths always hit local SQLite. Write paths always commit local first; cloud lags by 5s via debounced push. The user's typed character is in their local DB before any network call begins. Per-row LWW resolves concurrent edits between devices.
 
 These live in full in [CLAUDE.md](../CLAUDE.md). Treat them as non-negotiable — each one traces back to a data-loss bug or a deliberate-cost decision.

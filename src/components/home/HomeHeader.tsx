@@ -3,8 +3,6 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { SpinningIcon } from '../ui/SpinningIcon';
-import { useNotionSync } from '../../hooks/useNotionSync';
 import { subscribeToMigration, type MigrationStatus } from '../../services/clipMigration';
 import type { Habit, Entry } from '../../types/entry';
 
@@ -16,23 +14,12 @@ type Props = {
   onBack?: () => void;
 };
 
-function formatSyncTime(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  if (diff < 60000) return 'just now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-  return new Date(ts).toLocaleDateString();
-}
-
-export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: Props) {
+export function HomeHeader({ dayStarted, dateLabel, onBack }: Props) {
   const router = useRouter();
-  const { status: syncStatus, configured: syncConfigured, syncNow, result: syncResult, lastSynced } = useNotionSync();
-  const syncing = syncStatus === 'syncing';
 
   // Subscribe to in-flight clip migrations so the status pill ticks live.
   const [migration, setMigration] = useState<MigrationStatus | null>(null);
   useEffect(() => subscribeToMigration(s => setMigration(s.running ? s : null)), []);
-
 
   return (
     <View style={styles.container}>
@@ -46,41 +33,10 @@ export function HomeHeader({ dayStarted, dateLabel, entries, habits, onBack }: P
         <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
       </View>
       <View style={styles.headerRight}>
-        {syncConfigured && (
-          <Pressable onPress={!syncing ? syncNow : undefined} hitSlop={8} style={styles.headerIconBtn}>
-            <SpinningIcon name="refresh" size={18} color={syncing ? colors.accent2 : colors.textDim} spinning={syncing} />
-          </Pressable>
-        )}
         <Pressable onPress={() => router.push('/settings')} hitSlop={8} style={styles.headerIconBtn}>
           <Icon name="settings" size={18} color={colors.textDim} />
         </Pressable>
       </View>
-
-      {/* Sync status */}
-      {syncConfigured && syncResult && syncStatus !== 'syncing' && (
-        <View style={styles.syncStatus}>
-          {syncResult.pulled > 0 && (
-            <Text style={styles.syncStatusText}>↓ {syncResult.pulled} pulled from Notion</Text>
-          )}
-          {syncResult.pushed > 0 && (
-            <Text style={styles.syncStatusText}>↑ {syncResult.pushed} pushed to Notion</Text>
-          )}
-          {syncResult.pulled === 0 && syncResult.pushed === 0 && syncResult.errors.length === 0 && (
-            <Text style={styles.syncStatusText}>Synced — no changes</Text>
-          )}
-          {syncResult.errors.length > 0 && (
-            <Text style={[styles.syncStatusText, { color: colors.coral }]}>{syncResult.errors[0].slice(0, 60)}</Text>
-          )}
-          {lastSynced && (
-            <Text style={styles.syncTimeText}>{formatSyncTime(lastSynced)}</Text>
-          )}
-        </View>
-      )}
-      {syncConfigured && syncing && (
-        <View style={styles.syncStatus}>
-          <Text style={[styles.syncStatusText, { color: colors.accent2 }]}>Syncing with Notion...</Text>
-        </View>
-      )}
 
       {migration && (
         <View style={styles.syncStatus}>

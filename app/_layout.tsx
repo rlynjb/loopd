@@ -6,9 +6,6 @@ import { View, Text, ActivityIndicator, Alert, StyleSheet } from 'react-native';
 import * as Updates from 'expo-updates';
 import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
-import { NotionSyncProvider } from '../src/hooks/NotionSyncContext';
-import { isNotionConfigured, isAutoSyncEnabled } from '../src/services/notion/config';
-import { syncAll, syncAllTodos, syncAllHabits, syncAllThreads } from '../src/services/notion/sync';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { GlobalBottomNav } from '../src/components/nav/GlobalBottomNav';
 import { ErrorBoundary } from '../src/components/ErrorBoundary';
@@ -71,27 +68,10 @@ function AppContent() {
     })();
   }, []);
 
-  // Auto-sync on app open
-  useEffect(() => {
-    if (!ready) return;
-    (async () => {
-      const configured = await isNotionConfigured();
-      const autoSync = await isAutoSyncEnabled();
-      if (configured && autoSync) {
-        syncAll()
-          .then(() => syncAllTodos())
-          .then(() => syncAllHabits())
-          .then(() => syncAllThreads())
-          .catch(err => console.warn('[loopd] Auto-sync failed:', err));
-      }
-    })();
-  }, [ready]);
-
-  // Cloud sync (Supabase) — runs alongside Notion sync during the dual-run
-  // window (M4–M6). Bootstrap detects initial-push vs first-pull on the first
-  // cold start after the feature ships; subsequent boots run pullAll → pushAll.
-  // Edits push automatically via schedulePush() debounced 5s — see
-  // src/services/sync/schedulePush.ts.
+  // Cloud sync (Supabase). Bootstrap detects initial-push vs first-pull on
+  // the first cold start after the feature ships; subsequent boots run
+  // pullAll → pushAll. Edits push automatically via schedulePush() debounced
+  // 5s — see src/services/sync/schedulePush.ts.
   useEffect(() => {
     if (!ready) return;
     (async () => {
@@ -286,9 +266,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ErrorBoundary>
-        <NotionSyncProvider>
-          <AppContent />
-        </NotionSyncProvider>
+        <AppContent />
       </ErrorBoundary>
     </GestureHandlerRootView>
   );

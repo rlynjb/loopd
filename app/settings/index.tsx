@@ -1,19 +1,10 @@
 import { View, Text, Pressable, ScrollView, Alert, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
 import { colors, fonts } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
-import { isNotionConfigured, getLastSyncTimestamp } from '../../src/services/notion/config';
 
 export default function SettingsMenu() {
   const router = useRouter();
-  const [configured, setConfigured] = useState(false);
-  const [lastSynced, setLastSynced] = useState<string | null>(null);
-
-  useEffect(() => {
-    isNotionConfigured().then(setConfigured).catch(() => {});
-    getLastSyncTimestamp().then(setLastSynced).catch(() => {});
-  }, []);
 
   const handleExportDb = async () => {
     try {
@@ -71,15 +62,6 @@ export default function SettingsMenu() {
     );
   };
 
-  const formatLastSync = (ts: string | null): string => {
-    if (!ts) return 'Never';
-    const diff = Date.now() - new Date(ts).getTime();
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return new Date(ts).toLocaleDateString();
-  };
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -91,41 +73,14 @@ export default function SettingsMenu() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.title}>Settings</Text>
 
-        {/* Cloud Sync (Supabase) — M1 personal infrastructure. M5 fleshes
-            it out; this entry is here so the dev can trigger pushAll() from
-            the app while iterating on the sync layer. */}
+        {/* Cloud Sync (Supabase) */}
         <Pressable onPress={() => router.push('/settings/cloud-sync')} style={styles.menuItem}>
           <View style={styles.menuIcon}>
             <Icon name="upload" size={18} color={colors.amber} />
           </View>
           <View style={styles.menuInfo}>
             <Text style={styles.menuLabel}>Cloud Sync</Text>
-            <Text style={styles.menuSub}>Personal Supabase backup (Phase A)</Text>
-          </View>
-        </Pressable>
-
-        {/* Notion Sync */}
-        <Pressable onPress={() => router.push('/settings/notion-sync')} style={styles.menuItem}>
-          <View style={styles.menuIcon}>
-            <Icon name="refresh" size={18} color={colors.accent2} />
-          </View>
-          <View style={styles.menuInfo}>
-            <Text style={styles.menuLabel}>Notion Sync</Text>
-            <Text style={styles.menuSub}>
-              {configured ? `Connected — last sync ${formatLastSync(lastSynced)}` : 'Not configured'}
-            </Text>
-          </View>
-          <View style={[styles.menuDot, { backgroundColor: configured ? colors.green : colors.amber }]} />
-        </Pressable>
-
-        {/* Notion Setup Guide */}
-        <Pressable onPress={() => router.push('/settings/notion-guide')} style={styles.menuItem}>
-          <View style={styles.menuIcon}>
-            <Icon name="bookOpen" size={18} color={colors.accent2} />
-          </View>
-          <View style={styles.menuInfo}>
-            <Text style={styles.menuLabel}>Notion Setup Guide</Text>
-            <Text style={styles.menuSub}>How to set up your Notion databases</Text>
+            <Text style={styles.menuSub}>Supabase backup (Phase A — personal)</Text>
           </View>
         </Pressable>
 

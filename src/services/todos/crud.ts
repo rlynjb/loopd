@@ -5,7 +5,6 @@ import {
   updateEntry,
   deleteEntry,
   getEntriesByDate,
-  enqueueSyncDeletion,
 } from '../database';
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
@@ -118,18 +117,11 @@ export async function updateTodo(
 }
 
 // Remove a todo. If the entry becomes empty (no text, no clips, no habits, no
-// other todos), delete the entry itself so the ranker and Notion sync stop
-// seeing it. If the removed todo was synced to Notion as its own page,
-// enqueue a sync_deletion so the next Notion sync archives the page.
+// other todos), soft-delete the entry itself so the ranker stops seeing it.
 export async function deleteTodo(entryId: string, todoId: string): Promise<void> {
   const entry = await getEntryById(entryId);
   if (!entry) return;
-  const removed = (entry.todos ?? []).find(t => t.id === todoId);
   const todos = (entry.todos ?? []).filter(t => t.id !== todoId);
-
-  if (removed?.notionPageId) {
-    await enqueueSyncDeletion('todo', todoId, removed.notionPageId);
-  }
 
   const wouldBeEmpty =
     !entry.text &&

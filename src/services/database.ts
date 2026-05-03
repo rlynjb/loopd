@@ -15,7 +15,9 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   return db;
 }
 
-/** Fix bare-filename clip URIs left by Notion sync overwriting full paths */
+/** Defensive repair for bare-filename clip URIs in entries.clips_json.
+ *  Older Notion sync code occasionally overwrote full paths with bare
+ *  filenames; this re-resolves them against the canonical clips dir. */
 async function repairBareClipUris(database: SQLite.SQLiteDatabase): Promise<void> {
   const rows = await database.getAllAsync<{ id: string; date: string; clips_json: string | null; clip_uri: string | null }>(
     "SELECT id, date, clips_json, clip_uri FROM entries WHERE clips_json IS NOT NULL AND clips_json != '[]'"
@@ -568,33 +570,12 @@ export async function updateEntry(entry: Entry): Promise<void> {
 
 // Soft-delete: stamp deleted_at + bump updated_at so the row stays in the
 // DB (hidden from reads via WHERE deleted_at IS NULL) and propagates to
-// cloud as a normal sync event. The 30-day vacuum (M4) hard-deletes later.
-// During the Notion dual-run we also still write to sync_deletions so the
-// Notion archival path keeps working until M7 removes that code.
+// cloud as a normal sync event. The 30-day vacuum hard-deletes later.
 export async function deleteEntry(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
 
-  // Notion archival queue (dual-run only — drops in M7).
-  const row = await db.getFirstAsync<{ notion_page_id: string | null }>('SELECT notion_page_id FROM entries WHERE id = ?', [id]);
-  if (row?.notion_page_id) {
-    await db.runAsync(
-      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['entry', id, row.notion_page_id, now]
-    );
-  }
-  // Cascade soft-delete nutrition + queue for Notion archive.
-  const nutRows = await db.getAllAsync<{ id: string; notion_page_id: string | null }>(
-    'SELECT id, notion_page_id FROM nutrition WHERE entry_id = ? AND deleted_at IS NULL', [id]
-  );
-  for (const n of nutRows) {
-    if (n.notion_page_id) {
-      await db.runAsync(
-        'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-        ['nutrition', n.id, n.notion_page_id, now]
-      );
-    }
-  }
+  // Cascade soft-delete nutrition.
   await db.runAsync(
     'UPDATE nutrition SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
     [now, now, id],
@@ -682,15 +663,6 @@ export async function updateNutrition(
 export async function deleteNutrition(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
-    'SELECT notion_page_id FROM nutrition WHERE id = ?', [id],
-  );
-  if (row?.notion_page_id) {
-    await db.runAsync(
-      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['nutrition', id, row.notion_page_id, now],
-    );
-  }
   await db.runAsync(
     'UPDATE nutrition SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
@@ -983,15 +955,6 @@ export async function updateThread(thread: Thread): Promise<void> {
 export async function deleteThread(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
-    'SELECT notion_page_id FROM threads WHERE id = ?', [id]
-  );
-  if (row?.notion_page_id) {
-    await db.runAsync(
-      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['thread', id, row.notion_page_id, now]
-    );
-  }
   // Cascade soft-delete all mentions for this thread.
   await db.runAsync(
     'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE thread_id = ? AND deleted_at IS NULL',
@@ -1148,17 +1111,6 @@ export async function setDayTitle(date: string, title: string): Promise<void> {
   schedulePush();
 }
 
-export async function setDayTitleFromSync(date: string, title: string, notionEditTime?: string): Promise<void> {
-  // Used by sync — sets updated_at to the Notion edit time so local doesn't appear newer
-  const db = await getDatabase();
-  const ts = notionEditTime ?? new Date().toISOString();
-  await db.runAsync(
-    'INSERT INTO day_meta (date, title, updated_at) VALUES (?, ?, ?) ON CONFLICT(date) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at',
-    [date, title, ts]
-  );
-  schedulePush();
-}
-
 // ── Sync queries ──
 
 export async function getAllEntries(): Promise<Entry[]> {
@@ -1179,90 +1131,10 @@ export async function deleteEmptyEntries(): Promise<number> {
   return empty.length;
 }
 
-export async function getUnsyncedEntries(lastSync: string | null): Promise<Entry[]> {
-  const db = await getDatabase();
-  // Always include entries with no notion_page_id (never synced)
-  // and entries updated since last sync
-  const rows = lastSync
-    ? await db.getAllAsync<EntryRow>(
-        'SELECT * FROM entries WHERE notion_page_id IS NULL OR updated_at > ? OR updated_at IS NULL',
-        [lastSync]
-      )
-    : await db.getAllAsync<EntryRow>('SELECT * FROM entries');
-  console.log('[loopd sync] Unsynced entries:', rows.length, 'lastSync:', lastSync);
-  return rows.map(mapRowToEntry);
-}
-
-export async function getEntryByNotionPageId(pageId: string): Promise<Entry | null> {
-  const db = await getDatabase();
-  const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE notion_page_id = ?', [pageId]);
-  return row ? mapRowToEntry(row) : null;
-}
-
 export async function getEntryById(id: string): Promise<Entry | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<EntryRow>('SELECT * FROM entries WHERE id = ? AND deleted_at IS NULL', [id]);
   return row ? mapRowToEntry(row) : null;
-}
-
-export async function setEntryNotionPageId(entryId: string, notionPageId: string): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync('UPDATE entries SET notion_page_id = ? WHERE id = ?', [notionPageId, entryId]);
-  // No schedulePush — only the Notion-linkage column changed; doesn't need
-  // to flow to cloud (the cloud mirror doesn't carry notion_page_id).
-}
-
-export async function upsertEntryFromNotion(entry: Entry): Promise<void> {
-  const db = await getDatabase();
-  const now = new Date().toISOString();
-  await db.runAsync(
-    `INSERT INTO entries (id, date, text, habits_json, todos_json, clip_uri, clip_duration_ms, clips_json, created_at, notion_page_id, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET
-       date = excluded.date, text = excluded.text, habits_json = excluded.habits_json,
-       todos_json = excluded.todos_json, clips_json = excluded.clips_json, notion_page_id = excluded.notion_page_id, updated_at = excluded.updated_at`,
-    [
-      entry.id, entry.date, entry.text,
-      JSON.stringify(entry.habits), JSON.stringify(entry.todos ?? []),
-      entry.clipUri, entry.clipDurationMs,
-      JSON.stringify(entry.clips), entry.createdAt, entry.notionPageId ?? null, now,
-    ]
-  );
-  schedulePush();
-}
-
-export async function getSyncDeletions(entityType?: string): Promise<{ entityType: string; entityId: string; notionPageId: string }[]> {
-  const db = await getDatabase();
-  const rows = entityType
-    ? await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
-        'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions WHERE entity_type = ?',
-        [entityType],
-      )
-    : await db.getAllAsync<{ entity_type: string; entity_id: string; notion_page_id: string }>(
-        'SELECT entity_type, entity_id, notion_page_id FROM sync_deletions',
-      );
-  return rows.map(r => ({ entityType: r.entity_type, entityId: r.entity_id, notionPageId: r.notion_page_id }));
-}
-
-export async function clearSyncDeletions(entityType?: string): Promise<void> {
-  const db = await getDatabase();
-  if (entityType) {
-    await db.runAsync('DELETE FROM sync_deletions WHERE entity_type = ?', [entityType]);
-  } else {
-    await db.runAsync('DELETE FROM sync_deletions');
-  }
-}
-
-export async function enqueueSyncDeletion(
-  entityType: string,
-  entityId: string,
-  notionPageId: string,
-): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-    [entityType, entityId, notionPageId, new Date().toISOString()],
-  );
 }
 
 // ── Habit CRUD ──
@@ -1327,19 +1199,11 @@ export async function updateHabit(habit: Habit): Promise<void> {
 export async function deleteHabit(id: string): Promise<void> {
   const db = await getDatabase();
   const now = new Date().toISOString();
-  const row = await db.getFirstAsync<{ notion_page_id: string | null }>(
-    'SELECT notion_page_id FROM habits WHERE id = ?', [id]
-  );
-  if (row?.notion_page_id) {
-    await db.runAsync(
-      'INSERT INTO sync_deletions (entity_type, entity_id, notion_page_id, deleted_at) VALUES (?, ?, ?, ?)',
-      ['habit', id, row.notion_page_id, now]
-    );
-  }
   await db.runAsync(
     'UPDATE habits SET deleted_at = ?, updated_at = ? WHERE id = ?',
     [now, now, id],
   );
+  schedulePush();
 }
 
 // ── Projects ──

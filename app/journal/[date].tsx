@@ -20,7 +20,6 @@ import { formatDate } from '../../src/utils/time';
 import { generateId } from '../../src/utils/id';
 import { updateEntry as updateEntryDB, deleteEmptyEntries } from '../../src/services/database';
 import { pickVideoAssets, captureToProxy, TranscodeCancelledError, DiskFullError, type TranscodeHandle } from '../../src/services/fileManager';
-import { useNotionSync } from '../../src/hooks/useNotionSync';
 import { on } from '../../src/utils/events';
 import type { Entry } from '../../src/types/entry';
 
@@ -31,7 +30,6 @@ export default function JournalScreen() {
   const { entries, addEntry, editEntry, removeEntry, reload } = useEntries(date);
   const habits = useHabits();
   const { title: dayTitle, updateTitle: setDayTitle, reload: reloadTitle } = useDayTitle(date);
-  const { onSyncComplete } = useNotionSync();
 
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
@@ -110,14 +108,6 @@ export default function JournalScreen() {
       };
     }, [reload, reloadTitle, date, editEntry, addEntry])
   );
-
-  // Reload on sync complete
-  useEffect(() => {
-    return onSyncComplete(() => {
-      reload();
-      reloadTitle();
-    });
-  }, [onSyncComplete, reload, reloadTitle]);
 
   // Hide todos-only entries — the dashboard's TODOS add flow funnels into a
   // shared bucket entry per day, and those shouldn't clutter the journal
