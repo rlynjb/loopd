@@ -10,7 +10,7 @@ If you're studying this chapter for a coding round, internalize the *insight* of
 
 ### Where this lives in loopd
 
-[`src/services/todos/reorder.ts`](../../src/services/todos/reorder.ts) — when the user reorders a todo via the up/down arrows in `/todos`, the page rebuilds visible-sort positions and persists them. The actual production code does an adjacent swap; this problem generalizes the primitive to "apply a target order received from a drag-drop gesture."
+[`src/services/todos/reorder.ts`](../../../src/services/todos/reorder.ts) — when the user reorders a todo via the up/down arrows in `/todos`, the page rebuilds visible-sort positions and persists them. The actual production code does an adjacent swap; this problem generalizes the primitive to "apply a target order received from a drag-drop gesture."
 
 ### Problem statement
 
@@ -124,7 +124,7 @@ In production code I'd ignore unknown IDs (the `if (item)` guard handles it) bec
 
 ### Where this lives in loopd
 
-[`app/todos.tsx`](../../app/todos.tsx) — building the row list for the screen. `Entry[]` is loaded; each entry has nested `todos: TodoItem[]`. Separately, `TodoMeta[]` is loaded from `todo_meta`. The render layer needs a flat array of rows where each todo carries its parent's `entryDate` plus its meta. This is a tree-flatten plus hash-join in one pass.
+[`app/todos.tsx`](../../../app/todos.tsx) — building the row list for the screen. `Entry[]` is loaded; each entry has nested `todos: TodoItem[]`. Separately, `TodoMeta[]` is loaded from `todo_meta`. The render layer needs a flat array of rows where each todo carries its parent's `entryDate` plus its meta. This is a tree-flatten plus hash-join in one pass.
 
 ### Problem statement
 
@@ -223,7 +223,7 @@ At that volume the JS-side flatten becomes a render-time cliff. Three steps. (1)
 
 ### Where this lives in loopd
 
-[`src/services/todos/scanTodos.ts:63-88`](../../src/services/todos/scanTodos.ts#L63-L88) — when a user types `[] foo` then edits it to `[] bar`, the scanner must recognize that the same todo got renamed (preserve `id`, `done`, `createdAt`) rather than treating it as delete + insert. Same pattern applies to nutrition lines.
+[`src/services/todos/scanTodos.ts:63-88`](../../../src/services/todos/scanTodos.ts#L63-L88) — when a user types `[] foo` then edits it to `[] bar`, the scanner must recognize that the same todo got renamed (preserve `id`, `done`, `createdAt`) rather than treating it as delete + insert. Same pattern applies to nutrition lines.
 
 ### Problem statement
 

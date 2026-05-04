@@ -66,7 +66,7 @@ A few stats so the rough scope is grounded:
 
 - ~12k lines of TypeScript (after the cloud-sync migration deleted ~2,200 of Notion-era code)
 - 12 SQLite tables — 11 entity tables plus `sync_meta` (local-only ledger). The `todo_meta` table holds a 1:1 invariant with each TodoItem in `entries.todos_json`, enforced by application logic since SQLite can't FK to a JSON-array element.
-- 7-milestone ship plan for the most recent major migration (Notion → Supabase Postgres), each milestone independently revertible — see [`docs/loopd-cloud-sync-plan.md`](../loopd-cloud-sync-plan.md).
+- 7-milestone ship plan for the most recent major migration (Notion → Supabase Postgres), each milestone independently revertible — see [`docs/loopd-cloud-sync-plan.md`](../../../docs/loopd-cloud-sync-plan.md).
 - 4 LLM calls across 3 cost tiers, multi-provider (Anthropic + OpenAI)
 - React Native + Expo, Android-only (the prebuilt `android/` directory is committed)
 - Solo-developed with substantial AI-assisted code generation, all decisions mine

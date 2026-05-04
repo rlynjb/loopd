@@ -45,8 +45,8 @@ The guide is only as accurate as the codebase it's written against. After any si
 
 The other docs in `docs/` serve different purposes and don't overlap:
 
-- [docs/spec.md](../spec.md) — the canonical architecture reference (what loopd *is*).
-- [docs/concepts.md](../concepts.md) — a self-study learning curriculum (concepts grounded in this codebase).
-- [docs/dsa-study-guide.md](../dsa-study-guide.md) — six DSA problems for coding-round drill (this guide's chapter 10 covers three of them).
+- [docs/spec.md](../../../docs/spec.md) — the canonical architecture reference (what loopd *is*).
+- [docs/concepts.md](../../../docs/concepts.md) — a self-study learning curriculum (concepts grounded in this codebase).
+- [docs/dsa-study-guide.md](../../../docs/dsa-study-guide.md) — six DSA problems for coding-round drill (this guide's chapter 10 covers three of them).
 
 Start at [chapter 01](./01-preface.md).
