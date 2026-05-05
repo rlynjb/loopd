@@ -1,11 +1,15 @@
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
 import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
-import { HabitHeatmapRow } from '../src/components/home/HabitHeatmapRow';
+import { DailyScheduleGrid } from '../src/components/home/DailyScheduleGrid';
+import { DailyScheduleHeader } from '../src/components/home/DailyScheduleHeader';
+import { OffDayToggle, useOffDayMode } from '../src/components/home/OffDayToggle';
+import { DailyScheduleLegend } from '../src/components/home/DailyScheduleLegend';
+import { startOfISOWeekStr } from '../src/services/habits/cadence';
 import { SmartTodoList } from '../src/components/home/SmartTodoList';
 import {
   getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits, getAllEntries,
@@ -13,14 +17,11 @@ import {
 } from '../src/services/database';
 import { getThreadCards } from '../src/services/threads/getThreadCards';
 import { toggleThreadTouchToday } from '../src/services/threads/touch';
-import { Icon } from '../src/components/ui/Icon';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { generateId } from '../src/utils/id';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 import type { TodoMeta } from '../src/types/todoMeta';
 import type { ThreadCard } from '../src/types/thread';
-
-const HEATMAP_DAYS = 14;
 
 function greeting(now: Date = new Date()): string {
   const h = now.getHours();
@@ -112,44 +113,57 @@ export default function HomeScreen() {
     return total;
   }, [todayEntries]);
 
-  // Map habitId -> set of YYYY-MM-DD where it was logged (last 28 days).
+  // Map habitId -> set of YYYY-MM-DD where it was logged across ALL entries.
+  // No cutoff: past-week navigation can scroll arbitrarily far back, and the
+  // DailyScheduleGrid only renders the visible week's 7 cells anyway, so the
+  // memory cost is bounded by total entries (small).
   const checkedDatesByHabit = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const h of habits) map.set(h.id, new Set());
-    const cutoff = (() => {
-      const d = new Date(today + 'T12:00:00');
-      d.setDate(d.getDate() - HEATMAP_DAYS);
-      return d.toISOString().slice(0, 10);
-    })();
     for (const entry of allEntries) {
-      if (entry.date < cutoff) continue;
       for (const hid of entry.habits) {
         map.get(hid)?.add(entry.date);
       }
     }
     return map;
-  }, [allEntries, habits, today]);
+  }, [allEntries, habits]);
 
-  // 14-day header cells for the habits heatmap — weekday letter + day-of-
-  // month, one entry per column, Sunday-anchored to match HabitHeatmapRow.
-  const heatmapHeaderCells = useMemo(() => {
-    const letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-    const todayDow = new Date(today + 'T12:00:00').getDay();
-    const startDate = new Date(today + 'T12:00:00');
-    startDate.setDate(startDate.getDate() - (todayDow + 7));
-    const out: { letter: string; dayOfMonth: number; isToday: boolean }[] = [];
-    for (let i = 0; i < HEATMAP_DAYS; i++) {
-      const d = new Date(startDate);
-      d.setDate(startDate.getDate() + i);
-      const iso = d.toISOString().slice(0, 10);
-      out.push({
-        letter: letters[d.getDay()],
-        dayOfMonth: d.getDate(),
-        isToday: iso === today,
-      });
+  // Week-nav state — driven by ?week=YYYY-MM-DD URL param.
+  // Validation: must be a Monday and not > current week's Monday.
+  const params = useLocalSearchParams<{ week?: string }>();
+  const currentWeekStart = useMemo(() => startOfISOWeekStr(today), [today]);
+  const weekStart = useMemo(() => {
+    const raw = params.week;
+    if (!raw) return currentWeekStart;
+    // Validate: must look like YYYY-MM-DD, must be a Monday, must not be future.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return currentWeekStart;
+    if (startOfISOWeekStr(raw) !== raw) return currentWeekStart; // not a Monday
+    if (raw > currentWeekStart) return currentWeekStart;
+    return raw;
+  }, [params.week, currentWeekStart]);
+  const isCurrentWeek = weekStart === currentWeekStart;
+
+  const onPrevWeek = useCallback(() => {
+    const d = new Date(weekStart + 'T12:00:00');
+    d.setDate(d.getDate() - 7);
+    router.setParams({ week: d.toISOString().slice(0, 10) });
+  }, [weekStart, router]);
+  const onNextWeek = useCallback(() => {
+    if (isCurrentWeek) return;
+    const d = new Date(weekStart + 'T12:00:00');
+    d.setDate(d.getDate() + 7);
+    const next = d.toISOString().slice(0, 10);
+    if (next >= currentWeekStart) {
+      router.setParams({ week: undefined });
+    } else {
+      router.setParams({ week: next });
     }
-    return out;
-  }, [today]);
+  }, [weekStart, currentWeekStart, isCurrentWeek, router]);
+  const onJumpToToday = useCallback(() => {
+    router.setParams({ week: undefined });
+  }, [router]);
+
+  const [offDayMode, setOffDayMode] = useOffDayMode();
 
   const toggleHabitToday = useCallback(async (habitId: string) => {
     const holder = todayEntries.find(e => e.habits.includes(habitId));
@@ -231,9 +245,10 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* TRACKER — combined habits + threads grouped by time-of-day.
-            Within each bucket: habits first, then threads. Adaptive
-            mini-headers when 2+ buckets are populated by either type. */}
+        {/* DAILY SCHEDULE — habits weekly grid (new) + threads strip (kept).
+            Per docs/loopd-daily-schedule-grid-spec.md: habits get the 7-column
+            weekday grid; threads keep their 14-cell trailing strip below.
+            Mixed visual language is the v1 trade-off (spec §13 option a). */}
         {(habits.length > 0 || threadCards.length > 0) && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -242,59 +257,33 @@ export default function HomeScreen() {
                 <Text style={styles.sectionLink}>manage →</Text>
               </Pressable>
             </View>
-            <View style={styles.habitHeaderRow}>
-              <View style={styles.habitHeaderLabelSpacer} />
-              <View style={styles.habitHeaderCells}>
-                {heatmapHeaderCells.map((c, i) => (
-                  <View key={i} style={styles.habitHeaderCell}>
-                    <Text style={[styles.habitHeaderLetter, c.isToday && styles.habitHeaderToday]}>{c.letter}</Text>
-                    <Text style={[styles.habitHeaderNumber, c.isToday && styles.habitHeaderToday]}>{c.dayOfMonth}</Text>
-                  </View>
-                ))}
-              </View>
-              <View style={styles.habitHeaderCountSpacer} />
-            </View>
-            {(() => {
-              const habitBuckets: Record<string, typeof habits> = {
-                morning: [], midday: [], evening: [], anytime: [],
-              };
-              for (const h of habits) habitBuckets[h.timeOfDay ?? 'anytime'].push(h);
-              const threadBuckets: Record<string, typeof threadCards> = {
-                morning: [], midday: [], evening: [], anytime: [],
-              };
-              for (const c of threadCards) threadBuckets[c.thread.timeOfDay ?? 'anytime'].push(c);
-              const order: Array<'morning' | 'midday' | 'evening' | 'anytime'> = [
-                'morning', 'midday', 'evening', 'anytime',
-              ];
-              const occupied = order.filter(b => habitBuckets[b].length > 0 || threadBuckets[b].length > 0);
-              const showHeaders = occupied.length >= 2;
-              return occupied.map(bucket => (
-                <View key={bucket}>
-                  {showHeaders && <Text style={styles.bucketHeader}>{bucket}</Text>}
-                  {habitBuckets[bucket].map(h => (
-                    <HabitHeatmapRow
-                      key={h.id}
-                      habit={h}
-                      checkedDates={checkedDatesByHabit.get(h.id) ?? new Set()}
-                      today={today}
-                      onToggleToday={() => toggleHabitToday(h.id)}
-                    />
-                  ))}
-                  {threadBuckets[bucket].map(card => (
-                    <ThreadHeatmapRow
-                      key={card.thread.id}
-                      card={card}
-                      today={today}
-                      onToggleToday={async () => {
-                        await toggleThreadTouchToday(card.thread.id, card.thread.slug, today);
-                        loadAll();
-                      }}
-                      onView={() => router.push(`/threads/${card.thread.id}`)}
-                    />
-                  ))}
-                </View>
-              ));
-            })()}
+
+            <DailyScheduleHeader
+              weekStart={weekStart}
+              today={today}
+              isCurrentWeek={isCurrentWeek}
+              onPrevWeek={onPrevWeek}
+              onNextWeek={onNextWeek}
+              onJumpToToday={onJumpToToday}
+            />
+            <DailyScheduleGrid
+              habits={habits}
+              threads={threadCards}
+              checkedDatesByHabit={checkedDatesByHabit}
+              weekStart={weekStart}
+              today={today}
+              offDayMode={offDayMode}
+              isReadOnly={!isCurrentWeek}
+              onToggleHabitToday={toggleHabitToday}
+              onToggleThreadToday={async (threadId, slug) => {
+                await toggleThreadTouchToday(threadId, slug, today);
+                loadAll();
+              }}
+              onTapHabit={() => router.push('/more/habits')}
+              onTapThread={thread => router.push(`/threads/${thread.id}`)}
+            />
+            <OffDayToggle mode={offDayMode} onChange={setOffDayMode} />
+            <DailyScheduleLegend />
           </View>
         )}
 
@@ -320,69 +309,6 @@ export default function HomeScreen() {
         )}
       </ScrollView>
     </View>
-  );
-}
-
-// ── Thread row ──
-// Layout matches HabitHeatmapRow: 80px name | flex:1 14-cell strip |
-// 28px nav icon. Tapping the row toggles a "touched today" mention
-// (see services/threads/touch.ts). The arrow icon is its own Pressable
-// that routes to /threads/[id] for the detail view.
-
-function ThreadHeatmapRow({
-  card, today, onToggleToday, onView,
-}: {
-  card: ThreadCard;
-  today: string;
-  onToggleToday: () => void;
-  onView: () => void;
-}) {
-  const { thread, staleness } = card;
-  const activeDates = card.activeDates ?? new Set<string>();
-  const accent =
-    thread.color ||
-    (staleness === 'fresh' ? colors.green
-      : staleness === 'aging' ? colors.amber
-      : staleness === 'stale' ? colors.coral
-      : colors.textDim);
-
-  // Same Sunday-anchored 14-day window as HabitHeatmapRow.
-  const heatmapCells = (() => {
-    const todayDow = new Date(today + 'T12:00:00').getDay();
-    const start = (() => {
-      const d = new Date(today + 'T12:00:00');
-      d.setDate(d.getDate() - (todayDow + 7));
-      return d;
-    })();
-    const out: { date: string; active: boolean; isToday: boolean }[] = [];
-    for (let i = 0; i < 14; i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      const iso = d.toISOString().slice(0, 10);
-      out.push({ date: iso, active: activeDates.has(iso), isToday: iso === today });
-    }
-    return out;
-  })();
-
-  return (
-    <Pressable onPress={onToggleToday} style={styles.threadRow} hitSlop={4}>
-      <Text style={styles.threadRowName} numberOfLines={1}>{thread.name}</Text>
-      <View style={styles.threadRowHeatmap}>
-        {heatmapCells.map((c, i) => (
-          <View
-            key={`${c.date}-${i}`}
-            style={[
-              styles.threadRowCell,
-              c.active ? { backgroundColor: accent } : styles.threadRowCellOff,
-              c.isToday && !c.active && styles.threadRowCellToday,
-            ]}
-          />
-        ))}
-      </View>
-      <Pressable onPress={onView} hitSlop={10} style={styles.threadRowNavBtn}>
-        <Icon name="arrowRight" size={14} color={colors.textDim} />
-      </Pressable>
-    </Pressable>
   );
 }
 
@@ -442,42 +368,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 0,
     paddingTop: 8,
   },
-  habitHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 2,
-  },
-  habitHeaderLabelSpacer: {
-    width: 80,
-  },
-  habitHeaderCells: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: 2,
-  },
-  habitHeaderCell: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  habitHeaderLetter: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
-    color: colors.textDim,
-    letterSpacing: 0.3,
-  },
-  habitHeaderNumber: {
-    fontFamily: fonts.mono,
-    fontSize: 8,
-    color: colors.textDimmer,
-    marginTop: 1,
-  },
-  habitHeaderToday: {
-    color: colors.accent,
-  },
-  habitHeaderCountSpacer: {
-    width: 36,
-  },
   sectionLabel: {
     fontFamily: fonts.mono,
     fontSize: 10,
@@ -518,51 +408,5 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 10,
     color: colors.accent,
-  },
-  // Thread row — mirrors HabitHeatmapRow layout exactly so columns line
-  // up: 80px name, flex:1 14-cell strip, 36px right-side count.
-  threadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 10,
-  },
-  threadRowName: {
-    fontFamily: fonts.body,
-    fontSize: 13,
-    color: colors.text,
-    width: 80,
-  },
-  threadRowHeatmap: {
-    flex: 1,
-    flexDirection: 'row',
-    gap: 2,
-    alignItems: 'center',
-  },
-  threadRowCell: {
-    flex: 1,
-    height: 11,
-    borderRadius: 2,
-  },
-  threadRowCellOff: {
-    backgroundColor: 'rgba(255,255,255,0.03)',
-  },
-  threadRowCellToday: {
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: colors.accent,
-  },
-  threadRowNavBtn: {
-    width: 36,
-    alignItems: 'flex-end',
-    paddingVertical: 4,
-  },
-  bucketHeader: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDimmer,
-    letterSpacing: 1.4,
-    marginTop: 14,
-    marginBottom: 4,
   },
 });

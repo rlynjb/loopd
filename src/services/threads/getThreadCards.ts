@@ -29,20 +29,18 @@ export async function getThreadCards(now: Date = new Date()): Promise<ThreadCard
   // from the strip — per user direction, only manual taps mark a day done.
   // Those rows are identified by entry_id IS NULL AND todo_id IS NULL,
   // which is the exact shape toggleThreadTouchToday writes.
-  const activityCutoff = (() => {
-    const d = new Date(now);
-    d.setDate(d.getDate() - 14);
-    return d.toISOString().slice(0, 10);
-  })();
+  //
+  // No date cutoff: the daily-schedule weekly grid supports past-week
+  // navigation (?week=YYYY-MM-DD) and needs touch history for arbitrary
+  // past weeks. Memory cost is bounded by unique (thread, day) pairs
+  // which is small in practice.
   type ActivityRow = { thread_id: string; entry_date: string };
   const activityRows = await db.getAllAsync<ActivityRow>(
     `SELECT DISTINCT thread_id, entry_date
      FROM thread_mentions
-     WHERE entry_date >= ?
-       AND entry_id IS NULL
+     WHERE entry_id IS NULL
        AND todo_id IS NULL
        AND deleted_at IS NULL`,
-    [activityCutoff],
   );
   const activeDatesByThread = new Map<string, Set<string>>();
   for (const r of activityRows) {
