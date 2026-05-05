@@ -1,10 +1,18 @@
 # loopd — Product & Technical Spec
 
-Last updated: 2026-05-02
+Last updated: 2026-05-04
 
-A solo-dev, native Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking modes" layer that classifies todos and produces structured per-type expansions, a `#tag` thread system for project attribution, a daily-schedule tracker that combines habits + threads bucketed by time-of-day on the dashboard, and on-device SQLite as the source of truth with optional bidirectional Notion sync.
+A solo-dev, native Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking modes" layer that classifies todos and produces structured per-type expansions, a `#tag` thread system for project attribution, a daily-schedule tracker that combines habits + threads bucketed by time-of-day on the dashboard, and on-device SQLite as the source of truth with Supabase Postgres as a sync mirror.
 
-Operational setup, build, and deploy instructions live in [`README.md`](../README.md). This doc is the "what the app does and how it's put together" reference for new contributors and future-me.
+Operational setup, build, and deploy instructions live in [`README.md`](../README.md). This doc is the "what the app does and how it's put together" reference for new contributors and future-me. Companion documents:
+
+- [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) — full cloud-sync design.
+- [`docs/loopd-cloud-sync-plan.md`](./loopd-cloud-sync-plan.md) — 7-milestone migration plan (M0–M7 shipped 2026-05-02 → 2026-05-03).
+- [`docs/relatable-caption-spec.md`](./relatable-caption-spec.md) — second-LLM-call design for the vlog caption pass.
+- [`docs/loopd-thinking-modes-spec.md`](./loopd-thinking-modes-spec.md) — todo classification + expansion architecture.
+- [`docs/loopd-today-habits-threads-spec.md`](./loopd-today-habits-threads-spec.md) — daily-schedule tracker design.
+- [`docs/backlog.md`](./backlog.md) — deferred / nice-to-have work with trigger conditions.
+- [`docs/media-pipeline.md`](./media-pipeline.md) — clip transcode + export pipeline.
 
 ---
 
@@ -15,9 +23,9 @@ loopd turns everyday captures (short clips, text jots, habit checkmarks, marked-
 1. Throughout the day: open the journal for today's date, jot text, check off habits, capture/import clips, and tag actionable lines with simple inline markers (`[] task`, `** food 320 kcal`, `#projectname`).
 2. At commit time the prose is scanned by three independent passes: marked lines flow into typed records (todos in `todos_json` + `todo_meta`, nutrition in its own table, mentions in `thread_mentions`) without leaving the prose itself.
 3. Todos get a thinking-mode classification (heuristic-first, LLM fallback). Non-todo modes (idea / bug / question / decision / knowledge / content) gain a tap-to-expand affordance that produces structured AI output via per-type prompts.
-4. End of day: tap into the editor — AI auto-composes clip order, trims, and text overlays from the day's entries.
-5. Tweak in the editor (timeline / text / filter tabs), export to MP4 (saved to `DCIM/loopd/` and sharable).
-6. Cloud sync (Supabase Postgres) backs every table up automatically. Local SQLite stays canonical; sync runs on boot and on a 5s debounce after every edit. See [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) for the full design.
+4. End of day: tap into the editor — AI auto-composes clip order, trims, and text overlays from the day's entries, plus a relatable 2–4 line caption from a second LLM pass.
+5. Tweak in the editor (timeline / text / filter tabs), pick a caption variant (PRIMARY / ALT / SUMMARY), export to MP4 (saved to `DCIM/loopd/` and sharable).
+6. Cloud sync (Supabase Postgres) backs every table up automatically. Local SQLite stays canonical; sync runs on boot and on a 5s debounce after every edit.
 
 Native-only (React Native / Expo), runs on a development build — not Expo Go, not web. **Android only** — the prebuilt `android/` directory is committed; iOS is not currently supported.
 
@@ -60,6 +68,8 @@ Each drop type has a **one-time backfill migration** (SecureStore-gated) that ru
 
 Nutrition / Habits / Threads CRUD live under `/more/{nutrition,habits,threads}`. The dashboard's `DAILY SCHEDULE` section (§4) and the per-thread detail page at `/threads/[id]` provide in-context entry points so the More tab is a management hub, not the daily-use surface.
 
+The global `HomeHeader` ([src/components/home/HomeHeader.tsx](../src/components/home/HomeHeader.tsx)) renders the `loopd` logotype and a single gear icon → `/settings`. Cloud sync is silent — no spinner, no header banner; status lives at `Settings → Cloud Sync`.
+
 ---
 
 ## 4. Screens
@@ -92,7 +102,7 @@ Runs on app boot:
 ### `app/journal/[date].tsx` — daily journal
 Dynamic route keyed by `YYYY-MM-DD`. Inline entries with text + habits + clips. Key behaviors:
 
-- **DB-first autosave** on every keystroke (`liveTextRef`, `handleSilentNewText`) — see [CLAUDE.md § Autosave Rules](../CLAUDE.md). Silent saves bypass scanners (no churn mid-word).
+- **DB-first autosave** on every keystroke (`liveTextRef`, `handleSilentNewText`). Silent saves bypass scanners (no churn mid-word).
 - **Commit-time scanners** run from [useEntries.editEntry](../src/hooks/useEntries.ts) when text changes:
   - `scanTodosFromText` merges `[]` matches into `todos_json`.
   - `reconcileTodoMetaForEntry` (fire-and-forget) inserts paired `todo_meta` rows for new todos, runs heuristic, fires LLM classifier if heuristic returned null and the todo isn't done.
@@ -152,7 +162,7 @@ Per-thread aggregate view. Header shows name + colored dot + pin star + stalenes
 Reachable by tapping a thread row's `→` arrow on the dashboard tracker, or via "view" affordances elsewhere.
 
 ### `app/more/index.tsx` — More hub
-List of links with one-line stats: nutrition (entries this week), habits (active count + due-today count), threads (active count + going-stale count). Settings + Notion Sync are reachable from the global header (sync icon + gear icon at top of every screen via `HomeHeader`).
+List of links with one-line stats: nutrition (entries this week), habits (active count + due-today count), threads (active count + going-stale count). Settings is reachable from the global header (gear icon at top of every screen via `HomeHeader`).
 
 ### `app/more/nutrition.tsx` — nutrition log
 Flat list of every nutrition row from the local table, newest first. Each row shows food name, source date, and kcal. Tap to jump to the source journal day.
@@ -165,18 +175,18 @@ List habits with a sheet-style editor for create/edit. Editor exposes:
 - Day-of-week picker (for `weekly` and `specific_days`)
 - Count picker 1–7 (for `n_per_week`)
 
-Trash icon per row hard-deletes (with confirm); past entries' `habits_json` references are preserved (just dangle).
+Trash icon per row soft-deletes (with confirm); past entries' `habits_json` references are preserved (just dangle).
 
 The editor sheet uses `useSafeAreaInsets()` and pads its overlay by `GLOBAL_NAV_HEIGHT + insets.bottom` so the form clears the persistent bottom nav and Android system gesture bar.
 
 ### `app/more/threads.tsx` — threads CRUD
-List of all threads (active + archived tabs). Editor sheet exposes name, slug (auto-derived from name unless user has manually edited; lowercased, alphanumerics + hyphens), time-of-day, target cadence (days). Pin / archive / hard-delete actions per row. Same safe-area lift as the habits editor.
+List of all threads (active + archived tabs). Editor sheet exposes name, slug (auto-derived from name unless user has manually edited; lowercased, alphanumerics + hyphens), time-of-day, target cadence (days). Pin / archive / soft-delete actions per row. Same safe-area lift as the habits editor.
 
 ### `app/settings/`
-- [`index.tsx`](../app/settings/index.tsx) — menu.
+- [`index.tsx`](../app/settings/index.tsx) — menu (Cloud Sync, AI, Export Database, Import Database, App Updates).
 - [`ai.tsx`](../app/settings/ai.tsx) — provider toggle (Claude Sonnet 4.6 or GPT-4o), API-key input, Test Connection.
-- [`cloud-sync.tsx`](../app/settings/cloud-sync.tsx) — Supabase status + manual PUSH/PULL + per-table sync ledger. Long-press the title for a hidden dev menu (force push all / reset cloud / reset local from cloud).
-- [`updates.tsx`](../app/settings/updates.tsx) — manual OTA check.
+- [`cloud-sync.tsx`](../app/settings/cloud-sync.tsx) — Supabase status (configured / last push / last pull / error count) + manual PUSH/PULL buttons + per-table sync ledger. **Long-press the title** for a hidden dev menu: `FORCE PUSH ALL` (clears `synced_at` and re-uploads), `RESET CLOUD DB` (drops every cloud row for the Phase A user_id), `RESET LOCAL FROM CLOUD` (wipes local synced tables and runs first-pull). Destructive actions confirm before running.
+- [`updates.tsx`](../app/settings/updates.tsx) — manual OTA check (configured against EAS Update; no bundles published yet — see [docs/backlog.md](./backlog.md)).
 
 ---
 
@@ -184,29 +194,45 @@ List of all threads (active + archived tabs). Editor sheet exposes name, slug (a
 
 ### SQLite (expo-sqlite) — [src/services/database.ts](../src/services/database.ts)
 
-Eleven tables in `loopd.db`.
+Twelve tables in `loopd.db` — eleven entity tables plus the local-only `sync_meta` ledger.
 
 | Table | PK | Columns (notable) | Purpose |
 |---|---|---|---|
-| `habits` | `id` | `label`, `sort_order`, `slug`, `icon`, `color`, `cadence_type`, `cadence_days` (JSON), `cadence_count`, `archived` (column kept for back-compat; UI no longer surfaces it for habits), `time_of_day`, `notion_page_id`, `notion_last_synced`, `updated_at` | User's repeatable disciplines + cadence + time-of-day bucket. The Entries-DB Habits multi-select still governs identity for sync (the optional Habits DB carries cadence metadata) |
-| `entries` | `id` | `date`, `text`, `habits_json`, `clips_json`, `todos_json`, `clip_uri`/`clip_duration_ms` (legacy single-clip), `created_at`, `notion_page_id`, `updated_at` | Daily entries; prose is canonical |
-| `projects` | `id` | `date` UNIQUE, `status` ('draft'\|'exported'), `clips_json`, `removed_clip_source_keys_json`, `text_overlays_json`, `filter_overlays_json`, `export_uri`, `updated_at` | Editor state per day |
-| `vlogs` | `id` | `date`, `clip_count`, `habit_count`, `caption`, `duration_seconds`, `export_uri`, `created_at` | Archive of exported vlogs |
-| `day_meta` | `date` | `title`, `updated_at` | Per-day user-rename title |
-| `sync_deletions` | `id` autoinc | `entity_type` (`'entry'`\|`'todo'`\|`'habit'`\|`'nutrition'`\|`'thread'`), `entity_id`, `notion_page_id`, `deleted_at` | Queue of deletions to archive in Notion on next sync |
-| `ai_summaries` | `date` | `summary_json`, `generated_at`, `model` | Cached AI composition per date. `summary_json` carries both the structured `AISummary` fields and the optional relatable-caption fields; `getRecentAISummaries(beforeDate, limit)` is the helper that feeds prior captions into the next caption pass for tonal continuity / anti-repetition |
-| `nutrition` | `id` | `name`, `kcal`, `entry_id`, `entry_date`, `source_line`, `notion_page_id`, `created_at`, `updated_at` | Per-line nutrition records, derived from `** food N kcal` prose |
-| `todo_meta` | `todo_id` | `entry_id`, `entry_date`, `type`, `stage`, `expanded_md`, `expanded_at`, `model`, `classifier_confidence`, `classifier_model`, `user_overridden_type`, `position`, `created_at`, `updated_at` | 1:1 with each `TodoItem` in `todos_json`. CHECK enforces enums on `type` (7 values), `stage` (3 values), `classifier_confidence` (4 values + null) |
-| `threads` | `id` | `name`, `slug` UNIQUE, `icon`, `color`, `target_cadence_days`, `archived`, `pinned`, `time_of_day`, `notion_page_id`, `notion_last_synced`, `created_at`, `updated_at` | Project metadata. `slug` is the matching key for `#tag` mentions; UNIQUE enforces case-insensitive uniqueness |
-| `thread_mentions` | `id` | `thread_id`, `entry_id` (nullable), `entry_date`, `todo_id` (nullable), `source_line`, `tag_text`, `created_at` | Junction. App-level invariant: at least one of `entry_id` / `todo_id` is set, EXCEPT for the manual-touch deviation (both NULL when written by `toggleThreadTouchToday`). DB has no CHECK so the deviation is permitted |
+| `habits` | `id` | `label`, `sort_order`, `slug`, `icon`, `color`, `cadence_type`, `cadence_days` (JSON), `cadence_count`, `archived`, `time_of_day`, `notion_page_id`, `notion_last_synced`, `updated_at`, `synced_at`, `deleted_at` | User's repeatable disciplines + cadence + time-of-day bucket. The `notion_*` columns are dead from the post-Notion era and stay nullable; the cloud mirror drops them. |
+| `entries` | `id` | `date`, `text`, `habits_json`, `clips_json`, `todos_json`, `clip_uri`/`clip_duration_ms` (legacy single-clip), `created_at`, `notion_page_id`, `updated_at`, `synced_at`, `deleted_at` | Daily entries; prose is canonical. |
+| `projects` | `id` | `date` UNIQUE, `status` ('draft'\|'exported'), `clips_json`, `removed_clip_source_keys_json`, `text_overlays_json`, `filter_overlays_json`, `export_uri`, `updated_at`, `synced_at`, `deleted_at` | Editor state per day. |
+| `vlogs` | `id` | `date`, `clip_count`, `habit_count`, `caption`, `duration_seconds`, `export_uri`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Archive of exported vlogs. `export_uri` is device-local; cloud carries it for cross-device "did I export this day?" but the URI is meaningless on a different device. |
+| `day_meta` | `date` | `title`, `updated_at`, `synced_at`, `deleted_at` | Per-day user-rename title. |
+| `ai_summaries` | `date` | `summary_json`, `generated_at`, `model`, `updated_at`, `synced_at`, `deleted_at` | Cached AI composition per date. `summary_json` carries both the structured `AISummary` fields and the optional relatable-caption fields. `getRecentAISummaries(beforeDate, limit)` feeds prior captions into the next caption pass for tonal continuity / anti-repetition. |
+| `nutrition` | `id` | `name`, `kcal`, `entry_id`, `entry_date`, `source_line`, `notion_page_id`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Per-line nutrition records, derived from `** food N kcal` prose. |
+| `todo_meta` | `todo_id` | `entry_id`, `entry_date`, `type`, `stage`, `expanded_md`, `expanded_at`, `model`, `classifier_confidence`, `classifier_model`, `user_overridden_type`, `position`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | 1:1 with each `TodoItem` in `todos_json`. CHECK enforces enums on `type` (7 values), `stage` (3 values), `classifier_confidence` (4 values + null). |
+| `threads` | `id` | `name`, `slug` UNIQUE, `icon`, `color`, `target_cadence_days`, `archived`, `pinned`, `time_of_day`, `notion_page_id`, `notion_last_synced`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Project metadata. `slug` is the matching key for `#tag` mentions; UNIQUE enforces case-insensitive uniqueness. |
+| `thread_mentions` | `id` | `thread_id`, `entry_id` (nullable), `entry_date`, `todo_id` (nullable), `source_line`, `tag_text`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Junction. App-level invariant: at least one of `entry_id` / `todo_id` is set, EXCEPT for the manual-touch deviation (both NULL when written by `toggleThreadTouchToday`). DB has no CHECK so the deviation is permitted. |
+| `sync_meta` | `table_name` | `last_pull_at`, `last_push_at`, `pending_pushes`, `last_error`, `last_error_at` | Local-only ledger driving incremental cloud sync; one row per synced table. **Not itself synced.** |
+| `sync_deletions` | `id` autoinc | `entity_type`, `entity_id`, `notion_page_id`, `deleted_at` | **Deprecated** Notion-era outbox. No longer written to since soft-delete propagates as a normal sync event. The table stays in the schema (dropping it adds migration risk for no real benefit) — see [docs/backlog.md](./backlog.md) for the eventual cleanup. |
+
+**Cloud-sync columns added to every synced table**: `synced_at TEXT` (last successful push timestamp; LOCAL ONLY, not in Postgres), `deleted_at TEXT` (soft-delete timestamp; reads filter `WHERE deleted_at IS NULL`). The 30-day vacuum that hard-deletes soft-deleted rows is deferred (see [docs/backlog.md](./backlog.md)).
+
+**Notion-era leftovers**: `notion_page_id` and `notion_last_synced` columns on `entries`, `nutrition`, `habits`, `threads` are dead — never written, always NULL going forward, dropped from the cloud mirror. Same with `sync_deletions`. None of it is worth a migration to clean up; it's harmless ballast.
 
 Indexes: `entries(date)`, `entries(notion_page_id)`, `entries(updated_at)`, `projects(date)`, `habits(notion_page_id)`, `habits(archived)`, `habits(slug)`, `nutrition(entry_id)`, `nutrition(entry_date)`, `nutrition(name COLLATE NOCASE)`, `nutrition(notion_page_id)`, `todo_meta(entry_id)`, `todo_meta(entry_date)`, `todo_meta(type)`, `todo_meta(updated_at)`, `todo_meta(created_at)`, `threads(slug)` UNIQUE, `threads(archived)`, `threads(notion_page_id)`, `thread_mentions(thread_id, created_at)`, `thread_mentions(entry_id)`, `thread_mentions(todo_id)`, `thread_mentions(entry_date)`.
 
+### Postgres mirror — [supabase/migrations/](../supabase/migrations/)
+
+Ten synced tables mirrored to Supabase (the local-only `sync_meta` and deprecated `sync_deletions` are excluded). Migrations:
+
+- `0001_initial_schema.sql` — composite `(user_id, id)` PKs, JSONB columns, real BOOLEAN/TIMESTAMPTZ types, CHECK constraints mirroring local SQLite, composite FKs.
+- `0002_rls_policies.sql` — RLS policies authored for every table but `DISABLE ROW LEVEL SECURITY` on every one (Phase A is single-user with hardcoded UUID).
+- `0003_server_time_rpc.sql` — `get_server_time()` Postgres function called once per pull; backs the clock-skew-safe `last_pull_at` cursor.
+- `0004_relax_fks.sql` — drops the strict FKs from 0001 because local SQLite enforces no FKs; the over-strict cloud constraints rejected legitimate soft-orphan rows on push.
+
+Migrations are applied via `node scripts/db-migrate.mjs --all-pending` — a tiny tracker that records applied migrations in a `loopd_migrations` table so the runner is idempotent.
+
 ### Key TypeScript types — [src/types/](../src/types/)
 
-- **`Entry`** ([entry.ts](../src/types/entry.ts)) — `{ id, date, text, habits[], todos[], clipUri?, clipDurationMs?, clips[], createdAt, notionPageId?, updatedAt? }`
-- **`TodoItem`** — `{ id, text, done, completedAt?, createdAt?, sourceLine?, notionPageId? }`. `notionPageId` is the canonical Notion-row reference; no duplicate field on `TodoMeta`.
-- **`Habit`** — `{ id, label, sortOrder, slug?, icon?, color?, cadenceType?, cadenceDays?, cadenceCount?, timeOfDay?, notionPageId?, notionLastSynced?, updatedAt? }`. New cadence/metadata fields are optional on the type so existing call sites that construct minimal Habit objects (e.g. the Notion-options identity-sync path) keep compiling; the DB layer fills sensible defaults.
+- **`Entry`** ([entry.ts](../src/types/entry.ts)) — `{ id, date, text, habits[], todos[], clipUri?, clipDurationMs?, clips[], createdAt, notionPageId?, updatedAt? }`.
+- **`TodoItem`** — `{ id, text, done, completedAt?, createdAt?, sourceLine?, notionPageId? }`. `notionPageId` is dead but kept on the type so legacy rows still parse.
+- **`Habit`** — `{ id, label, sortOrder, slug?, icon?, color?, cadenceType?, cadenceDays?, cadenceCount?, timeOfDay?, notionPageId?, notionLastSynced?, updatedAt? }`. Cadence/metadata fields are optional on the type so existing call sites that construct minimal Habit objects keep compiling; the DB layer fills sensible defaults.
 - **`CadenceType`** — `'daily' | 'weekdays' | 'weekly' | 'specific_days' | 'n_per_week'`.
 - **`TimeOfDay`** — `'morning' | 'midday' | 'evening' | 'anytime'`. Sort order on the dashboard tracker: morning → midday → evening → anytime.
 - **`Vlog`** — `{ id, date, clipCount, habitCount, caption?, durationSeconds, exportUri?, createdAt }`.
@@ -225,6 +251,9 @@ Indexes: `entries(date)`, `entries(notion_page_id)`, `entries(updated_at)`, `pro
 - **`ThreadMention`** — `{ id, threadId, entryId, entryDate, todoId, sourceLine, tagText, createdAt }`.
 - **`Staleness`** — `'fresh' | 'aging' | 'stale' | 'cold'`. Computed from days-since-last-mention against optional `targetCadenceDays` or default 1/3/7 thresholds.
 - **`ThreadCard`** — computed view shape consumed by the dashboard. `{ thread, lastMentionAt, daysSinceLast, staleness, entriesThisWeek, openTodos, recentTodos, activeDates }`. `activeDates` is a `Set<YYYY-MM-DD>` of dates in the last 14 days where the thread had a manual-touch mention (drives the dashboard 14-cell strip; prose `#tag` mentions are deliberately excluded).
+- **`SyncableTable<TLocal, TCloud>`** ([services/sync/types.ts](../src/services/sync/types.ts)) — every synced table implements this. Carries `tableName`, `pushOrder`, `pullOrder`, `cloudConflictColumns`, `localIdColumn`, `getId`, `localToCloud`, `cloudToLocal`, `localQueryDirty`, `localMarkSynced`, `localUpsert`. The orchestrator walks a registry of these generically.
+- **`PushResult`** / **`PullResult`** / **`SyncMetaRow`** — sync status shapes consumed by `app/settings/cloud-sync.tsx`.
+- **Note**: `src/types/notion.ts` exists but has no importers — orphan from the deleted Notion sync. Not worth removing in isolation; will go with the next types-cleanup pass.
 
 ---
 
@@ -247,7 +276,7 @@ Globally-defined habits with cadence rules + time-of-day buckets. Per-entry logg
 
 **Heatmap row** ([HabitHeatmapRow.tsx](../src/components/home/HabitHeatmapRow.tsx)) renders a 14-cell Sunday-anchored strip with four cell states: `completed` (green), `missed` (low-alpha red), `today-pending` (outlined), `neutral` (very dim — for not-due days or future days). Right-side count shows the cadence-aware streak.
 
-**CRUD** at `/more/habits`. Time-of-day chips, cadence-type radio, day-picker (for weekly/specific_days), count picker (for n_per_week). Trash icon hard-deletes; past `habits_json` references on entries dangle harmlessly.
+**CRUD** at `/more/habits`. Time-of-day chips, cadence-type radio, day-picker (for weekly/specific_days), count picker (for n_per_week). Trash icon soft-deletes; past `habits_json` references on entries dangle harmlessly.
 
 ### 6.3 Todos (checkbox drop)
 Todos live as `[]` / `[x]` lines in entry prose. The scanner ([scanTodos.ts](../src/services/todos/scanTodos.ts)) merges them into `entries.todos_json` at commit time. Two-pass matching (text + line-index via `sourceLine`) keeps row identity through edits.
@@ -277,7 +306,7 @@ Every `TodoItem` has a paired `todo_meta` row. The 1:1 invariant is enforced by 
 ### 6.5 Nutrition (suffix-style drop)
 Each `** <food> <N> kcal` line in prose becomes a row in the `nutrition` table, tagged to its source entry and date. Two rows for the same food on the same day = two intake events.
 
-Scanner: [scanNutrition.ts](../src/services/nutrition/scanNutrition.ts). Two-pass matching: exact `(name, kcal)` then line-index. Unmatched existing rows are **deleted** (unlike todos, nutrition rows correspond 1:1 to prose lines).
+Scanner: [scanNutrition.ts](../src/services/nutrition/scanNutrition.ts). Two-pass matching: exact `(name, kcal)` then line-index. Unmatched existing rows are **soft-deleted** (unlike todos, nutrition rows correspond 1:1 to prose lines).
 
 Autocomplete: [NutritionAutocomplete](../src/components/journal/NutritionAutocomplete.tsx) detects the `** ` marker and renders chips with most-recent kcal values. Tap inserts `<name> <kcal> kcal `.
 
@@ -297,15 +326,13 @@ A lightweight project-attribution layer. `#tag` mentions in journal prose or tod
 1. Pass 1 — exact `(thread_id, source_line)` match.
 2. Pass 2 — `(thread_id, tag_text)` within ±3 lines for line-shifted mentions.
 
-Per-todo mentions reconcile against `thread_mentions WHERE todo_id = ?`; per-entry mentions reconcile against `WHERE entry_id = ? AND todo_id IS NULL`. Unmatched parsed → insert; unmatched existing → delete.
+Per-todo mentions reconcile against `thread_mentions WHERE todo_id = ?`; per-entry mentions reconcile against `WHERE entry_id = ? AND todo_id IS NULL`. Unmatched parsed → insert; unmatched existing → soft-delete.
 
 **Manual touch.** From the dashboard tracker, tapping a thread row writes a `thread_mentions` row with `entry_id IS NULL AND todo_id IS NULL` (see [touch.ts](../src/services/threads/touch.ts)). This deviates from Principle 11 (mentions are derived from prose) and is the **only** documented exception. Justified because the schema permits it, the staleness math composes uniformly across all mention shapes, and toggling off only deletes the manual row.
 
 **Staleness** ([staleness.ts](../src/services/threads/staleness.ts)) — pure compute. If `targetCadenceDays` is set, staleness measured against it (1× = fresh, 2× = aging, 4× = stale, beyond = cold). Otherwise default thresholds: ≤1d fresh, ≤3d aging, ≤7d stale, >7d cold. Never-mentioned threads = `cold`.
 
 **Lazy backfill** ([threads/migrate.ts](../src/services/threads/migrate.ts)) — SecureStore-gated under `thread_mentions_backfill_v1_done`, with an extra short-circuit: skip when zero threads exist locally. The gate flips on the first boot AFTER a thread exists.
-
-**Mentions are NOT synced to Notion** (see §6.11). They're derived from entries/todos which already sync.
 
 ### 6.7 Daily Schedule tracker
 Combined dashboard section that merges habits + threads under a single `DAILY SCHEDULE` header. Bucketed by `time_of_day`; adaptive mini-headers (`morning` / `midday` / `evening` / `anytime`) appear once 2+ buckets are populated by either type. Within each bucket: habit rows first, then thread rows.
@@ -322,7 +349,7 @@ Implementation details:
 - `PreviewPlayer` uses two video slots; the next clip is preloaded into the inactive slot for seamless transitions.
 - Stale `currentTime=0` progress events after scrub→play are suppressed.
 
-### 6.9 AI composition (vlog summary)
+### 6.9 AI composition (vlog summary + relatable caption)
 [src/services/ai/](../src/services/ai/) — provider-agnostic (Sonnet 4.6 or GPT-4o). Two-call chain orchestrated by `summarize.ts`:
 
 1. **Structured summary call** — produces a typed `AISummary` (headline, summary, mood, clip order/trims, text overlays, filter preset). `validate.ts` clamps clip ranges, drops unknown clip IDs, slots missing IDs at the end.
@@ -338,15 +365,17 @@ Full details in [docs/media-pipeline.md](./media-pipeline.md). 1080p H.264 proxy
 ### 6.11 Cloud Sync (Supabase Postgres)
 Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and the working plan in [`docs/loopd-cloud-sync-plan.md`](./loopd-cloud-sync-plan.md). Local SQLite stays canonical (Architectural Principle 12); Supabase is a sync mirror.
 
-- **Push** — every write to a synced table calls `schedulePush()` which fires a 5s-debounced `pushAll()`. Per-table batched upsert with `ON CONFLICT (user_id, id) DO UPDATE`; stamps local `synced_at` on success.
-- **Pull** — incremental, paginated by `updated_at ASC`. `last_pull_at` is set from a `get_server_time()` Postgres RPC to avoid clock skew. Conflict resolution is last-write-wins by `updated_at`.
-- **Soft delete** — every CRUD delete stamps `deleted_at + updated_at`; reads filter `WHERE deleted_at IS NULL`; the deletion propagates to cloud as a normal sync event. (No 30-day vacuum yet — soft-deleted rows accumulate. v1.x candidate.)
-- **Bootstrap** — `bootstrapCloudSync()` runs once (gated by `cloud_initial_push_done` SecureStore flag). Decides initial-push vs first-pull vs no-op vs initial-push fallback for the both-populated case.
-- **Tables synced** — every entity table from §5: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`. (`sync_deletions` was a Notion-era queue; no longer used.)
-- **Phase A** — single hardcoded `user_id = '00000000-0000-0000-0000-000000000001'`, RLS disabled. Phase B (paid tier) flips RLS on and adds auth.
+- **Push** — every write to a synced table calls `schedulePush()` which fires a 5s-debounced `pushAll()`. Per-table batched upsert (50/batch) with `ON CONFLICT (user_id, id) DO UPDATE`; stamps local `synced_at` on success. Push order respects FK intent (parents before children: entries → projects → day_meta → vlogs → ai_summaries → todo_meta → nutrition → habits → threads → thread_mentions).
+- **Pull** — incremental, paginated by `updated_at ASC`. `last_pull_at` is set from a `get_server_time()` Postgres RPC to avoid clock skew. Conflict resolution is last-write-wins by `updated_at` via the pure [`chooseWinner`](../src/services/sync/conflict.ts). Pull order differs from push (habits + threads pulled before todo_meta / nutrition / thread_mentions so child rows land after their parents exist).
+- **Soft delete** — every CRUD delete in [`database.ts`](../src/services/database.ts) stamps `deleted_at + updated_at`; reads filter `WHERE deleted_at IS NULL`; the deletion propagates to cloud as a normal sync event. (No 30-day vacuum yet — soft-deleted rows accumulate. v1.x candidate per [docs/backlog.md](./backlog.md).)
+- **Bootstrap** — `bootstrapCloudSync()` runs once (gated by `cloud_initial_push_done` SecureStore flag). Decides initial-push (local has data, cloud is empty), first-pull (cloud has data, local is empty), no-op (both empty), or initial-push fallback (both populated — Phase A defaults to "trust local").
+- **First-pull recovery** — `firstPullAll()` resets `sync_meta` and pulls every cloud row from epoch. Backs the **RESET LOCAL FROM CLOUD** dev menu action — the corruption-recovery path.
+- **Tables synced** — every entity table from §5: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`. The local `sync_meta` ledger is local-only.
+- **Phase A** — single hardcoded `user_id = '00000000-0000-0000-0000-000000000001'` in [`sync/client.ts`](../src/services/sync/client.ts), RLS disabled. Phase B (paid tier) flips RLS on (policies authored in `0002_rls_policies.sql`) and adds Supabase Auth.
+- **Known gap** — clip files (`Documents/loopd/clips/<date>/*.mp4`) are NOT in Supabase Storage. Only `entries.clips_json` (the path references) round-trips. See [docs/backlog.md](./backlog.md) for the eventual storage-pipeline work.
 
 ### 6.12 OTA Updates
-`expo-updates` checks on every app open. Background fetch + restart prompt.
+`expo-updates` checks on every app open. Background fetch + restart prompt. Configured against EAS Update (project ID in `app.json`); no bundles published yet — current dev workflow rebuilds + sideloads release APKs. See [docs/backlog.md](./backlog.md) for the OTA setup recipe.
 
 ---
 
@@ -354,44 +383,44 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 
 | Path | Purpose |
 |---|---|
-| `database.ts` | SQLite schema, migrations, CRUD for all 11 tables; AI summary cache. Every write to a synced table calls `sync/schedulePush`; every read filters `WHERE deleted_at IS NULL`. |
-| `fileManager.ts` | Pick / record / copy clip; DCIM save; ensure app dirs |
-| `ffmpeg.ts`, `ffmpegCommand.ts` | FFmpeg wrapper + 1080p H.264 transcode command builder |
-| `clipMigration.ts` | Backfills 1080p proxies for pre-transcode clips |
-| `exportPipeline.ts` | Final vlog transcode & mux |
-| `textBitmap.ts`, `textRenderer.tsx` | Rasterizes text overlays via Skia |
-| `todos/scanTodos.ts` | `[]`/`[x]` parser; two-pass merge against `todos_json`; `rewriteTodoLine` for dashboard round-trip |
-| `todos/migrate.ts` | One-time backfill of `[]` markers in pre-existing entries (SecureStore-gated) |
-| `todos/rank.ts` | Ranking + relative-time formatting for the dashboard `SmartTodoList` |
-| `todos/crud.ts` | Entry-scoped todo CRUD; round-trips done/text into prose; fires threads scan after writes so `#tags` register on save |
-| `todos/typeMeta.ts` | Single source for type icon/label/color/order |
-| `todos/heuristicClassify.ts` | Free heuristic — text → `'todo'` \| null |
-| `todos/classify.ts` | Cheapest-model LLM classifier; module in-flight counter |
-| `todos/reconcileMeta.ts` | Inserts/deletes paired `todo_meta` rows on every entry commit; fires classifier for ambiguous, not-done todos |
-| `todos/migrateMeta.ts` | One-time `todo_meta` backfill (heuristic only) + `classifyAmbiguousMeta` boot catch-up + `countAmbiguousNotDone` |
-| `todos/stageMeta.ts` | Stage icon/label/color (default `'todo'` surfaces as "Open") |
-| `todos/reorder.ts` | `ensureAllTodoPositions` + swap helpers; lazy NULL-first sparse-then-dense pattern |
-| `todos/expandPrompts.ts` | Six system prompts with reasoning preambles + JSON schemas + context-block builder |
-| `todos/expandSerialize.ts` | Per-type JSON → markdown templates |
-| `todos/expand.ts` | Expansion orchestrator (primary model, 3-concurrent cap, malformed-JSON auto-retry) |
-| `nutrition/scanNutrition.ts` | `** food N kcal` parser; two-pass reconcile against the nutrition table |
-| `nutrition/migrate.ts` | One-time nutrition backfill (SecureStore-gated) |
-| `habits/cadence.ts` | Pure cadence engine: `isDueOn`, `needsMoreThisWeek`, `summarizeCadence`, ISO-week helpers |
-| `habits/streaks.ts` | Cadence-aware streak math + per-cell heatmap state computation |
-| `habits/migrate.ts` | One-time `habits_cadence_backfill_v1_done`: derives slugs from labels for pre-cadence habits |
-| `threads/scanThreads.ts` | `#tag` parser with code-span masking; resolves slugs to thread IDs (auto-creates unknown); two-pass reconcile against `thread_mentions`; per-todo + per-entry passes |
-| `threads/crud.ts` | Thread CRUD with discriminated `CreateResult` (slug-taken / empty-name); `getThreadSuggestions` for the autocomplete (recency-sorted via LEFT JOIN with NULLS LAST) |
-| `threads/staleness.ts` | Pure `computeStaleness` + `formatStalenessLabel` |
-| `threads/getThreadCards.ts` | Single-pass aggregator for the dashboard: thread + last mention + entries-this-week + open-todos + top-3 recent open todos + 14-day `activeDates` set (manual-touch only) |
-| `threads/getThreadDetail.ts` | Per-thread aggregator for `/threads/[id]`: open todos + done todos (recent 5) + entry-prose mentions (with line excerpts) |
-| `threads/touch.ts` | `toggleThreadTouchToday` — idempotent dashboard toggle that writes a manual mention with NULL entry_id + todo_id (deviation from Principle 11, documented inline) |
-| `threads/migrate.ts` | Lazy `thread_mentions_backfill_v1_done`: scans every entry + todo for `#tag` matches; short-circuits if user has zero threads (re-checks on next boot) |
-| `ai/config.ts` | Claude/OpenAI key + provider storage |
-| `ai/prompt.ts`, `ai/summarize.ts`, `ai/compose.ts`, `ai/validate.ts` | Vlog summary prompts, structured-summary LLM call, compose to editor types, validation/clamping |
+| `database.ts` | SQLite schema, migrations, CRUD for all 12 tables; AI summary cache. Every write to a synced table calls `sync/schedulePush`; every read filters `WHERE deleted_at IS NULL`. Soft-delete cascades for entry → nutrition + todo_meta + thread_mentions, and thread → thread_mentions. |
+| `fileManager.ts` | Pick / record / copy clip; DCIM save; ensure app dirs. |
+| `ffmpeg.ts`, `ffmpegCommand.ts` | FFmpeg wrapper + 1080p H.264 transcode command builder. |
+| `clipMigration.ts` | Backfills 1080p proxies for pre-transcode clips. |
+| `exportPipeline.ts` | Final vlog transcode & mux. |
+| `textBitmap.ts`, `textRenderer.tsx` | Rasterizes text overlays via Skia. |
+| `todos/scanTodos.ts` | `[]`/`[x]` parser; two-pass merge against `todos_json`; `rewriteTodoLine` for dashboard round-trip. |
+| `todos/migrate.ts` | One-time backfill of `[]` markers in pre-existing entries (SecureStore-gated). |
+| `todos/rank.ts` | Ranking + relative-time formatting for the dashboard `SmartTodoList`. |
+| `todos/crud.ts` | Entry-scoped todo CRUD; round-trips done/text into prose; fires threads scan after writes so `#tags` register on save. |
+| `todos/typeMeta.ts` | Single source for type icon/label/color/order. |
+| `todos/heuristicClassify.ts` | Free heuristic — text → `'todo'` \| null. |
+| `todos/classify.ts` | Cheapest-model LLM classifier; module in-flight counter. |
+| `todos/reconcileMeta.ts` | Inserts/soft-deletes paired `todo_meta` rows on every entry commit; fires classifier for ambiguous, not-done todos. |
+| `todos/migrateMeta.ts` | One-time `todo_meta` backfill (heuristic only) + `classifyAmbiguousMeta` boot catch-up + `countAmbiguousNotDone`. |
+| `todos/stageMeta.ts` | Stage icon/label/color (default `'todo'` surfaces as "Open"). |
+| `todos/reorder.ts` | `ensureAllTodoPositions` + swap helpers; lazy NULL-first sparse-then-dense pattern. |
+| `todos/expandPrompts.ts` | Six system prompts with reasoning preambles + JSON schemas + context-block builder. |
+| `todos/expandSerialize.ts` | Per-type JSON → markdown templates. |
+| `todos/expand.ts` | Expansion orchestrator (primary model, 3-concurrent cap, malformed-JSON auto-retry). |
+| `nutrition/scanNutrition.ts` | `** food N kcal` parser; two-pass reconcile against the nutrition table. |
+| `nutrition/migrate.ts` | One-time nutrition backfill (SecureStore-gated). |
+| `habits/cadence.ts` | Pure cadence engine: `isDueOn`, `needsMoreThisWeek`, `summarizeCadence`, ISO-week helpers. |
+| `habits/streaks.ts` | Cadence-aware streak math + per-cell heatmap state computation. |
+| `habits/migrate.ts` | One-time `habits_cadence_backfill_v1_done`: derives slugs from labels for pre-cadence habits. |
+| `threads/scanThreads.ts` | `#tag` parser with code-span masking; resolves slugs to thread IDs (auto-creates unknown); two-pass reconcile against `thread_mentions`; per-todo + per-entry passes. |
+| `threads/crud.ts` | Thread CRUD with discriminated `CreateResult` (slug-taken / empty-name); `getThreadSuggestions` for the autocomplete (recency-sorted via LEFT JOIN with NULLS LAST). |
+| `threads/staleness.ts` | Pure `computeStaleness` + `formatStalenessLabel`. |
+| `threads/getThreadCards.ts` | Single-pass aggregator for the dashboard: thread + last mention + entries-this-week + open-todos + top-3 recent open todos + 14-day `activeDates` set (manual-touch only). |
+| `threads/getThreadDetail.ts` | Per-thread aggregator for `/threads/[id]`: open todos + done todos (recent 5) + entry-prose mentions (with line excerpts). |
+| `threads/touch.ts` | `toggleThreadTouchToday` — idempotent dashboard toggle that writes a manual mention with NULL entry_id + todo_id (deviation from Principle 11, documented inline). |
+| `threads/migrate.ts` | Lazy `thread_mentions_backfill_v1_done`: scans every entry + todo for `#tag` matches; short-circuits if user has zero threads (re-checks on next boot). |
+| `ai/config.ts` | Claude/OpenAI key + provider storage (`expo-secure-store`). |
+| `ai/prompt.ts`, `ai/summarize.ts`, `ai/compose.ts`, `ai/validate.ts` | Vlog summary prompts, structured-summary LLM call, compose to editor types, validation/clamping. |
 | `ai/caption.ts` | Second LLM pass per [docs/relatable-caption-spec.md](./relatable-caption-spec.md). `generateCaption(input)` returns `{ caption, alternate, detectedTheme }`. Failures swallowed by `summarize.ts` so the structured summary still ships. |
 | `sync/client.ts` | Supabase singleton + hardcoded Phase A `user_id`; reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from `.env`. |
 | `sync/types.ts` | `SyncableTable<TLocal, TCloud>` interface — every synced table implements it. |
-| `sync/syncMeta.ts` | CRUD for the local `sync_meta` ledger (per-table last_pull_at / last_push_at / last_error). |
+| `sync/syncMeta.ts` | CRUD for the local `sync_meta` ledger (per-table `last_pull_at` / `last_push_at` / `last_error`). |
 | `sync/conflict.ts` | Pure `chooseWinner(local, cloud)` returning `'local' \| 'cloud' \| 'tie'` by `updated_at`. |
 | `sync/push.ts` | Batched push (50/batch), `ON CONFLICT (user_id, id) DO UPDATE`, stamps `synced_at` on success. |
 | `sync/pull.ts` | Incremental pull paginated by `updated_at ASC`; uses `get_server_time` RPC for clock-skew-safe `last_pull_at`. |
@@ -399,8 +428,8 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 | `sync/orchestrator.ts` | `pushAll()` and `pullAll()` walk the registry in `pushOrder` / `pullOrder` (different per spec §4.4). |
 | `sync/bootstrap.ts` | First-cold-start detection: initial-push vs first-pull vs no-op. SecureStore-gated by `cloud_initial_push_done`. |
 | `sync/schedulePush.ts` | 5-second debounced trigger; called from every database.ts write to push edits to cloud. |
-| `sync/devActions.ts` | Force push, reset cloud, reset local-from-cloud — backs the hidden dev menu. |
-| `sync/tables/*.ts` | Ten thin per-table SyncableTable implementations (one per synced table). |
+| `sync/devActions.ts` | Force push, reset cloud, reset local-from-cloud — backs the hidden dev menu in `app/settings/cloud-sync.tsx`. |
+| `sync/tables/*.ts` | Ten thin per-table SyncableTable implementations (one per synced table: entries, projects, dayMeta, vlogs, aiSummaries, nutrition, habits, todoMeta, threads, threadMentions). |
 
 ---
 
@@ -408,13 +437,14 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 
 | Integration | Library / endpoint | Used for |
 |---|---|---|
-| Anthropic | `@anthropic-ai/sdk` (v0.90.0), `claude-sonnet-4-6` (primary) / `claude-haiku-4-5-20251001` (classifier) | Vlog summary, expansion, classifier |
+| Anthropic | `@anthropic-ai/sdk` (v0.90.0), `claude-sonnet-4-6` (primary) / `claude-haiku-4-5-20251001` (classifier) | Vlog summary, relatable caption, expansion, classifier |
 | OpenAI | `fetch` to `api.openai.com`, `gpt-4o` (primary) / `gpt-4o-mini` (classifier) | Alt provider |
 | Supabase | `@supabase/supabase-js` (v2.105+) + `react-native-url-polyfill` | Cloud sync (Postgres mirror of every synced table; `get_server_time` RPC for clock-skew-safe pulls) |
 | FFmpeg | `@wokcito/ffmpeg-kit-react-native` (v6.1.2) | 1080p proxy transcode + final export |
 | DCIM | `expo-media-library` | Save exports to `DCIM/loopd/` |
 | Camera roll | `expo-image-picker` / `expo-document-picker` / `expo-media-library` | Clip import |
 | Secrets | `expo-secure-store` | AI keys, backfill flags, `cloud_initial_push_done` flag |
+| OTA | `expo-updates` (configured against EAS Update; no bundles published yet) | Future JS-only update path |
 
 ---
 
@@ -454,12 +484,12 @@ Target platform: **Android only** (the prebuilt `android/` directory is committe
 3. **Save to DB on every keystroke.** Silent, no-state-update DB writes. Refs hold pending values for focus logic only. **Scanners do not run on keystroke** — only at commit (focus blur, screen leave, explicit save).
 4. **Always read DB before deleting.** Auto-commit timers and cleanup effects must verify the latest row state before deciding anything destructive.
 5. **Never clear live refs in focus cleanup.** `useFocusEffect` cleanups can race idle timers; clearing `liveTextRef` during cleanup caused past data loss.
-6. **Don't auto-delete during sync.** Automatic empty-entry cleanup only runs on explicit user-initiated page loads.
+6. **Don't auto-delete during sync.** Automatic empty-entry cleanup only runs on explicit user-initiated page loads. Soft delete via `deleted_at` is the deletion mechanism — hard-delete (vacuum) is explicit and gated by 30-day age (deferred per backlog).
 7. **Two-pass matching is the way.** Any feature that derives records from prose lines uses `(exact match, then line-index fallback)` so users can edit content in place without losing record identity.
 8. **Backfills are SecureStore-gated, one-time.** Any new prose-derived feature ships with a one-time backfill so existing entries pick up the new markers; gate it with a flag (`<feature>_backfill_v<N>_done`) so it never runs twice.
 9. **Classifier output is editable; user override is permanent.** Any AI-assigned attribute on a derived row must be overridable by the user, and the override must lock that attribute from future AI mutation. The `user_overridden_type` flag pattern is the template.
 10. **Heuristic before LLM.** When a feature needs classification, scoring, or routing, try a deterministic heuristic first. Only fall through to an LLM call when the heuristic is uncertain. Cheaper, faster, and more debuggable.
 11. **Mentions are derived; metadata is stored.** When a feature creates a relationship between two objects (here: threads ↔ entries via `#tag`s), the relationship rows are *derived* from a canonical source (prose) and rebuilt at scan time. The metadata about the relationship subject (here: thread name, color, target cadence) is stored in its own table and survives between scans. **One documented deviation:** the dashboard tracker's manual "touch today" toggle writes a `thread_mentions` row with NULL entry/todo (see [services/threads/touch.ts](../src/services/threads/touch.ts)) so users can mark threads done without typing in prose. Justified because (a) the schema permits it, (b) staleness + activity math compose uniformly across mention shapes, (c) toggling off only deletes that manual row.
-12. **Cloud is a sync mirror, never the canonical source.** Read paths always hit local SQLite. Write paths always commit local first; cloud lags by 5s via debounced push. The user's typed character is in their local DB before any network call begins. Per-row LWW resolves concurrent edits between devices.
+12. **Cloud is a sync mirror, never the canonical source.** Read paths always hit local SQLite. Write paths always commit local first; cloud lags by 5s via debounced push. The user's typed character is in their local DB before any network call begins. Per-row LWW resolves concurrent edits between devices. The same architecture survived the Notion → Supabase swap (commit `dc8483a`) without changing a single read path — that's the design call.
 
-These live in full in [CLAUDE.md](../CLAUDE.md). Treat them as non-negotiable — each one traces back to a data-loss bug or a deliberate-cost decision.
+Treat these as non-negotiable — each one traces back to a data-loss bug or a deliberate-cost decision.
