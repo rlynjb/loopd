@@ -272,9 +272,7 @@ Globally-defined habits with cadence rules + time-of-day buckets. Per-entry logg
 - `specific_days` — any subset of weekdays in `cadence_days`
 - `n_per_week` — schedule alone says "any day this week is fair game"; the dashboard combines this with check-in history via `needsMoreThisWeek` to decide whether to surface the row as due today
 
-**Cadence-aware streaks** ([habits/streaks.ts](../src/services/habits/streaks.ts)) — a streak counts due-days only. Due-day-completed extends the streak; due-day-missed breaks it; non-due-days are neutral. For `n_per_week`, the streak counts **completed weeks** (a 3x/week habit done Mon/Wed/Fri = 1 week of streak; the current week is "in progress" until it closes).
-
-**Heatmap row** ([HabitHeatmapRow.tsx](../src/components/home/HabitHeatmapRow.tsx)) renders a 14-cell Sunday-anchored strip with four cell states: `completed` (green), `missed` (low-alpha red), `today-pending` (outlined), `neutral` (very dim — for not-due days or future days). Right-side count shows the cadence-aware streak.
+**Weekly grid** — habits render on the dashboard's daily-schedule grid (§6.7), one row per habit, seven cells per row anchored to the current ISO week. The cell-state engine ([cellState.ts](../src/components/home/cellState.ts)) maps `(habit, date, today, checkedDates)` to one of `done` / `pending` / `upcoming` / `missed` / `off-day`. Cadence drives off-day vs scheduled; check-ins drive done vs pending/missed.
 
 **CRUD** at `/more/habits`. Time-of-day chips, cadence-type radio, day-picker (for weekly/specific_days), count picker (for n_per_week). Trash icon soft-deletes; past `habits_json` references on entries dangle harmlessly.
 
@@ -337,11 +335,15 @@ Per-todo mentions reconcile against `thread_mentions WHERE todo_id = ?`; per-ent
 ### 6.7 Daily Schedule tracker
 Combined dashboard section that merges habits + threads under a single `DAILY SCHEDULE` header. Bucketed by `time_of_day`; adaptive mini-headers (`morning` / `midday` / `evening` / `anytime`) appear once 2+ buckets are populated by either type. Within each bucket: habit rows first, then thread rows.
 
-Both row types share the same layout (80px name + flex 14-cell strip + 36px right-side number / nav arrow). Habit rows use the cadence-aware streak count; thread rows show a `→` nav arrow (tap → `/threads/[id]`). Tapping the body of a thread row toggles a manual touch (§6.6).
+Layout is a **7-column weekday grid** anchored to the current ISO week (Monday-first). 100px label column on the left (name + cadence summary on a second line for habits, `#slug` + target cadence for threads); 7 day cells flexed to fill the rest. Today's column gets a cream pill on the day-of-month badge plus a faint vertical tint extending top-to-bottom through every row. Cell visuals: `done` (solid green + ✓), `pending` (outlined cream, today only, interactive), `upcoming` (dashed cream), `missed` (dashed red), `off-day` (faint scaffolding or invisible per the user's `off-days: [hidden|faded]` toggle).
 
-The 14-cell strip on thread rows is driven exclusively by manual touches — `#tag` mentions in prose do NOT light up the strip. This was a deliberate decision: prose mentions appear on the thread detail page (where mentions are the whole point), but they don't paint the dashboard's "done today" indicator.
+Habit cells use [cellStateFor](../src/components/home/cellState.ts) which is cadence-aware — `M/W/F` habits show off-day cells on Tue/Thu/Sat/Sun. Thread cells use the simpler [cellStateForThread](../src/components/home/cellState.ts) — only `done` / `pending` / `off-day`, since threads don't have a weekday schedule (only an aspirational `target_cadence_days`). Thread cells light up only on **manual touches** ([toggleThreadTouchToday](../src/services/threads/touch.ts)); prose `#tag` mentions deliberately don't paint the grid.
 
-`manage →` link at the section header routes to `/more`.
+Header has `‹` / week-label / `›` nav controls. Past-week navigation is wired through a `?week=YYYY-MM-DD` URL param (Monday of the target week, validated server-side). All cells are read-only on past-week views — no `pending` state, no today-tint. The `›` arrow is greyed out on the current week. Tap the week label to jump back to current.
+
+Tap a habit name → `/more/habits` (CRUD list). Tap a thread name → `/threads/[id]` (detail page). Tap today's pending or done cell → toggle the day's check-in / manual touch. The off-day toggle and a five-swatch legend sit below the grid; the toggle persists to SecureStore as `daily_schedule_offday_mode`.
+
+`manage →` link at the section header routes to `/more`. Full design in [docs/loopd-daily-schedule-grid-spec.md](./loopd-daily-schedule-grid-spec.md); 8-milestone implementation plan in [docs/loopd-daily-schedule-grid-plan.md](./loopd-daily-schedule-grid-plan.md).
 
 ### 6.8 Vlog Editor
 Implementation details:
@@ -406,7 +408,6 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 | `nutrition/scanNutrition.ts` | `** food N kcal` parser; two-pass reconcile against the nutrition table. |
 | `nutrition/migrate.ts` | One-time nutrition backfill (SecureStore-gated). |
 | `habits/cadence.ts` | Pure cadence engine: `isDueOn`, `needsMoreThisWeek`, `summarizeCadence`, ISO-week helpers. |
-| `habits/streaks.ts` | Cadence-aware streak math + per-cell heatmap state computation. |
 | `habits/migrate.ts` | One-time `habits_cadence_backfill_v1_done`: derives slugs from labels for pre-cadence habits. |
 | `threads/scanThreads.ts` | `#tag` parser with code-span masking; resolves slugs to thread IDs (auto-creates unknown); two-pass reconcile against `thread_mentions`; per-todo + per-entry passes. |
 | `threads/crud.ts` | Thread CRUD with discriminated `CreateResult` (slug-taken / empty-name); `getThreadSuggestions` for the autocomplete (recency-sorted via LEFT JOIN with NULLS LAST). |
