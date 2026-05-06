@@ -11,9 +11,26 @@ export type CaptionInput = {
   themeHint?: CaptionTheme | null;
 };
 
-// Output of the caption generator. `caption` is the primary 2–4 line
-// reflective caption that becomes the vlog's text overlay; `alternate`
-// is a shorter 2-line variant the user can swap to from the editor.
+// Four-variant tonal caption set. Same day, same content, different voice
+// per spec docs/loopd-caption-variants-plan.md. The user picks which
+// variant to publish via chips in the editor TEXT tab.
+export type CaptionVariantKey = 'clean' | 'smoother' | 'reflective' | 'punchy';
+
+export const CAPTION_VARIANT_KEYS: CaptionVariantKey[] = [
+  'clean', 'smoother', 'reflective', 'punchy',
+];
+
+// Output of the new 4-variant caption generator. Each value is the
+// 3-line body for that variant; the day-title prefix is added by the
+// editor at render time.
+export type CaptionVariantOutput = {
+  variants: Record<CaptionVariantKey, string>;
+  detectedTheme: string;
+};
+
+// Legacy 2-variant output retained for type round-trip on old cached rows.
+// New code should not write this shape; reads fall through to it when
+// `variants` is absent on an AISummary.
 export type CaptionOutput = {
   caption: string;
   alternate: string;
@@ -33,10 +50,21 @@ export type AISummary = {
     position: 'top' | 'center' | 'bottom';
   }[];
   filterPreset: 'none' | 'moody' | 'cool' | 'film' | 'muted';
-  // Relatable-caption fields (added 2026-05-02). Optional so older
-  // ai_summaries cached before this feature shipped keep parsing.
+
+  // Legacy 2-variant relatable-caption fields (added 2026-05-02, deprecated
+  // 2026-05-05). Read for backward-compat on cached rows; not written by
+  // current code. Older rows that still carry these will render as a
+  // 3-chip group (PRIMARY / ALT / SUMMARY) in the editor; the next
+  // regenerate upgrades to the 4-variant set below.
   caption?: string;
   captionAlternate?: string;
   captionTheme?: string;
+
+  // 4-variant tonal caption set (added 2026-05-05). Optional because older
+  // cached rows pre-date this. New `variantsTheme` field is preferred
+  // over the legacy `captionTheme` but readers should fall back.
+  variants?: Record<CaptionVariantKey, string>;
+  variantsTheme?: string;
+
   generatedAt: string;
 };

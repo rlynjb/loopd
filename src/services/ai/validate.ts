@@ -1,4 +1,4 @@
-import type { AISummary } from '../../types/ai';
+import { CAPTION_VARIANT_KEYS, type AISummary, type CaptionVariantKey } from '../../types/ai';
 
 const VALID_MOODS = ['flat', 'ok', 'good', 'great', 'fired'];
 const VALID_FILTERS = ['none', 'moody', 'cool', 'film', 'muted'];
@@ -62,14 +62,31 @@ export function validateSummary(
     }));
   }
 
-  // Preserve relatable-caption fields if present on the parsed object.
-  // The summarize() chain populates these in a second LLM call AFTER
-  // validateSummary runs, so for fresh summaries these will be undefined
-  // here and get added downstream. For cached re-parses (when the editor
-  // re-validates a previously-saved summary on load) they round-trip.
+  // Preserve caption-related fields if present on the parsed object. The
+  // summarize() chain populates these in a second LLM call AFTER
+  // validateSummary runs, so on a fresh summary path they're undefined
+  // here and added downstream. On a cached re-parse (editor re-validates a
+  // previously-saved summary on load) both shapes round-trip:
+  //   - Legacy 2-variant fields (caption / captionAlternate / captionTheme)
+  //   - New 4-variant block (variants / variantsTheme)
   const caption = typeof obj.caption === 'string' ? obj.caption : undefined;
   const captionAlternate = typeof obj.captionAlternate === 'string' ? obj.captionAlternate : undefined;
   const captionTheme = typeof obj.captionTheme === 'string' ? obj.captionTheme : undefined;
+
+  let variants: Record<CaptionVariantKey, string> | undefined;
+  if (obj.variants && typeof obj.variants === 'object') {
+    const raw = obj.variants as Record<string, unknown>;
+    const built: Partial<Record<CaptionVariantKey, string>> = {};
+    for (const key of CAPTION_VARIANT_KEYS) {
+      if (typeof raw[key] === 'string' && raw[key]) built[key] = raw[key] as string;
+    }
+    // Only round-trip if all four keys are present — partial sets are
+    // treated as malformed and dropped (the editor falls back to legacy).
+    if (CAPTION_VARIANT_KEYS.every(k => typeof built[k] === 'string')) {
+      variants = built as Record<CaptionVariantKey, string>;
+    }
+  }
+  const variantsTheme = typeof obj.variantsTheme === 'string' ? obj.variantsTheme : undefined;
 
   return {
     valid: errors.length === 0,
@@ -84,6 +101,8 @@ export function validateSummary(
       caption,
       captionAlternate,
       captionTheme,
+      variants,
+      variantsTheme,
       generatedAt: new Date().toISOString(),
     },
     errors,

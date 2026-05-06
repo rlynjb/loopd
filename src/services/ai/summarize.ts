@@ -77,18 +77,19 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
     const { summary, errors } = validateSummary(parsed, clipIds, clipDurations);
     if (errors.length > 0) console.warn('[loopd ai] Validation warnings:', errors);
 
-    // Second LLM call: relatable caption per docs/relatable-caption-spec.md.
-    // Independent of the structured summary — kept in its own call so the
-    // caption prompt can stay strict on its forbidden patterns. Failures
-    // here don't fail the whole summarize chain; the editor falls back to
-    // summary.summary for the text overlay.
+    // Second LLM call: 4-variant tonal caption per
+    // docs/loopd-caption-variants-plan.md. Single call emits all four
+    // variants (clean / smoother / reflective / punchy). Independent of the
+    // structured summary — kept in its own call so the caption prompt can
+    // stay strict on its forbidden patterns. Failures here don't fail the
+    // summarize chain; the editor falls back to summary.summary for the
+    // text overlay.
     try {
       const captionInput = await buildCaptionInput(date, entries, summary.mood);
       const { output: captionOut } = await generateCaption(captionInput);
       if (captionOut) {
-        summary.caption = captionOut.caption;
-        summary.captionAlternate = captionOut.alternate;
-        summary.captionTheme = captionOut.detectedTheme;
+        summary.variants = captionOut.variants;
+        summary.variantsTheme = captionOut.detectedTheme;
       }
     } catch (err) {
       console.warn('[loopd ai] Caption skipped:', err instanceof Error ? err.message : err);

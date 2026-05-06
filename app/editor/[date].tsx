@@ -65,15 +65,34 @@ export default function EditorScreen() {
   // chips can read `caption` / `captionAlternate` / `summary` without
   // re-querying ai_summaries on every render.
   const [aiSummary, setAiSummary] = useState<AISummary | null>(null);
-  // Which variant is currently rendered into the active text overlay:
-  //   'primary'   — the relatable 2–4 line caption (default after regen)
-  //   'alternate' — the shorter 2-line variant
-  //   'summary'   — the original structured summary, sentence-broken
-  //                 (kept as an escape hatch if the relatable caption
-  //                 doesn't feel authentic on a given day)
-  // Reset to 'primary' any time we regenerate or auto-compose.
-  type CaptionVariant = 'primary' | 'alternate' | 'summary';
-  const [captionVariant, setCaptionVariant] = useState<CaptionVariant>('primary');
+  // Which variant is currently rendered into the active text overlay.
+  //
+  // 4-variant tonal caption set (new — populated by the post-2026-05-05
+  // caption pass; see docs/loopd-caption-variants-plan.md):
+  //   'clean'      — present-progressive, observational (default after regen)
+  //   'smoother'   — conversational, hedged
+  //   'reflective' — contemplative, slower
+  //   'punchy'     — axiomatic, parallel, terse
+  //
+  // Legacy 2-variant fields (read-only, from older cached summaries):
+  //   'primary'    — old 2–4 line reflective caption
+  //   'alternate'  — old shorter 2-line variant
+  //
+  // Always-available fallback:
+  //   'summary'    — sentence-broken structured summary, the escape hatch
+  //
+  // The chip group renders 5 chips when the new variants are present,
+  // 3 chips for legacy-only rows, 1 chip when no caption ever ran.
+  type CaptionVariant = 'clean' | 'smoother' | 'reflective' | 'punchy' | 'primary' | 'alternate' | 'summary';
+  const [captionVariant, setCaptionVariant] = useState<CaptionVariant>('clean');
+
+  // Pick the best default variant for a given summary: prefer 'clean' from
+  // the new 4-variant set, fall back to legacy 'primary', else 'summary'.
+  const defaultVariantFor = useCallback((s: AISummary | null): CaptionVariant => {
+    if (s?.variants?.clean) return 'clean';
+    if (s?.caption) return 'primary';
+    return 'summary';
+  }, []);
 
   // Auto-compose from AI or fallback on mount
   useEffect(() => {
@@ -96,7 +115,7 @@ export default function EditorScreen() {
         }
         if (!cancelled) {
           setAiSummary(summary);
-          setCaptionVariant('primary');
+          setCaptionVariant(defaultVariantFor(summary));
         }
       } else if (aiConfigured) {
         setGenerating(true);
@@ -109,7 +128,7 @@ export default function EditorScreen() {
             if (composed.filterOverlays) updateFilterOverlays(composed.filterOverlays);
           }
           setAiSummary(result.summary);
-          setCaptionVariant('primary');
+          setCaptionVariant(defaultVariantFor(result.summary));
         }
         setGenerating(false);
       }
@@ -129,10 +148,20 @@ export default function EditorScreen() {
           setGenerating(false);
           if (result.summary) {
             const composed = autoCompose(result.summary, entries, date, dayTitle);
-            // Only update text overlay — preserve user's clip trims/splits
-            if (composed.textOverlays) updateTextOverlays(composed.textOverlays);
+            // Only update text overlay — preserve user's clip trims/splits.
+            // The regenerate replaces every overlay with a fresh id, so the
+            // user's `editingTextId` (set when they tapped an overlay
+            // pre-regenerate) is now stale. Re-point it at the new overlay
+            // so the TEXT tab body stays visible. autoCompose only ever
+            // produces one overlay; if that ever changes, we point at the
+            // first one — the user will rarely have edited > 1 anyway.
+            if (composed.textOverlays) {
+              updateTextOverlays(composed.textOverlays);
+              const nextId = composed.textOverlays[0]?.id ?? null;
+              if (nextId) setEditingTextId(nextId);
+            }
             setAiSummary(result.summary);
-            setCaptionVariant('primary');
+            setCaptionVariant(defaultVariantFor(result.summary));
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           } else {
             Alert.alert('Failed', result.error ?? 'Could not generate summary');
@@ -142,7 +171,7 @@ export default function EditorScreen() {
     ]);
   };
 
-  // Switch the active text overlay between the three caption variants.
+  // Switch the active text overlay between the available caption variants.
   // Title preserved at the top with a blank-line separator (matches the
   // format autoCompose produces). Overwrites any manual edits the user
   // made to the overlay text — same caveat as REGENERATE WITH AI, which
@@ -151,6 +180,13 @@ export default function EditorScreen() {
     if (!aiSummary || variant === captionVariant) return;
     const body = (() => {
       switch (variant) {
+        // New 4-variant tonal set
+        case 'clean':
+        case 'smoother':
+        case 'reflective':
+        case 'punchy':
+          return aiSummary.variants?.[variant]?.trim() ?? '';
+        // Legacy 2-variant fields (older cached summaries)
         case 'primary':
           return aiSummary.caption?.trim() ?? '';
         case 'alternate':
@@ -171,6 +207,32 @@ export default function EditorScreen() {
     setCaptionVariant(variant);
     Haptics.selectionAsync();
   }, [aiSummary, captionVariant, dayTitle, updateTextOverlays]);
+
+  // Compute the chip set for the current cached summary. Priority:
+  //   1. variants present  → 5 chips (CLEAN/SMOOTH/REFLECT/PUNCHY/SUMMARY)
+  //   2. legacy caption     → 3 chips (PRIMARY/ALT/SUMMARY)
+  //   3. neither            → 1 chip  (SUMMARY)
+  const chipSet = useMemo<{ key: CaptionVariant; label: string }[]>(() => {
+    if (!aiSummary) return [];
+    if (aiSummary.variants) {
+      return [
+        { key: 'clean', label: 'CLEAN' },
+        { key: 'smoother', label: 'SMOOTH' },
+        { key: 'reflective', label: 'REFLECT' },
+        { key: 'punchy', label: 'PUNCHY' },
+        { key: 'summary', label: 'SUMMARY' },
+      ];
+    }
+    if (aiSummary.caption) {
+      const out: { key: CaptionVariant; label: string }[] = [
+        { key: 'primary', label: 'PRIMARY' },
+      ];
+      if (aiSummary.captionAlternate) out.push({ key: 'alternate', label: 'ALT' });
+      out.push({ key: 'summary', label: 'SUMMARY' });
+      return out;
+    }
+    return [{ key: 'summary', label: 'SUMMARY' }];
+  }, [aiSummary]);
 
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [editingTextId, setEditingTextId] = useState<string | null>(null);
@@ -845,58 +907,30 @@ export default function EditorScreen() {
                 </Text>
               </Pressable>
               {/* Variant chips — pick which body text fills the overlay.
-                  PRIMARY/ALT come from the relatable-caption pass; SUMMARY
-                  is the original structured summary as an escape hatch.
-                  Older cached summaries pre-dating the caption feature
-                  will only show SUMMARY. */}
-              {aiSummary && (
+                  Chip set adapts to what's on the cached summary:
+                    • New 4-variant pass → CLEAN / SMOOTH / REFLECT / PUNCHY / SUMMARY
+                    • Legacy caption pass → PRIMARY / ALT / SUMMARY
+                    • No caption ever ran → SUMMARY only
+                  See docs/loopd-caption-variants-plan.md §3.6. */}
+              {chipSet.length > 1 && (
                 <View style={styles.variantChipGroup}>
-                  {aiSummary.caption && (
+                  {chipSet.map(chip => (
                     <Pressable
-                      onPress={() => handleSelectCaptionVariant('primary')}
+                      key={chip.key}
+                      onPress={() => handleSelectCaptionVariant(chip.key)}
                       disabled={generating}
                       style={[
                         styles.variantChip,
-                        captionVariant === 'primary' && styles.variantChipActive,
+                        captionVariant === chip.key && styles.variantChipActive,
                         generating && { opacity: 0.4 },
                       ]}
                     >
                       <Text style={[
                         styles.variantChipText,
-                        captionVariant === 'primary' && styles.variantChipTextActive,
-                      ]}>PRIMARY</Text>
+                        captionVariant === chip.key && styles.variantChipTextActive,
+                      ]}>{chip.label}</Text>
                     </Pressable>
-                  )}
-                  {aiSummary.captionAlternate && (
-                    <Pressable
-                      onPress={() => handleSelectCaptionVariant('alternate')}
-                      disabled={generating}
-                      style={[
-                        styles.variantChip,
-                        captionVariant === 'alternate' && styles.variantChipActive,
-                        generating && { opacity: 0.4 },
-                      ]}
-                    >
-                      <Text style={[
-                        styles.variantChipText,
-                        captionVariant === 'alternate' && styles.variantChipTextActive,
-                      ]}>ALT</Text>
-                    </Pressable>
-                  )}
-                  <Pressable
-                    onPress={() => handleSelectCaptionVariant('summary')}
-                    disabled={generating}
-                    style={[
-                      styles.variantChip,
-                      captionVariant === 'summary' && styles.variantChipActive,
-                      generating && { opacity: 0.4 },
-                    ]}
-                  >
-                    <Text style={[
-                      styles.variantChipText,
-                      captionVariant === 'summary' && styles.variantChipTextActive,
-                    ]}>SUMMARY</Text>
-                  </Pressable>
+                  ))}
                 </View>
               )}
             </View>

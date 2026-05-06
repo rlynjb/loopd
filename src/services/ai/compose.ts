@@ -62,16 +62,18 @@ export function autoCompose(summary: AISummary, entries: Entry[], date: string, 
     });
   }
 
-  // Text overlay — journal title + the relatable caption (preferred) or
-  // a sentence-broken fallback from the structured summary. The caption is
-  // already 2–4 lines with intentional `\n` breaks per the spec, so we
-  // pass it through unchanged.
+  // Text overlay body — pick the best caption available, in priority order:
+  //   1. variants.clean  — new 4-variant tonal pass (default voice)
+  //   2. caption         — legacy 2-variant pass (older cached summaries)
+  //   3. sentence-broken — structured-summary fallback (no caption pass)
+  // The day-title is prefixed with a blank line separator.
   const title = dayTitle?.trim() ?? '';
-  const captionBody = summary.caption?.trim();
+  const cleanVariant = summary.variants?.clean?.trim();
+  const legacyCaption = summary.caption?.trim();
   const fallbackBody = summary.summary
     .replace(/([.!?])\s+/g, '$1\n')
     .trim();
-  const body = captionBody || fallbackBody;
+  const body = cleanVariant || legacyCaption || fallbackBody;
   const overlayText = title
     ? `${title}\n\n${body}`
     : body;

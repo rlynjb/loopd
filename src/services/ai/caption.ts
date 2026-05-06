@@ -1,9 +1,16 @@
 import { getAnthropicKey, getOpenAIKey, getProvider } from './config';
-import type { CaptionInput, CaptionOutput, CaptionTheme } from '../../types/ai';
+import {
+  CAPTION_VARIANT_KEYS,
+  type CaptionInput,
+  type CaptionTheme,
+  type CaptionVariantKey,
+  type CaptionVariantOutput,
+} from '../../types/ai';
 
-// Relatable-caption generator for the vlog editor. Implements
-// docs/relatable-caption-spec.md verbatim — system + user prompt, JSON
-// output, edge-case handling.
+// 4-variant tonal caption generator for the vlog editor. Implements
+// docs/loopd-caption-variants-plan.md §2 (the system prompt converted from
+// the user's tonal-style sample). Single LLM call emits four variants of
+// the same day in different voices.
 //
 // Lives as a separate call from summarize() so the structured editor data
 // (clip order, trims, filters) and the human-feeling caption don't share a
@@ -14,51 +21,83 @@ import type { CaptionInput, CaptionOutput, CaptionTheme } from '../../types/ai';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
 
-const SYSTEM_PROMPT = `You are the caption writer for loopd, a daily vlog journal app. Your job is to turn a user's raw daily log into a short, reflective caption that reads like an authentic personal thought — not a summary.
+const SYSTEM_PROMPT = `You generate four variant captions for a daily vlog from the user's raw log. Each variant is the same 3-line body about the same day, written in a different tonal voice. The user picks which voice to publish.
 
-CORE PRINCIPLE: Turn actions into realizations.
+OUTPUT: a single valid JSON object with EXACTLY this shape:
 
-STRUCTURE (always 3 beats):
-1. Hook — an emotion, realization, or noticing (internal state, not action)
-2. Light summary — 1–2 actions max, simplified
-3. Reflection — what's shifting, clicking, or becoming clearer
-
-RATIO: ~70% feeling/reflection, ~30% what was done.
-
-VOICE:
-- Grounded, calm, reflective
-- First person, present-progressive ("noticing", "realizing", "starting to")
-- Specific enough to feel real, never vague
-- 2–4 lines total, TikTok-readable
-
-NEVER:
-- Start with "Today I…"
-- List more than 2 actions
-- Use hustle language ("crushed", "shipped", "executed", "locked in")
-- Use motivational closers or hashtags
-- Use self-help phrasing ("the journey", "trust the process")
-- Overexplain the lesson
-
-FORMULAS (rotate across days; check recent captions to avoid repetition):
-A) "Lately I've been noticing ___ / Today I ___ / I think I'm starting to ___"
-B) "Realizing ___ / [actions] / [shift]"
-C) "Feels like ___ / [what happened] / [what it means]"
-
-EDGE CASES:
-- Empty rawLog → caption based purely on mood or a generic noticing; do not fabricate actions
-- Very long log (10+ items) → pick the 1–2 most thematically connected items; ignore the rest
-- Highly emotional mood (e.g. "burnt out", "grieving") → drop the action beat entirely; deliver a 2-line reflection only
-- Only ideas (no actions) → reframe ideas as "noticing I keep coming back to…" rather than "did"
-- Repetitive day (same as yesterday) → lean into the repetition itself as the reflection
-
-OUTPUT FORMAT (strict JSON, no markdown fences):
 {
-  "caption": "string — 2–4 lines, \\n separated",
-  "alternate": "string — shorter 2-line version",
-  "detectedTheme": "growth|discipline|clarity|struggle|shift|curiosity"
+  "clean":      "Line1\\nLine2\\nLine3",
+  "smoother":   "Line1\\nLine2\\nLine3",
+  "reflective": "Line1\\nLine2\\nLine3",
+  "punchy":     "Line1\\nLine2\\nLine3",
+  "detectedTheme": "growth" | "discipline" | "clarity" | "struggle" | "shift" | "curiosity"
 }
 
-Return ONLY the JSON object. No preamble, no explanation.`;
+No prose preamble, no markdown fences, no commentary. JSON only.
+
+VARIANT VOICES — distinct per key:
+
+clean (default voice):
+  Present-progressive, observational, plain. Direct sentences.
+  No hedging like "really" / "kind of". No "feels like".
+  Example body:
+    Realizing how much words shape understanding
+    Spent the morning digging into technical terms and concepts
+    Starting to see communication as the bridge between thought and expression
+
+smoother:
+  Conversational, slightly hedged, gentle. Use "really" / "kind of"
+  / "feels like" sparingly to soften observations.
+  Example body:
+    Been realizing how important words are in shaping understanding
+    Spent the morning studying technical concepts and terminology
+    Communication really feels like the bridge between ideas and expression
+
+reflective:
+  Contemplative. Mix past-tense action ("Spent the morning…", "Morning
+  spent…") with present-tense realization ("Realizing…", "Starting to
+  appreciate…"). Slower pace, longer phrasing.
+  Example body:
+    Starting to appreciate the weight words carry
+    Morning spent learning technical concepts and terminology
+    Realizing communication is what connects thoughts to expression
+
+punchy:
+  Axiomatic and terse. Parallel structure across the three lines —
+  same grammatical shape repeated. 2–5 words per line. No filler.
+  Example body:
+    Words shape understanding
+    Concepts shape thinking
+    Communication bridges both
+
+UNIVERSAL RULES (apply to all four variants):
+- Exactly 3 body lines, separated by a single newline.
+- First-person implied — never write "I" / "you" / "we".
+- No hashtags. No emojis. No "today I…" / "Today was…" framings.
+- No questions, no exclamations.
+- No motivational platitudes ("trust the process", "embrace the journey").
+- Use specific nouns from the raw log when natural — "technical concepts",
+  "the morning workout", "the loopd codebase". Don't invent details.
+- All four variants describe the SAME day. Don't shift the topic between
+  voices. Only the surface changes.
+
+THEME DETECTION:
+Pick one detectedTheme that best matches the day:
+  growth      — learning, breakthrough, leveling-up
+  discipline  — habits, repetition, showing up
+  clarity     — understanding, finding the right framing
+  struggle    — friction, blocked, pushing through
+  shift       — pivot, realization, changed direction
+  curiosity   — exploring, asking questions, going wide
+
+INPUTS YOU'LL RECEIVE:
+- date, rawLog (bullet list), mood (optional), recentCaptions (last 5), themeHint (optional)
+
+If the rawLog is sparse (1–2 short lines), still emit four valid variants but keep them tight. Don't pad with invented content.
+
+If you can't form a coherent caption from the raw log, return:
+  { "error": "insufficient-input" }
+…with no other keys.`;
 
 function buildUserPrompt(input: CaptionInput): string {
   const lines: string[] = [];
@@ -77,7 +116,7 @@ function buildUserPrompt(input: CaptionInput): string {
     lines.push(input.recentCaptions.join('\n---\n'));
   }
   lines.push('');
-  lines.push('Generate the caption.');
+  lines.push('Generate the four variants.');
   return lines.join('\n');
 }
 
@@ -86,7 +125,9 @@ async function callClaude(apiKey: string, system: string, user: string): Promise
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 512,
+    // 4 variants × ~30 tokens + theme + JSON overhead ≈ 200–300 tokens.
+    // 768 leaves headroom for verbose models without runaway cost.
+    max_tokens: 768,
     system,
     messages: [{ role: 'user', content: user }],
   });
@@ -99,7 +140,7 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      max_tokens: 512,
+      max_tokens: 768,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
@@ -114,29 +155,52 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
 
 const VALID_THEMES: CaptionTheme[] = ['growth', 'discipline', 'clarity', 'struggle', 'shift', 'curiosity'];
 
-function parseAndValidate(text: string): CaptionOutput | null {
+function normalizeVariant(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const trimmed = v.trim();
+  if (!trimmed) return null;
+  // Soft cap at 3 lines — the prompt asks for exactly 3 but models drift.
+  // Take the first 3 non-empty lines.
+  const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 3);
+  if (lines.length === 0) return null;
+  return lines.join('\n');
+}
+
+function parseAndValidate(text: string): CaptionVariantOutput | null {
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
+  let obj: Record<string, unknown>;
   try {
-    const obj = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
-    const caption = typeof obj.caption === 'string' ? obj.caption.trim() : '';
-    const alternate = typeof obj.alternate === 'string' ? obj.alternate.trim() : '';
-    const themeRaw = typeof obj.detectedTheme === 'string' ? obj.detectedTheme.trim().toLowerCase() : '';
-    const detectedTheme = (VALID_THEMES as string[]).includes(themeRaw) ? themeRaw : 'clarity';
-    if (!caption) return null;
-    return {
-      // Soft caps — the spec says 2–4 lines, but the model usually obeys. We
-      // truncate gently rather than reject so the editor still gets something.
-      caption: caption.split('\n').slice(0, 4).join('\n'),
-      alternate: alternate ? alternate.split('\n').slice(0, 2).join('\n') : '',
-      detectedTheme,
-    };
+    obj = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
   } catch {
     return null;
   }
+
+  // Insufficient-input escape hatch from the prompt.
+  if (typeof obj.error === 'string') return null;
+
+  const variants: Partial<Record<CaptionVariantKey, string>> = {};
+  for (const key of CAPTION_VARIANT_KEYS) {
+    const normalized = normalizeVariant(obj[key]);
+    if (normalized) variants[key] = normalized;
+  }
+  // Require all four variants — partial output is treated as malformed.
+  if (CAPTION_VARIANT_KEYS.some(k => !variants[k])) return null;
+
+  const themeRaw = typeof obj.detectedTheme === 'string'
+    ? obj.detectedTheme.trim().toLowerCase()
+    : '';
+  const detectedTheme = (VALID_THEMES as string[]).includes(themeRaw) ? themeRaw : 'clarity';
+
+  return {
+    variants: variants as Record<CaptionVariantKey, string>,
+    detectedTheme,
+  };
 }
 
-export async function generateCaption(input: CaptionInput): Promise<{ output: CaptionOutput | null; error?: string }> {
+export async function generateCaption(
+  input: CaptionInput,
+): Promise<{ output: CaptionVariantOutput | null; error?: string }> {
   const provider = await getProvider();
   const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
   if (!apiKey) return { output: null, error: 'No API key configured' };
