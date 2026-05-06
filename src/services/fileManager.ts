@@ -226,33 +226,6 @@ export async function captureToProxy(
   }
 }
 
-export async function recordClip(
-  _date: string,
-  onProcessing?: () => void,
-  onHandle?: (handle: TranscodeHandle) => void,
-): Promise<{ uri: string; durationMs: number } | null> {
-  const { status } = await ImagePicker.requestCameraPermissionsAsync();
-  if (status !== 'granted') return null;
-
-  const result = await ImagePicker.launchCameraAsync({
-    mediaTypes: ['videos'],
-    quality: 1,
-    videoQuality: 1,
-  });
-
-  if (result.canceled || result.assets.length === 0) return null;
-
-  onProcessing?.();
-
-  // Preserve the untouched original in the system gallery (DCIM) as the
-  // user's master. Non-critical — if it fails we still have the proxy.
-  try {
-    await saveToDCIMLoopd(result.assets[0].uri);
-  } catch { /* non-critical */ }
-
-  return await captureToProxy(result.assets[0], onHandle);
-}
-
 export async function pickAndCopyClip(
   _date: string,
   onProcessing?: () => void,

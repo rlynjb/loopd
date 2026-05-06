@@ -3,11 +3,7 @@ import { useRouter, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { recordClip } from '../../services/fileManager';
-import { insertEntry } from '../../services/database';
-import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
-import type { Entry } from '../../types/entry';
 
 export function GlobalBottomNav() {
   const router = useRouter();
@@ -22,36 +18,11 @@ export function GlobalBottomNav() {
   const isTodos = pathname.startsWith('/todos');
   const isMore = pathname.startsWith('/more');
 
-  const handleRecord = async () => {
-    const today = getTodayString();
-    const result = await recordClip(today);
-    if (!result) return;
-    const entry: Entry = {
-      id: generateId('entry'),
-      date: today,
-      text: null,
-      habits: [],
-      todos: [],
-      clipUri: result.uri,
-      clipDurationMs: result.durationMs,
-      clips: [{ uri: result.uri, durationMs: result.durationMs }],
-      createdAt: new Date().toISOString(),
-    };
-    await insertEntry(entry);
-  };
-
   return (
     <View style={[styles.container, { paddingBottom: Math.max(insets.bottom, 64) }]}>
       <Pressable onPress={() => router.push('/')} style={styles.tab}>
         <Icon name="house" size={18} color={isHome ? colors.accent : colors.textDim} strokeWidth={2.5} />
         <Text style={[styles.label, isHome && { color: colors.accent }]}>Home</Text>
-      </Pressable>
-
-      <Pressable onPress={handleRecord} style={styles.tab}>
-        <View style={styles.recordBtn}>
-          <Icon name="circle" size={20} color={colors.coral} strokeWidth={2.5} />
-        </View>
-        <Text style={[styles.label, { color: colors.coral }]}>Record</Text>
       </Pressable>
 
       <Pressable onPress={() => router.push(`/journal/${getTodayString()}`)} style={styles.tab}>
@@ -95,13 +66,5 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 8,
     color: colors.textDim,
-  },
-  recordBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(224,85,85,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });
