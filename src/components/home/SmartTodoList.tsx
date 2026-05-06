@@ -1,15 +1,18 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { View, Text, Pressable, TextInput, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
-import { rankTodos, formatRelativeTime, type RankedTodo } from '../../services/todos/rank';
-import { addTodo, updateTodo, deleteTodo } from '../../services/todos/crud';
+import { formatRelativeTime } from '../../services/todos/rank';
+import { updateTodo, deleteTodo } from '../../services/todos/crud';
 import { TypeBadge } from '../todos/TypeBadge';
-import type { Entry } from '../../types/entry';
+import type { Entry, TodoItem } from '../../types/entry';
 import type { TodoMeta } from '../../types/todoMeta';
 
 const MAX_ROWS = 5;
+// Recently-completed todos linger this long before disappearing from the
+// dashboard — gives the user a beat to see "yes, the toggle worked."
+const KEEP_DONE_MS = 2000;
 
 type Props = {
   entries: Entry[];            // all entries (parent owns the query)
@@ -21,51 +24,73 @@ type Props = {
   metas?: Map<string, TodoMeta>;
 };
 
-export function SmartTodoList({ entries, today, onChanged, metas }: Props) {
+type DashboardTodo = TodoItem & {
+  entryId: string;
+  entryCreatedAt: string;
+};
+
+export function SmartTodoList({ entries, today: _today, onChanged, metas }: Props) {
   const router = useRouter();
-  const [newText, setNewText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
-  const newInputRef = useRef<TextInput>(null);
-  // Guards against onSubmitEditing + onBlur both firing on keyboard "done",
-  // which otherwise makes addTodo run twice and duplicate the item.
-  const addingRef = useRef(false);
 
-  const ranked = useMemo(() => rankTodos(entries, { today }), [entries, today]);
-  const visible = ranked.slice(-MAX_ROWS);
-
-  const handleAdd = useCallback(async () => {
-    if (addingRef.current) return;
-    addingRef.current = true;
-    const text = newText.trim();
-    setNewText('');
-    if (!text) { addingRef.current = false; return; }
-    try { await addTodo(text); onChanged(); } catch (e) {
-      console.warn('[todos] add failed:', e);
-    } finally {
-      addingRef.current = false;
+  // Sort matches /todos exactly (app/todos.tsx §8.2): NULL-position rows
+  // first, ordered by createdAt DESC (newest at the top); then positioned
+  // rows by position ASC. New captures land at the top of the dashboard
+  // list the same way they do on the /todos page.
+  const sorted = useMemo<DashboardTodo[]>(() => {
+    const flat: DashboardTodo[] = [];
+    for (const entry of entries) {
+      for (const todo of entry.todos ?? []) {
+        flat.push({ ...todo, entryId: entry.id, entryCreatedAt: entry.createdAt });
+      }
     }
-  }, [newText, onChanged]);
+    // Drop long-completed items so the dashboard doesn't carry zombies.
+    const now = Date.now();
+    const filtered = flat.filter(t => {
+      if (!t.done) return true;
+      if (!t.completedAt) return true;
+      return now - new Date(t.completedAt).getTime() <= KEEP_DONE_MS;
+    });
+    filtered.sort((a, b) => {
+      const aPos = metas?.get(a.id)?.position ?? null;
+      const bPos = metas?.get(b.id)?.position ?? null;
+      if (aPos == null && bPos == null) {
+        const aTime = new Date(a.createdAt ?? a.entryCreatedAt).getTime();
+        const bTime = new Date(b.createdAt ?? b.entryCreatedAt).getTime();
+        return bTime - aTime;
+      }
+      if (aPos == null) return -1;
+      if (bPos == null) return 1;
+      return aPos - bPos;
+    });
+    return filtered;
+  }, [entries, metas]);
 
-  const handleToggle = useCallback(async (t: RankedTodo) => {
+  // Top of the sorted list = newest captures + lowest-position user-ordered
+  // rows. slice(0, N) — not slice(-N) — because the new sort puts the most
+  // relevant items at the top, not the end.
+  const visible = sorted.slice(0, MAX_ROWS);
+
+  const handleToggle = useCallback(async (t: DashboardTodo) => {
     try {
       await updateTodo(t.entryId, t.id, { done: !t.done });
       onChanged();
     } catch (e) { console.warn('[todos] toggle failed:', e); }
   }, [onChanged]);
 
-  const handleDelete = useCallback(async (t: RankedTodo) => {
+  const handleDelete = useCallback(async (t: DashboardTodo) => {
     try { await deleteTodo(t.entryId, t.id); onChanged(); } catch (e) {
       console.warn('[todos] delete failed:', e);
     }
   }, [onChanged]);
 
-  const startEdit = useCallback((t: RankedTodo) => {
+  const startEdit = useCallback((t: DashboardTodo) => {
     setEditingId(t.id);
     setEditText(t.text);
   }, []);
 
-  const commitEdit = useCallback(async (t: RankedTodo) => {
+  const commitEdit = useCallback(async (t: DashboardTodo) => {
     const text = editText.trim();
     setEditingId(null);
     if (!text || text === t.text) return;
@@ -77,7 +102,12 @@ export function SmartTodoList({ entries, today, onChanged, metas }: Props) {
   return (
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
-        <Text style={styles.label}>TODOS {ranked.length > 0 ? `(${ranked.length})` : ''}</Text>
+        <Text style={styles.label}>TODOS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
+        {sorted.length > MAX_ROWS && (
+          <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
+            <Text style={styles.seeAllText}>see all →</Text>
+          </Pressable>
+        )}
       </View>
 
       {visible.map(t => {
@@ -125,32 +155,6 @@ export function SmartTodoList({ entries, today, onChanged, metas }: Props) {
         );
       })}
 
-      {/* Empty add row — always visible, tap anywhere to type. Acts as both
-          the add affordance and the empty state. */}
-      <Pressable onPress={() => newInputRef.current?.focus()} style={styles.row}>
-        <View style={styles.checkbox}>
-          <View style={[styles.check, styles.checkPlaceholder]} />
-        </View>
-        <View style={styles.body}>
-          <TextInput
-            ref={newInputRef}
-            value={newText}
-            onChangeText={setNewText}
-            onSubmitEditing={handleAdd}
-            onBlur={handleAdd}
-            placeholder="Add a todo…"
-            placeholderTextColor={colors.textDimmer}
-            returnKeyType="done"
-            style={styles.text}
-          />
-        </View>
-      </Pressable>
-
-      {ranked.length > MAX_ROWS && (
-        <Pressable onPress={() => router.push('/todos')} style={styles.seeAllBtn}>
-          <Text style={styles.seeAllText}>See all ({ranked.length})</Text>
-        </Pressable>
-      )}
     </View>
   );
 }
@@ -192,10 +196,6 @@ const styles = StyleSheet.create({
     borderColor: colors.green,
     backgroundColor: `${colors.green}12`,
   },
-  checkPlaceholder: {
-    borderColor: colors.textDimmer,
-    borderStyle: 'dashed',
-  },
   body: {
     flex: 1,
     gap: 2,
@@ -228,9 +228,6 @@ const styles = StyleSheet.create({
   },
   deleteBtn: {
     padding: 4,
-  },
-  seeAllBtn: {
-    paddingVertical: 6,
   },
   seeAllText: {
     fontFamily: fonts.mono,
