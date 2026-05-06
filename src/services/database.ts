@@ -137,6 +137,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   // User-set position on todo_meta — added 2026-04-26. NULL by default;
   // populated lazily on first reorder action via ensureAllTodoPositions().
   await addColumn('todo_meta', 'position', 'INTEGER');
+  // Pin flag — added 2026-05-05. 0 = not pinned, 1 = pinned. Pinned rows
+  // float to the top of the /todos list. Replaces the deprecated manual
+  // reorder feature.
+  await addColumn('todo_meta', 'pinned', 'INTEGER NOT NULL DEFAULT 0');
 
   // Sync deletions tracking table
   await database.execAsync(`
@@ -723,6 +727,7 @@ type TodoMetaRow = {
   classifier_model: string | null;
   user_overridden_type: number;
   position: number | null;
+  pinned: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -741,6 +746,7 @@ function mapRowToTodoMeta(row: TodoMetaRow): TodoMeta {
     classifierModel: row.classifier_model,
     userOverriddenType: row.user_overridden_type === 1,
     position: row.position,
+    pinned: row.pinned === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -776,14 +782,15 @@ export async function insertTodoMeta(meta: TodoMeta): Promise<void> {
     `INSERT INTO todo_meta (
        todo_id, entry_id, entry_date, type, stage, expanded_md, expanded_at,
        model, classifier_confidence, classifier_model, user_overridden_type,
-       position, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       position, pinned, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       meta.todoId, meta.entryId, meta.entryDate, meta.type, meta.stage,
       meta.expandedMd, meta.expandedAt, meta.model,
       meta.classifierConfidence, meta.classifierModel,
       meta.userOverriddenType ? 1 : 0,
       meta.position ?? null,
+      meta.pinned ? 1 : 0,
       meta.createdAt, meta.updatedAt,
     ],
   );
@@ -808,6 +815,7 @@ export async function updateTodoMeta(
   if ('classifierModel' in updates) { fields.push('classifier_model = ?'); values.push(updates.classifierModel ?? null); }
   if ('userOverriddenType' in updates) { fields.push('user_overridden_type = ?'); values.push(updates.userOverriddenType ? 1 : 0); }
   if ('position' in updates) { fields.push('position = ?'); values.push(updates.position ?? null); }
+  if ('pinned' in updates) { fields.push('pinned = ?'); values.push(updates.pinned ? 1 : 0); }
   if (fields.length === 0) return;
   fields.push('updated_at = ?');
   values.push(new Date().toISOString());

@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Pressable, ScrollView, TextInput, StyleSheet, Animated } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../src/constants/theme';
 import { Icon } from '../src/components/ui/Icon';
 import { TypeBadge } from '../src/components/todos/TypeBadge';
 import { TypeChangePicker } from '../src/components/todos/TypeChangePicker';
-import { StageBadge } from '../src/components/todos/StageBadge';
-import { StageChangePicker } from '../src/components/todos/StageChangePicker';
 import { TagAutocomplete } from '../src/components/journal/TagAutocomplete';
 import {
   getAllEntries, getAllTodoMetas, updateTodoMeta,
@@ -18,16 +17,15 @@ import { createThread } from '../src/services/threads/crud';
 import type { Thread } from '../src/types/thread';
 import { TYPE_META, TYPES_IN_ORDER } from '../src/services/todos/typeMeta';
 import { formatRelativeTime } from '../src/services/todos/rank';
-import { ensureAllTodoPositions, swapTodoPositions } from '../src/services/todos/reorder';
 import {
   isClassifierAvailable, getClassifyInFlight, CLASSIFY_PROGRESS_EVENT,
 } from '../src/services/todos/classify';
 import { countAmbiguousNotDone } from '../src/services/todos/migrateMeta';
 import { on } from '../src/utils/events';
 import type { Entry, TodoItem } from '../src/types/entry';
-import type { TodoMeta, TodoType, TodoStage } from '../src/types/todoMeta';
+import type { TodoMeta, TodoType } from '../src/types/todoMeta';
 
-type Status = 'all' | 'open' | 'done' | 'in_progress' | 'backlog';
+type Status = 'all' | 'open' | 'done';
 type CategoryFilter = 'all' | TodoType;
 type ThreadFilter = 'all' | string; // 'all' or a thread ID
 
@@ -53,6 +51,7 @@ function defaultMeta(todo: TodoItem, entry: Entry): TodoMeta {
     classifierModel: null,
     userOverriddenType: false,
     position: null,
+    pinned: false,
     createdAt: todo.createdAt ?? entry.createdAt,
     updatedAt: todo.createdAt ?? entry.createdAt,
   };
@@ -92,7 +91,6 @@ export default function TodosScreen() {
     rangeEnd: number;
   } | null>(null);
   const [pickerFor, setPickerFor] = useState<Row | null>(null);
-  const [stagePickerFor, setStagePickerFor] = useState<Row | null>(null);
   const [classifyInFlight, setClassifyInFlight] = useState(0);
   const [ambiguousCount, setAmbiguousCount] = useState(0);
   const [aiAvailable, setAiAvailable] = useState(true);
@@ -183,41 +181,32 @@ export default function TodosScreen() {
         });
       }
     }
-    // Sort: NULL positions first (newest captures land at the top, ordered
-    // by createdAt DESC) then positioned rows in ASC order. Once the user
-    // has reordered, every row gets a position assigned and the createdAt
-    // tiebreak stops mattering.
+    // Sort: pinned rows first (replaces the deprecated manual reorder),
+    // then everything else by createdAt DESC (newest at the top). Within
+    // each pinned/unpinned group, the createdAt-DESC tiebreak applies.
     out.sort((a, b) => {
-      const aPos = a.meta.position;
-      const bPos = b.meta.position;
-      if (aPos == null && bPos == null) {
-        const aTime = new Date(a.createdAt ?? a.meta.createdAt).getTime();
-        const bTime = new Date(b.createdAt ?? b.meta.createdAt).getTime();
-        return bTime - aTime;
-      }
-      if (aPos == null) return -1;
-      if (bPos == null) return 1;
-      return aPos - bPos;
+      const aPin = a.meta.pinned ? 1 : 0;
+      const bPin = b.meta.pinned ? 1 : 0;
+      if (aPin !== bPin) return bPin - aPin;
+      const aTime = new Date(a.createdAt ?? a.meta.createdAt).getTime();
+      const bTime = new Date(b.createdAt ?? b.meta.createdAt).getTime();
+      return bTime - aTime;
     });
     return out;
   }, [entries, metas]);
 
   const filtered = useMemo(() => {
     return allRows.filter(r => {
-      // Status filter is a single-select that conflates done with stage:
-      //   - 'all'         → no status filter (everything, any done/stage)
-      //   - 'open'        → not done AND stage='todo' (the default workflow state)
-      //   - 'in_progress' → not done AND stage='in_progress'
-      //   - 'backlog'     → not done AND stage='backlog'
-      //   - 'done'        → done (any stage)
-      if (status === 'all') {
-        // no-op
+      // Status filter is a single-select with two real states:
+      //   - 'all'   → no filter (everything, any done state)
+      //   - 'open'  → not done
+      //   - 'done'  → done
+      // The legacy `stage` column on todo_meta is no longer surfaced — the
+      // checkbox toggle (done flag) is the only status concept now.
+      if (status === 'open') {
+        if (r.done) return false;
       } else if (status === 'done') {
         if (!r.done) return false;
-      } else {
-        if (r.done) return false;
-        const expected = status === 'open' ? 'todo' : status;
-        if (r.meta.stage !== expected) return false;
       }
       if (category !== 'all' && r.meta.type !== category) return false;
       if (threadFilter !== 'all') {
@@ -413,39 +402,14 @@ export default function TodosScreen() {
     }
   }, [pickerFor, load]);
 
-  const handleMove = useCallback(async (row: Row, direction: -1 | 1) => {
-    const idx = filtered.findIndex(r => r.id === row.id);
-    if (idx < 0) return;
-    const targetIdx = idx + direction;
-    if (targetIdx < 0 || targetIdx >= filtered.length) return;
-    const target = filtered[targetIdx];
+  const handleTogglePin = useCallback(async (row: Row) => {
     try {
-      // First-reorder side effect — populate positions for every row.
-      await ensureAllTodoPositions(filtered);
-      // Re-fetch so swap operates on the freshly-assigned positions.
-      const fresh = await getAllTodoMetas();
-      const freshById = new Map(fresh.map(m => [m.todoId, m]));
-      const a = { id: row.id, meta: { position: freshById.get(row.id)?.position ?? null } };
-      const b = { id: target.id, meta: { position: freshById.get(target.id)?.position ?? null } };
-      await swapTodoPositions(a, b);
+      await updateTodoMeta(row.id, { pinned: !row.meta.pinned });
       await load();
     } catch (e) {
-      console.warn('[todos] move failed:', e);
+      console.warn('[todos] pin toggle failed:', e);
     }
-  }, [filtered, load]);
-
-  const handleStagePick = useCallback(async (newStage: TodoStage) => {
-    if (!stagePickerFor) return;
-    const target = stagePickerFor;
-    setStagePickerFor(null);
-    if (newStage === target.meta.stage) return;
-    try {
-      await updateTodoMeta(target.id, { stage: newStage });
-      await load();
-    } catch (e) {
-      console.warn('[todos] stage change failed:', e);
-    }
-  }, [stagePickerFor, load]);
+  }, [load]);
 
   const subtitle = useMemo(() => {
     const total = allRows.length;
@@ -511,14 +475,14 @@ export default function TodosScreen() {
           contentContainerStyle={styles.filters}
           keyboardShouldPersistTaps="handled"
         >
-          {(['all', 'open', 'in_progress', 'done', 'backlog'] as Status[]).map(s => (
+          {(['all', 'open', 'done'] as Status[]).map(s => (
             <Pressable
               key={s}
               onPress={() => setStatus(s)}
               style={[styles.pill, status === s && styles.pillActive]}
             >
               <Text style={[styles.pillText, status === s && styles.pillTextActive]}>
-                {s === 'in_progress' ? 'IN PROGRESS' : s.toUpperCase()}
+                {s.toUpperCase()}
               </Text>
             </Pressable>
           ))}
@@ -626,8 +590,38 @@ export default function TodosScreen() {
         {filtered.map(r => {
           const isEditing = editingId === r.id;
           const time = formatRelativeTime(r.createdAt ?? r.meta.createdAt);
+          // Swipe-left reveals a coral delete button. Tapping it fires
+          // handleDelete; the swipe doesn't auto-delete on release. The
+          // inline x icon was removed once swipe shipped — single delete
+          // affordance is cleaner.
+          //
+          // The action wraps in a fixed-width container with explicit
+          // height: '100%' + Android `elevation` so the panel:
+          //   1. Always matches the row's full (multi-line) height
+          //   2. Stacks ABOVE the row content on Android (without elevation,
+          //      the row's text could bleed through behind the coral panel
+          //      due to platform z-ordering quirks)
+          const renderRightActions = () => (
+            <View style={styles.swipeActionContainer}>
+              <Pressable
+                onPress={() => handleDelete(r)}
+                style={styles.swipeDeleteAction}
+                hitSlop={4}
+              >
+                <Icon name="trash" size={18} color="#fff" />
+                <Text style={styles.swipeDeleteText}>Delete</Text>
+              </Pressable>
+            </View>
+          );
           return (
-            <View key={r.id} style={styles.row}>
+            <Swipeable
+              key={r.id}
+              renderRightActions={renderRightActions}
+              rightThreshold={40}
+              friction={1.5}
+              overshootRight={false}
+            >
+            <View style={styles.row}>
               <Pressable onPress={() => handleToggle(r)} hitSlop={10} style={styles.checkbox}>
                 <View style={[styles.check, r.done && styles.checkOn]}>
                   {r.done && <Icon name="checkSquare" size={10} color={colors.bg} />}
@@ -659,10 +653,6 @@ export default function TodosScreen() {
                     confidence={r.meta.classifierConfidence}
                     onPress={() => setPickerFor(r)}
                   />
-                  <StageBadge
-                    stage={r.meta.stage}
-                    onPress={() => setStagePickerFor(r)}
-                  />
                   {r.meta.type !== 'todo' && r.meta.expandedMd && (
                     <Pressable
                       onPress={() => router.push({ pathname: '/todos/[id]', params: { id: r.id, text: r.text } })}
@@ -685,20 +675,22 @@ export default function TodosScreen() {
                   </Pressable>
                 </View>
               </View>
-              <View style={styles.rightStack}>
-                <Pressable onPress={() => handleDelete(r)} hitSlop={10} style={styles.deleteBtn}>
-                  <Icon name="x" size={14} color={colors.coral} />
-                </Pressable>
-                <View style={styles.reorderRow}>
-                  <Pressable onPress={() => handleMove(r, -1)} hitSlop={6} style={styles.reorderBtn}>
-                    <Icon name="arrowUp" size={11} color={colors.textDim} />
-                  </Pressable>
-                  <Pressable onPress={() => handleMove(r, 1)} hitSlop={6} style={styles.reorderBtn}>
-                    <Icon name="arrowDown" size={11} color={colors.textDim} />
-                  </Pressable>
-                </View>
-              </View>
+              <Pressable
+                onPress={() => handleTogglePin(r)}
+                hitSlop={14}
+                android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: true, radius: 22 }}
+                style={styles.pinBtn}
+              >
+                <Icon
+                  name="pin"
+                  size={16}
+                  color={r.meta.pinned ? colors.accent : colors.textDim}
+                  fill={r.meta.pinned ? colors.accent : 'none'}
+                  strokeWidth={1.5}
+                />
+              </Pressable>
             </View>
+            </Swipeable>
           );
         })}
       </ScrollView>
@@ -719,14 +711,6 @@ export default function TodosScreen() {
         currentType={pickerFor?.meta.type ?? 'todo'}
         onCancel={() => setPickerFor(null)}
         onPick={handleTypePick}
-      />
-
-      <StageChangePicker
-        visible={!!stagePickerFor}
-        todoText={stagePickerFor?.text ?? ''}
-        currentStage={stagePickerFor?.meta.stage ?? 'todo'}
-        onCancel={() => setStagePickerFor(null)}
-        onPick={handleStagePick}
       />
 
       {toastVisible && (
@@ -923,8 +907,15 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 10,
     paddingVertical: 10,
+    paddingHorizontal: 0,
+    backgroundColor: colors.bg,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.04)',
+    // Clip any text that extends beyond the row's bounding box — without
+    // this, multi-line wrapped text can visually extend past the row's
+    // right edge during the Swipeable translation and overlap the coral
+    // delete panel.
+    overflow: 'hidden',
   },
   checkbox: {
     paddingTop: 2,
@@ -977,25 +968,22 @@ const styles = StyleSheet.create({
     color: colors.accent,
     letterSpacing: 0.4,
   },
-  // Right-side stack: arrows pinned top-right, red delete pinned bottom-right.
-  // alignSelf:'stretch' overrides the row's flex-start alignItems so this
-  // column inherits the row's full height; minHeight gives short rows a
-  // forced gap between the arrows and the destructive delete button.
-  rightStack: {
-    alignSelf: 'stretch',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    paddingLeft: 4,
-    minHeight: 70,
-  },
-  reorderRow: {
-    flexDirection: 'row',
+  // Pin star — replaces the old reorder column on the row's right edge.
+  // Positioned by the parent row's flex layout (no stretch / stack needed).
+  pinBtn: {
+    // Tap zone — pumped up because:
+    //   1. Swipeable's horizontal gesture handler can intercept ambiguous
+    //      taps near the row's right edge; a beefier target is more
+    //      forgiving.
+    //   2. Android's recommended minimum is 48dp; with hitSlop {14} the
+    //      effective area gets close.
+    // Top-aligned with the checkbox (the row uses alignItems: 'flex-start').
+    paddingTop: 4,
+    paddingBottom: 12,
+    paddingLeft: 16,
+    paddingRight: 8,
+    minWidth: 40,
     alignItems: 'center',
-    gap: 2,
-  },
-  reorderBtn: {
-    paddingVertical: 3,
-    paddingHorizontal: 4,
   },
   expandedTag: {
     fontFamily: fonts.mono,
@@ -1003,7 +991,30 @@ const styles = StyleSheet.create({
     color: colors.green,
     letterSpacing: 0.4,
   },
-  deleteBtn: {
-    padding: 4,
+  // Swipe-left action panel. Fixed width keeps the gesture distance
+  // predictable. Explicit height: '100%' is critical — without it the
+  // panel auto-sizes to the icon+text content and short rows look fine
+  // but tall multi-line rows show row content peeking above/below the
+  // shorter coral panel.
+  swipeActionContainer: {
+    width: 110,
+    height: '100%',
+    elevation: 4,
+    zIndex: 5,
+  },
+  swipeDeleteAction: {
+    flex: 1,
+    backgroundColor: colors.coral,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  swipeDeleteText: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    color: '#fff',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
 });

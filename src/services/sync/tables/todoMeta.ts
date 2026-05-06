@@ -16,6 +16,7 @@ type TodoMetaLocalRow = {
   classifier_model: string | null;
   user_overridden_type: number | null;
   position: number | null;
+  pinned: number | null;
   created_at: string;
   updated_at: string;
   synced_at: string | null;
@@ -36,6 +37,7 @@ type TodoMetaCloudRow = {
   classifier_model: string | null;
   user_overridden_type: boolean;
   position: number | null;
+  pinned: boolean;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -65,6 +67,7 @@ export const todoMetaSyncable: SyncableTable<TodoMetaLocalRow, TodoMetaCloudRow>
       classifier_model: row.classifier_model,
       user_overridden_type: row.user_overridden_type === 1,
       position: row.position,
+      pinned: row.pinned === 1,
       created_at: row.created_at,
       updated_at: row.updated_at,
       deleted_at: row.deleted_at,
@@ -85,6 +88,7 @@ export const todoMetaSyncable: SyncableTable<TodoMetaLocalRow, TodoMetaCloudRow>
       classifier_model: row.classifier_model,
       user_overridden_type: row.user_overridden_type ? 1 : 0,
       position: row.position,
+      pinned: row.pinned ? 1 : 0,
       created_at: row.created_at,
       updated_at: row.updated_at,
       synced_at: null,
@@ -110,8 +114,8 @@ export const todoMetaSyncable: SyncableTable<TodoMetaLocalRow, TodoMetaCloudRow>
       `INSERT INTO todo_meta (
          todo_id, entry_id, entry_date, type, stage, expanded_md, expanded_at,
          model, classifier_confidence, classifier_model, user_overridden_type,
-         position, created_at, updated_at, synced_at, deleted_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         position, pinned, created_at, updated_at, synced_at, deleted_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(todo_id) DO UPDATE SET
          entry_id = excluded.entry_id,
          entry_date = excluded.entry_date,
@@ -124,6 +128,7 @@ export const todoMetaSyncable: SyncableTable<TodoMetaLocalRow, TodoMetaCloudRow>
          classifier_model = excluded.classifier_model,
          user_overridden_type = excluded.user_overridden_type,
          position = excluded.position,
+         pinned = excluded.pinned,
          updated_at = excluded.updated_at,
          synced_at = excluded.synced_at,
          deleted_at = excluded.deleted_at`,
@@ -131,7 +136,7 @@ export const todoMetaSyncable: SyncableTable<TodoMetaLocalRow, TodoMetaCloudRow>
         row.todo_id, row.entry_id, row.entry_date, row.type, row.stage,
         row.expanded_md, row.expanded_at, row.model, row.classifier_confidence,
         row.classifier_model, row.user_overridden_type, row.position,
-        row.created_at, row.updated_at, row.synced_at, row.deleted_at,
+        row.pinned ?? 0, row.created_at, row.updated_at, row.synced_at, row.deleted_at,
       ],
     );
   },

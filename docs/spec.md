@@ -56,12 +56,11 @@ Each drop type has a **one-time backfill migration** (SecureStore-gated) that ru
 
 ## 3. Navigation
 
-**Global bottom nav** ([src/components/nav/GlobalBottomNav.tsx](../src/components/nav/GlobalBottomNav.tsx)) — five tabs, hidden on `/editor/*` and `/settings/*`:
+**Global bottom nav** ([src/components/nav/GlobalBottomNav.tsx](../src/components/nav/GlobalBottomNav.tsx)) — four tabs, hidden on `/editor/*` and `/settings/*`:
 
 | Tab | Route | Icon |
 |-----|-------|------|
 | Home | `/` | `house` |
-| Record | (modal capture) | red dot |
 | Journal | `/journal/[date]` (today) | `penLine` |
 | Todos | `/todos` | `listTodo` |
 | More | `/more` | `settings` |
@@ -128,16 +127,14 @@ All todos across all entries, joined with their `todo_meta` row. Layout:
 - Header: title + subtitle (`"N total · newest first"` or `"M of N shown"`).
 - **Status filter** (`Status:` label + horizontal scroll of single-select chips):
   - **ALL** — no status filter
-  - **OPEN** (default) — not done AND `stage='todo'`
-  - **IN PROGRESS** — not done AND `stage='in_progress'`
+  - **OPEN** (default) — not done (any stage; in-progress / backlog rows roll up here)
   - **DONE** — done (any stage)
-  - **BACKLOG** — not done AND `stage='backlog'`
+  - The `stage` column on `todo_meta` is dead — no UI reads or writes it. New rows still default to `'todo'` to satisfy the NOT NULL constraint, but the value carries no behavioral meaning. The status concept is now strictly the boolean `done` flag.
 - **Drops filter** (`Drops:` label + horizontal scroll): ALL + one chip per `TodoType` with counts.
 - **Threads filter** (`Threads:` label + horizontal scroll, only renders when at least one thread exists): ALL + one chip per thread with `#slug` and a count of todos tagged. AND-combines with the other filters.
 - **Flat list, newest first** by `createdAt` DESC. Done items strikethrough in chronological place.
 - Per-row affordances (in `metaRow`):
   - `TypeBadge` — colored pill with type icon + label. **No badge for plain `'todo'` rows** — the absence is the signal. Confidence "?" appears on medium/low rows. Tap → `TypeChangePicker`.
-  - `StageBadge` — always visible; shows "Open" / "In Progress" / "Backlog". Tap → `StageChangePicker`.
   - `[expand]` (accent) on non-todo rows without an expansion → routes to `/todos/[id]`.
   - `● expanded` (green) on non-todo rows that already have one → same route, view-mode.
   - Relative time + linkable source date.
@@ -205,7 +202,7 @@ Twelve tables in `loopd.db` — eleven entity tables plus the local-only `sync_m
 | `day_meta` | `date` | `title`, `updated_at`, `synced_at`, `deleted_at` | Per-day user-rename title. |
 | `ai_summaries` | `date` | `summary_json`, `generated_at`, `model`, `updated_at`, `synced_at`, `deleted_at` | Cached AI composition per date. `summary_json` carries both the structured `AISummary` fields and the optional relatable-caption fields. `getRecentAISummaries(beforeDate, limit)` feeds prior captions into the next caption pass for tonal continuity / anti-repetition. |
 | `nutrition` | `id` | `name`, `kcal`, `entry_id`, `entry_date`, `source_line`, `notion_page_id`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Per-line nutrition records, derived from `** food N kcal` prose. |
-| `todo_meta` | `todo_id` | `entry_id`, `entry_date`, `type`, `stage`, `expanded_md`, `expanded_at`, `model`, `classifier_confidence`, `classifier_model`, `user_overridden_type`, `position`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | 1:1 with each `TodoItem` in `todos_json`. CHECK enforces enums on `type` (7 values), `stage` (3 values), `classifier_confidence` (4 values + null). |
+| `todo_meta` | `todo_id` | `entry_id`, `entry_date`, `type`, `stage`, `expanded_md`, `expanded_at`, `model`, `classifier_confidence`, `classifier_model`, `user_overridden_type`, `position` (deprecated), `pinned`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | 1:1 with each `TodoItem` in `todos_json`. CHECK enforces enums on `type` (7 values), `stage` (3 values), `classifier_confidence` (4 values + null). `position` is dead schema (replaced by `pinned`); `pinned` floats rows to the top of `/todos`. |
 | `threads` | `id` | `name`, `slug` UNIQUE, `icon`, `color`, `target_cadence_days`, `archived`, `pinned`, `time_of_day`, `notion_page_id`, `notion_last_synced`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Project metadata. `slug` is the matching key for `#tag` mentions; UNIQUE enforces case-insensitive uniqueness. |
 | `thread_mentions` | `id` | `thread_id`, `entry_id` (nullable), `entry_date`, `todo_id` (nullable), `source_line`, `tag_text`, `created_at`, `updated_at`, `synced_at`, `deleted_at` | Junction. App-level invariant: at least one of `entry_id` / `todo_id` is set, EXCEPT for the manual-touch deviation (both NULL when written by `toggleThreadTouchToday`). DB has no CHECK so the deviation is permitted. |
 | `sync_meta` | `table_name` | `last_pull_at`, `last_push_at`, `pending_pushes`, `last_error`, `last_error_at` | Local-only ledger driving incremental cloud sync; one row per synced table. **Not itself synced.** |
@@ -243,7 +240,7 @@ Migrations are applied via `node scripts/db-migrate.mjs --all-pending` — a tin
 - **`AISummary`** ([ai.ts](../src/types/ai.ts)) — structured composition output. Core fields: `headline`, `summary`, `mood`, `clipOrder`, `clipTrims`, `textOverlays`, `filterPreset`, `generatedAt`. Optional relatable-caption fields populated by the second LLM pass: `caption?`, `captionAlternate?`, `captionTheme?` (kept optional so older cached rows still parse).
 - **`CaptionInput`** / **`CaptionOutput`** / **`CaptionTheme`** ([ai.ts](../src/types/ai.ts)) — input/output shapes for `generateCaption`. `CaptionTheme` is the closed enum `'growth' | 'discipline' | 'clarity' | 'struggle' | 'shift' | 'curiosity'`; the stored `captionTheme` is normalized to one of these (fallback `'clarity'`).
 - **`TodoType`** ([todoMeta.ts](../src/types/todoMeta.ts)) — `'todo' | 'idea' | 'bug' | 'question' | 'decision' | 'knowledge' | 'content'`.
-- **`TodoStage`** — `'todo' | 'in_progress' | 'backlog'`. Internal value `'todo'` surfaces as **"Open"** in the UI.
+- **`TodoStage`** — `'todo' | 'in_progress' | 'backlog'`. **Deprecated** — the stage column on `todo_meta` is no longer surfaced in any UI. The type and DB column stay so existing rows round-trip cleanly. Status is now strictly the boolean `done` flag.
 - **`ClassifierConfidence`** — `'high' | 'medium' | 'low' | 'heuristic'`.
 - **`TodoMeta`** — `{ todoId, entryId, entryDate, type, stage, expandedMd?, expandedAt?, model?, classifierConfidence?, classifierModel?, userOverriddenType, position, createdAt, updatedAt }`. **No `notionPageId`** — sync code joins TodoItem ↔ TodoMeta and uses the single id from TodoItem.
 - **Six per-type expansion shapes** — `IdeaExpansion`, `BugExpansion`, `QuestionExpansion`, `DecisionExpansion`, `KnowledgeExpansion`, `ContentExpansion`, plus a discriminated `TodoExpansion` union and `ExpandableType = Exclude<TodoType, 'todo'>`.
@@ -290,9 +287,7 @@ Every `TodoItem` has a paired `todo_meta` row. The 1:1 invariant is enforced by 
 
 **`user_overridden_type` lock** — once the user manually picks a type via the picker, `userOverriddenType=1` and the row is locked from future re-classification.
 
-**Stage** (orthogonal to type and done): `'todo'` (default; surfaces as "Open"), `'in_progress'`, `'backlog'`. Per-row `StageBadge` always visible; `StageChangePicker` for changes.
-
-**Position** (orthogonal manual reorder): NULL until the user explicitly reorders any todo; once reorder is invoked, every row gets a dense integer assigned and the sort flips from `createdAt`-DESC to `position`-ASC.
+**Pin** (per-row): the `/todos` row's right stack has a star toggle. Pinned rows float to the top above the createdAt-DESC default sort. Replaces the deprecated manual-reorder feature; `position` column on `todo_meta` is now dead schema (column kept, no UI reads or writes it).
 
 **Expansion** (manual, never automatic):
 - Six per-type prompts in [expandPrompts.ts](../src/services/todos/expandPrompts.ts) with chain-of-thought reasoning preambles.
@@ -400,8 +395,6 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 | `todos/classify.ts` | Cheapest-model LLM classifier; module in-flight counter. |
 | `todos/reconcileMeta.ts` | Inserts/soft-deletes paired `todo_meta` rows on every entry commit; fires classifier for ambiguous, not-done todos. |
 | `todos/migrateMeta.ts` | One-time `todo_meta` backfill (heuristic only) + `classifyAmbiguousMeta` boot catch-up + `countAmbiguousNotDone`. |
-| `todos/stageMeta.ts` | Stage icon/label/color (default `'todo'` surfaces as "Open"). |
-| `todos/reorder.ts` | `ensureAllTodoPositions` + swap helpers; lazy NULL-first sparse-then-dense pattern. |
 | `todos/expandPrompts.ts` | Six system prompts with reasoning preambles + JSON schemas + context-block builder. |
 | `todos/expandSerialize.ts` | Per-type JSON → markdown templates. |
 | `todos/expand.ts` | Expansion orchestrator (primary model, 3-concurrent cap, malformed-JSON auto-retry). |

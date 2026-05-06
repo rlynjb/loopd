@@ -69,6 +69,7 @@ export async function reconcileTodoMetaForEntry(entry: Entry): Promise<void> {
         classifierModel: null,
         userOverriddenType: false,
         position: null,
+        pinned: false,
         createdAt: todo.createdAt ?? now,
         updatedAt: now,
       };

@@ -12,6 +12,7 @@ import {
   Save, Download, Upload, Camera, LayoutDashboard, Film,
   House,
   Lightbulb, Bug, HelpCircle, GitBranch,
+  Pin, PinOff,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -79,6 +80,9 @@ export const ICONS = {
   bug: Bug,
   helpCircle: HelpCircle,
   gitBranch: GitBranch,
+  // Pin / unpin
+  pin: Pin,
+  pinOff: PinOff,
 } as const;
 
 export type IconName = keyof typeof ICONS;
@@ -88,9 +92,13 @@ type Props = {
   size?: number;
   color?: string;
   strokeWidth?: number;
+  /** SVG fill color — pass to render solid/filled variants of an outline
+   *  icon (e.g. a filled pin). Defaults to 'none' which keeps the icon
+   *  outline-only. */
+  fill?: string;
 };
 
-export function Icon({ name, size = 18, color = colors.textMuted, strokeWidth = 1.5 }: Props) {
+export function Icon({ name, size = 18, color = colors.textMuted, strokeWidth = 1.5, fill = 'none' }: Props) {
   const IconComponent = ICONS[name];
-  return <IconComponent size={size} color={color} strokeWidth={strokeWidth} />;
+  return <IconComponent size={size} color={color} strokeWidth={strokeWidth} fill={fill} />;
 }

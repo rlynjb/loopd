@@ -39,10 +39,14 @@ export type TodoMeta = {
   classifierConfidence: ClassifierConfidence | null;
   classifierModel: string | null;
   userOverriddenType: boolean;
-  // User-set ordering. NULL until the user has explicitly reordered any
-  // todo; once reorder is invoked, every row gets a dense integer assigned
-  // and the sort flips from createdAt-DESC to position-ASC.
+  // User-set ordering. **Deprecated** as of 2026-05-05 — replaced by `pinned`.
+  // The column stays on the schema and round-trips through sync; no UI
+  // reads or writes it. New rows leave it NULL.
   position: number | null;
+  // Pin flag (added 2026-05-05). Pinned rows float to the top of the /todos
+  // list above the createdAt-DESC default sort. Toggled per-row from the
+  // pin chip on each todo.
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
 };
