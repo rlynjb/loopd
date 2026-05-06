@@ -37,15 +37,17 @@ Soft-deleted rows (`deleted_at IS NOT NULL`) accumulate forever. The plan was a 
 
 ## Cloud sync — drop dead schema columns
 
-**Status:** stale columns + tables left behind by Notion deletion.
+**Status:** stale columns + tables left behind by feature deletions.
 
-- `sync_deletions` table — empty, never written to anymore.
+- `sync_deletions` table — Notion-era outbox; empty, never written to anymore.
 - `notion_page_id` / `notion_last_synced` columns — present on `entries`, `nutrition`, `habits`, `threads`. Always NULL going forward.
-- The cloud mirror already drops them; only local has the dead weight.
+- `todo_meta.stage` — once drove the IN PROGRESS / BACKLOG status filters; replaced by the binary `done` flag (2026-05-05). NOT NULL DEFAULT 'todo' so new rows still write the default; nothing reads it.
+- `todo_meta.position` — drove the manual reorder feature; replaced by `pinned` (2026-05-05).
+- The cloud mirror keeps these columns too (they round-trip through sync) but no read path consults them on either side.
 
 **Trigger:** purely cosmetic. Storage is negligible.
 
-**Cost:** ~15 min. SQLite supports `ALTER TABLE … DROP COLUMN` in 3.35+ which expo-sqlite has, but you'd want a migration that runs once and is gated by SecureStore.
+**Cost:** ~30 min. SQLite supports `ALTER TABLE … DROP COLUMN` in 3.35+ which expo-sqlite has. Drops on Postgres need a paired Supabase migration. Gate the local SQLite migration with a SecureStore flag so it runs once.
 
 ---
 

@@ -1,5 +1,15 @@
 # Relatable Vlog Caption Generator — Spec & Prompt
 
+> **Superseded 2026-05-05** by [`docs/loopd-caption-variants-plan.md`](./loopd-caption-variants-plan.md).
+> The 2-variant output shape (`caption` + `alternate` + `detectedTheme`) and the
+> 3-beat structured prompt described below are retained for **read-side
+> backward-compat only** — older `ai_summaries` rows cached before the
+> 4-variant pass shipped still parse against the legacy AISummary fields
+> and render as a 3-chip group (PRIMARY / ALT / SUMMARY) in the editor.
+> All new caption generation uses the 4-variant prompt. Voice rules,
+> forbidden patterns, and theme detection from this spec are preserved
+> in the new prompt verbatim.
+
 ## 1. Intent
 
 Transform a raw daily log (tasks, actions, ideas) into a short, reflective caption that feels like an authentic personal thought — not a summary or checklist.
