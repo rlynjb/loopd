@@ -15,7 +15,7 @@
    │   │                          AISummaryCard, PastVlogCard)                       │  │
    │   │  app/journal/[date].tsx   editor for one day's prose + clips                │  │
    │   │  app/editor/[date].tsx    vlog composer (clip trims, overlays)              │  │
-   │   │  app/todos.tsx            flat ranked todo list                             │  │
+   │   │  app/todos.tsx            flat todo list (pinned-first, createdAt DESC)    │  │
    │   │  app/todos/[id].tsx       single-todo detail + AI expansion                 │  │
    │   │  app/threads/[id].tsx     thread (#tag) detail                              │  │
    │   │  app/more/{habits,threads,nutrition}.tsx                                    │  │
@@ -108,3 +108,14 @@
 - **SecureStore** — Android Keystore-backed key/value. Stores LLM API keys, Supabase URL/anon key, the `cloud_initial_push_done` bootstrap flag, and per-feature backfill flags.
 - **Supabase Postgres** — the cloud mirror, never canonical. Reads always go to local SQLite; cloud catches up asynchronously. Migrations are append-only files in `supabase/migrations/`.
 - **External LLMs** — Anthropic + OpenAI. Provider switch lives in `src/services/ai/config.ts` and is read on every call.
+
+---
+
+## Where to go next
+
+- [`01-system-design/`](./01-system-design/) — every architectural pattern, one file per concept.
+- [`02-dsa/`](./02-dsa/) — every meaningful algorithm in the codebase, with execution traces and complexity.
+- [`03-ai-engineering/`](./03-ai-engineering/) — how loopd uses LLMs (and what it deliberately doesn't).
+
+---
+Updated: 2026-05-07 — fixed `app/todos.tsx` description (sort is now pinned-first then createdAt DESC, no longer "ranked"); added section index links.
