@@ -46,7 +46,12 @@ The closest cousin loopd does have is `scheduleClassify` — but that's app code
 
 ## In this codebase
 
-Tool calling is absent. The four AI services (`summarize`, `caption`, `classify`, `expand`) all return on the first response. There is no place in the codebase that interprets a model output as a tool invocation.
+_Not implemented — intentionally absent._ The four AI services all return on the first response. The closest reference points showing the single-call shape:
+
+**No tool loop:**           `src/services/ai/summarize.ts` → `summarize()` L42–L105 — single Anthropic SDK call (`callClaude` L12–L22) or OpenAI fetch (`callOpenAI` L24–L40); the return is final
+**No tool dispatch:**       `src/services/todos/expand.ts` → `expandTodo()` L211–L266 — even when validation fails, the retry at L234–L247 is a re-call of the same chain, not a model-chosen tool invocation
+**No agent loop file:**     no `src/services/ai/agent.ts`, no `orchestrator.ts`, no graph anywhere in `src/services/ai/` or `src/services/todos/`
+**Architectural anchor:**   the rule is documented in [02-single-purpose-chains](./02-single-purpose-chains.md) and [12-why-no-agents](./12-why-no-agents.md) — adding tool-calling means a new service file, not a modification
 
 ---
 
@@ -104,4 +109,56 @@ A: I'm not behind on the tooling — I read the Claude tool-use API and OpenAI's
 - "The day a feature needs to navigate, tools go in a new file."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory (the "loopd's call" vs "an agent with tools" contrast). Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "no tool calling in loopd" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/ai/summarize.ts` and the absence of any orchestrator/agent file
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+You're asked to add a feature: "expand this todo with context from any past entry that mentioned similar ideas." The naive shape would be a tool-call loop where the model emits `{tool: 'search_entries', input: {query}}`, the app runs FTS5/pgvector, returns hits, the model synthesises. Walk what files would change in the diff: `expand.ts`? A new service file? `validate.ts`? What max-iteration cap and timeout would you set, and where in the codebase would those constants live? Why is it not shipped today?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/summarize.ts` L42–L105 (current single-call shape) and `src/services/todos/expand.ts` L211–L266 to compare against the proposed loop.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/ai/summarize.ts` (no observation step) to support what exists
+→ Point to where a new `src/services/ai/agent.ts` with iteration cap + timeout would land if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly (or correctly named that no such file exists)
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Tool calling is intentionally absent — anchored on the closest single-call sites.

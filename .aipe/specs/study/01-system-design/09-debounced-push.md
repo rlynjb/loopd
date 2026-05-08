@@ -43,10 +43,10 @@ The 5-second value is a tuning knob. Shorter feels chattier (more round-trips pe
 
 ## In this codebase
 
-- `src/services/sync/schedulePush.ts` → `schedulePush()`, the debouncer.
-- Every mutator in `src/services/database.ts` calls `schedulePush()` after a synced-table write.
-- `src/services/sync/orchestrator.ts` → `pushAll()` runs from the timer.
-- App boot in `app/_layout.tsx` also kicks `pushAll()` once on startup to catch up writes from the previous session.
+**Debouncer:**       `src/services/sync/schedulePush.ts` → `schedulePush()` L14–L21 (`PUSH_DEBOUNCE_MS = 5_000` at L9, internal `fire()` L22+)
+**Caller pattern:**  Every synced-table mutator in `src/services/database.ts` ends with `schedulePush()` — that's the rule. The 1387-line file has dozens of write functions; each one bumps `updated_at` and arms the timer.
+**Timer target:**    `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 (called from `fire()` when no push is in flight)
+**Boot catch-up:**   `app/_layout.tsx` kicks `pushAll()` once on cold start so writes that didn't make it to cloud last session catch up
 
 ---
 
@@ -107,4 +107,56 @@ A: The case I haven't end-to-end tested is "user types in airplane mode for an h
 - "Boot-time `pushAll()` is the safety net — anything missed by app kill catches up on next launch."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the debounced push trigger to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/schedulePush.ts:schedulePush`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user types in a journaling burst — 60 keystrokes spread over 6 seconds, with one 2-second pause in the middle. Then they background the app. How many times does the timer arm? How many times does it actually fire? What's the state of the in-memory `timer` variable when the app gets backgrounded mid-window? On cold start, what catches up the unfired window?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/schedulePush.ts` L14–L21 (and `app/_layout.tsx` for the boot kick) to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/schedulePush.ts` (the 5s constant) to support what exists
+→ Point to a per-write push (no debounce) at `src/services/database.ts` mutators if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

@@ -72,10 +72,10 @@ If the device is offline, the writes pile up locally with `updated_at > synced_a
 
 ## In this codebase
 
-- `src/services/database.ts` — the single mouth to SQLite. Every mutator stamps `updated_at` and calls `schedulePush()`.
-- `src/hooks/useEntries.ts`, `useDatabase.ts`, `useHabits.ts`, `useDayTitle.ts`, `useExport.ts`, `useProject.ts` — thin React wrappers; they own the query and delegate mutations.
-- `src/services/sync/schedulePush.ts` — the 5-second debouncer.
-- `src/services/sync/orchestrator.ts` — `pushAll()` walks the SyncableTable registry of 10 tables.
+**SQLite mouth:**     `src/services/database.ts` — the only file that opens `loopd.db`. Every mutator stamps `updated_at` and calls `schedulePush()`. The 1387-line file *is* the funnel — the hard guarantee that "DB is canonical" lives here.
+**React wrappers:**   `src/hooks/{useEntries,useDatabase,useHabits,useDayTitle,useExport,useProject}.ts` — thin state hooks that own a query each and delegate mutations into `database.ts`.
+**Debouncer:**        `src/services/sync/schedulePush.ts` → `schedulePush()` L14–L21 (5s window via `PUSH_DEBOUNCE_MS = 5_000` at L9, internal `fire()` at L22)
+**Orchestrator:**     `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — walks the 10-table `REGISTRY` defined at L25
 
 ---
 
@@ -139,4 +139,56 @@ A: It's lost from the cloud, not from the device. The write hit SQLite synchrono
 - "The design assumes the device is canonical; the day there are two devices, last-write-wins becomes the failure mode that needs CRDTs."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the local-first request flow to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/database.ts` + `src/services/sync/schedulePush.ts:schedulePush`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user types `[] call mom`, then 2 seconds later types `[] write spec`, then immediately backgrounds the app. Walk what's in local SQLite vs cloud Postgres at three timestamps: t=2s after second keystroke, t=4s, t=10s (assuming network is healthy). What happens differently if the OS kills the app at t=4s and the user reopens it at t=20s?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/schedulePush.ts` L14–L21 and `src/services/database.ts` (any mutator) to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/database.ts` to support what exists (the single-funnel guarantee)
+→ Point to per-domain modules under `src/services/{todos,threads,nutrition}/` (where you'd push the mutators if you split them up) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

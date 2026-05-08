@@ -92,9 +92,10 @@ The "brute" alternative is "just call the LLM on every new todo" — works, cost
 
 ## In this codebase
 
-- `src/services/todos/heuristicClassify.ts` → the function and its regex tables.
-- Called from `reconcileTodoMetaForEntry` (see [02-reconcile-todo-meta](./02-reconcile-todo-meta.md)).
-- LLM fallback: `src/services/todos/classify.ts` → `classifyTodo()`.
+**Function:**         `src/services/todos/heuristicClassify.ts` → `heuristicClassify()` L71–L102 (with helper `firstWord()` L64–L70)
+**Regex tables:**     `src/services/todos/heuristicClassify.ts` — `IMPERATIVE_VERBS` L12 (Set of ~70 verbs), `MODAL_STARTS` L26, `QUESTION_STARTS` L37, `SPECULATIVE_STARTS` L44, `DEADLINE_PATTERNS` L57
+**Call site:**        `src/services/todos/reconcileMeta.ts` → consulted on insert at L48-L92 (see [02-reconcile-todo-meta](./02-reconcile-todo-meta.md))
+**LLM fallback:**     `src/services/todos/classify.ts` → `classifyTodo()` — fires only when `heuristicClassify` returns `null`
 
 ---
 
@@ -152,4 +153,61 @@ A: I don't, precisely. The 60-70% number is a back-of-envelope estimate from man
 - "60-70% is back-of-envelope — the metric to actually measure it doesn't exist yet."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain heuristic-first classifier to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/heuristicClassify.ts:heuristicClassify`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user types these three lines as new todos:
+1. `[] is the new auth flow broken?`
+2. `[] should we maybe ship this`
+3. `[] fix the dashboard before EOD`
+
+For each line, walk the order of regex checks: which tables fire, which one decides the return value, and does the line ever reach the LLM (`classifyTodo`)? Specifically — does line 2 hit the modal `^should\s+` or the question `^should\s+(we|i)\b`? Why does the order of those two checks matter?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/heuristicClassify.ts` L71–L102 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/heuristicClassify.ts` to support what exists
+→ Point to `src/services/todos/classify.ts` (the LLM call that absorbs every `null` from the heuristic) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

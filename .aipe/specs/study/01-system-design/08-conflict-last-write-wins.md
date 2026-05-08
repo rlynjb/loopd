@@ -42,8 +42,11 @@ The malformed-timestamp branch is defensive. If a row has a non-ISO string in `u
 
 ## In this codebase
 
-- `src/services/sync/conflict.ts` → `chooseWinner()`.
-- `src/services/sync/pull.ts` → `pullTable()` calls it per row.
+**File:** `src/services/sync/conflict.ts`
+**Function / class:** `chooseWinner<T extends Tombstoned>(local, cloud)` — pure, no side effects
+**Line range:** L20–L31 (the whole file is 31 lines; `Tombstoned` type at L13)
+
+**Caller:** `src/services/sync/pull.ts` → `pullTable()` L34–L117 invokes `chooseWinner` per row to decide whether to upsert the cloud row over local.
 
 ---
 
@@ -105,4 +108,56 @@ A: Almost. After the push succeeds, the local row has `updated_at = T` and `sync
 - "When the conflict surface changes (real concurrency, multi-user), LWW becomes wrong — and the migration target is vector clocks plus per-field merge."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain last-write-wins conflict resolution to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/conflict.ts:chooseWinner`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+The user has the app on phone and tablet. They edit entry e123 on the phone at 2026-05-07T09:00:00.500Z (so `local.updated_at = T+500ms`), then on the tablet they edit the same entry one millisecond later at 09:00:00.501Z. The phone's push fires first (gets to cloud), then the tablet pulls. What does `chooseWinner` return on the tablet for that row? What if both clocks were perfectly in sync but the times happened to be byte-identical?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/conflict.ts` L20–L31 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/conflict.ts:chooseWinner` to support what exists
+→ Point to where a `version_vector` column would have to thread through (`src/services/sync/tables/*`, the migration, every push/pull mapper) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

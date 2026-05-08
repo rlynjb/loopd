@@ -46,11 +46,12 @@
 
 ## In this codebase
 
-- `src/services/database.ts` — SQLite open + schema migration.
-- `src/services/fileManager.ts` — filesystem helpers, including `repairBareClipUris`.
-- `src/services/ai/config.ts` — SecureStore reads/writes for AI config.
-- `src/services/sync/client.ts` — Supabase client init from SecureStore.
-- `src/services/sync/tables/*` — per-table mappers between SQLite and Postgres shapes.
+**SQLite:**         `src/services/database.ts` (1387 lines) — opens `loopd.db`, runs schema migrations on first call, exposes typed CRUD for 12 tables.
+**Filesystem:**     `src/services/fileManager.ts` — clip + export path helpers (`/document/loopd/clips/<date>/`, `/exports/<date>.mp4`), including `repairBareClipUris` defensive resolver.
+**SecureStore:**    `src/services/ai/config.ts` (50 lines) — `getProvider`, `getAnthropicKey`, `getOpenAIKey`. Other SecureStore consumers: `src/services/sync/client.ts` (Supabase URL + anon key), `src/services/sync/bootstrap.ts` (`cloud_initial_push_done` flag).
+**Postgres:**       `src/services/sync/client.ts` — Supabase JS client init. Reads from SecureStore so URL and anon key are user-supplied.
+**Per-table glue:** `src/services/sync/tables/*` — one file per synced table, exporting the mapper functions between SQLite and Postgres row shapes.
+**External LLMs:**  `src/services/ai/{summarize,caption,classify,expand}.ts` — stateless HTTP calls; no client-side persistence beyond cached responses in `ai_summaries`.
 
 ---
 
@@ -111,4 +112,56 @@ A: There isn't one for clips. The metadata recovers — installing the app on a 
 - "The migration path to durable clips is Supabase Storage + content-addressed URIs; the schema already supports it."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the storage layer summary to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/database.ts` + `src/services/fileManager.ts` + `src/services/ai/config.ts`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user records a 30-second clip on Monday and exports a vlog on Tuesday. They reinstall the app on Wednesday (no backup). What survives — what data does cloud sync restore on next launch, and what is permanently lost? For each of the 5 storage layers, name what's there before reinstall, and what's there after.
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/tables/` to see what does sync, and `src/services/fileManager.ts` to see what's device-local-only.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/fileManager.ts` (the device-local clip strategy) to support what exists
+→ Point to where Supabase Storage with content-addressed `clip_uri` (sha256 → URL) would land if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

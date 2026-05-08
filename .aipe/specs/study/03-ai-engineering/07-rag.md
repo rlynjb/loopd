@@ -59,10 +59,11 @@ If/when added:
 
 ## In this codebase
 
-- Hand-picked retrieval lives in:
-  - `src/services/ai/caption.ts` → `getRecentAISummaries(date, 5)`.
-  - `src/services/todos/expand.ts` → `buildContext()` pulls last 3 days of entries.
-- No `embed.ts`, no vector index, no `pgvector` extension on Supabase.
+_Vector RAG not implemented — intentionally absent._ Hand-picked retrieval lives in:
+
+**Caption anti-repeat:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223 invokes `getRecentAISummaries(date, 5)` — the 5-most-recent prior captions, fetched by SQL date filter
+**Expand context:**       `src/services/todos/expand.ts` → `buildContext()` L147–L199 pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos via SQL queries with explicit `.slice(0, N)` caps
+**Architectural anchor:** no `src/services/ai/embed.ts`, no `entry_embeddings` table, no `pgvector` extension on the Supabase schema (`supabase/migrations/0001_initial_schema.sql`). The seed for adding RAG lives in this concept file, not in code.
 
 ---
 
@@ -121,4 +122,56 @@ A: Partly that's a "I haven't built it yet" answer, and I'll own that. But also:
 - "Three years of entries plus 'find anything semantically similar' is the cliff. Not yet."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram (RAG vs hand-picked retrieval) from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "why no RAG (yet)" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/expand.ts:buildContext` and `src/services/ai/caption.ts:getRecentAISummaries`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user has 600 days of journal entries (~1.8M tokens of prose). The expand chain wants the most relevant 3 prior entries when expanding a todo about Project X. Today, `buildContext` pulls the *most recent* 3 days regardless of relevance. Walk: under what condition does that current behaviour stop being good enough? When the cliff hits, what 3 things would you add (file, table, step) to introduce real RAG, and which existing chain would consume the new retrieval first?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/expand.ts` L147–L199 to verify what `buildContext` actually fetches.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/expand.ts:buildContext` (the SQL-with-`.slice` shape) to support what exists
+→ Point to where a new `src/services/ai/embed.ts` + `entry_embeddings` table + a Supabase migration adding `pgvector` would land if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly (or correctly named that no embeddings file exists)
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Vector RAG is intentionally absent — anchored on hand-picked retrieval sites.

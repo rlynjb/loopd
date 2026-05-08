@@ -94,9 +94,15 @@
 
 ## In this codebase
 
-- `src/services/todos/rank.ts` → `rankTodos()` defined and exported, **not currently called by any app code**.
-- `src/services/todos/rank.ts` → `formatRelativeTime()` is imported by `app/todos.tsx` and `src/components/home/SmartTodoList.tsx`. That's the live consumption of the file.
-- The actual sort used by the dashboard and `/todos` is in [11-pinned-first-sort](./11-pinned-first-sort.md).
+**File (legacy):** `src/services/todos/rank.ts`
+**Function / class:** `rankTodos()` (with helper `effectiveCreatedAt()`)
+**Line range:** L24–L73 (helper `effectiveCreatedAt` at L17–L23)
+
+**Status:** dormant — defined and exported, but no app code currently calls it. Verify with `grep -r "rankTodos" src/ app/`.
+
+**Live consumption from the same file:** `formatRelativeTime()` L74–L86 — imported by `app/todos.tsx` and `src/components/home/SmartTodoList.tsx`. That import is the only reason `rank.ts` is still in the bundle.
+
+The actual sort used by `/todos` and the dashboard is documented in [11-pinned-first-sort](./11-pinned-first-sort.md).
 
 ---
 
@@ -154,4 +160,56 @@ A: Because I shipped the pinned-first sort as the live ordering on 2026-05-05 an
 - "If AI-priority comes back, I'd compose with pinned-first, not revive `rankTodos`."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain ranked-todo-sort (legacy) to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/rank.ts:rankTodos` (and that it's currently dormant)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Imagine you re-enable `rankTodos` and ship it tomorrow as the live sort on `/todos` (replacing pinned-first). What's the first user-visible regression you'd see, given that users have been pinning items for two weeks under the current model? Reference the three sort tiers (`carried`, `ai`, `journal`) and explain what would happen to a freshly pinned todo from yesterday.
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/rank.ts` L24–L73 and check whether your answer matches what the comparator actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/rank.ts` to support what exists
+→ Point to `src/services/todos/rank.ts:formatRelativeTime` (the only live export — the cleanup is "extract this helper, then delete the rest of the file") if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

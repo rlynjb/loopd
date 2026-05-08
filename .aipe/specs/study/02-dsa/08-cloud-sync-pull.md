@@ -103,10 +103,12 @@ The "brute" alternative is full-table pull (no cursor, no pagination). On any no
 
 ## In this codebase
 
-- `src/services/sync/pull.ts` → `pullTable()`.
-- `src/services/sync/orchestrator.ts` → `pullAll()`.
-- `src/services/sync/conflict.ts` → `chooseWinner()`.
-- Postgres RPC `get_server_time()` defined in `supabase/migrations/0003_server_time_rpc.sql`.
+**Algorithm:**     `src/services/sync/pull.ts` → `pullTable()` L34–L117 (`PAGE_SIZE = 200` const at L23)
+**Server clock:**  `src/services/sync/pull.ts` → `getServerTime()` L25–L33 — RPC wrapper that anchors `last_pull_at` to Postgres's clock, not the device's
+**Per-row read:**  `src/services/sync/pull.ts` → `fetchLocalRow()` L118–L129 — used by the conflict gate
+**Orchestrator:**  `src/services/sync/orchestrator.ts` → `pullAll()` L61–L82
+**Conflict:**      `src/services/sync/conflict.ts` → `chooseWinner()` L20–L31
+**RPC contract:**  `supabase/migrations/0003_server_time_rpc.sql` defines `get_server_time()` server-side
 
 ---
 
@@ -165,4 +167,56 @@ A: I lose one. If page 1 ends with a row at `updated_at = T`, and there's anothe
 - "Strict `>` loses ties — composite cursor `(updated_at, id)` is the fix when collisions matter."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain cloud sync pull to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/pull.ts:pullTable`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+You're pulling `entries`. `last_pull_at` is `2026-05-07T09:00Z`. Cloud has 350 rows newer than that. Your device clock is 30 seconds AHEAD of the server. Page 1 returns 200 rows; row 47 in that page has cloud `updated_at = 09:30Z`, and your local copy of that same row has `updated_at = 09:35Z` because you typed offline. Walk what happens during page 1: what `serverTime` value does `last_pull_at` end up at after success, what does `chooseWinner(local, cloud)` return for row 47, and would the answer change if you used `Date.now()` instead of the RPC?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/pull.ts` L34–L117 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/pull.ts` to support what exists
+→ Point to `src/services/sync/conflict.ts:chooseWinner` (the per-row LWW gate that would need to become a `(updated_at, id)` composite cursor predicate to fix the strict-`>` tie-loss) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

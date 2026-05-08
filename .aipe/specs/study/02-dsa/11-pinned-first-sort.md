@@ -67,9 +67,13 @@ There's no slower version that's interesting. The constants are small (todos in 
 
 ## In this codebase
 
-- `app/todos.tsx` — the live `/todos` sort.
-- `src/components/home/SmartTodoList.tsx` — the dashboard's identical sort. (Note: the in-source comment block in this component still references the old position-based logic — the actual sort body uses pinned + createdAt DESC like /todos.)
-- `src/services/database.ts` — `updateTodoMeta(row.id, { pinned: !row.meta.pinned })` for the toggle.
+**File (live):**         `app/todos.tsx`
+**Function / class:**    inline `out.sort((a, b) => …)` in the `/todos` screen render path
+**Line range:**          L187–L194 — pinned first, then `createdAt DESC`
+
+**Toggle write path:**   `src/services/database.ts` → `updateTodoMeta(row.id, { pinned: !row.meta.pinned })` is the only call site
+
+> ⚠ **Content drift flagged 2026-05-07**: `src/components/home/SmartTodoList.tsx` L41–L67 still uses the **legacy position-based sort** (`metas?.get(a.id)?.position`), NOT the pinned-first comparator described in this file. The dashboard component has not yet been migrated to match `/todos`. The in-file comment at L37-L40 of `SmartTodoList.tsx` describes the old NULL-position-then-position-ASC behaviour, and the sort body matches that comment — both are stale relative to `/todos`. Fix is a one-comparator swap. Tracking site: this concept file + `01-system-design/16-pin-replaces-reorder.md` + `00-overview.md`'s SmartTodoList description.
 
 ---
 
@@ -130,4 +134,56 @@ A: There isn't one. The user can't override the `createdAt DESC` tiebreak within
 - "No third tier within pinned — when the demand for it shows up, the legacy `position` column is the path."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain pinned-first sort to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `app/todos.tsx` L187–L194 (and that `SmartTodoList.tsx` is on the legacy comparator)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Three todos: `t-1 = {createdAt 2026-05-07T09:00, pinned: true}`, `t-2 = {createdAt 2026-05-07T11:00, pinned: false}`, `t-3 = {createdAt 2026-05-07T10:00, pinned: true}`. The user opens `/todos`. What's the final order, and why is `t-3` above or below `t-1` despite both being pinned? Then: open the dashboard (which uses `SmartTodoList`). What order does the dashboard render the same three rows, given the content-drift note above?
+
+Write your answer. 3–5 sentences minimum. Then open `app/todos.tsx` L187–L194 and check whether your answer for `/todos` matches; then open `src/components/home/SmartTodoList.tsx` L41–L67 and verify the dashboard divergence.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `app/todos.tsx` to support what exists
+→ Point to `src/components/home/SmartTodoList.tsx` (the unmigrated dashboard sort) if you chose the alternative — the cleanup is already overdue
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses position-based sort, not pinned-first.

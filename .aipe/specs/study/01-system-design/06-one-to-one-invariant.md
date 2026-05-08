@@ -49,10 +49,10 @@ Why not an FK? `todos_json` is a JSON column on the `entries` row. Each TodoItem
 
 ## In this codebase
 
-- `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()`.
-- `src/services/database.ts` → `getTodoMetasByEntry`, `insertTodoMeta`, `deleteTodoMeta`.
-- `src/services/todos/heuristicClassify.ts` → consulted before insert to set initial `type`.
-- `src/services/todos/classify.ts` → fired async via `scheduleClassify` for ambiguous lines.
+**Reconciler:**       `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()` L48–L92 (with async-fire helper `scheduleClassify` L13–L46)
+**SQLite helpers:**   `src/services/database.ts` — `getTodoMetasByEntry`, `insertTodoMeta`, `deleteTodoMeta` (the three calls inside the reconciler)
+**Heuristic gate:**   `src/services/todos/heuristicClassify.ts` → `heuristicClassify()` L71–L102 — consulted on insert to set initial `type`
+**LLM fallback:**     `src/services/todos/classify.ts` → `classifyTodo()` — fired async via `scheduleClassify` for ambiguous lines
 
 ```
 Pseudocode (reconcileTodoMetaForEntry):
@@ -130,4 +130,56 @@ A: I considered it. The block was that triggers in SQLite are not portable — t
 - "Self-healing means missed reconciles aren't catastrophic — they're temporary inconsistencies the next commit closes."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the 1:1 invariant to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/reconcileMeta.ts:reconcileTodoMetaForEntry`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+You're called in to debug a user's broken state. They have an entry whose `todos_json` lists 4 ids `[t-A, t-B, t-C, t-D]`, but `todo_meta` for that entry has 3 rows: `[t-A, t-B, t-X]` — `t-X` is for a todo that was deleted from prose two commits ago, and `t-C/t-D` are missing. The user types a new keystroke. What does `reconcileTodoMetaForEntry` do, in order, on the next commit? Will every step be reachable in a single run, or does it take two?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/reconcileMeta.ts` L48–L92 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/reconcileMeta.ts` to support what exists
+→ Point to a SQLite-trigger-based alternative (which would need to live in `supabase/migrations/` and bypass the heuristic+LLM logic) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

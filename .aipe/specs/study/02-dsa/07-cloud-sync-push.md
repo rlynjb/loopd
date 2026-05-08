@@ -86,9 +86,10 @@ The "brute" alternative is per-row upserts (one HTTP call per dirty row). At 137
 
 ## In this codebase
 
-- `src/services/sync/push.ts` → `pushTable()`.
-- `src/services/sync/orchestrator.ts` → `pushAll()` walks the registry of 10 tables.
-- `src/services/sync/tables/*` → per-table `localQueryDirty`, `localToCloud`, `localMarkSynced`.
+**Algorithm:**       `src/services/sync/push.ts` → `pushTable<TLocal, TCloud>()` L9–L67 (`BATCH_SIZE = 50` const at L7)
+**Orchestrator:**    `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — walks the 10-table `REGISTRY` (defined L25)
+**Per-table glue:**  `src/services/sync/tables/*` — each table exports `localQueryDirty`, `localToCloud`, `localMarkSynced` (the three callbacks `pushTable` consumes)
+**Cursor column:**   the SQLite `synced_at` column on every synced table is the durable retry queue — `localQueryDirty` runs `SELECT * WHERE updated_at > synced_at`
 
 ---
 
@@ -146,4 +147,56 @@ A: Yes, and that's a real gap. `pushAll` walks 10 tables in sequence; each `push
 - "Eventually consistent across tables — single-writer hides the lack of cross-table transactions."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain cloud sync push to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/push.ts:pushTable`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A push run starts. `localQueryDirty` returns 137 dirty rows for `entries`. Batch 1 (rows 0–49) succeeds. Batch 2 (rows 50–99) fails on a 502 from Supabase. Batch 3 (rows 100–136) succeeds. What is the next state of `synced_at` and `updated_at` across the 137 rows immediately after `pushTable` returns? On the next push fire (assuming no further user edits), how many rows does `localQueryDirty` re-select, and which of the 137 are they?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/push.ts` L9–L67 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/push.ts` to support what exists
+→ Point to `src/services/sync/orchestrator.ts:pushAll` (where a per-table loop would need to become a single multi-table RPC for cross-table transactional consistency) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

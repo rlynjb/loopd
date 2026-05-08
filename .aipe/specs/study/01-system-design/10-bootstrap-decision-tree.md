@@ -62,10 +62,10 @@ The `local=yes cloud=yes` case is the awkward one — neither side is obviously 
 
 ## In this codebase
 
-- `src/services/sync/bootstrap.ts` — the four-way decision and orchestration.
-- `src/services/sync/firstPull.ts` — the all-table first-pull walker.
-- `src/services/sync/orchestrator.ts` → `pushAll()` is called for the initial-push branch.
-- SecureStore key `cloud_initial_push_done` — the run-once flag.
+**Decision:**         `src/services/sync/bootstrap.ts` → `bootstrapCloudSync()` L59–L96 (with `localHasData()` L36–L43, `cloudHasData()` L44–L58, `isBootstrapDone()` L27–L31, `markBootstrapDone()` L32–L35)
+**First-pull:**       `src/services/sync/firstPull.ts` — the all-table first-pull walker invoked from the `local=no, cloud=yes` branch
+**Initial-push:**     `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — called from the `local=yes, cloud=no` branch (and the awkward both-populated fallback)
+**Run-once flag:**    SecureStore key `cloud_initial_push_done` — `BOOTSTRAP_KEY` constant at `bootstrap.ts:18`
 
 ---
 
@@ -126,4 +126,56 @@ A: This is the case where the design hurts most. The restored backup is two week
 - "The both-populated case needs a UI prompt; until that ships, local wins and the dev menu is the audit trail."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the bootstrap decision tree to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/bootstrap.ts:bootstrapCloudSync`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user replaces their phone, restores their loopd backup from two weeks ago (so local SQLite has 14-day-stale data), and turns cloud sync on for the first time after the restore. Cloud has the user's current real data from their old phone. Walk what happens on the next cold start: which quadrant fires, what `cloud_initial_push_done` ends up at, and what does the user *see* — what data is preserved and what is lost?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/bootstrap.ts` L59–L96 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/bootstrap.ts:bootstrapCloudSync` (the silent both-populated fallback) to support what exists
+→ Point to where a UI prompt would have to land (likely a new boot screen + a deferred bootstrap call) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

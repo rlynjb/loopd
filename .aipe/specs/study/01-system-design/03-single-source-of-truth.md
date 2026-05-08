@@ -48,10 +48,14 @@ Habits are an exception: they're first-class user-managed entities, not derived 
 
 ## In this codebase
 
-- `src/services/todos/scanTodos.ts` → `scanTodosFromText()` — extracts `[]` lines.
-- `src/services/threads/scanThreads.ts` → `parseTags()` + `reconcileMentions()` — extracts `#tag` mentions.
-- `src/services/nutrition/scan.ts` — extracts `** food N kcal` lines.
-- `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()` — keeps `todo_meta` 1:1 with `todos_json`.
+This principle is cross-cutting; the four scanner+reconciler pairs that enforce it are:
+
+**Todos scan:**       `src/services/todos/scanTodos.ts` → `scanTodosFromText()` L53–L138 — extracts `[]` lines from prose
+**Todos reconcile:**  `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()` L48–L92 — keeps `todo_meta` 1:1 with `todos_json`
+**Threads scan:**     `src/services/threads/scanThreads.ts` → `parseTags()` L37–L64 + `reconcileMentions()` L169–L230 — extracts `#tag` mentions
+**Nutrition scan:**   `src/services/nutrition/scan.ts` — extracts `** food N kcal` lines
+
+The principle's anchor is the call site that fires all of these on every prose commit (focus blur, screen leave). Habits are the deliberate non-derived first-class entity (no `scanHabits`).
 
 ---
 
@@ -115,4 +119,56 @@ A: It's not really OK — it's the smallest exception I could justify, and I doc
 - "The manual-touch deviation is the documented one-off; one exception is the budget I gave myself."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "prose is canonical for drops" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/scanTodos.ts:scanTodosFromText` (and its sibling reconciler)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user goes into the dashboard's quick-add and types "remember to call mom" — adds it as a todo via the button (not via prose). What does the system do to keep "prose is canonical" intact? Then: the same user opens the journal entry that the quick-add wrote into and deletes the line. What happens to the todo, the `todo_meta`, the `thread_mentions` (if any), the `expanded_md`?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/scanTodos.ts` and `src/services/todos/reconcileMeta.ts` to check.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/scanTodos.ts` (the scanner pattern) to support what exists
+→ Point to `src/services/threads/touch.ts` (the documented manual-touch deviation) if you chose the alternative — show what a *second* deviation would actually cost
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

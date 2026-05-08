@@ -41,13 +41,14 @@ This framing keeps the AI surface debuggable: when something looks wrong, you ca
 
 ## In this codebase
 
-Every AI service in `src/services/ai/` follows the same shape: build prompt → single call → parse output → persist. Files:
-- `summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts` — the four chains.
-- `config.ts` — provider + key reading.
-- `prompt.ts` — shared prompt-building helpers.
-- `validate.ts` — schema validation post-call.
+Every AI service follows the same shape: build prompt → single call → parse output → persist. Reference files:
 
-There's no agent loop. No retry-with-tool-result. No multi-turn dialog state.
+**Chains:**       `src/services/ai/summarize.ts:summarize()` L42–L105, `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90–L120, `expand.ts:expandTodo()` L211–L266
+**Config:**       `src/services/ai/config.ts` → `getProvider()` L9–L12 + key getters L18–L40
+**Prompt build:** `src/services/ai/prompt.ts` → `SYSTEM` const L4–L27, `buildPrompt()` L29–L59
+**Validators:**   `src/services/ai/validate.ts` → `validateSummary()` L7–L110
+
+No agent loop. No retry-with-tool-result. No multi-turn dialog state. Every call is a pure function from prompt to JSON.
 
 ---
 
@@ -106,4 +107,56 @@ A: Because the output looks like reasoning. It isn't. An LLM is a probability di
 - "The same prompt twice is the same problem twice — that's why I can debug it."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "an LLM is a function" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → any of `src/services/ai/{summarize,caption}.ts` or `src/services/todos/{classify,expand}.ts`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user reports that the `punchy` caption variant has been suspiciously similar across the last 3 days — same opening clause, same sentence rhythm. Where in the codebase does the "memory" that's *supposed* to prevent that live? What would happen if the function that fetches it returned `[]` due to a SQLite bug — would the caption call fail, or just produce repetitive output? Why does that distinction matter for "treat the model as a function"?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/caption.ts` L201–L223 and trace `getRecentAISummaries(date, 5)` to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/ai/caption.ts` (the stateless single-call shape) to support what exists
+→ Point to where conversation-buffer state would have to live (a new `chatBuffer` table + an editor screen + the `expand.ts` retry path) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

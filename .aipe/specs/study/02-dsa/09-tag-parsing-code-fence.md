@@ -95,8 +95,9 @@ There isn't really a brute version that's correct. Naive `text.match(/#tag/g)` w
 
 ## In this codebase
 
-- `src/services/threads/scanThreads.ts` → `parseTags()`, `maskCode()`.
-- `src/services/threads/scanThreads.ts` → `reconcileMentions()` consumes the output.
+**Parser:**       `src/services/threads/scanThreads.ts` → `parseTags()` L37–L64 (with helper `maskCode()` L25–L36)
+**Tag regex:**    `src/services/threads/scanThreads.ts` → `TAG_RE` constant at L14 — `(^|[^\w-])#([a-zA-Z][a-zA-Z0-9-]*)`
+**Consumer:**     `src/services/threads/scanThreads.ts` → `reconcileMentions()` L169–L230 reads `parseTags`'s output and uses `lineIndex` as the join key — the contract this whole pattern preserves
 
 ---
 
@@ -154,4 +155,67 @@ A: Not really. The lazy regex `\`\`\`[\s\S]*?\`\`\`` matches the *first* closing
 - "Regex is the wrong tool for nested fences; works for journaling because nobody nests."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain tag parsing with code-fence masking to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/threads/scanThreads.ts:parseTags` (and the `maskCode` helper)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user writes this entry on line 0–6:
+```
+Working on #loopd today.
+Need to remember `git checkout #main` doesn't count.
+```` (fence opens line 2)
+some code with #fenced inside, also some prose
+```` (fence closes line 4)
+Pushed #release branch live.
+Same #loopd tag again — but on a different line.
+```
+
+What does `parseTags` return — how many tags, with which `lineIndex` values, and which (if any) does the per-line `seen` Set deduplicate?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/threads/scanThreads.ts` L37–L64 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/threads/scanThreads.ts:maskCode` to support what exists
+→ Point to `src/services/threads/scanThreads.ts:reconcileMentions` (the downstream that depends on stable `lineIndex`) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

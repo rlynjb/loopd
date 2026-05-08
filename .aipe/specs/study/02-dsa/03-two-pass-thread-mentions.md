@@ -102,9 +102,9 @@ Here. Pass 2 is the cheap path. The `find` is linear over a per-entry list — n
 
 ## In this codebase
 
-- `src/services/threads/scanThreads.ts` → `reconcileMentions()`.
-- `src/services/threads/scanThreads.ts` → `parseTags()` produces the `parsed` input.
-- `src/services/database.ts` → `insertMention`, `updateMentionSourceLine`, `updateMentionTagText`, `deleteMention`.
+**Algorithm:**     `src/services/threads/scanThreads.ts` → `reconcileMentions()` L169–L230 (private; called from `scanThreadMentionsForEntry` L109 and `scanThreadMentionsForTodo` L143)
+**Parser input:**  `src/services/threads/scanThreads.ts` → `parseTags()` L37–L64 produces the `parsed` array
+**Storage:**       `src/services/database.ts` → `insertMention`, `updateMentionSourceLine`, `updateMentionTagText`, `deleteMention` (the four side-effect calls inside `reconcileMentions`)
 
 ---
 
@@ -162,4 +162,56 @@ A: It's deliberate but it does look inconsistent on a quick read. The todo scan 
 - "I bounded the inputs at the call site, so the asymptote stops mattering."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain two-pass thread mention reconcile to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/threads/scanThreads.ts:reconcileMentions`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Existing `thread_mentions` rows: `m1 = {th=loopd, sourceLine=2, tagText='loopd'}`, `m2 = {th=health, sourceLine=8, tagText='Health'}`. The user inserts 5 new lines at the top of the entry — so `parsed` now has `{th=loopd, lineIndex=7, tagText='loopd'}` and `{th=health, lineIndex=13, tagText='Health'}`. Walk Pass 1 and Pass 2 — what gets matched, what gets inserted, what gets deleted, and how many rows does the `m2`-with-+5-shift case keep?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/threads/scanThreads.ts` L169–L230 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/threads/scanThreads.ts` to support what exists
+→ Point to `src/services/todos/scanTodos.ts` (the sibling Map+Set version) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

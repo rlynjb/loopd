@@ -63,11 +63,12 @@ The same commit that introduced `pinned` removed the drag-reorder gestures and t
 
 ## In this codebase
 
-- `supabase/migrations/0005_todo_meta_pinned.sql` — adds `pinned`.
-- `src/types/todoMeta.ts` — declares `pinned: boolean`, `position: number | null` (marked deprecated 2026-05-05), `stage: TodoStage`.
-- `app/todos.tsx` — sort: `pinned` first, then `createdAt DESC` (lines ~184-194). Swipe-to-delete via `react-native-gesture-handler`'s `Swipeable`.
-- `src/components/home/SmartTodoList.tsx` — same sort.
-- Pin toggle: `updateTodoMeta(row.id, { pinned: !row.meta.pinned })`.
+**Migration:**         `supabase/migrations/0005_todo_meta_pinned.sql` — adds the `pinned` column on the cloud side
+**Types:**             `src/types/todoMeta.ts` (109 lines) — declares `pinned: boolean`, `position: number | null` (marked deprecated 2026-05-05), `stage: TodoStage`
+**Live sort:**         `app/todos.tsx` — inline `out.sort(...)` at L187–L194 implements `pinned` first, then `createdAt DESC`. Swipe-to-delete via `react-native-gesture-handler`'s `Swipeable`.
+**Pin toggle:**        `src/services/database.ts` → `updateTodoMeta(row.id, { pinned: !row.meta.pinned })`
+
+> ⚠ **Content drift flagged 2026-05-07**: this concept file's "How it works" section claims `SmartTodoList` "matches this exactly", but `src/components/home/SmartTodoList.tsx` L41–L67 still uses the **legacy position-based sort** (`metas?.get(a.id)?.position ?? null`). The dashboard's `SmartTodoList` has not yet been migrated to the pinned-first comparator that ships in `app/todos.tsx`. The fix is a one-comparator swap. See [02-dsa/11-pinned-first-sort](../02-dsa/11-pinned-first-sort.md) for the full divergence note.
 
 ---
 
@@ -129,4 +130,56 @@ A: Yes, it is. They're dead columns kept on the schema because the cost of dropp
 - "Removing affordance is reversible while the legacy code stays in tree — `rankTodos` is the recovery path."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "pin replaces manual reorder" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `app/todos.tsx` L187–L194 + `supabase/migrations/0005_todo_meta_pinned.sql`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user updates from the pre-2026-05-05 version of the app to the post-pin version. Their existing `todo_meta` rows have non-null integer `position` values from before. After the update, what does the `/todos` sort look like — does the old `position` data influence ordering at all? What about a row whose cloud-side write hasn't pulled yet so its local copy still has the old `position`? Why doesn't dropping `position` from the schema help here?
+
+Write your answer. 3–5 sentences minimum. Then open `app/todos.tsx` L187–L194 and `src/types/todoMeta.ts` to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `app/todos.tsx` L187–L194 (the live two-key comparator) to support what exists
+→ Point to `src/services/todos/rank.ts:rankTodos` (the dormant 3-tier comparator that's still in tree as a recovery path) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses legacy position-based sort.

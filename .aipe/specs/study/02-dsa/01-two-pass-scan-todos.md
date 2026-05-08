@@ -166,8 +166,11 @@
 
 ## In this codebase
 
-- `src/services/todos/scanTodos.ts` → `scanTodosFromText()` and `collectMatches()`.
-- Called by every prose-edit commit path that touches a journal entry.
+**File:** `src/services/todos/scanTodos.ts`
+**Function / class:** `scanTodosFromText()` (with helper `collectMatches()`)
+**Line range:** L53–L138 (helper `collectMatches` at L17–L52)
+
+Called by every prose-edit commit path that touches a journal entry. The Set-of-used-ids guard inside the function is what makes Pass 2 safe against double-claim.
 
 ---
 
@@ -226,4 +229,56 @@ A: It's acceptable because the user has no way to express the difference either 
 - "At 30 todos per entry, O(n×m) and O(n+m) are both sub-millisecond — the rewrite was for clarity."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain two-pass scan-todos to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/scanTodos.ts:scanTodosFromText`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Existing has 3 todos with `sourceLine` 0, 1, 2 and texts "call mom", "draft spec", "book dentist". The user inserts a brand-new todo `[] write tests` at the very top (becomes line 0), deletes the dentist line entirely, and edits "draft spec" to "write spec" (now on line 2). After Pass 1 + Pass 2 + carryover, what 3 items does `out` contain, and which existing ids survive?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/scanTodos.ts` L53–L138 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/scanTodos.ts` to support what exists
+→ Point to `src/services/todos/reconcileMeta.ts` (the downstream reconciler that depends on stable ids) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

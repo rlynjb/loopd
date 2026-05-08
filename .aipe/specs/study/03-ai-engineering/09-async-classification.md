@@ -75,9 +75,10 @@ Pseudocode (reconcileMeta.ts):
 
 ## In this codebase
 
-- `src/services/todos/reconcileMeta.ts` → fires the async classify.
-- `src/services/todos/classify.ts` → `scheduleClassify`, `classifyTodo`, `getClassifyInFlight`, `CLASSIFY_PROGRESS_EVENT`.
-- `app/todos.tsx` → subscribes to the event for live badge updates.
+**Fire site:**           `src/services/todos/reconcileMeta.ts` → `scheduleClassify()` L13–L46 (called from `reconcileTodoMetaForEntry()` L48–L92, NOT awaited)
+**LLM call:**            `src/services/todos/classify.ts` → `classifyTodo()` L90–L120
+**In-flight tracker:**   `src/services/todos/classify.ts` → `getClassifyInFlight` L37, `CLASSIFY_PROGRESS_EVENT` L38 (event constant the UI subscribes to)
+**UI subscriber:**       `app/todos.tsx` — subscribes to `CLASSIFY_PROGRESS_EVENT` (the type-badge update path); `app/todos/[id].tsx` L113 also subscribes for the detail screen
 
 ---
 
@@ -135,4 +136,56 @@ A: Yes, and that's a deliberate trade I make for this app. Single user, sporadic
 - "Silent best-effort is fine when AI is best-effort. It stops being fine when AI is canonical."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain async background classification to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/reconcileMeta.ts:scheduleClassify`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user commits an entry with 12 new todos. 5 hit the heuristic (return `'todo'`). 7 return `null` and need the LLM. Walk what happens between t=0 (commit fires) and t=2s: which calls return synchronously, which fire async, what does the user see in the editor at each timestamp, and what role does `CLASSIFY_PROGRESS_EVENT` play? If 3 of the 7 LLM calls fail with a network error, what's the visible difference?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/reconcileMeta.ts` L48–L92 and `src/services/todos/classify.ts` L90–L120 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/reconcileMeta.ts:scheduleClassify` (the fire-and-forget pattern) to support what exists
+→ Point to `src/services/todos/expand.ts:25` (`MAX_CONCURRENT = 3`) as the existing example of a concurrency cap that classify *doesn't* have if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

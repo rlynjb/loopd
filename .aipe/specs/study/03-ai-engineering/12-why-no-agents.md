@@ -60,7 +60,13 @@ The criteria for adding an agent:
 
 ## In this codebase
 
-The four AI service files (`summarize`, `caption`, `classify`, `expand`) are all single-chain. There is no "agent" file, no "orchestrator", no "graph" anywhere in `src/services/ai/` or `src/services/todos/`.
+_Agents not implemented — intentionally absent._ The four AI service files are all single-chain:
+
+**Single-chain anchor 1:**  `src/services/ai/summarize.ts` → `summarize()` L42–L105 (no observation step; one parse, one validate, one persist)
+**Single-chain anchor 2:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223
+**Single-chain anchor 3:**  `src/services/todos/classify.ts` → `classifyTodo()` L90–L120
+**Closest to agent:**       `src/services/todos/expand.ts` → `expandTodo()` L211–L266 with the one-retry pattern at L234–L247 — but the retry is a re-call of the same chain with a stricter prompt, not a model-chosen tool invocation
+**Architectural anchor:**   no `src/services/ai/agent.ts`, no `orchestrator.ts`, no graph anywhere in `src/services/ai/` or `src/services/todos/`
 
 ---
 
@@ -119,4 +125,56 @@ A: Partly. But also: at one user with at most three days of context per chain, t
 - "Agents earn their existence by needing the loop. Today's jobs don't."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the contrast diagram (single chain vs hypothetical agent) from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "why no agents" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → name 2 single-chain anchors and the absence of any agent file
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Someone proposes a "daily reflection agent" that loops over the day's entries with thought/action/observation: read entry → identify themes → group todos → propose tomorrow's pinned items, with the model deciding when it has enough evidence. Walk your one-paragraph rebuttal grounded in this codebase: why isn't this a fit for the existing single-chain shape, what would a fit-for-purpose version look like (single chain or agent?), where would it land file-wise, and what cost ceiling would you set?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/summarize.ts` L42–L105 and `src/services/todos/expand.ts` L211–L266 to compare.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/expand.ts:expandTodo` (the chain-with-retry that's the *closest* to an agent in the codebase) to support what exists
+→ Point to where a real agent would land (a new `src/services/ai/agent.ts` with iteration cap + per-call timeout + cost ceiling) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly (or correctly named that no agent file exists)
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Agents are intentionally absent — anchored on the closest single-chain sites.

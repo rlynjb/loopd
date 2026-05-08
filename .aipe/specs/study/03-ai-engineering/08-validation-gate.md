@@ -51,9 +51,10 @@ If validation fails, the behaviour depends on the feature:
 
 ## In this codebase
 
-- `src/services/ai/validate.ts` → `validateSummary()`, `parseAndValidate()` for the caption variants.
-- `src/services/todos/expand.ts` → `validateExpansion()` and the one-retry pattern (line ~243).
-- `src/services/ai/summarize.ts` → calls `validateSummary` and persists or surfaces error.
+**Summary validator:**   `src/services/ai/validate.ts` → `validateSummary()` L7–L110 — checks every clipId in `clipOrder` exists, trims fit clip duration, etc.
+**Caption validator:**   `src/services/ai/caption.ts` → `parseAndValidate()` L169–L199 (with `normalizeVariant()` L158–L167) — checks all 4 variants present
+**Expand validator:**    `src/services/todos/expand.ts` → `validateExpansion()` L77–L142 — per-type required fields. One-retry pattern at L234–L247 (`callOnce` invoked twice with stricter prompt on second attempt)
+**Caller:**              `src/services/ai/summarize.ts` → `summarize()` L42–L105 calls `validateSummary` and persists or surfaces error in `ai_summaries.error`
 
 ---
 
@@ -111,4 +112,56 @@ A: The validation gate is a *parse* gate, not an injection gate. I check that th
 - "Model upgrades break validators first — that's the canary."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the validation gate to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/ai/validate.ts:validateSummary` (or `:validateExpansion`)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Sonnet returns a caption response that is structurally valid JSON `{ variants: { clean, smoother, reflective }, detectedTheme }` — but the `punchy` variant is missing entirely. What does `parseAndValidate` do — return the partial result, throw, fail soft? What's persisted to `ai_summaries`? What does the user see on the dashboard? Then: same response shape happens for `validateSummary` if `clipOrder` references a clipId that doesn't exist — what's the recovery path?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/caption.ts` L169–L199 and `src/services/ai/validate.ts` L7–L110 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/ai/validate.ts` (the hard-rejection contract) to support what exists
+→ Point to where a "fill defaults on partial output" alternative would land (likely a new merger in each validator) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

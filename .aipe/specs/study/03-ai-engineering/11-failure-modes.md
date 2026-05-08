@@ -54,11 +54,11 @@ Each failure mode has a defined recovery path. The principle: **the canonical da
 
 ## In this codebase
 
-- `src/services/ai/summarize.ts` → caption try/catch around line 87.
-- `src/services/todos/expand.ts:25` → `MAX_CONCURRENT = 3`.
-- `src/services/todos/expand.ts:243` → one-retry pattern.
-- `src/services/ai/validate.ts` → all schema validators.
-- `src/services/ai/config.ts` → key reads + early return on missing.
+**Caption isolation:**    `src/services/ai/summarize.ts` → `summarize()` L42–L105 wraps the caption call in its own try/catch at L87–L96 (caption can fail; structured summary still saves)
+**Concurrency cap:**      `src/services/todos/expand.ts` → `MAX_CONCURRENT = 3` at L25 — over-cap returns `{ ok:false, reason:'in-flight-cap'}`
+**One-retry pattern:**    `src/services/todos/expand.ts` → `expandTodo()` L211–L266; the inner `callOnce` invocation pair lives at L234–L247
+**All validators:**       `src/services/ai/validate.ts` → `validateSummary()` L7–L110 + `parseAndValidate()` for caption in `caption.ts` L169–L199 + `validateExpansion()` in `expand.ts` L77–L142
+**Key gate:**             `src/services/ai/config.ts` → key getters L18–L40 (whole file is L1–L50); every chain returns `{ error: 'no API key' }` on the early-return when these come back empty
 
 ---
 
@@ -116,4 +116,56 @@ A: Fair — the silent-failure modes are the gap. The one that would justify a r
 - "Every failure path leaves the canonical SQLite row untouched."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the failure-mode table from memory. Label every row.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "AI is best-effort, canonical data is never blocked" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → at least one of `summarize.ts:87` or `expand.ts:25` or `expand.ts:234`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+The user has been on a flaky train for 30 minutes. They've committed 4 entries with 12 todos total — 8 ambiguous (need LLM classify), 2 expand button presses, 1 caption-after-summary day. Every network call has been failing with timeouts. Walk what the user sees: which AI annotations are missing, which canonical data is intact, what does `/todos` show as in-flight, and what happens when the network returns at minute 31?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/summarize.ts` L87–L96, `src/services/todos/expand.ts` L25 + L211–L266, and `src/services/todos/classify.ts` L90–L120 to verify the recovery shapes.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/ai/summarize.ts:87` (the silent-log behaviour) to support what exists
+→ Point to where a per-failure-mode counter + a UI banner would land (likely a new `src/services/ai/telemetry.ts` plus an `/todos` banner state) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

@@ -53,12 +53,12 @@ The pull anchors to `serverTime` (a Postgres RPC) instead of `Date.now()` — lo
 
 ## In this codebase
 
-- `src/services/sync/push.ts` → `pushTable()`.
-- `src/services/sync/pull.ts` → `pullTable()`.
-- `src/services/sync/orchestrator.ts` → `pushAll()`, `pullAll()` walk the registry.
-- `src/services/sync/conflict.ts` → `chooseWinner()`.
-- `src/services/sync/syncMeta.ts` → ledger reads/writes.
-- `src/services/sync/tables/*` — per-table mappers (`localToCloud`, `localFromCloud`, `localQueryDirty`).
+**Push:**            `src/services/sync/push.ts` → `pushTable()` L9–L67 (`BATCH_SIZE = 50` const at L7)
+**Pull:**            `src/services/sync/pull.ts` → `pullTable()` L34–L117 (`PAGE_SIZE = 200` const at L23, `getServerTime()` L25–L33)
+**Orchestrator:**    `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60, `pullAll()` L61–L82 — both walk the 10-table `REGISTRY` defined at L25
+**Conflict:**        `src/services/sync/conflict.ts` → `chooseWinner()` L20–L31
+**Ledger:**          `src/services/sync/syncMeta.ts` — per-table `last_pull_at`, `last_push_at`, `pending_pushes`, `last_error`
+**Per-table glue:**  `src/services/sync/tables/*` — each exports `localQueryDirty`, `localToCloud`, `localFromCloud`, `localMarkSynced`
 
 ```
 Push pseudocode (push.ts):
@@ -145,4 +145,56 @@ A: It's not strictly guaranteed; it's resolved by `chooseWinner`. After a succes
 - "Per-batch `synced_at` stamping is the integrity bar; one missed stamp means a row pushes forever."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "cloud as a mirror" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/{push,pull,orchestrator}.ts`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user opens loopd on a second device for the first time after using device A for two weeks. Cloud has 14 days of entries. Walk what happens between launch and the first dashboard render: which sync function fires first, what does it select, what's `last_pull_at` set to before vs after, and what does the user see while it's running?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/bootstrap.ts` L59–L96 and `src/services/sync/pull.ts` L34–L117 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/sync/orchestrator.ts:pushAll` (the per-table sequential loop) to support what exists
+→ Point to a per-table parallel push (`Promise.all` over the registry) or a multi-table RPC if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

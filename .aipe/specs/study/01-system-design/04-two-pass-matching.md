@@ -55,8 +55,9 @@ Anything left unmatched is a new todo. Anything unmatched on the existing side i
 
 ## In this codebase
 
-- `src/services/todos/scanTodos.ts` → `scanTodosFromText()` implements both passes.
-- `src/services/threads/scanThreads.ts` → `reconcileMentions()` does the same shape with a `±3 line shift` window in Pass 2.
+**Todos:**     `src/services/todos/scanTodos.ts` → `scanTodosFromText()` L53–L138 — Pass 1 (exact text), Pass 2 (line index)
+**Threads:**   `src/services/threads/scanThreads.ts` → `reconcileMentions()` L169–L230 — same shape, Pass 2 widens to `±3 line shift` window
+**Sibling DSA:** [02-dsa/01-two-pass-scan-todos](../02-dsa/01-two-pass-scan-todos.md) and [02-dsa/03-two-pass-thread-mentions](../02-dsa/03-two-pass-thread-mentions.md) for execution traces
 
 ```
 Pseudocode (scanTodosFromText):
@@ -148,4 +149,56 @@ A: Pass 1 sees the second match's text in the existing list, but the existing ro
 - "The algorithm assumes single-writer; two devices editing the same prose breaks it silently, not loudly."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain two-pass matching to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/scanTodos.ts:scanTodosFromText`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+The user has 4 existing todos at lines 0–3: A=`call mom`, B=`ship feature`, C=`fix bug`, D=`book dentist`. They reorder so A is now line 2, B is line 0, C stays at line 2 → wait, that conflicts with A. Try again: B → 0, A → 1, C → 2, D → 3 (i.e., user just moved B to top). They also edit D's text from `book dentist` to `book the dentist`. After Pass 1 + Pass 2, do all four ids survive? Walk which pass claims each match.
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/scanTodos.ts` L53–L138 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/scanTodos.ts` to support what exists
+→ Point to `src/services/todos/scanTodos.ts:collectMatches` (where you'd inject hidden UUIDs into the prose-roundtrip) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

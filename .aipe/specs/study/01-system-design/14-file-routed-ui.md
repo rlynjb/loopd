@@ -48,13 +48,11 @@ Navigation uses `useRouter().push('/path')`. Hardware back goes to the previous 
 
 ## In this codebase
 
-- `app/_layout.tsx` — boot path; initialises DB and bootstrap.
-- `app/index.tsx` — Today/dashboard.
-- `app/todos.tsx`, `app/todos/[id].tsx`.
-- `app/journal/[date].tsx`, `app/editor/[date].tsx`.
-- `app/threads/[id].tsx`.
-- `app/more/{index,habits,threads,nutrition}.tsx`.
-- `app/settings/{ai,cloud-sync,index,updates}.tsx`.
+**Boot path:**         `app/_layout.tsx` (287 lines) — initialises SQLite via `useDatabase`, runs cloud bootstrap, wraps providers (gesture handler, theme, fonts). Every route runs through this wrapper.
+**Static routes:**     `app/index.tsx` (Today/dashboard), `app/todos.tsx` (1020 lines).
+**Dynamic routes:**    `app/todos/[id].tsx`, `app/journal/[date].tsx`, `app/editor/[date].tsx`, `app/threads/[id].tsx`. Each reads its segment via `useLocalSearchParams<{ id?: string; date?: string }>()`.
+**Nested groups:**     `app/more/{index,habits,threads,nutrition}.tsx`, `app/settings/{ai,cloud-sync,index,updates}.tsx`.
+**Convention:**        the file system tree IS the route table — there is no `routes.ts`.
 
 ---
 
@@ -115,4 +113,56 @@ A: It's a blank screen for the duration. SQLite open is fast (~50ms on Android),
 - "Cost: shared route behavior is hard to abstract; for ~15 screens, the cost is negligible."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain file-routed UI to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `app/_layout.tsx` + `app/journal/[date].tsx` (representative route)
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user navigates from `/` (dashboard) to `/journal/2026-05-07` and then taps a `[]` line that opens a todo: `/todos/abc-123`. Walk the route tree, the `_layout.tsx` chain, and what params each screen reads. Then they hit hardware-back twice — what's the back-stack behaviour and why?
+
+Write your answer. 3–5 sentences minimum. Then open `app/_layout.tsx`, `app/journal/[date].tsx`, and `app/todos/[id].tsx` to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `app/_layout.tsx` (the file-as-route convention) to support what exists
+→ Point to where a React Navigation route registry would land (a new `src/navigation/routes.ts` plus refactored screen registrations) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

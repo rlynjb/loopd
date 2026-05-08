@@ -64,9 +64,9 @@ Confident `'todo'` results bypass the LLM entirely — meta is inserted with `cl
 
 ## In this codebase
 
-- `src/services/todos/heuristicClassify.ts` → the regex tables.
-- `src/services/todos/reconcileMeta.ts` → calls heuristic before insert.
-- `src/services/todos/classify.ts` → `scheduleClassify`, fired only on `null`.
+**Heuristic:**     `src/services/todos/heuristicClassify.ts` → `heuristicClassify()` L71–L102 + regex tables L12–L62
+**Caller:**        `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()` L48–L92 calls heuristic before insert; falls through to `scheduleClassify()` L13–L46 on `null`
+**LLM fallback:**  `src/services/todos/classify.ts` → `classifyTodo()` L90–L120 (with `SYSTEM_PROMPT` L12–L25)
 
 ---
 
@@ -124,4 +124,56 @@ A: Yes. The heuristic only catches the obvious 'todo' shape — anything verb-le
 - "Halve the cost on the highest-volume chain. That's the whole win."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain "heuristic before LLM" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/heuristicClassify.ts:heuristicClassify`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user types `[] this is a question right?`. Walk both layers — exactly what does the heuristic decide and why? Does this line ever reach the LLM (`classifyTodo`)? Now do the same for `[] fix the dashboard before EOD` — heuristic returns what, and does the LLM run?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/heuristicClassify.ts` L71–L102 to verify the order of checks.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/heuristicClassify.ts` (the regex-based zero-cost gate) to support what exists
+→ Point to `src/services/todos/classify.ts:classifyTodo` (the LLM that absorbs every `null`) if you chose the alternative — what does cost look like with no gate?
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

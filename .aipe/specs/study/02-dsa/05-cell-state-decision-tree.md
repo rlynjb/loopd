@@ -80,9 +80,9 @@ There's no brute version here — the function is already O(1). The "alternative
 
 ## In this codebase
 
-- `src/components/home/cellState.ts` → `cellStateFor()` and `cellStateForThread()`.
-- `src/services/habits/cadence.ts` → `isDueOn()`, the cadence engine.
-- `src/components/home/DailyScheduleGrid.tsx` → consumer; builds `checkedDatesByHabit` once.
+**Algorithm:**       `src/components/home/cellState.ts` → `cellStateFor()` L30–L58 (habits) and `cellStateForThread()` L59–L67 (threads)
+**Cadence engine:**  `src/services/habits/cadence.ts` → `isDueOn()` (consulted at L43-ish inside `cellStateFor` to short-circuit `off-day`)
+**Consumer:**        `src/components/home/DailyScheduleGrid.tsx` — builds `checkedDatesByHabit: Map<string, Set<string>>` once per render and passes it down to each cell
 
 ---
 
@@ -140,4 +140,56 @@ A: The parent ticks on a 1-minute interval, so there's a window of up to 60 seco
 - "Time-dependent purity needs an explicit tick; midnight is the edge case I'd fix when someone notices."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the cell state decision tree to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/components/home/cellState.ts:cellStateFor`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user has a habit with `cadenceType: 'specific_days'` and `cadenceDays: [1, 3, 5]` (Mon/Wed/Fri). Today is Thursday 2026-05-07. The user actually checked in on Thursday (so it's in `checkedDates`) but the habit doesn't have Thursday on its schedule. What state does `cellStateFor` return for the Thursday cell — `done`, `off-day`, or something else? And in what order do the checks fire to get there?
+
+Write your answer. 3–5 sentences minimum. Then open `src/components/home/cellState.ts` L30–L58 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/components/home/cellState.ts` to support what exists
+→ Point to `src/components/home/DailyScheduleGrid.tsx` (the parent that prepares `checkedDatesByHabit`) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

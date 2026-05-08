@@ -52,10 +52,10 @@ Caption was *split out* of summarize when the 4-variant prompt was added — cap
 
 ## In this codebase
 
-- `src/services/ai/summarize.ts` — uses `SYSTEM_PROMPT` from `summarize.ts`, validated by `validate.ts`.
-- `src/services/ai/caption.ts` — uses the most opinionated SYSTEM_PROMPT in the codebase (4 named voices).
-- `src/services/todos/classify.ts` — minimal prompt; no surrounding context (cost optimisation).
-- `src/services/todos/expand.ts` — selects one of 6 system prompts via `getSystemPrompt(meta.type)`.
+**Chain 1 (summarize):** `src/services/ai/summarize.ts` → `summarize()` L42–L105 — uses `SYSTEM_PROMPT` defined inline; validated by `validate.ts:validateSummary` L7–L110
+**Chain 2 (caption):**   `src/services/ai/caption.ts` → `generateCaption()` L201–L223 — `SYSTEM_PROMPT` constant L24–L100 (most opinionated prompt in the codebase, 4 named voices); validated by `parseAndValidate()` L169–L199
+**Chain 3 (classify):**  `src/services/todos/classify.ts` → `classifyTodo()` L90–L120 — `SYSTEM_PROMPT` L12–L25, no surrounding context (cost optimisation)
+**Chain 4 (expand):**    `src/services/todos/expand.ts` → `expandTodo()` L211–L266 — selects one of 6 system prompts via `getSystemPrompt(meta.type)` from `src/services/todos/expandPrompts.ts:66`; validator `validateExpansion` L77–L142, one-retry pattern at L234–L247
 
 ```
 Pseudocode (the pattern, applied uniformly):
@@ -144,4 +144,56 @@ A: Fair — and yes, in a strict reading it's six chains in one file. The reason
 - "`expand.ts` is six prompts, one shape — that's the line I drew."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain single-purpose chains to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → name 2 of the 4 chain files
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Product asks for a new feature: extend `caption.ts` so it ALSO detects mood and emits a hashtag list. Two options: (a) augment the SYSTEM_PROMPT to ask for `{ variants, detectedTheme, mood, hashtags }` in one chain, or (b) add a new `detectVibe(date)` chain in a new file. Walk what each costs in failure modes — what does "step 4 returned malformed JSON" mean for caption variants in option (a) vs option (b)? Which would you ship and why?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/caption.ts` L201–L223 to verify the current single-chain shape.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/expand.ts` (the chain *family* with 6 system prompts) to support what exists
+→ Point to where you'd extract per-type chains into 6 separate files if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

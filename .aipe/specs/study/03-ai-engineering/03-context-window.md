@@ -48,10 +48,10 @@ The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the wi
 
 ## In this codebase
 
-- `src/services/todos/expand.ts` → `buildContext()` with the explicit `.slice(0, N)` caps.
-- `src/services/ai/caption.ts` → `getRecentAISummaries(date, 5)` for anti-repetition.
-- `src/services/ai/summarize.ts` → packs the whole day; bounded by per-day text.
-- `src/services/todos/classify.ts` → no surrounding context at all.
+**Largest cap-set:**  `src/services/todos/expand.ts` → `buildContext()` L147–L199 — explicit `.slice(0, 3)` for recentDates and `.slice(0, 5)` for sibling todos
+**Caption context:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223 invokes `getRecentAISummaries(date, 5)` for anti-repetition (5 most-recent prior captions)
+**Day-shaped:**       `src/services/ai/summarize.ts` → `summarize()` L42–L105, `buildCaptionInput()` L111–L163 — packs the whole day, bounded only by per-day text
+**Context-free:**     `src/services/todos/classify.ts` → `classifyTodo()` L90–L120 — `SYSTEM_PROMPT` L12–L25 — no surrounding context at all (cost optimisation)
 
 ---
 
@@ -109,4 +109,56 @@ A: I don't, exactly. I picked them by feel — last 3 days is enough to see cont
 - "A bad cap is still bounded; no cap grows with the user."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain how loopd packs the context window to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/expand.ts:buildContext` is the canonical example
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+A user has a heavy day: 3 entries totaling 6500 tokens of prose, plus 12 sibling todos, plus the system prompt is ~800 tokens. The expand chain fires for one of those todos. Walk what `buildContext()` actually packs given the explicit caps. Total token count? Which "soft" limits could you bump and which would actually require a different prompt strategy?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/expand.ts` L147–L199 to verify the slice caps.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/expand.ts:buildContext` (the per-feature, explicit-caps shape) to support what exists
+→ Point to where a unified `buildContext` helper would live (likely a new `src/services/ai/context.ts` plus rewrites in 4 callers) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

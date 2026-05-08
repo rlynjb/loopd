@@ -89,9 +89,10 @@ Per-call branches (all 4 callsites follow this exact shape):
 
 ## In this codebase
 
-- `src/services/ai/config.ts` → `getProvider()`, `getAnthropicKey()`, `getOpenAIKey()`.
-- `src/services/ai/summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts` — each implements the branch.
-- The default provider is `claude`; the user can switch in `app/settings/ai.tsx`.
+**Provider read:**   `src/services/ai/config.ts` → `getProvider()` L9–L12, `getAnthropicKey()` + `getOpenAIKey()` L18–L40 (whole file is L1–L50)
+**Branch sites:**    `src/services/ai/summarize.ts:summarize()` L42–L105 (helpers `callClaude` L12–L22, `callOpenAI` L24–L40), `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90–L120, `expand.ts:expandTodo()` L211–L266 — each carries the explicit `provider == 'openai' ? callOpenAI : callClaude` branch
+**Toggle:**          `app/settings/ai.tsx` writes the new provider name to SecureStore — next AI call picks it up live
+**Default:**         `claude` — Anthropic SDK gets the canonical path; OpenAI is the maintained alternate via raw `fetch` to `/v1/chat/completions` with `response_format: json_object`
 
 ---
 
@@ -149,4 +150,56 @@ A: Correct — it's a switch, not an abstraction. I called it abstraction in the
 - "OpenAI's `response_format: json_object` is exactly the kind of detail a unified interface lies about."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain LLM provider switching to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/ai/config.ts:getProvider` + a representative branch site
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+The user is mid-day, has been using Claude. They open Settings → AI and switch the provider to OpenAI. They go back to the journal and edit an entry. Walk what happens on the next caption call: does anything refresh? Does the open caption screen rebind? What if they had pressed "expand" on a todo at the moment of the switch — which provider answers?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/caption.ts` L201–L223 and `src/services/ai/config.ts` L9–L12 to verify.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/ai/summarize.ts:callClaude` and `:callOpenAI` (the explicit two-function shape) to support what exists
+→ Point to where a `BaseChatModel` interface would land (a new `src/services/ai/provider.ts` + 4 refactored callsites) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

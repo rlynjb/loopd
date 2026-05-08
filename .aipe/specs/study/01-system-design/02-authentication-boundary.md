@@ -49,9 +49,9 @@ Phase B activates the runtime gate: ship Supabase auth, drop the hardcoded id, e
 
 ## In this codebase
 
-- `src/services/sync/client.ts` — holds `PHASE_A_USER_ID`. Every push and pull stamps it.
-- `supabase/migrations/0002_rls_policies.sql` — the disabled-but-ready RLS scaffold.
-- `supabase/migrations/0001_initial_schema.sql` — composite PKs on every synced table.
+**Hardcoded id:**       `src/services/sync/client.ts` — holds `PHASE_A_USER_ID` (UUID). Every push and pull mapper stamps it; replacing it with `auth.uid()` is the Phase B switch.
+**Schema gate:**        `supabase/migrations/0001_initial_schema.sql` — declares composite `(user_id, id)` PKs on every synced table. The schema-level isolation that holds today and after RLS ships.
+**Runtime gate (off):** `supabase/migrations/0002_rls_policies.sql` — the staged-but-disabled RLS scaffold. File exists, policies are not installed in Phase A.
 
 ---
 
@@ -112,4 +112,56 @@ A: Honestly, the device-loss case isn't covered. The app has no PIN, no biometri
 - "The threat model in Phase A is device-loss, not cross-user — and device-loss is currently uncovered. I know that."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain the authentication boundary to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/sync/client.ts` + `supabase/migrations/0001..0002`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+Phase B ships tomorrow. The migration is: ship Supabase auth UI, drop the hardcoded `PHASE_A_USER_ID`, enable migration `0002`. A user has 200 entries already in cloud, all tagged with the Phase A UUID. After they log in for the first time and get a *real* `auth.uid()`, what does the dashboard query show? What's the one-time backfill that has to run, and where would you write it?
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/sync/client.ts` and `supabase/migrations/0001_initial_schema.sql` to verify the schema shape.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `supabase/migrations/0001_initial_schema.sql` (the schema gate that paid back) to support what exists
+→ Point to `supabase/migrations/0002_rls_policies.sql` (the runtime gate you'd enable, paired with auth UI) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

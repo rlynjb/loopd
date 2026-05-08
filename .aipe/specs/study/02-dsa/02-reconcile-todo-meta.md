@@ -117,9 +117,10 @@
 
 ## In this codebase
 
-- `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()`.
-- `src/services/todos/heuristicClassify.ts` → consulted on insert.
-- `src/services/todos/classify.ts` → fired async via `scheduleClassify`.
+**Algorithm:**       `src/services/todos/reconcileMeta.ts` → `reconcileTodoMetaForEntry()` L48–L92
+**Async LLM hook:**  `src/services/todos/reconcileMeta.ts` → `scheduleClassify()` L13–L46 — fire-and-forget Haiku call
+**Heuristic gate:**  `src/services/todos/heuristicClassify.ts` → `heuristicClassify()` L71–L102 — consulted synchronously on insert
+**LLM fallback:**    `src/services/todos/classify.ts` → `classifyTodo()` (the function `scheduleClassify` invokes when `heuristicClassify` returns `null`)
 
 ---
 
@@ -177,4 +178,56 @@ A: It's consistent in the sense that nothing is half-written, because each inser
 - "The function reads like the invariant; that's why it's optimal."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain todo_meta reconciliation to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `src/services/todos/reconcileMeta.ts:reconcileTodoMetaForEntry`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+`scanTodosFromText` returns 5 todo ids `[t-1..t-5]`. The existing `todo_meta` for that entry has rows for `[t-1, t-2, t-3]` (matching) plus `[t-X, t-Y]` (stale — they got removed from the prose two commits ago). After `reconcileTodoMetaForEntry` runs, how many `insertTodoMeta` calls fire, how many `deleteTodoMeta` calls fire, how many rows are touched, and how many heuristic-vs-LLM classifications happen if the texts of `t-4` and `t-5` are "call mom" and "is this still broken?"
+
+Write your answer. 3–5 sentences minimum. Then open `src/services/todos/reconcileMeta.ts` L48–L92 and check whether your answer matches what the code actually does.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `src/services/todos/reconcileMeta.ts` to support what exists
+→ Point to `src/services/database.ts` (where you'd wrap the inserts/deletes in a transaction) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).

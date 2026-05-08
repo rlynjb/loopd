@@ -42,8 +42,8 @@ Append-only means: never edit `0001` even if you find a typo two days later. Eit
 
 ## In this codebase
 
-- `supabase/migrations/0001_initial_schema.sql` through `0005_todo_meta_pinned.sql`.
-- `scripts/db-migrate.mjs` — the runner. Uses `pg` + `dotenv`. Run with `node scripts/db-migrate.mjs --all-pending`.
+**Migrations dir:** `supabase/migrations/` — currently 5 files: `0001_initial_schema.sql`, `0002_rls_policies.sql`, `0003_server_time_rpc.sql`, `0004_relax_fks.sql`, `0005_todo_meta_pinned.sql`. Append-only; never edit a committed file.
+**Runner:**         `scripts/db-migrate.mjs` (153 lines) — uses `pg` + `dotenv`. Connects via `DATABASE_URL`, queries a `_migrations` ledger table, runs pending files in order. Run with `node scripts/db-migrate.mjs --all-pending`.
 
 ---
 
@@ -104,4 +104,56 @@ A: Once, locally, before any environment but my dev box had run the migration. I
 - "The runner is twenty lines of `pg` + `dotenv` because there's no ORM to defer to — the simplicity is deliberate."
 
 ---
+
+## Validate your understanding
+
+### Level 1 — Reconstruct the diagram
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory. Label every box and every arrow.
+
+Open the file. Compare.
+
+✓ Pass: your diagram matches the structure and labels
+✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
+
+### Level 2 — Explain it out loud
+Explain append-only migrations to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+
+Checkpoints — did you:
+- Name the specific file or function?  → `supabase/migrations/` + `scripts/db-migrate.mjs`
+- Say why this approach was chosen over the alternative?
+- Name the tradeoff in one sentence?
+
+If you skipped any: you described it, you didn't understand it.
+
+### Level 3 — Apply it to a new scenario
+Answer this without looking at the file:
+
+You realise migration `0003_server_time_rpc.sql` has a bug — the RPC returns `timestamptz` but the client expects `text`. The migration is already deployed to your dev Supabase project. The right fix involves dropping and recreating the function. Walk what you'd do: do you edit `0003`? Add `0006`? What's in the `0006` SQL? What's the order of the deploy?
+
+Write your answer. 3–5 sentences minimum. Then open `supabase/migrations/0003_server_time_rpc.sql` and `scripts/db-migrate.mjs` to verify the runner's behaviour.
+
+### Level 4 — Defend the decision you'd change
+Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
+
+"If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
+
+Reference the actual code:
+→ Point to `scripts/db-migrate.mjs` (the 153-line raw `pg` runner) to support what exists
+→ Point to where Prisma or Supabase CLI hooks would land (likely a `prisma/` directory + a `supabase/` CLI config) if you chose the alternative
+
+There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
+
+### Quick check — code reference test
+Without opening any files, answer:
+- What file does this pattern live in?
+- What is the function or class name?
+- Approximately what line range?
+
+Then open the file and verify.
+
+✓ Pass: you named the file and function correctly
+✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
+Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
