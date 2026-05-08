@@ -88,3 +88,35 @@ The four AI service files (`summarize`, `caption`, `classify`, `expand`) are all
 - **No agents** — gives: predictable cost, easy debugging, simple control flow. Costs: ceiling on task complexity.
 - **Single-chain rule** — gives: every AI service looks the same. Costs: when an agent IS needed, it must be added as a deliberate exception.
 - **App-code patterns surrounding LLMs** — gives: separation between "what the model decides" and "what the app does next." Costs: app code carries more logic than a fully agentic system would.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"Why no agents?" is the most loaded AI question in 2026. Half the field is shipping LangGraph state machines for problems that don't need them; the other half is shipping nothing because they can't decide. The interviewer wants to see I picked single-chain because the *steps are knowable in advance* — not because I was scared of complexity. The clue: I want to enumerate the four jobs (summarize/caption/classify/expand) and show that none of them have a "decide what to do next" question.
+
+### Likely questions
+
+[mid] Q: Where in the codebase would I look to find an "orchestrator" if there were one?
+      A: There isn't one. Each AI service file in `src/services/ai/` and `src/services/todos/` owns one chain end-to-end: get config, build prompt, single call, parse, validate, persist. There's no `agent.ts`, no `orchestrator.ts`, no graph. The patterns that *surround* the LLM — heuristic-first in `heuristicClassify.ts`, fire-and-forget in `scheduleClassify`, validation in `validate.ts`, the `user_overridden_type` lock — are app-code conventions that run before or after the model, not multi-step LLM reasoning. App fires LLM, never LLM fires LLM.
+
+[senior] Q: What's an example of a feature you considered, then explicitly chose not to build as an agent?
+         A: "Plan a vlog from a week of entries with self-critique." The naive agent shape is: outline → critique outline → refine → render plan, with each step a separate LLM call and the model deciding when it's good enough. I chose not to build it because (a) loopd is a single-day app — the editor commits one day's structured composition, and weekly planning doesn't fit the data model; (b) the cost would be 3-4× the per-call cost of summarize at ~$0.04 each, with no quality ceiling I'd hit with a single chain plus better prompts; (c) the failure modes balloon — what does "step 2 returned malformed JSON" recover to? Single-chain summarise plus a future "weekly digest" feature as another single chain handles 95% of what the agent would deliver, at a fraction of the cost and complexity.
+
+[arch] Q: When *would* you add an agent loop in this codebase? What's the trigger?
+       A: The day a feature has steps the model needs to *decide* rather than steps I can hardcode. Concretely: "find every time the user mentioned Project X across the archive, summarise the trajectory, flag contradictions" — that needs search → synthesis → comparison → flag, with the model deciding when it has enough evidence. That's an agent. It would go in a new file (not a modification to the four existing chains), with explicit max-iteration cap, per-call timeout, and cost ceiling. The four single-chain files stay single-chain; agents earn their existence by needing the loop.
+
+### The question candidates always dodge
+Q: Isn't `expand.ts` essentially a chained call? It picks a system prompt based on type, then validates, then maybe retries with a stricter prompt. Where exactly does single-chain end and agent begin?
+
+A: Partly. But also: at one user with at most three days of context per chain, the steps ARE knowable in advance. `expand.ts` reads `meta.type`, looks up `getSystemPrompt(meta.type)` — that's a deterministic table, not a model decision. The retry with stricter prompt is a re-call of the same chain, not a new step the model chose. An agent is when the model says "I want to call tool X" and the orchestrator runs X and feeds the result back. `expand.ts` never asks the model what to do next; it just runs the chain again with a different system message if validation failed. The line I draw: a chain re-runs the same job; an agent decides what job to run. Adding an agent loop here means more cost, more failure modes, and no capability gain — none of the four jobs need the model to decide. I'd add agents the day the steps stop being knowable in advance, for example the day the user asks the model "show me everything I wrote about Project X" across the full archive.
+
+### One-line anchors
+- "Single chain re-runs the same job. An agent decides what job to run."
+- "The steps are knowable in advance. That's why no agents."
+- "Cost + debuggability + no quality gain = no agent."
+- "Agents earn their existence by needing the loop. Today's jobs don't."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

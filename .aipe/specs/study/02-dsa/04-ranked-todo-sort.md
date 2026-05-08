@@ -125,4 +125,33 @@
 - **`keepDoneMs` filter inside flatten** — gives: a single pass. Costs: the filter parameter has to be threaded through; not configurable per-screen without plumbing.
 
 ---
-Updated: 2026-05-07 — reframed as legacy. The function is no longer called by app code; the dashboard and /todos use the pinned-first sort. Only `formatRelativeTime` from rank.ts is consumed live. See `11-pinned-first-sort.md` for the active algorithm.
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe here is dead-code honesty. `rankTodos` is exported, fully implemented, with three sort tiers and a `keepDoneMs` filter — and nothing in the app calls it. A weak answer is "I forgot to delete it." A strong answer says: I shipped the replacement before I deleted the original because I wasn't sure the replacement was right, and the cleanup is debt I haven't paid down. The interviewer is checking if I treat dead code as a code-smell I track or as ambient noise I ignore.
+
+### Likely questions
+
+[mid] Q: Walk me through what `priority = { carried: 0, ai: 1, journal: 2 }` is doing inside the comparator.
+      A: It's a fall-through tiebreaker. After the `done` flag puts completed todos at the bottom, the next discriminator is "where did this todo come from?" — carried over from a previous day (highest urgency), AI-generated from an expand call, or written today directly. The lower number wins, so `carried` floats to the top of the open todos. If two todos share the same source tier, the comparator falls through to `createdAt` ascending, oldest first. Three keys, fall-through, single stable sort — the canonical multi-key pattern.
+
+[senior] Q: Why was this replaced by pinned-first if both are O(n log n)?
+         A: Performance wasn't the reason. The product question changed. `rankTodos` baked in an opinionated ordering — carried > AI > journal — that made sense when I thought users wanted "what should I do next" surfaced automatically. After using the app for a few weeks I realized I wanted explicit control: pin what matters, recency for everything else. Pinned-first is dumber and the user does more work, but it's predictable. The comparator complexity is roughly the same; the design philosophy is opposite.
+
+[arch] Q: If you brought back AI-prioritized todos, would you reuse `rankTodos` or write something new?
+       A: I'd reuse the comparator skeleton — fall-through compare is the right shape — but I'd unify it with pinned-first instead of replacing it. The new comparator would be: pinned DESC, then `source` priority (carried > AI > journal), then createdAt DESC. That's a 3-tier compose, structurally identical to what `rankTodos` already does. I'd also lift `keepDoneMs` out of flatten into a query-layer filter so it's configurable per screen instead of hardcoded.
+
+### The question candidates always dodge
+Q: Why is this still in the repo if nothing calls it?
+
+A: Because I shipped the pinned-first sort as the live ordering on 2026-05-05 and didn't delete `rankTodos` because I wasn't sure I wouldn't want it for an "unranked-by-default" view I had in mind. If I'm being honest, that's a rationalization — I haven't built the unranked view, I haven't even speced it, and the function has been dead since the day I wrote the replacement. It's debt. The right move is to delete it now and pull it back from git history if I ever want it. The reason I haven't is that the file also exports `formatRelativeTime`, which IS consumed by `app/todos.tsx` and `SmartTodoList.tsx`, so the cleanup is "extract the formatter, then delete the rest of the file" — three steps instead of one, and I keep deferring it. Good catch on a real interview question; I should fix this before the next time someone reads the codebase cold.
+
+### One-line anchors
+- "Three keys, fall-through compare — canonical multi-key sort."
+- "Replaced for product reasons, not performance."
+- "It's dead code. The cleanup is `formatRelativeTime` extraction plus a delete."
+- "If AI-priority comes back, I'd compose with pinned-first, not revive `rankTodos`."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

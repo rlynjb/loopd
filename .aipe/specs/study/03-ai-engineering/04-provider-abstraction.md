@@ -118,3 +118,35 @@ LangChain's `BaseChatModel` is the unified-interface alternative. It works for t
 - **Explicit branches** — gives: each provider can use its optimal API. Costs: every caller has to know about both.
 - **Read provider per call** — gives: live switching works without restart. Costs: every call hits SecureStore (fast but not free).
 - **No shared interface** — gives: honest about differences. Costs: cross-cutting features harder to add.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"Why didn't you build a `BaseChatModel` interface?" — they want to see whether I know what an abstraction *costs* and what it *pays back*. The interviewer is hunting for the candidate who reaches for LangChain's unified interface as a reflex. I want to land on: I have two providers, eight call sites, and a uniform call shape — that's a pattern, not an abstraction. A real abstraction needs three implementations to be worth writing.
+
+### Likely questions
+
+[mid] Q: Walk me through what happens in `summarize.ts` when the user has set provider=openai. Where does the branch live?
+      A: `summarize.ts` calls `getProvider()` from `ai/config.ts` which reads SecureStore — synchronous-ish. It then calls `getOpenAIKey()`. If the key is missing it returns `{ error: 'no API key' }`. Otherwise it hits the OpenAI branch: a raw `fetch` to `/v1/chat/completions` with `response_format: { type: 'json_object' }`, `model: 'gpt-4o'`, system + user messages. The response comes back as `r.choices[0].message.content`, gets passed to `parseJson`, then to `validateSummary`. If provider had been `claude` the same function would have used `client.messages.create` from `@anthropic-ai/sdk` and read `r.content[0].text`. Same prompts, same validators, different SDK call.
+
+[senior] Q: Why read provider on every call instead of once at app start?
+         A: Two reasons. One: it lets the user switch providers in `app/settings/ai.tsx` without restarting the app — the next call picks up the new provider mid-session. Two: SecureStore reads are cheap, and there's no hot path where the cost matters (every call is followed by a network round-trip orders of magnitude slower). The cost of reading per-call is roughly zero; the cost of caching it would be a stale-config bug the day a user re-keys.
+
+[arch] Q: At what point does the `BaseChatModel`-style abstraction start winning? What's your threshold?
+       A: Around three providers. With two, the eight call sites duplicate ~20 lines per pair and stay readable. At three, you'd have twelve call sites and the duplication starts to hurt. At five, every cross-cutting concern (token counting, streaming, retry-with-backoff) lands in five places and the abstraction pays back. I'd extract a real interface the day I add the third provider. Today the call shape is uniform enough that "branch on provider" reads cleanly, and `response_format: json_object` only exists on OpenAI — a unified interface would either lie about that or force Claude to pretend it has the knob.
+
+### The question candidates always dodge
+Q: You have eight `if (provider === 'claude')` branches across four files. You call this an "abstraction". How is it an abstraction?
+
+A: Correct — it's a switch, not an abstraction. I called it abstraction in the docs because the call sites have a uniform shape and converge on the same parser/validator, but the implementations are duplicated. If I added Gemini tomorrow I'd have twelve branches, three pairs of near-identical code, and three places to update for every cross-cutting feature. The honest framing is: this is "duplicated implementation, uniform contract", and it's a deliberate stop short of a `BaseChatModel`. The day I add a third provider I'll extract a real interface — probably with a tagged-union return type so the OpenAI-only `response_format: json_object` doesn't have to be papered over. With two providers, an abstraction layer would have one consumer and three call sites and not pay back. I'd rather grep for `'claude'` than read three layers of indirection.
+
+### One-line anchors
+- "It's a switch, not an abstraction. Honest duplication beats dishonest abstraction."
+- "Read provider per call. SecureStore is cheap; restart-required is not."
+- "Three providers is the day I extract `BaseChatModel`."
+- "OpenAI's `response_format: json_object` is exactly the kind of detail a unified interface lies about."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

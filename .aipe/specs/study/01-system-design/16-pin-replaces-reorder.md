@@ -95,3 +95,38 @@ The shift from "user manages an order" to "user marks priority" is older than so
 - **Boolean replaces int** — gives: trivial mental model, one less drag UI to maintain. Costs: can't express "A before B before C."
 - **Deprecated columns kept** — gives: no destructive schema change. Costs: schema noise; future readers must know which columns are live.
 - **Recency tiebreak** — gives: new captures bubble naturally. Costs: an old pinned item is below a newer pinned item — no way to override.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+Replacing a feature is harder than building one. The interviewer wants to know whether you observed actual usage before ripping out the old UI, and whether you held the line on schema discipline (didn't drop the column even though it was tempting).
+
+### Likely questions
+
+[mid] Q: The `position` column still exists in `todo_meta`. Walk me through what happens when a row is written today.
+
+A: Inserts and updates from the app set `position = NULL` (or omit it; the column is nullable). The cloud-sync mappers in `sync/tables/todoMeta.ts` round-trip the column verbatim — if a legacy row in cloud still has a position integer, it pulls back into SQLite intact. No code reads `position` for sort or filter; it's effectively a dead column on the schema. The reason it's still there is that dropping it would require a destructive Postgres migration and a coordinated client-side schema bump, which would block users on older app versions from syncing. Append-only migration discipline says: leave it.
+
+[senior] Q: You shipped pin + swipe-to-delete and removed drag-reorder + three-stage filter in one commit. Why bundled?
+
+A: Because they were the same idea: replace a maintenance-heavy multi-degree UI with a single-bit gesture. Drag-reorder + three-stage filter were both expressions of "user manages this dimension manually." Pin + swipe-to-delete are both "user marks a single attribute on a row." Shipping them together meant the user got a coherent new model in one go instead of two confusing intermediate states. The cost is a bigger diff to review; the win is that no version of the app shipped with "pin exists but drag-reorder is also still here" — which would have been a UX mess.
+
+[arch] Q: What happens if your usage analysis was wrong and a user actually relied on multi-item ordering?
+
+A: They lose expressiveness. The existing `rankTodos` function in `services/todos/rank.ts` still exists (it's the legacy comparator), so the recovery path is "add a manual-ordering setting that re-routes the sort through `rankTodos` for users who opt in." The cost would be conditional sort logic in two places (`/todos` and `SmartTodoList`). I haven't shipped that because the analysis was strong — I'm the only user; I never used multi-item ordering. For a multi-user app I'd watch the data first and ship pin-only, then add the manual-order opt-in if a meaningful fraction of users complained. Removing affordance is reversible if the legacy code stays in tree, which is why `rankTodos` wasn't deleted.
+
+### The question candidates always dodge
+Q: You're keeping `position` and `stage` columns on the schema even though no UI reads them. Isn't that just digital debt?
+
+A: Yes, it is. They're dead columns kept on the schema because the cost of dropping them (destructive cloud migration that would break users on older app versions) is higher than the cost of carrying them (a few bytes per row, two extra fields in the cloud-sync mapper). The honest version is: I made the call that schema noise is preferable to a coordinated migration, and I documented both columns as deprecated in `src/types/todoMeta.ts`. The cleanup happens when I do my next "schema squash" — at the time I squash migrations `0001-0005` into a consolidated baseline, I'd drop both columns at the same time. Until then, they sit there. The risk is that a future reader sees `position` and assumes it's live, which is why the type definition has the deprecation comment and why this study guide says it explicitly. That's the cost of keeping legacy schema in tree; I think it's lower than the alternative.
+
+### One-line anchors
+- "Drag-reorder was an affordance the user never used; pin captures the actual intent in one bit."
+- "Boolean replaces int — the data model now matches what users do, not what they say they want."
+- "`position` and `stage` are kept on the schema because dropping them would mean a destructive cloud migration; deprecation in code is the cheaper path."
+- "Removing affordance is reversible while the legacy code stays in tree — `rankTodos` is the recovery path."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

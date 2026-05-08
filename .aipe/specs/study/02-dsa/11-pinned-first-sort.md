@@ -96,3 +96,38 @@ There's no slower version that's interesting. The constants are small (todos in 
 - **Boolean pin** — gives: trivial mental model, instant toggle. Costs: no ordering within the pinned group beyond recency.
 - **createdAt DESC tiebreak** — gives: new captures bubble up automatically. Costs: an old-pinned item gets pushed down by any newer pinned item.
 - **Two-key comparator** — gives: O(n log n) one-pass sort. Costs: nothing meaningful.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+Sorting is the textbook DSA topic that interviewers reach for when they're checking basics. The interviewer wants to confirm you understand that the sort isn't the interesting part — the comparator is — and that you can name what the two keys give up versus a richer ranking model.
+
+### Likely questions
+
+[mid] Q: Walk me through the comparator on `(t-1: pinned=false, 09:00)` vs `(t-2: pinned=true, 10:00)`.
+
+A: `aPin = 0`, `bPin = 1`. The first check is `if (aPin !== bPin) return bPin - aPin`, which evaluates to `1 - 0 = 1`. A positive return from a comparator means "a should come after b" in JavaScript's sort, so `t-2` ends up before `t-1` — pinned wins regardless of recency. If both rows had `pinned: true`, we'd skip the first branch and fall to `bTime - aTime`, which puts the newer one first.
+
+[senior] Q: Why a two-key comparator with a boolean and a timestamp instead of a single numeric rank?
+
+A: A single rank (e.g., `pinned ? 1e15 - createdAt : -createdAt`) would work and be slightly faster, but it's harder to read and trivially easy to break with a sign flip. The two-key version is explicit about what the policy *is*: pin first, then recency. If product asked tomorrow "make pin a three-tier priority instead of a boolean," I change `aPin = a.meta.pinned ? 1 : 0` to `aPin = a.meta.priority` and the rest of the comparator is untouched. The single-rank version would need a coordinate redesign. Comparator clarity beats one fewer comparison at this scale (n in the hundreds).
+
+[arch] Q: What changes if a user has 100,000 todos?
+
+A: TimSort is still O(n log n), so the sort itself is fine — about 1.7M comparisons at 100k. The comparator is two cheap reads (a boolean and a millisecond conversion), so the per-call cost is constant. Where it actually breaks is the rendering: 100k rows in a `FlatList` requires virtualization to be set up correctly, and the `Swipeable` wrapper per row has overhead I haven't measured at that scale. The sort is the cheapest part of the page render at 100k. That said, no journaling user is going to hit 100k — at one todo per day it's 270 years.
+
+### The question candidates always dodge
+Q: Your design has no way to express "pinned and at the top of the pinned group." What's the workaround a user has if they pin something old and want it above newer pins?
+
+A: There isn't one. The user can't override the `createdAt DESC` tiebreak within the pinned group. The workaround that exists is "unpin the newer pinned items so the old one is alone at the top," which is obviously bad UX. The honest answer is I haven't built a third tier because the use case hasn't shown up — for a journal where pinned items are usually a handful of recurring concerns, the recency tiebreak inside pinned is fine. The day a user complains, the path is to either re-introduce a `priority` integer within pinned (which is the legacy `position` column repurposed) or add a "stick this to the very top" toggle that's a third boolean. Both are about a day of work; neither is shipped because the demand doesn't exist.
+
+### One-line anchors
+- "The sort is two-key — pinned first, then `createdAt DESC` — because that captures the actual product intent in the cheapest comparator."
+- "TimSort handles partially-sorted lists in near-linear time; the constants are tiny at journaling scale."
+- "Two-key comparator beats single-rank because the policy is explicit and trivially evolvable."
+- "No third tier within pinned — when the demand for it shows up, the legacy `position` column is the path."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

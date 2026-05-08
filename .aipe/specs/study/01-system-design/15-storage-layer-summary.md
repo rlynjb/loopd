@@ -77,3 +77,38 @@ The "different storage for different data shapes" idea is older than the cloud �
 - **5 layers** — gives: each one is small and well-suited. Costs: the app has to know which layer to ask.
 - **Clips device-local** — gives: zero upload cost, instant playback. Costs: reinstall = video loss.
 - **Cloud is mirror only** — gives: predictable read path (always SQLite). Costs: a power user expecting "log into cloud, pull state on a new device" gets metadata only, not videos.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+Five storage layers sounds like over-engineering. The interviewer is checking whether you can name what each layer does that the others can't — and whether you understand that the alternative (one big bucket) would actually be worse.
+
+### Likely questions
+
+[mid] Q: Where do API keys live and why not in SQLite?
+
+A: API keys live in SecureStore (Android Keystore-backed). They don't live in SQLite for two reasons: SQLite isn't encrypted at rest by default, and a future SQL query that accidentally `SELECT *`s a config table could leak them through logs or sync. SecureStore puts them behind the Keystore — even if the device's filesystem is read by another process, the keys aren't readable without OS-level auth. I read them via `getAnthropicKey()` / `getOpenAIKey()` in `ai/config.ts`, which is the only file in the codebase that touches SecureStore for AI keys.
+
+[senior] Q: Why don't you push video clips to cloud? Most apps would back up user content.
+
+A: Cost and complexity. A loopd user generates ~30s of video per day; that's small for one user, but pushing it through `supabase-js` would mean either base64-encoding the bytes (wasteful) or moving to Supabase Storage (a separate API surface, separate auth, separate failure modes). The current design accepts that clips are device-local — a phone loss means video loss, but the metadata (clip trims, overlays, timestamps) is in `clips_json` on the synced `entries` row, so a new device can rebuild a journal without the visuals. For a Phase B that wants durability, Supabase Storage with a content-addressed `clip_uri` (sha256 → URL) is the migration path. I deliberately chose to defer that.
+
+[arch] Q: At ten users with multi-device usage, where does this storage strategy break first?
+
+A: The clip layer. Single-device-per-user assumes the device is the canonical clip store; with two devices, you need either a central blob store (Supabase Storage) and a content-addressed scheme, or a peer-to-peer sync (impractical on Android). The metadata side scales — SQLite ↔ Postgres handles ten users easily because writes are bounded per user. The next bottleneck after that is SecureStore (no multi-device sync; user has to re-enter API keys per device). Then the LLM layer at scale becomes the cost ceiling, not the storage one.
+
+### The question candidates always dodge
+Q: You said clips are device-local. What's the recovery story when a user drops their phone in a lake?
+
+A: There isn't one for clips. The metadata recovers — installing the app on a new device, logging in (when Phase B exists), and pulling from cloud restores all `entries`, `todos`, `threads`, `vlogs`, etc. The video files themselves are gone. The exported vlog `.mp4` files in `/document/loopd/exports/` are also gone. For Phase A this is acceptable because I'm the only user and my phone has cloud backups via Google. For a multi-user product the answer has to be Supabase Storage with content-addressed paths — clip URIs become hashes, hashes resolve to URLs, the cloud is the durable store. That's a Phase C feature; the architecture supports the migration (the `clip_uri` column is just a string, not a foreign key) but I haven't shipped the bytes-to-cloud path. The honest version is "loopd backs up your journal, not your videos."
+
+### One-line anchors
+- "Five storage layers because each is bad at something the others are good at."
+- "Clips are filesystem because base64-in-SQLite would bloat every read; secrets are SecureStore because SQLite isn't encrypted at rest."
+- "Cloud is metadata-only by design — videos are device-local, and that's a known durability cost."
+- "The migration path to durable clips is Supabase Storage + content-addressed URIs; the schema already supports it."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

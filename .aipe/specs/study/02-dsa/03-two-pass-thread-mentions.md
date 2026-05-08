@@ -131,3 +131,35 @@ The ±3 fuzzy match is a tolerance window — same idea as patch-tolerance in `g
 - **±3 tolerance** — gives: small line shifts preserve identity. Costs: a 4-line shift loses identity; the threshold is arbitrary.
 - **Linear find in Pass 2** — gives: simple code, fast in practice. Costs: O(n × m) — but n × m is tiny per entry.
 - **Update sourceLine + tagText separately** — gives: each is a small idempotent UPDATE. Costs: two write paths instead of one combined update.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I can defend O(n×m) on a hot path with a straight face. The honest answer is that "hot path" is a relative term — `reconcileMentions` runs on every entry commit, but per-entry tag count is bounded at a handful, so n×m is bounded at ~50. A Map allocation per call would cost more than the loop saves. The interviewer wants to see if I'm picking complexity classes by measurement, not by reflex.
+
+### Likely questions
+
+[mid] Q: Why does Pass 2 use `±3` instead of `±5` or `±10`?
+      A: Three is the tolerance window for "the user added a paragraph above this tag and didn't move the tag itself." Empirically that's the most common shift — people add context, not displace tags. At ±10 I'd start matching across unrelated sections of the entry; the same `#health` tag in two different contexts could swap identities. ±3 keeps the match tight enough that confusion is rare and small enough that the linear scan stays cheap.
+
+[senior] Q: Why isn't Pass 2 indexed by `(threadId, tagText)` like Pass 1 could be?
+         A: Because the third predicate is a *range*, not an equality. `|sourceLine - lineIndex| <= 3` doesn't fit a hash key — I'd need a sorted index per `(threadId, tagText)` group plus a binary search. At n+m around 10, building that structure costs more in allocation and indirection than the linear scan it would replace. I bounded the inputs at the call site — `parseTags` only returns tags within one entry — so the constant cost is what's actually paying.
+
+[arch] Q: What if a single entry grew to 10,000 lines with 500 tags? Does the algorithm survive?
+       A: The algorithm scales as O(n × m) so 500 × 500 = 250k ops per pass, two passes — still under 10ms in JS. What breaks first is the assumption that `parseTags` runs on every commit. At 10k lines and 500 tags I'd want to debounce the scan, or only re-parse the dirty range of the text. The data shape itself stops fitting one entry at that point — the migration is to split entries, not to optimize the algorithm.
+
+### The question candidates always dodge
+Q: You have a sibling algorithm in `01-two-pass-scan-todos` that uses Map + Set for O(n+m). Why didn't you make this one O(n+m) too? Isn't that just inconsistency?
+
+A: It's deliberate but it does look inconsistent on a quick read. The todo scan has up to 30 entries' worth of carryover floating around — when you reconcile a multi-day view, n and m can both grow to a few hundred — so the Map+Set actually pays. `reconcileMentions` runs strictly per-entry; n and m never get above a handful. Building a Map for a 5-element lookup is more allocation than the linear scan it replaces. I weighed it and the constant matters more than the asymptote at this scale. If `reconcileMentions` ever started running across multiple entries (a cross-entry rebuild), I'd rewrite it; I'd rather the rewrite happen at the moment the constraint changes than carry premature optimization.
+
+### One-line anchors
+- "±3 isn't arbitrary — it's the observed shift when users add context above a tag."
+- "O(n×m) is correct when n×m is bounded; the constant cost of a Map allocation can dwarf the savings."
+- "Same shape as the todo scan, looser Pass 2 — match strictness reflects data churn."
+- "I bounded the inputs at the call site, so the asymptote stops mattering."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

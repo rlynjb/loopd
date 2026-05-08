@@ -80,3 +80,39 @@ The "single source of truth" idea is older than databases — it's a normalisati
 - **Prose canonical** — gives: edit-the-text deletes-the-row. Costs: every feature needs a scanner + reconciler.
 - **Scanners at commit only** — gives: keystroke path stays cheap. Costs: a few hundred ms of "stale" derived state during typing.
 - **No `scanHabits`** — gives: habits can have rich metadata (cadence, time-of-day) the user wouldn't write inline. Costs: habits are *not* declared in prose, so they don't show up in journal exports unless you mention them.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The interviewer wants to know whether you understand the cost of declaring a single source of truth — most engineers say "single source of truth" as a slogan and then build two writable surfaces anyway. The probe is: did you actually live by it, and what did you give up to live by it?
+
+### Likely questions
+
+[mid] Q: A user types `[] call mom` then deletes the line. Walk me through what happens to the corresponding `todo_meta` row.
+
+A: The keystroke autosaves prose to `entries.text` in SQLite. At the next commit boundary (focus blur, screen leave), `scanTodosFromText` runs — the deleted line produces no match, so the corresponding `TodoItem` is dropped from `todos_json`. Then `reconcileTodoMetaForEntry` diffs the new `todos_json` ids against the existing `todo_meta` rows and soft-deletes the orphan. There's no "delete todo" code path; the todo went away because the prose did.
+
+[senior] Q: Why didn't you give the dashboard a "+ todo" button that writes directly to `todos_json`? It would be one less round-trip.
+
+A: Because the moment two surfaces can write the same data, they drift. If I add a todo via a button, I either have to also add a `[]` line to the prose (so the canonical surface stays correct), or I accept that "delete the line, todo disappears" stops being a universal rule. The dashboard's quick-add path takes the first option — it appends a `[]` line to the day's entry text, then re-runs the scanner. It's a few more lines of code, but it preserves the invariant that the prose is the only writable surface for drops.
+
+[arch] Q: How does this principle scale to a multi-author or collaborative version of the app?
+
+A: Badly without changes. "Prose is canonical" assumes one writer. With two writers, you get the same problem as collaborative document editing — concurrent edits to the same prose line can both produce or both destroy a derived row, and neither writer is wrong. The fix would be to keep prose canonical but apply CRDT semantics on the prose itself (Y.js, Automerge), letting the scanners run after every converged state. The scanner pattern stays; the canonical layer changes from "raw text" to "CRDT-text".
+
+### The question candidates always dodge
+Q: The manual-touch deviation breaks your "prose is canonical" rule. Why is that one exception OK and not others?
+
+A: It's not really OK — it's the smallest exception I could justify, and I documented it loudly in the spec (Principle 11). The dashboard's "tap a thread to mark it touched today" gesture writes a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id` because there's no prose line to attach it to. I considered making the touch gesture insert a synthetic prose line, but that pollutes the journal with rows the user didn't type. The exception is permitted because the staleness math composes uniformly — the touch row counts the same as a prose-derived row when computing "did this thread happen today?". The rule the deviation respects is that the *derived shape* (a row in `thread_mentions`) is canonical-equivalent to a prose-derived row; only the source differs. If I needed a second exception, I'd revisit the architecture; one is the budget.
+
+### One-line anchors
+- "Prose is canonical — the cost is a scanner per feature, the win is that 'edit the line, the row updates' works without per-feature plumbing."
+- "Two writable surfaces always drift; one writable surface plus derivers is the discipline."
+- "The scanners run at commit boundaries, not on every keystroke — the keystroke path stays cheap."
+- "Habits are first-class because cadence metadata won't fit inline; that's the principled exception, not a regression."
+- "The manual-touch deviation is the documented one-off; one exception is the budget I gave myself."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

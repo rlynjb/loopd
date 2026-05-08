@@ -146,3 +146,35 @@ The "build both index structures, then walk both sides" diff pattern is the same
 - **Index both sides** — gives: O(n+m) and clear code. Costs: O(n+m) memory upfront.
 - **Async classify on insert** — gives: reconcile returns fast. Costs: a brief window where the row shows `type='todo'` before the LLM upgrades it.
 - **Self-healing on next commit** — gives: a missed insert/delete isn't catastrophic. Costs: between runs, the invariant can be momentarily violated.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I understand the difference between an O(n+m) algorithm chosen for speed and one chosen for *clarity*. At 20 todos per entry, brute force runs in 400 ops; the optimal version in 40. Both are sub-millisecond. The Map+Set version is in the codebase because `byTodoId.has(todo.id)` literally reads like the invariant — "is this todo already represented in meta?". The interviewer wants to know if I can articulate that complexity choice on a hot path is a code-readability decision when n is bounded.
+
+### Likely questions
+
+[mid] Q: Why does `reconcileTodoMetaForEntry` build `current` as a Set when the insert phase only iterates `entry.todos` once?
+      A: The `current` Set isn't for the insert phase — it's for the delete phase. The delete phase walks `existing` and asks "is this meta's todoId still in the current todos?" That's an O(1) Set lookup per row instead of an O(n) `.find` over `entry.todos`. The two index structures serve the two different walks: `byTodoId` answers "does this todo already have a meta?" and `current` answers "does this meta still have a todo?".
+
+[senior] Q: Why is the LLM call fired async rather than awaited inside reconcile?
+         A: Reconcile runs on the journaling write path. If I awaited the Haiku call, every typing burst that produces a new todo would block the local write by ~300-800ms. Instead I call `heuristicClassify` synchronously — it's a regex pass that catches 60-70% of cases — and only fall through to `scheduleClassify` for the ambiguous ones. The local row gets `type='todo', confidence=null` immediately, the LLM upgrades it later. The cost I accept is a brief window where the UI shows `type='todo'` before it might flip to `'idea'`.
+
+[arch] Q: What happens if `scheduleClassify` keeps failing for a particular row?
+       A: The row stays at `type='todo', confidence=null` indefinitely. Reconcile won't re-fire because `byTodoId.has(todo.id)` is true on the next run. To recover I'd need a separate sweep — find rows where `confidence IS NULL AND created < now - threshold` and re-enqueue. I haven't built that sweep; right now a stuck classifier failure is silent. At single-user scale that's fine; at multi-user scale it'd be a metric to alert on.
+
+### The question candidates always dodge
+Q: You said reconcile is "self-healing on next commit." What if the user closes the app between the insert phase and the delete phase — is the DB consistent?
+
+A: It's consistent in the sense that nothing is half-written, because each insert/delete is its own SQLite statement and they're not in a transaction. So if the app dies after the inserts but before the deletes, you'd have all the new metas plus the orphans that should have been deleted. Both `byTodoId` and `current` rebuild fresh on the next run, so the orphan gets caught next time the entry is touched. The invariant is *eventually* 1:1, not transactionally 1:1. The honest fix would be to wrap the whole reconcile in a transaction so it's all-or-nothing — that's a one-line change with `db.transaction(() => ...)` and I should probably do it. The reason I haven't is laziness plus the observation that orphan metas are read-only (the JS join ignores them) so the user-visible consequence of drift is zero.
+
+### One-line anchors
+- "Two index structures, two walks — `byTodoId` for inserts, `current` for deletes."
+- "Heuristic synchronously, LLM async — typing never waits on Haiku."
+- "Self-healing means eventually 1:1, not transactionally 1:1."
+- "The function reads like the invariant; that's why it's optimal."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

@@ -111,3 +111,38 @@ This is the classic timestamp-cursor sync engine, descended from CouchDB and Dyn
 - **Local canonical, cloud mirror** — gives: writes feel instant. Costs: cloud is always slightly stale; never trusted in the read path.
 - **Push + pull separate** — gives: each can be retried, scheduled, and tested independently. Costs: more files; you need a registry to keep them coordinated.
 - **`synced_at` local-only** — gives: cloud schema stays simple (only `updated_at` + `deleted_at`). Costs: a missed `synced_at` stamp = the row pushes forever; the per-batch stamp must be robust.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The interviewer is checking whether you built a sync engine or whether you're using a service that hides one. "We use Supabase" is a shorthand that gets you nothing if it's followed by "and that handles syncing." The probe is: what runs on each side, what's the cursor, what happens when the device is offline for a week and then comes back, and what's the resolution rule when both sides have edits.
+
+### Likely questions
+
+[mid] Q: How does push know which rows to send?
+
+A: `pushTable` queries `WHERE updated_at > COALESCE(synced_at, '1970-01-01')` against the local table — that's the dirty set. Every successful upsert batch stamps `synced_at = now()` on the rows in that batch, so the next push won't re-send them. `synced_at` is local-only — it never goes to the cloud, because the cloud doesn't need to know when this device last reported. The two timestamps separate "when the row last changed" (canonical, replicates) from "when this device last reported it" (bookkeeping, stays local).
+
+[senior] Q: Why anchor the pull cursor to a Postgres RPC `get_server_time` instead of just `Date.now()`?
+
+A: Clock skew. The pull cursor is `last_pull_at`, and on the next pull I select cloud rows with `updated_at > last_pull_at`. If `last_pull_at` was stamped from the device's clock, and the device's clock is 30 seconds ahead of Supabase's, I'd miss every row whose cloud `updated_at` is in that 30-second gap. Stamping `last_pull_at` from `serverTime` (returned by the RPC) means the cursor is in the same time domain as the rows I'm filtering against. The cost is one extra round-trip per pull cycle; the win is that I never miss rows.
+
+[arch] Q: What happens if the table grows to ten million rows? Where does the sync engine break?
+
+A: Several places. The push query `WHERE updated_at > synced_at` has no index on `updated_at` today — at ten million rows that's a full scan per push. The fix is `CREATE INDEX ON <table>(updated_at)` (or partial index on `updated_at WHERE deleted_at IS NULL`). The pull pagination is fine in shape (200/page, ordered by `updated_at`) but assumes a sane index on the cloud side. The `chooseWinner` step does a per-row local SELECT — that's already O(log n) with the PK index, so it scales. The hard ceiling is the push batch size: 50/batch is right for ~hundreds-of-rows-per-day usage; at sustained high write volume, batching by 500 with parallel batches per table would matter.
+
+### The question candidates always dodge
+Q: Push and pull both run on `pushAll`/`pullAll` — what guarantees that a row I just pushed isn't immediately pulled back and overwritten?
+
+A: It's not strictly guaranteed; it's resolved by `chooseWinner`. After a successful push, my local row's `updated_at` is unchanged but `synced_at = now`. The cloud row now has the same `updated_at`. On the next pull, the cloud row's `updated_at` equals my local's, which the rule resolves as "tie → cloud" — and cloud upserts back to local. That's idempotent in practice (the data is identical), but it does mean the row briefly bounces. The honest case where this hurts is if the cloud server's timestamp is slightly different from what I stamped on push — that's possible because Supabase may rewrite `updated_at` server-side via a default. The mitigation is that my push doesn't set `updated_at` from the device clock; the cloud trigger or my mapper handles it. If I were paranoid I'd add a `(user_id, id, updated_at)` short-circuit in `chooseWinner` that says "if updated_at is byte-identical, skip" — that's a thirty-line change I haven't shipped because the pingpong has zero observable impact in practice.
+
+### One-line anchors
+- "Local canonical, cloud mirror — the read path never waits on the network."
+- "Push is `WHERE updated_at > synced_at`; pull is `WHERE updated_at > last_pull_at`. Two cursors, two flows, one shared registry."
+- "Pull anchors to `serverTime` from a Postgres RPC, not `Date.now()` — clock skew would otherwise drop rows."
+- "Per-batch `synced_at` stamping is the integrity bar; one missed stamp means a row pushes forever."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

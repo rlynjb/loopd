@@ -195,3 +195,35 @@ The two-pass match is a simplification of Myers diff: take the cheap exact-match
 - **Map + Set** — gives: O(n+m) time + correctness. Costs: extra structures (memory, allocation).
 - **Two passes** — gives: identity survives common edits. Costs: can't disambiguate edit-in-place from delete-and-add.
 - **Carryover preserved** — gives: rows aren't lost if their line goes away briefly. Costs: orphan-like rows accumulate until reconcile cleans them.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe here is whether I understand that the `Set<string>` of used ids is doing correctness work, not performance work. A naive interviewer reads "two-pass" and hears "optimization"; a sharper one wants to know if I can articulate that two identical `[]` lines on the same day would double-claim the same existing todo without the guard. The brute-force version isn't slow at 30 todos — it's wrong.
+
+### Likely questions
+
+[mid] Q: Walk me through what happens in Pass 2 if a line that exactly matched in Pass 1 is also a line-index match for a different existing todo.
+      A: It can't happen. The Pass 1 match writes the index into `claimed` and Pass 2's first check is `if claimed has i: continue`. The line is skipped entirely. Even if Pass 2 wanted to consider it, the corresponding `prior.id` was added to `used` in Pass 1, so the line-index lookup would also be filtered out. That's the whole point of the `used` Set — Pass 2 only sees rows Pass 1 didn't claim.
+
+[senior] Q: Why two passes instead of running one pass with a combined predicate?
+         A: Pass priority encodes evidence quality. Exact-text match is stronger evidence of "same todo" than line-index match — the user kept the words, they just moved the line. If I combined them into one pass with a tiebreak, a reorder where line 5 became line 2 would race against another line that happens to now be line 5 with different text, and the wrong row would win. Running exact-text first means reorderings always claim their rows before line-index gets to compete.
+
+[arch] Q: What breaks if a single entry has 5,000 todos?
+       A: `scanTodosFromText` stays O(n+m) and linear in real time, but the scan runs on every focus blur, so the cost shows up as input lag once the entry is huge. The bigger problem is `entries.text` itself — a single prose column with 5,000 `[]` lines is the wrong data model. The migration is one-entry-equals-one-day capped naturally; if someone wanted cross-day aggregation they'd compose at the query layer, not pile into one field.
+
+### The question candidates always dodge
+Q: Your algorithm can't tell apart "I edited line 7" from "I deleted line 7 and added a new todo on line 7." Why is that acceptable, and what do you lose?
+
+A: It's acceptable because the user has no way to express the difference either — they just typed. If I forced a distinction I'd have to ship a "mark this as a new todo" affordance, which is exactly the kind of friction the app exists to avoid. What I lose is identity in the rare case where a user replaces "call mom" with "fix bug" on the same line on the same edit pass — that should logically be delete-and-add but my algorithm preserves `t-A`'s id, createdAt, and classifier metadata. The wrong consequence is that downstream `meta.type` might stay stale until the LLM reclassifies. The right consequence is that fixing a typo on a todo doesn't burn a fresh classifier call. I picked the cheap-and-mostly-right shape; the principled fix would be cosine-distance on the text with a threshold, but at 20-30 todos per entry that's overkill.
+
+### One-line anchors
+- "The Set isn't an optimization, it's a correctness gate."
+- "Pass priority encodes evidence quality — exact text beats line index."
+- "Identity survives prose edits because the algorithm trusts the line, not the user."
+- "At 30 todos per entry, O(n×m) and O(n+m) are both sub-millisecond — the rewrite was for clarity."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

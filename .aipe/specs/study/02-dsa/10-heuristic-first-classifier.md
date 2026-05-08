@@ -121,3 +121,35 @@ The "brute" alternative is "just call the LLM on every new todo" — works, cost
 - **Heuristic-first** — gives: 60-70% of todos classified for free. Costs: a regex table to maintain.
 - **Bias toward `null`** — gives: false-positives are impossible. Costs: more LLM calls than strictly necessary.
 - **Order-sensitive checks** — gives: edge cases handled correctly. Costs: order is load-bearing; reordering is a bug.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I understand that this isn't a classifier — it's a *cost gate*. A real classifier returns the best label; `heuristicClassify` returns `'todo'` only when it's confident, and `null` for everything ambiguous. That asymmetry is the whole design. The interviewer wants to hear me name the dominant cost concern (per-LLM-call $) and explain that the heuristic exists to keep the LLM call rate down, not to be smart on its own.
+
+### Likely questions
+
+[mid] Q: Walk me through what happens for the line "should email the client by EOD" — which check fires first?
+      A: It's not empty, doesn't end with `?`. Speculative check runs — none of `maybe|noticed|idea:` match. Question check runs — `^should\s+(we|i)\b` doesn't match because the next word is "email," not "we" or "I." Modal check runs — `^should\s+` matches → returns `'todo'`. The line never reaches DEADLINE or IMPERATIVE because modal already decided. The order encodes "rule out the speculative interpretations first, then look for evidence of action."
+
+[senior] Q: Why does `heuristicClassify` bias toward returning `null` instead of guessing?
+         A: Because false positives are silent and false negatives are cheap. If I confidently mark "noticed the dashboard flickers" as `'todo'`, the user sees a checkbox they have to manually clear — friction. If I return `null` and the LLM says `'idea'`, the user sees the right thing 300ms later — invisible. The asymmetry of the failure modes drives the asymmetry of the function. Returning `null` more often costs me more LLM calls; returning `'todo'` wrongly costs the user trust.
+
+[arch] Q: What changes when you support a non-English language?
+       A: All ~100 regexes are English-locale. A French entry like "il faut appeler maman" would fall through every check and return `null`, deferring to the LLM. That's actually the correct fallback — graceful degradation. To add French, I'd duplicate the regex tables per locale and dispatch on the user's `Accept-Language` or a settings field. The harder problem is `IMPERATIVE_VERBS` — verb conjugations multiply the table size in any inflected language. At that point the heuristic stops being cheap and the LLM is the right tool. So the architectural answer: heuristics scale poorly across locales; the LLM is the cross-language path.
+
+### The question candidates always dodge
+Q: How do you actually know the heuristic catches 60-70%? Where's the data?
+
+A: I don't, precisely. The 60-70% number is a back-of-envelope estimate from manually scanning a few weeks of my own journal — counting how many `[]` lines start with an imperative verb (`call`, `fix`, `send`, `email`, `book`) versus how many are ambiguous. I haven't logged the actual `heur != null` rate or measured how often the LLM later reclassifies a heuristic-tagged row. The honest fix is one extra metric in `reconcileTodoMetaForEntry`: count `heur=='todo' / heur==null` per entry, persist to a debug table, build a tiny dashboard. I haven't done it because the LLM cost at single-user scale is a few cents a month even at 100% LLM-call rate, so the gate's actual hit rate doesn't drive a financial decision. The 60-70% figure is plausible, not proven; if someone funded the multi-user version, the first thing I'd build is the metric and tune the regex tables against real data.
+
+### One-line anchors
+- "It's a cost gate, not a classifier — `null` is the safe answer."
+- "Order encodes evidence priority: rule out speculative interpretations first."
+- "False positives are silent friction; false negatives are cheap LLM calls."
+- "60-70% is back-of-envelope — the metric to actually measure it doesn't exist yet."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

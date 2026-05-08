@@ -104,3 +104,35 @@ Fire-and-forget is the classic responsiveness pattern in UI code — kick off th
 - **Async fire-and-forget** — gives: editor commit returns instantly. Costs: classification appears later; user might miss it.
 - **Event-based UI update** — gives: live feel without polling. Costs: another subscription to manage on screen mount/unmount.
 - **Silent failure** — gives: no spurious error toasts. Costs: hard to notice when classification is consistently failing.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"Why fire-and-forget?" tests whether I picked async because of UX latency or just for fun. They want the latency math: 30 todos × 10 ambiguous × ~300ms = 3-5 seconds of editor-commit pause if I awaited them all. They also want to see that I thought about what happens when the async call fails — silent failure isn't ignorance, it's an explicit choice for best-effort work.
+
+### Likely questions
+
+[mid] Q: When `scheduleClassify` fails — say a network error mid-classification — what does the user see?
+      A: Nothing immediately. The function catches the error, logs a warning, and never throws — that's how it stays fire-and-forget. The meta row stays at whatever the heuristic returned (usually `type='todo'` placeholder, `classifierConfidence=null`). The next time `reconcileTodoMetaForEntry` runs for that entry — say on the next save — the catch-up logic sees the row still has null confidence and re-fires `scheduleClassify`. So failures are eventually-consistent rather than user-visible. The cost is that a steady stream of failures stays silent unless the dev-mode logs are watched or the `/todos` banner shows persistent in-flight via `getClassifyInFlight()`.
+
+[senior] Q: Why not block the editor commit on classification, with a loading spinner?
+         A: Because classification is best-effort — a failure leaves the row at `type='todo'`, which is a fine default. Blocking the user-facing path on best-effort work is the wrong trade. The editor commit is the canonical write (prose to SQLite); making it depend on a network round-trip means a flaky network blocks the user from saving their journal. The async pattern decouples the canonical write from the AI annotation, and that's exactly what the principle "prose-canonical, AI is best-effort" demands. The user sees the row as `type='todo'` for some milliseconds, then the badge upgrades when `CLASSIFY_PROGRESS_EVENT` fires.
+
+[arch] Q: At higher volume — say 100 ambiguous todos in one entry — would the unbounded fire-and-forget pattern still work?
+       A: Probably not. Today the codebase doesn't cap classify concurrency (one async call per `null` heuristic), and the per-entry count is implicitly bounded by entry size. At 100 todos the user is briefly hammering the API and would hit rate limits — likely 429s, which `scheduleClassify` would silently swallow. I'd add a concurrency cap (`MAX_CONCURRENT` similar to `expand.ts:25`) and probably a per-entry queue. The pattern stays the same; the bounding becomes explicit rather than implicit.
+
+### The question candidates always dodge
+Q: Your error path is "log a warning and move on." A user with a flaky network could have their entire `/todos` screen showing `type='todo'` forever and you'd never alert them. Isn't that just hiding bugs?
+
+A: Yes, and that's a deliberate trade I make for this app. Single user, sporadic use, AI is annotation not canonical data — the cost of a false alarm ("AI failed!" toast every time the train goes through a tunnel) is higher than the cost of silent under-annotation. The mitigation is that `getClassifyInFlight()` exists and the `/todos` banner shows "X classifying…", so a user paying attention sees the count fail to drop. In a multi-user product or one where AI annotation was load-bearing, I'd add explicit error surfacing — a row badge "classify failed, tap to retry", a per-day error count, a settings-panel diagnostic. Today neither cost-benefit calculation flips. The principle is: silent best-effort is fine when AI is best-effort; it stops being fine when AI is canonical. None of loopd's AI is canonical.
+
+### One-line anchors
+- "Don't block the user-facing path on best-effort work."
+- "Failures are eventually-consistent — next reconcile re-fires."
+- "`type='todo'` is a fine default while we wait."
+- "Silent best-effort is fine when AI is best-effort. It stops being fine when AI is canonical."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

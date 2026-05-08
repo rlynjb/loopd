@@ -109,3 +109,35 @@ Pure render functions are fundamental to React (and to spreadsheet recalc engine
 - **Pure function** — gives: O(1) per cell, no flash, easy to test. Costs: parent must prep all inputs.
 - **Decision tree (5 states)** — gives: deterministic, exhaustive. Costs: adding a 6th state means changing every consumer.
 - **Order-sensitive checks** — gives: `done` always wins; `off-day` beats `missed`. Costs: the order encodes business rules; readers must follow it.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I understand that "O(1) per cell" is a property of the render contract, not just the algorithm. `cellStateFor` could be O(1) and still wreck performance if it triggered a re-render storm. The win is that pure + O(1) means React's diffing only repaints cells whose inputs actually changed. The interviewer wants to hear that the data prep at the parent (`checkedDatesByHabit`) is what makes the per-cell call O(1) — without the Set, `cellStateFor` would have to scan an array per call and the complexity argument falls apart.
+
+### Likely questions
+
+[mid] Q: Why does the `done` check come before the `isDueOn` check in `cellStateFor`?
+      A: Because the user can check in on a day the habit isn't normally due — say they're on a M/W/F cadence and they did the run on a Tuesday. The check-in is real data; the cadence is just the schedule. If `isDueOn` ran first, an off-day check-in would render as `off-day` and the user's done-state would be invisible. Order encodes priority of evidence: the user's recorded action always wins over the schedule's prediction.
+
+[senior] Q: Why pass `checkedDatesByHabit` down as a Map instead of letting each cell call `getCheckIns(habit, date)`?
+         A: Because `getCheckIns` would be either an SQLite call (impure, async, bad in render) or a JS scan over a flat array (O(N) per cell, so the grid becomes O(7×N²)). The Map is a one-time O(N) build at the parent that turns every cell lookup into O(1). The grid renders in O(7N) total. It's the classic decorate-once-query-many-times pattern; the Map is the index, the render is the query.
+
+[arch] Q: What if I had 1,000 habits — does the grid still render in 16ms?
+       A: 7 × 1,000 = 7,000 cell renders. The state computation is O(1) so that's fine, but React's reconciliation overhead per cell is non-trivial — at 1,000 rows you'd want virtualization (`FlashList` or `RecyclerListView` in RN) to only render the visible window. The algorithm itself doesn't change; what changes is how much of the grid you render at once. The state function is decoupled from the rendering strategy, which is exactly why the purity matters.
+
+### The question candidates always dodge
+Q: Your function depends on `todayStr` as a string from the parent. What happens at midnight when the date rolls over and the parent hasn't ticked yet?
+
+A: The parent ticks on a 1-minute interval, so there's a window of up to 60 seconds where `todayStr` is yesterday. During that window, today's pending cells render as `missed` if they haven't been checked in, and tomorrow's upcoming cells render as `upcoming` until the tick fires. That's wrong on the technicality — yesterday's checked cells stay `done`, that's correct, but a pending habit on the new day might briefly flash as `missed` once midnight passes. The honest fix is to anchor the tick to a time-zone-aware "next midnight" timer instead of a fixed interval, so the grid recomputes exactly at the boundary. Right now the user sees a 1-minute lag at the day boundary, which has never been observable in practice because nobody is staring at the grid at 12:00:00. It's wrong and it's fine — the kind of bug I'd fix the moment it surfaced and not before.
+
+### One-line anchors
+- "Pure + O(1) means React only repaints what changed."
+- "The Map at the parent is what makes the per-cell call O(1) — without it the algorithm collapses."
+- "Order in the decision tree encodes priority of evidence: check-in beats cadence."
+- "Time-dependent purity needs an explicit tick; midnight is the edge case I'd fix when someone notices."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

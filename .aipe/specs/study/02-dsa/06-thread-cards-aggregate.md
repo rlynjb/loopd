@@ -148,3 +148,35 @@ The "fetch in bulk, join in memory" pattern is older than ORMs — it's how ever
 - **4 queries + 2 joins** — gives: bounded round-trips, cheap composition. Costs: more code than a single SELECT.
 - **In-memory joins** — gives: leverage existing entries cache. Costs: must keep memory cache fresh.
 - **Per-row defensive `skip`** — gives: missing metadata doesn't crash the dashboard. Costs: silent data drops; warn in dev mode if you care.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is "do you know what an N+1 is and have you actually avoided one, or did you avoid it accidentally?" `getThreadCards` runs 4 queries plus 2 in-memory joins; an N+1 would be `for thread in threads: getMentionsForThread(thread.id)` and that's exactly what a junior shipper would write. The interviewer wants to hear that I picked 4-and-2 because the bound on round-trips matters more than the size of any single query, and that I'm reusing `getAllEntries` because it's already a dashboard cache, not because I ran out of SQL skill.
+
+### Likely questions
+
+[mid] Q: Why is `recents.sort(byCreatedAtDesc).take(3)` done in JS instead of in SQL with `ORDER BY ... LIMIT 3 PER thread`?
+      A: SQLite doesn't have a clean `LIMIT N PER GROUP` — you'd need a window function with `ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC)` and then a subquery filter. That's two extra queries' worth of complexity for a JS sort over what's typically <20 todos per thread. The JS version is one line and self-evident; the SQL version is a maintenance liability for no measurable gain.
+
+[senior] Q: Why does the iteration "skip silently" when `meta` or `todo` is missing instead of throwing?
+         A: Because the dashboard is the most-loaded screen and a missing meta row is recoverable — `reconcileTodoMetaForEntry` will patch it on the next entry commit. If I threw, the entire dashboard would fail to render because of one drift case. The cost is silent data drops: in dev I'd log a warning, in production I just skip and the next reconcile heals it. It's the defensive shape that turns "data integrity bug" into "transient UI gap."
+
+[arch] Q: What breaks at 10,000 threads or 1M mentions?
+       A: At 10k threads the iteration is still O(T) but the per-thread `linkedTodoIds` lookup starts to matter — the Map building cost dominates. At 1M mentions, `getAllEntries` would no longer fit in memory and the in-memory join breaks. The migration is to push into a SQL JOIN with bounded result set per page, and to paginate the dashboard itself (which currently assumes "all threads" fits on screen). At my user scale (single user, dozens of threads, hundreds of mentions) none of this matters; at multi-user scale the architectural shift is "memory cache → query per page."
+
+### The question candidates always dodge
+Q: Your aggregate is composed across 4 different SQL queries with no transaction. What about transactional consistency — could the dashboard render a state that never actually existed in the DB?
+
+A: Yes, technically. Between the `getLastMentionByThread` call and the `weekRows` call, a write could land that includes a new mention — so `lastMentionMap` might show the new mention but `weekRows` might not have counted it yet. The dashboard would render a card whose `lastAt` is fresher than its `entriesThisWeek` would imply. In practice this is invisible because (a) writes are user-driven and the dashboard load takes <100ms, (b) the next dashboard load corrects the inconsistency, and (c) nothing in the UI is making decisions on the joint state — `lastAt` and `entriesThisWeek` are independent display fields. The principled fix is to wrap all 4 queries in a `BEGIN IMMEDIATE` transaction in SQLite, which guarantees a consistent snapshot read. I haven't done it because the cost is "every dashboard load takes a write lock momentarily" and the benefit is "fixing a race that's never been observed." It's the right call for now and it would stop being the right call the moment two writers existed (multi-device, future feature).
+
+### One-line anchors
+- "Round-trips are the cost; row count is the variable."
+- "4 queries + 2 in-memory joins beats 1 mega-JOIN because `getAllEntries` is already cached."
+- "Defensive skip means data drift becomes a UI gap, not a render crash."
+- "Cross-table consistency would need a transaction; single-writer makes the race invisible."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

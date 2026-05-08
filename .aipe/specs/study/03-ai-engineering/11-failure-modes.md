@@ -85,3 +85,35 @@ Each failure mode has a defined recovery path. The principle: **the canonical da
 - **Best-effort AI** — gives: user's data never blocked. Costs: AI features may silently not run; user wonders why.
 - **Per-failure recovery** — gives: each mode has a specific behaviour. Costs: more code than "throw and bubble."
 - **MAX_CONCURRENT cap** — gives: cost ceiling on expand burst. Costs: power user trying to "expand all" hits the cap.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"What happens when AI fails?" tests whether I have a recovery story or just a happy path. The interviewer wants to hear the principle "canonical data is never blocked by AI" backed by code references — `summarize.ts:87` caption try/catch, `expand.ts:25` MAX_CONCURRENT, the one-retry pattern. The candidate who can only describe the success path fails this question.
+
+### Likely questions
+
+[mid] Q: Trace what happens end-to-end when the user has no API key set.
+      A: Every AI service starts with `if (!apiKey) return { error: 'no API key' }` — the early return lives in `ai/config.ts` at the key-getter site. The chain never makes a network call. The caller propagates the error or surfaces it via a UI banner pointing to settings. The canonical data path is unaffected: prose still saves to SQLite, todos still parse out, the editor still commits. The user just doesn't get AI annotations until they configure a key. This is the cleanest of all the failure modes because it's a synchronous gate before any side effects.
+
+[senior] Q: Why one retry on malformed JSON in `expand.ts` and zero retries in caption/summarize/classify?
+         A: Because expand's expected output is high-information per call (a typed JSON object filling 4-6 required fields like `observed`, `expected`, `suspectedCause`, `reproSteps[]` for 'bug') and the user explicitly fired the expand action. Failing silently after one network call would be a bad UX — the user pressed "expand", saw nothing happen, doesn't know why. The retry with a stricter prompt ("Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object…") rescues the borderline cases. Caption, summarize, and classify run automatically — no user intent — and they have other recovery paths (caption skipped means structured summary still saves; summarize surfaces error in `ai_summaries.error`; classify stays at heuristic-or-null). The retry budget tracks user intent, not technical possibility.
+
+[arch] Q: At scale — say 1000 users — how would this failure-mode list change?
+       A: Most of it stays the same, but the silent-failure modes become real problems. Today a user with consistently-failing classification sees `type='todo'` on every row and might not notice. At 1000 users I'd need server-side aggregate visibility — a metric for "classification failure rate per provider per model", alarms when it spikes (model upgrade ate the schema), and a per-user diagnostic. I'd also tighten `MAX_CONCURRENT` from a per-user cap to a global cost ceiling, and probably add exponential backoff on 429s. The recovery shapes don't change; the observability and cost-control do.
+
+### The question candidates always dodge
+Q: You list eight failure modes, but the table reads like "we log it and move on." What's a failure that would actually make you want a user-visible alarm — and why don't you have one today?
+
+A: Fair — the silent-failure modes are the gap. The one that would justify a real alarm is "classification consistently failing for this user across multiple entries" — meaning either their key is bad, the model upgrade broke the schema, or they're rate-limited. Today the only signal is the `/todos` banner showing in-flight count via `getClassifyInFlight()` which doesn't drop, and dev-mode logs no real user reads. The reason I haven't built it is the cost-benefit at single-user phase A: an alarm system means deciding what counts as "consistently failing" (3 in a row? 10 in 5 minutes?), how to surface it (toast, banner, settings badge?), and how to recover (button to retry? auto-retry?). At one user with sporadic use, the developer (me) is the alarm — I notice when my own todos stop classifying. The day this app has more users, the first observability investment is a per-failure-mode counter and a "AI is degraded" banner with a retry action. Until then, "log and move on" is the honest behaviour.
+
+### One-line anchors
+- "Canonical data is never blocked by AI. The worst outcome is 'no annotation this time'."
+- "Retry budget tracks user intent. Expand retries; classify doesn't."
+- "Silent-failure modes are the visible gap at scale. At one user, the dev is the alarm."
+- "Every failure path leaves the canonical SQLite row untouched."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

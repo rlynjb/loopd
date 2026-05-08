@@ -73,3 +73,35 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 - **No tool calling** — gives: predictable cost, simple control flow. Costs: features needing navigation can't be expressed as a single chain.
 - **One-shot transformations** — gives: trivially debuggable, retriable. Costs: hits a ceiling on task complexity.
 - **App-fires-LLM, not LLM-fires-app** — gives: the app stays in control. Costs: the model can't ask for what it needs.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"Why no tool calling?" is the senior interviewer's tell that they want to see whether I can articulate when a feature *needs* tools versus when it doesn't. The answer they're checking for: do I understand that tool calling is a control-flow upgrade with a cost upgrade, and do I know what kind of feature would justify it? The trap is the candidate who says "I just didn't get to it" — that signals I haven't thought about the design space.
+
+### Likely questions
+
+[mid] Q: Concretely, what does "no tool calling" mean for the four chains in this codebase?
+      A: It means every call returns on the first response. `summarize`, `caption`, `classify`, `expand` all hand the model a prompt, get back a JSON string, parse it, and persist. Nowhere in the codebase does the model emit something like `{tool: "search_entries"}` and the app run a SQL query and feed the result back. The closest cousin is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work. The control flow is always: app decides → LLM responds → app persists.
+
+[senior] Q: Is there a feature in loopd today where adding tool calling would be a clear win?
+         A: Not today. Every feature is a one-shot transformation: "summarise this day", "caption this day", "classify this line", "expand this todo". The data the model needs is already in hand at call time, packed into the prompt by `buildContext()`. Tool calling pays off when the model needs to *navigate* — search a corpus, query a DB, hit an external API — and the cost of stuffing every possibility into the prompt is too high. Loopd's prompts are small and the corpus is one user's journal. Nothing to navigate.
+
+[arch] Q: Suppose I add a feature: "find me every day I wrote about Project X." Would that be the moment for tool calling?
+       A: That's exactly the moment. The model would emit `{tool: "search_entries", input: {query: "Project X"}}`, the app would run an FTS5 or pgvector search, return the rows as an observation, and the model would synthesise. I'd build it as a new service file — not a modification to the four existing chains. It would need a max-iteration cap, a per-tool-call timeout, and a cost ceiling (otherwise a runaway loop costs real money). Tool calling is a major control-flow upgrade and I'd want it isolated.
+
+### The question candidates always dodge
+Q: Tool calling and agents are the standard way to build AI apps in 2026. Are you sure you're not just behind on the tooling?
+
+A: I'm not behind on the tooling — I read the Claude tool-use API and OpenAI's `tools` parameter and I deliberately didn't reach for them. Tool calling turns the LLM from a function into a loop, and a loop has runaway cost, harder debugging, and tool-name hallucination as failure modes. Adding it without a feature that needs it would burn budget for no quality gain. The four chains in `src/services/ai/` work because the data they need fits in the prompt; the moment a feature genuinely needs to navigate (search across the archive, hit an external API, run code) I'd add tools — in a new service file, with iteration caps and timeouts. The decision isn't "tools are bad", it's "tools are the wrong tool for one-shot transformations". I'll grant the dodge though: if I'm wrong about a future feature, the day it ships will look like "we should have built the tool-loop sooner".
+
+### One-line anchors
+- "Tools turn an LLM from a function into a loop. Add them deliberately."
+- "Every chain returns on the first response. There is no observation step."
+- "App-fires-LLM, not LLM-fires-app. The app stays in control."
+- "The day a feature needs to navigate, tools go in a new file."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

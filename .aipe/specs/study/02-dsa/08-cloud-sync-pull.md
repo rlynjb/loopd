@@ -134,3 +134,35 @@ Cursor-based pagination is the standard for change-data-capture (CDC). DynamoDB 
 - **Server-time anchor** — gives: skew-immune. Costs: an extra RPC per pull.
 - **Per-row local SELECT** — gives: precise conflict decisions. Costs: O(n) extra local reads (cheap; SQLite is fast).
 - **Page size 200** — gives: balanced memory + roundtrips. Costs: arbitrary; tunable.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I understand that "OFFSET vs cursor" is about correctness, not just performance. With OFFSET, a row inserted into the middle of the result set during the loop causes a row to be skipped or duplicated; with `WHERE updated_at > cursor` ordered ASC, the cursor only moves forward and inserts during the loop are picked up on the next call automatically. The interviewer wants to hear me name "monotonic cursor" and explain *why* it's safe under concurrent writes — not just say "200/page is fast."
+
+### Likely questions
+
+[mid] Q: What happens if the same row is updated during the pull and lands in two different pages?
+      A: It can only land in two pages if its `updated_at` advances past the page-1 cursor and into page 2's window. That means the row was newer than my cursor *at the start*, got fetched in page 1, then got updated *again* by another writer before I read page 2. On page 2 I see the new version, run `chooseWinner` against my freshly-applied local copy, and the newer cloud row wins. The double-apply is harmless because upserts are idempotent and `chooseWinner` always picks the newer `updated_at`.
+
+[senior] Q: Why does `chooseWinner` get called per-row instead of trusting the cloud row blindly?
+         A: Because the user could have edited locally while the device was offline. If I just upserted every cloud row, I'd overwrite local edits that haven't been pushed yet. `chooseWinner(local, cloud)` compares `updated_at` — if the local copy is newer (the user typed something), I skip the cloud row and let the next push send the local version. It's the read counterpart of the LWW write semantics. The cost is one local SELECT per row, which is sub-millisecond on SQLite.
+
+[arch] Q: What about network partitions during a multi-page pull — what's the recovery path?
+       A: If the partition kills the connection mid-loop, `recordPullSuccess` never fires, so `last_pull_at` stays at the previous value. On the next pull, the cursor starts from the old `last_pull_at` and re-fetches everything from the partition point onward. Per-row I'm idempotent (chooseWinner + upsert), so the re-fetched rows that I'd already applied just get re-applied to the same value. No data loss; some duplicate network work. The only risk is if a row got *deleted* on the cloud during the partition — pull doesn't see deletes (it filters by `updated_at`), so I'd miss it. That's the soft-delete column's job; deleted rows still have a `deleted_at` and a fresh `updated_at`, so they propagate.
+
+### The question candidates always dodge
+Q: You're using strict `>` on the cursor. What happens when two rows have identical `updated_at` timestamps at the page boundary?
+
+A: I lose one. If page 1 ends with a row at `updated_at = T`, and there's another row also at `updated_at = T` that didn't fit in the page, my next query is `WHERE updated_at > T` — which excludes the second row entirely. It's a real bug. I haven't hit it in practice because (a) Postgres `now()` resolves to microseconds and collisions are rare under single-writer load, and (b) the row would still come back on the *next* update because `updated_at` would advance. The principled fix is a composite cursor `(updated_at, id)` with the predicate `(updated_at, id) > (cursor_t, cursor_id)`, which makes the ordering total. I haven't done it because at single-user scale the collision rate is effectively zero, but I'd ship the fix the moment I had two writers because then microsecond collisions become routine. It's the kind of bug that's invisible until it's catastrophic.
+
+### One-line anchors
+- "Monotonic cursor over OFFSET — concurrent writes don't shift the window."
+- "Server time RPC because the device clock can lie; the cloud's clock is the authority."
+- "`chooseWinner` per row is the read counterpart of LWW writes."
+- "Strict `>` loses ties — composite cursor `(updated_at, id)` is the fix when collisions matter."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

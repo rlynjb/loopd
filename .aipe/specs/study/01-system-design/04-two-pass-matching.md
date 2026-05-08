@@ -114,3 +114,38 @@ This is a simplified diff algorithm — Myers' diff and its descendants do exact
 - **Two passes** — gives: identity survives the common edits. Costs: O(n×m) brute path; the actual codebase uses Map+Set for O(n+m).
 - **Text-first, line-second** — gives: reorders always win. Costs: hard to tell apart "edit-in-place" from "delete-and-add-on-same-line."
 - **Carryover preserved** — gives: a row with no current prose line stays in the DB until explicitly deleted. Costs: orphan-like rows accumulate; the soft-delete + reconciler combo cleans them up over time.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"How do you know which `[]` line is which" sounds trivial. The interviewer is probing for whether you understand that user-facing identity (a todo with its classifier output, expansion, and pin) survives content edits — and whether you can name the algorithm that preserves it cheaply. They're looking for diff-algorithm vocabulary without the candidate reaching for "I'd just give every line a UUID."
+
+### Likely questions
+
+[mid] Q: Why does Pass 1 run before Pass 2? What goes wrong if you flip the order?
+
+A: Pass 1 is exact-text match; Pass 2 is line-index fallback. If Pass 2 ran first, "I moved my todos around" would match by line position — the wrong todo gets matched to the wrong line, and identity gets shuffled. By running text-match first, a reorder always wins: "call mom" finds its prior row regardless of where the user moved it. Pass 2 only fills in what Pass 1 couldn't — the case where the user edited the words on a line that didn't move.
+
+[senior] Q: Why two passes and not just give every prose line a hidden UUID?
+
+A: A hidden UUID means the user can't paste prose between days, can't copy-paste a list of todos from a note app, can't dictate prose to the OS keyboard — every "import" path would either lose identity or have to invent ids. Two-pass matching uses the prose itself as the identifier, which is what the user types and edits naturally. The cost is that the algorithm gets confused by simultaneous bulk edit + bulk reorder, but that's a workflow that doesn't actually exist for solo journaling. I picked the constraint that fits the user, not the constraint that fits the algorithm.
+
+[arch] Q: What happens to this design if the prose can be edited by two devices at the same time?
+
+A: It would break in the worst way — silently. Two devices both running `scanTodosFromText` against different versions of the prose would produce different `todos_json` arrays, both legitimate-looking, and the LWW conflict resolver in `chooseWinner` would pick one and discard the other's identity preservation work. The fix isn't on the matcher; it's on the prose itself. Either prose becomes a CRDT (Y.js / Automerge), or the app goes single-writer-at-a-time with explicit handoff. The two-pass match is a single-writer algorithm.
+
+### The question candidates always dodge
+Q: What does your algorithm do when a user has two `[]` lines with the exact same text on the same day?
+
+A: Pass 1 sees the second match's text in the existing list, but the existing row has already been claimed by the earlier match — the `used` set blocks the double-claim. The second match falls through to Pass 2. Pass 2 looks for an existing row with the same line index and an unclaimed id; if the second occurrence is on a fresh line, it gets a new todo. If both occurrences are at the same line (impossible in normal prose, but defensively considered) the algorithm produces one match and one new row. The honest answer is that this case is rare in journaling — duplicate `[]` lines with identical text are usually a copy-paste accident, and the user notices and edits one of them. If duplicates were common, I'd add a `(text, lineIndex)` composite key to the matcher; with the actual data shape, the `used` set is enough.
+
+### One-line anchors
+- "Two-pass match is Myers diff applied to row identity — strongest evidence first, weakest fills the gaps."
+- "The user's investment is the row's id (classifier output, expansion, pin); content edits shouldn't destroy it."
+- "Prose-as-identifier is what makes paste, dictate, and natural-edit workflows possible — UUIDs would block those."
+- "The algorithm assumes single-writer; two devices editing the same prose breaks it silently, not loudly."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

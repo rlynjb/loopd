@@ -78,3 +78,35 @@ The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the wi
 - **Hand-picked, capped context** — gives: predictable cost, no surprises. Costs: must remember to update caps when adding new features.
 - **No cross-day memory by default** — gives: easy to reason about. Costs: features that need history must explicitly fetch and add it.
 - **Per-feature context shape** — gives: each prompt is just-right. Costs: 4 different `buildContext`-ish helpers; no shared one-size-fits-all.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"How do you decide what goes in the context?" probes whether I have a cost model and whether I understand that cost is a function of *every* prompt section, not just the model choice. The interviewer wants to see explicit caps and a reason for each one. Generic "we pass relevant info" answers fail this question.
+
+### Likely questions
+
+[mid] Q: Why does `classify.ts` send no surrounding context at all? Wouldn't more context help disambiguate?
+      A: Yes, more context would help, and yes I deliberately don't send it. Classify runs on every new ambiguous todo line — a heavy journaling day produces 30+ todos, and at $0.0001 per call on Haiku/4o-mini the cost is already trivial only because the prompt is ~50 tokens in, ~50 out. Adding the surrounding entry text would multiply input tokens by 10× for marginal accuracy gain on a 7-class problem where the heuristic already caught the obvious ones. I traded accuracy for cost predictability and it's the right trade for this app.
+
+[senior] Q: Why per-feature `buildContext` instead of one shared context-builder?
+         A: Because the four chains need different shapes. `expand.ts:147 buildContext()` pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos. `caption.ts` pulls 5 recent captions for anti-repetition plus mood. `summarize.ts` packs the whole day. `classify.ts` pulls nothing. A unified builder would either send too much (every chain pays for context it doesn't need) or expose so many flags that the call site looks like a config object. Each chain owns its context shape, with explicit `.slice(0, N)` caps that you can grep for and reason about.
+
+[arch] Q: At a million-token context window, do these caps still matter?
+       A: They matter less for *fitting* and more for *cost and quality*. A 1M-token prompt costs roughly 1M-tokens-worth, and the model's recall in the middle of a giant context is documented to dip. The caps in `expand.ts` aren't there because I'm scared of the context limit; they're there because last-3-days is the right amount for the task and the rest is noise. If I moved to a 1M-token model I'd keep the caps.
+
+### The question candidates always dodge
+Q: You hand-pick "last 3 days, 5 siblings, 5 captions" — those are magic numbers. How do you know they're right?
+
+A: I don't, exactly. I picked them by feel — last 3 days is enough to see continuity in a journaling app where days connect; 5 siblings is enough to give the model nearby todos without dominating the prompt; 5 captions is enough to detect repetition without anchoring the model to old voice. There's no A/B test behind any of these numbers. The defence isn't that they're optimal — it's that they're capped. A bad cap is still bounded; an uncapped prompt grows with the user's data and one heavy journaling day blows past budget. If I started seeing quality regressions I'd treat the cap as a tuning knob, not a constant. Today the user-facing quality is fine, so the numbers stay.
+
+### One-line anchors
+- "Caps decouple cost from data size."
+- "The model only sees what's in the window for *this* call."
+- "Each chain owns its context shape — there is no shared `buildContext`."
+- "A bad cap is still bounded; no cap grows with the user."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

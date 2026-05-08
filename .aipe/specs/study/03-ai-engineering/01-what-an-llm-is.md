@@ -75,3 +75,35 @@ Auto-regressive language models trace back to n-gram models from the 80s, recurr
 - **Treat as pure function** — gives: trivially debuggable, retriable, testable. Costs: every relevant context must be in the prompt.
 - **No agent loop** — gives: predictable cost. Costs: no autonomous multi-step reasoning.
 - **Stateless** — gives: scales with HTTP. Costs: "remember last conversation" must be implemented in app code, not the model.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+On "what is an LLM" the question almost never tests definitions — it tests whether I treat the model as a function or as a coworker. The error mode they're hunting is the candidate who anthropomorphises: "it remembers", "it knows", "it decides". I want to land on the framing that loopd's whole architecture (validation gate, async classify, heuristic-first) only makes sense if you start from "tokens in, tokens out, no memory, no I/O".
+
+### Likely questions
+
+[mid] Q: If the LLM is stateless, how does loopd give it any "memory" at all — for example, anti-repetition across captions?
+      A: It's not memory; it's context I assemble in app code. `caption.ts` calls `getRecentAISummaries(date, 5)` and pastes those into the prompt for each new caption. The model sees the last 5 captions as input tokens; it doesn't remember them. If I forgot to fetch and paste, the model would happily re-use the same opening line every day. The "memory" is a SQLite query plus a string concat.
+
+[senior] Q: Why frame an LLM as a function instead of as an "AI assistant"? What does that buy you in this codebase?
+         A: Framing it as a pure function makes every AI call independently retriable, independently testable, and independently debuggable. The same prompt fed to the same model with the same sampler gives the same distribution — that's how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. If I treated it as an assistant with state, I couldn't reason about "what did the model see at call time" — and that's the question I always need to answer when something looks wrong.
+
+[arch] Q: At what point does this "function" framing break down? When would you stop modeling LLM calls as pure transformations?
+       A: The framing breaks the moment a feature genuinely needs multi-turn state — say, an interactive editor where the user replies to the model's draft. Then I'd need a conversation buffer, and the abstraction would shift from "function call" to "conversation step". I'd still keep each underlying API call stateless; I'd just acknowledge the buffer as app-side state. Loopd has zero of those features today, which is exactly why every chain in `src/services/ai/` is a single call.
+
+### The question candidates always dodge
+Q: If it's just a function, why does everyone — including you, sometimes — anthropomorphise it?
+
+A: Because the output looks like reasoning. It isn't. An LLM is a probability distribution sampled token by token; what comes out reads like thought because the training corpus was thought-shaped. The error class I see most often in the wild is treating the LLM like a database (asking it to recall) or a planner (asking it to commit). In this codebase the validation gate exists exactly because I don't trust the model to be more than a token-predictor — I parse, I check the schema, I reject. The classify chain is the cleanest example: I send 50 tokens of input, get 50 tokens of output, and treat the result as "the model's guess at one of 7 labels", not "the model's understanding of my todo". Once you internalise that, every architectural choice in `src/services/ai/` becomes obvious.
+
+### One-line anchors
+- "Tokens in, tokens out. Everything else is in app code."
+- "The validation gate exists because I don't trust the model to be more than a token-predictor."
+- "Memory is a SQLite query and a string concat. It's not in the model."
+- "The same prompt twice is the same problem twice — that's why I can debug it."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

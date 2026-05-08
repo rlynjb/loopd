@@ -113,3 +113,35 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
 - **Single-purpose chains** — gives: easy debugging, independent failure modes, cheap. Costs: no cross-chain reasoning.
 - **JSON output contract** — gives: parse + validate is mechanical. Costs: prompt must be very explicit; one model upgrade can break the shape.
 - **Caption split from summarize** — gives: caption errors don't lose the structured summary. Costs: two calls instead of one when both are needed.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+"Why four chains and not one big chain, or a graph?" — they want to see whether I picked single-purpose deliberately or fell into it. The clue I want to drop early: caption was *split out* of summarize. That's evidence I didn't start here; I moved here when conjoined chains failed conjointly.
+
+### Likely questions
+
+[mid] Q: Walk me through what happens when `expand.ts` is called for a todo of type 'bug'. Where exactly does the chain shape live?
+      A: `expand.ts` reads the meta to get the type, then calls `getSystemPrompt('bug')` from `expandPrompts.ts` — that returns the bug-specific schema instruction. It builds a user prompt via `buildContext()`, fires one call (Sonnet or 4o depending on provider), then runs `validateExpansion` against the bug-required fields (`observed`, `expected`, `suspectedCause`, `reproSteps`). If validation fails it retries once with a stricter system prompt; if that fails it returns `{ ok: false, reason: 'malformed' }`. One file owns one job — the type just selects the template.
+
+[senior] Q: Why didn't you keep summarize and caption as one chain? It would've been one call instead of two.
+         A: They were one chain originally. The 4-variant caption prompt is the most opinionated in the codebase (`caption.ts:SYSTEM_PROMPT` defines four named voices with body-line examples and universal rules — no "I", no hashtags, no questions). When the caption prompt got long and started failing on edge cases, the structured summary was failing with it — one model wobble killed both outputs. Splitting them meant caption could fail and summarize would still save. The cost is one extra LLM call when both are needed; the benefit is independent failure modes. That's the defining tradeoff of single-purpose.
+
+[arch] Q: At what point would you collapse multiple chains back into one? Or fan out into a chain-of-chains?
+       A: I'd collapse if I could get the same output quality with one prompt and the failure correlation stopped mattering — e.g., if the caption rules got short enough that summarize could absorb them without quality loss. I'd fan out if a feature genuinely needed multi-step reasoning where the output of step 1 had to be reviewed before step 2 — for instance, "draft a vlog plan, critique it, refine it". Today none of the four jobs need that. Each one is a one-shot transformation: text in, JSON out, done.
+
+### The question candidates always dodge
+Q: You say "one job per chain", but `expand.ts` actually selects between 6 different system prompts based on type. Isn't that 6 chains masquerading as one?
+
+A: Fair — and yes, in a strict reading it's six chains in one file. The reason I count it as one is that the *shape* is uniform: read meta, pick prompt, single call, validate, persist. The per-type schemas differ but the orchestration is identical. If I extracted six files I'd have six copies of the same control flow with one parameter swapped. The line I drew is "one chain = one call shape with one validation contract". The 'bug' validator and the 'idea' validator differ in required fields, which is what `validateExpansion` switches on. So I'll grant the criticism: `expand.ts` is the closest thing in the codebase to a chain *family*, and if I added a seventh type it would be a fair moment to ask whether the file should split. With six and stable, the duplication-saved beats the abstraction-cost.
+
+### One-line anchors
+- "Caption was split out of summarize. That's the test of whether single-purpose pays."
+- "One chain, one job, one validation contract."
+- "Failures should be local. A chain that does five things fails in 5! ways."
+- "`expand.ts` is six prompts, one shape — that's the line I drew."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

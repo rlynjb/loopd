@@ -73,3 +73,38 @@ Debouncing originated in mechanical switches (literal bouncing) and got adopted 
 - **5s debounce** — gives: ~1 push per typing burst. Costs: up-to-5s of "writes only in SQLite" risk on app kill.
 - **Re-queue if already pushing** — gives: in-flight push isn't disrupted; new writes still land. Costs: in extreme cases the queue can starve if `pushAll()` always runs longer than 5s.
 - **Boot-time `pushAll()`** — gives: catches up anything missed last session. Costs: the first few seconds of cold-start network are spent on push, not pull.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+A 5-second debounce is a number that begs the question "why 5?". The interviewer wants to know whether you picked it deliberately, what the tradeoff is, and whether you understand that debouncing is a write-rate problem, not just a "feels nicer" problem.
+
+### Likely questions
+
+[mid] Q: The user types `[]` then immediately backs out of the screen. Does the push happen?
+
+A: It depends on whether the screen-blur fires within 5 seconds. The keystroke fires `schedulePush()` which arms the 5s timer. If the user backs out within 5s, the timer hasn't fired yet — but `pushAll()` doesn't run on screen-blur, only on the timer. So the push is delayed by the remainder of the 5s window. The data is safe locally because the SQLite write was synchronous; only the cloud-mirror is delayed. If the app is backgrounded long enough that Android kills it, the push catches up on next app launch via the boot-time `pushAll()` in `app/_layout.tsx`.
+
+[senior] Q: Why 5 seconds and not 1 second? You'd lose less on app kill.
+
+A: 1 second was the first thing I tried. The problem is journaling cadence: a user typing a thought pauses every couple of seconds to think, and a 1s debounce would fire mid-pause, then again at the end of the burst — two pushes per thought instead of one. 5 seconds is empirically the smallest interval that captures a typical sentence as one batch. The cost is up to 5 seconds of "in SQLite but not in cloud" exposure on app kill, but the local writes survive that — only the cloud-mirror lags. If I had a use case where the kill-window mattered (e.g., user starts a write on phone, expects it on tablet within seconds), I'd reduce to 2s and accept the doubled push count.
+
+[arch] Q: What if the network is so slow that `pushAll()` takes longer than 5 seconds — what happens to writes that arrive during the push?
+
+A: `fire()` checks `if (pushing) schedulePush()` — it re-arms the timer instead of starting a second push. New writes during the in-flight push update local SQLite normally, bumping `updated_at` past `synced_at`. When the in-flight push completes, the next `schedulePush()` arms the timer again, and 5s after the next quiet write, `pushAll()` picks up the still-dirty rows via `WHERE updated_at > synced_at`. The design tolerates slow networks; it just means the catch-up takes another debounce cycle. The case where it actually fails is sustained writes faster than `pushAll()` can complete — the dirty set grows unboundedly. In practice, journaling never gets there; if it did, the fix is parallel per-table pushes or larger batch sizes.
+
+### The question candidates always dodge
+Q: Your debounce is 5 seconds and you've shipped this. What's the data-loss case you haven't tested?
+
+A: The case I haven't end-to-end tested is "user types in airplane mode for an hour, then the OS kills the app while it's still backgrounded." Locally, the data is fine — every keystroke went to SQLite synchronously. But on next launch, `app/_layout.tsx` runs the boot-time `pushAll()`, which only succeeds if the network has come back — if the user's still in airplane mode on next launch, the push silently fails and the next debounce cycle hits when network returns. I haven't reproduced this end-to-end with `adb` because the device is my actual phone and I don't want to risk my own journal data. The mitigation I've actually tested is the smaller version: 5-second window kill via the OS task switcher, where local data survived. The real test I owe this design is the multi-day-offline case, and it's on my list.
+
+### One-line anchors
+- "Debouncing decouples write rate from network rate — local sees the firehose, network sees the trickle."
+- "5 seconds is empirical, not sacred — it's the smallest window that batches a typing burst as one push."
+- "The `if (pushing) schedulePush()` re-arm is what makes slow networks tolerable; without it, the in-flight push would be clobbered."
+- "Boot-time `pushAll()` is the safety net — anything missed by app kill catches up on next launch."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).

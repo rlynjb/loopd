@@ -123,3 +123,35 @@ The "mask then parse" pattern shows up wherever embedded languages need to be ig
 - **Mask to spaces** — gives: line numbers stay stable. Costs: extra string allocation.
 - **Per-line dedup** — gives: same tag twice on a line counts once. Costs: in-memory `Set`; bounded by tag count per line.
 - **Regex-based** — gives: simple, fast, easy to read. Costs: doesn't handle weird edge cases (mismatched fences) gracefully.
+
+---
+
+## Interview defense
+
+### What an interviewer is really asking
+The probe is whether I understand the *contract* between `parseTags` and `reconcileMentions` — they communicate through line indices. If `maskCode` shifted lines, every downstream comparison would be wrong. The interviewer wants to hear that the space-replace strategy isn't a clever trick, it's the only correctness-preserving way to remove code regions while keeping the index space stable. The "mask then parse" two-step is what lets the inner regex stay simple.
+
+### Likely questions
+
+[mid] Q: Why does the fenced-code regex use `[\s\S]*?` instead of `.*?`?
+      A: Because `.` in JavaScript regex doesn't match newlines by default. A fenced code block spans multiple lines, so I need the character class `[\s\S]` to mean "any character including newline." The `*?` lazy quantifier ensures I match the shortest fence-to-fence span — without it, `\`\`\`a\`\`\` then \`\`\`b\`\`\`` would match as one giant block instead of two.
+
+[senior] Q: Why per-line dedup with a `seen` Set instead of letting the regex find every occurrence?
+         A: Because the same tag written twice on one line is one mention, not two — `reconcileMentions` keys on `(threadId, sourceLine)` so two identical mentions on the same line would either collide and lose data or create two database rows that fight for the same identity. The Set-based dedup catches it before insert. I scope it per-line because the *same tag on a different line* is a legitimate second mention — that's a deliberate user signal.
+
+[arch] Q: What if a user pastes a 5MB markdown document with hundreds of code fences?
+       A: `maskCode` runs two regex passes over the full string, so peak memory is ~3× the input (original + first mask + second mask). At 5MB that's 15MB transient — uncomfortable on a low-end Android. The lazy regex `[\s\S]*?` is also worst-case quadratic on pathological inputs (lots of unbalanced backticks). The migration would be a streaming line-by-line scanner with a fence-state flag — single allocation, no regex backtracking. I haven't built it because journal entries cap out at a few KB; if someone pasted a real document I'd hit the limit and tell them to split it.
+
+### The question candidates always dodge
+Q: What about nested code blocks? Markdown lets you indent a fence inside a list item — does your masker handle that?
+
+A: Not really. The lazy regex `\`\`\`[\s\S]*?\`\`\`` matches the *first* closing triple-backtick after an opener, so a nested fence inside a list-indented fence would match across both, leaving the second fence's contents exposed. In practice nobody nests fences in journaling — this isn't documentation prose, it's a daily log — so the bug doesn't fire. The deeper issue is that I'm using regex to parse a context-sensitive grammar, which is the wrong tool. A proper fix would be a small state machine that tracks fence depth and inline-code spans, basically a tiny markdown lexer; that's 80 lines of code I haven't written. The honest version of the answer: this works for the inputs I've seen, breaks on the inputs I haven't, and the inputs I haven't seen are not user inputs in this app. The day a user pastes nested fences with intent, I'll write the lexer.
+
+### One-line anchors
+- "Mask to spaces preserves line indices — the contract with `reconcileMentions`."
+- "Two-step parse: erase the outer layer, then parse the inner layer cleanly."
+- "Per-line dedup catches duplicate tags before they collide on `(threadId, sourceLine)`."
+- "Regex is the wrong tool for nested fences; works for journaling because nobody nests."
+
+---
+Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
