@@ -17,11 +17,6 @@ This is the "special case is a parameter, not a fork" principle — the same ins
 
 ---
 
-## Quick summary
-- **What:** `firstPullAll()` walks the 10-table synced list, resets each `sync_meta.last_pull_at` to NULL via UPSERT, then delegates to `pullAll()`. The regular pull's `cursor = last_pull_at ?? '1970-01-01...'` does the rest.
-- **Why here:** a fresh device install with non-empty cloud (typical: wiped phone) needs to fetch everything once. The bootstrap detector in `bootstrap.ts` decides when to call this instead of `pushAll`.
-- **Tradeoff:** because the cursor logic from `pullTable` is reused, full-table fetch reuses the 200-row pagination — slow on a fresh attach (10k rows = 50 pages = ~10 round-trips per table = ~100 round-trips total) but never blows up.
-
 **Real operation:** `firstPullAll` in `src/services/sync/firstPull.ts`. Called from `bootstrapCloudSync` in `src/services/sync/bootstrap.ts:82` when local is empty and cloud has data.
 
 ---
@@ -243,6 +238,19 @@ When brute force is fine: only on a dev fixture where you know the total cloud r
 
 ---
 
+## Quick summary
+
+Initial replication as "incremental sync with the cursor pinned to epoch" is the family of "special case is a parameter, not a fork" — same instinct as null-object pattern, sentinel timestamps, and CDC backfill in Postgres logical replication, Kafka Connect, and Debezium where snapshot is just the cursor-from-epoch case of the stream. In this codebase `firstPullAll` in `src/services/sync/firstPull.ts` (L20–L30) walks the 10-table `SYNCED_TABLES` list, UPSERTs each `sync_meta.last_pull_at` to NULL, then delegates to `pullAll()` — and `pullTable`'s `cursor = last_pull_at ?? '1970-01-01...'` line is what makes "NULL = pull from epoch" work without a code branch. The constraint is that bootstrap must reuse the incremental machinery so the install-time code path has been exercised on every normal sync for months before it ever runs in anger. The cost is that bootstrap inherits the regular pull's quirks: 200-row pagination means a 10k-row attach takes ~50 paged round-trips per table, and cross-table consistency isn't transactional so `entries` may temporarily reference `todo_meta` rows not yet pulled. The brute-force "one huge SELECT per table" alternative isn't even shipped — it 413s past Supabase's request-size limits and has no resumability.
+
+Key points to remember:
+- "First pull" is "incremental pull with `last_pull_at = NULL`" — one code path, not two.
+- The NULL sentinel is explicit at the schema level; `??` defaulting to `'1970-01-01...'` lives only in `pullTable`, not duplicated across files.
+- Per-table cursor stamps progress as each table completes — a mid-bootstrap network drop is resumable on the next call.
+- O(N/200) round-trips total, O(200) memory per page; cross-table consistency is not transactional and accepted as such.
+- SecureStore flag + SQLite cursor can desync if one is wiped without the other — rare on mobile but a real bug class.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -323,3 +331,4 @@ Then open the file and verify.
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

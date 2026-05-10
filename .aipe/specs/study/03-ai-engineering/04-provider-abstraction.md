@@ -13,14 +13,7 @@
 
 You've installed a new database in a side project and realised the SDK is identical to the last one. Same `client.query()`, same `client.connect()` — the implementation behind it is completely different but the call sites don't know that. That's not an accident. It's a pattern with a name, and it's load-bearing in every system that needs to swap one piece for another without rewriting everything that talks to it.
 
-Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface. It belongs to the family of "decouple the consumer from the producer" patterns, alongside dependency injection and the adapter pattern. You've already seen this in React's renderer abstraction (DOM, native, server — same component tree), in database drivers (Postgres, MySQL, SQLite behind the same query API), and in LLM client wrappers like LangChain or LiteLLM that put one `invoke()` over OpenAI, Anthropic, and a dozen others. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** every AI service reads `getProvider()` at call time, branches into either Anthropic SDK or raw fetch to OpenAI, then converges on the same parser.
-- **Why here:** the app sells AI features but doesn't lock the user into one provider. SecureStore keys can be either; the user picks. Default is Claude.
-- **Tradeoff:** every caller carries the branch — there is no single `BaseModel.invoke` interface. Each path can use the provider's optimal API.
+Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface. It belongs to the family of "decouple the consumer from the producer" patterns, alongside dependency injection and the adapter pattern. You've already seen this in React's renderer abstraction (DOM, native, server — same component tree), in database drivers (Postgres, MySQL, SQLite behind the same query API), and in LLM client wrappers like LangChain or LiteLLM that put one `invoke()` over OpenAI, Anthropic, and a dozen others. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -133,6 +126,19 @@ LangChain's `BaseChatModel` is the unified-interface alternative. It works for t
 
 ---
 
+## Quick summary
+
+Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface, and the call-site-branch shape is the deliberately-honest variant of it. In this codebase every AI service reads `getProvider()` from `src/services/ai/config.ts` at call time and branches into either the Anthropic SDK (`client.messages.create`) or a raw fetch to OpenAI's `/v1/chat/completions` — 5 chains × 2 providers = 10 explicit branch arms across `summarize`, `caption`, `classify`, `expand`, and `interpret`. The constraint that drove it is honesty about real differences between the two SDKs — OpenAI's `response_format: json_object` exists, Claude's doesn't, and a unified `BaseChatModel` would either lie about that or force the lowest common denominator. The cost is duplicated code per caller and cross-cutting features (token counting, streaming, retries) landing in every branch arm. With a third provider added the unified-interface alternative starts winning.
+
+Key points to remember:
+- 5 chains × 2 providers = 10 explicit branch arms, each with a uniform call shape: get provider, get key, branch, parse, validate.
+- Provider is read per call from SecureStore — live switching works mid-session without restart.
+- OpenAI uses `response_format: json_object`; Claude uses prompt instructions plus defensive ``` ```json ``` fence stripping.
+- Three providers is the threshold to extract a real `BaseChatModel` interface — at two, it's a switch with a uniform contract, not an abstraction.
+- The cost is honest duplication: cross-cutting features land in 10 places instead of one.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -217,3 +223,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added with its own callClaude/callOpenAI pair).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; corrected "four providers × four callsites = eight functions" to "5 chains × 2 providers = 10 explicit branch arms" throughout (diagram, pseudocode header, mid/senior/arch/dodge interview answers, Level 4).
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

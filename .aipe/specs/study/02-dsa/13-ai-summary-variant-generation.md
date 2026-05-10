@@ -17,11 +17,6 @@ This is multi-output structured prompting — a specific application of the broa
 
 ---
 
-## Quick summary
-- **What:** `generateCaption(input)` calls Claude Sonnet 4.6 (or GPT-4o) with one prompt that emits all four variants in a single JSON object, then validates the shape and persists into the existing `ai_summaries` row.
-- **Why here:** the four variants describe the *same* day in different voices — a single call keeps them consistent (same facts, same nouns) and costs one round-trip instead of four.
-- **Tradeoff:** if any one variant comes back malformed, the entire output is discarded (`parseAndValidate` returns `null`). Partial JSON = no variants. Cheaper and safer than reconciling four parallel calls.
-
 **Real operation:** `generateCaption` in `src/services/ai/caption.ts`; persistence in `src/services/ai/summarize.ts` L87–L96.
 
 ---
@@ -243,6 +238,19 @@ Structured-output prompting with multi-key JSON is the standard pattern for any 
 
 ---
 
+## Quick summary
+
+Multi-output structured prompting is the family of "ask the model for all the related outputs at once with a strict schema, validate the whole shape or reject it" — same discipline as OpenAI function-calling, JSON-mode generation, and tool-use APIs, applied here to caption variants. In this codebase `generateCaption` in `src/services/ai/caption.ts` calls Claude Sonnet 4.6 (or GPT-4o) with one system prompt that specifies four voices (`clean | smoother | reflective | punchy`) and a `detectedTheme` from a 6-way categorical; `parseAndValidate` then checks every variant key, normalises each to three lines, and validates the theme against `VALID_THEMES` — and `src/services/ai/summarize.ts` L87–L96 attaches `summary.variants` + `summary.variantsTheme` to the AISummary before `upsertAISummary` persists the row. The constraint is *output coherence*: the four variants must describe the *same* day with the same nouns, mood, and facts — only a single shared context guarantees that, parallel calls would produce four independent stories. The cost is bimodal: any one malformed variant invalidates the entire response (`parseAndValidate` returns `null` and the editor silently falls back to `summary.summary`), with no partial-credit recovery. At single-user scale a malformed response is rare; the single-call shape costs one Sonnet round-trip (~$0.012, ~300ms) versus five sequential calls (~$0.056, ~1.4s).
+
+Key points to remember:
+- One LLM call, four outputs in a single JSON object — shared context = shared nouns, shared mood.
+- Strict-shape validation: missing any of the four variant keys or a non-string normalisation result means the whole output is discarded.
+- Caption failure does not fail summarize — the call is wrapped in its own try/catch so the structured summary always persists.
+- Pick the shape for output coherence, not for latency — parallel `Promise.all` would match latency but not noun consistency.
+- Variant count past ~5–6 starts to push `max_tokens` (768 today); at that point splitting into grouped calls beats one over-stuffed call.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -323,3 +331,4 @@ Then open the file and verify.
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

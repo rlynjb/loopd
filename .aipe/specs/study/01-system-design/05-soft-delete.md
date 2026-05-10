@@ -13,15 +13,7 @@
 
 You've deleted a row on one device and watched it come back, like a vampire, the next time the app synced from a backup. A hard `DELETE` removes the row, but it doesn't leave any trace that says "this thing used to exist and the user got rid of it." So any replica that still has the row treats it as new and dutifully restores it. That's how a delete becomes an un-delete.
 
-A tombstone is a row that's marked as gone instead of physically removed, with a timestamp recording when it died. It belongs to the family of "logical deletion" patterns and is how every replicated system avoids the resurrection problem: Cassandra writes tombstones, Dynamo writes tombstones, distributed file systems do the same. You've also seen this in any "trash" folder UI — the file isn't gone, it's flagged, so undo is cheap and the system has a paper trail. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** soft-delete via `deleted_at` timestamp. Every read filters `WHERE deleted_at IS NULL`. Every write that "deletes" stamps the column and bumps `updated_at`.
-- **Why here:** the cloud sync layer must learn about deletions; a hard `DELETE FROM` would just make the row vanish locally and cloud would re-pull it as if still alive.
-- **Checklist step:** 1 (Data model) + 5 (Failure handling)
-- **Tradeoff:** the database grows monotonically. A 30-day vacuum is in the spec but deferred — volume is small enough that it doesn't matter yet.
+A tombstone is a row that's marked as gone instead of physically removed, with a timestamp recording when it died. It belongs to the family of "logical deletion" patterns and is how every replicated system avoids the resurrection problem: Cassandra writes tombstones, Dynamo writes tombstones, distributed file systems do the same. You've also seen this in any "trash" folder UI — the file isn't gone, it's flagged, so undo is cheap and the system has a paper trail. Here's how the shape lands in this codebase.
 
 ---
 
@@ -83,6 +75,19 @@ Soft-delete is one of the oldest tombstone patterns in distributed systems. It s
 - **Soft-delete** — gives: sync convergence on deletes for free. Costs: rows accumulate; reads must filter every time.
 - **Filter at read site** — gives: each query is explicit; no surprise behaviour. Costs: every `SELECT` needs the predicate; one missed query = bug.
 - **Vacuum deferred** — gives: simpler today. Costs: at scale the table will need it; build the job before the data demands it.
+
+---
+
+## Quick summary
+
+A tombstone is a row marked as gone instead of physically removed, with a timestamp recording when it died — that's how every replicated system avoids the resurrection problem where a deleted row is dutifully restored by a replica that never saw the delete. In this codebase every synced table carries `deleted_at TEXT` (declared in `supabase/migrations/0001_initial_schema.sql`); every delete-style mutator in `src/services/database.ts` (`deleteEntry`, `deleteHabit`, `deleteTodoMeta`, `deleteThread`, `deleteMention`) stamps `deleted_at = now`, bumps `updated_at`, and calls `schedulePush()`, while every read filters `WHERE deleted_at IS NULL`. The constraint was that the cloud sync layer must learn about deletions — a hard `DELETE FROM` would just make the row vanish locally, and cloud would re-pull it as if still alive. The cost is monotonic growth and that every read needs the predicate (one missed query equals a bug), with a 30-day vacuum specified but deferred until volume warrants it. Local-only tables like `sync_meta` and `sync_deletions` use hard delete because they don't cross a sync boundary, so there's no second replica to convince.
+
+Key points to remember:
+- Every synced table has `deleted_at TEXT`; every read filters `WHERE deleted_at IS NULL`; every "delete" stamps the column and bumps `updated_at`.
+- The single `database.ts` funnel makes the rule universal — every CRUD function applies it the same way.
+- Lives in step 1 (Data model) and step 5 (Failure handling) of the system-design checklist.
+- Soft-delete only matters across a sync boundary; local-only tables hard-delete.
+- The database grows monotonically until the deferred 30-day vacuum exists, and GDPR right-to-erasure is currently uncovered without manual SQL.
 
 ---
 
@@ -174,3 +179,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

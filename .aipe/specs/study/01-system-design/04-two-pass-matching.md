@@ -13,15 +13,7 @@
 
 You have a list of items the user wrote yesterday and a fresh list they wrote today. Some are the same, some moved around, some had a typo fixed in place. Which row in today's list is "really" which row from yesterday? If you get it wrong, every piece of metadata you've attached — created-at, tags, AI classifications — points at the wrong line. That's the question this pattern answers.
 
-Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** Pass 1 matches by exact text (catches reorderings). Pass 2 matches by line index (catches "I edited the words on this line").
-- **Why here:** preserves the row's id, createdAt, classifier output, and expansion across edits without requiring the user to declare identity explicitly.
-- **Checklist step:** 1 (Data model) + 4 (State ownership)
-- **Tradeoff:** "I edited line 7" looks the same as "I deleted line 7 and added a new todo" to the algorithm. Acceptable; the classifier re-runs either way.
+Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. The diagram below shows the shape it takes here.
 
 ---
 
@@ -130,6 +122,19 @@ This is a simplified diff algorithm — Myers' diff and its descendants do exact
 
 ---
 
+## Quick summary
+
+Exact-then-fallback matching is a layered reconciliation strategy: try the strict cheap identifier first, then fall back to a fuzzier positional one for the leftovers, so identity survives both reorderings and same-line edits. In this codebase `scanTodosFromText` runs Pass 1 (exact case-insensitive text match, which catches reorderings) and Pass 2 (line-index match against the existing row's `sourceLine`, which catches "I edited the words on this line"); the same shape lives in `reconcileMentions` for `#tag` threads, with Pass 2 widened to a ±3 line shift window. The constraint was using the prose itself as the identifier — a hidden UUID would break paste, dictate, and natural-edit workflows the user actually relies on. The cost is that "I edited line 7" looks the same as "I deleted line 7 and added a new todo" to the algorithm, and bulk reorders combined with bulk text edits degrade because neither pass fires. The two-pass algorithm assumes single-writer; two devices editing the same prose breaks it silently, not loudly.
+
+Key points to remember:
+- Pass 1 (exact text) runs before Pass 2 (line index) so reorderings always win over positional matches.
+- The `used` set blocks double-claims — duplicate `[]` lines with identical text fall through cleanly.
+- Lives in step 1 (Data model) and step 4 (State ownership) of the system-design checklist.
+- A row's id is the user's investment over time (classifier output, AI expansion, pin state); content edits shouldn't destroy identity.
+- Unmatched existing rows survive as carryover with `sourceLine` cleared, paying for it with orphan-like rows that the soft-delete + reconciler combo eventually cleans up.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -218,3 +223,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

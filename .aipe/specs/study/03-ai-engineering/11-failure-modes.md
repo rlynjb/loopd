@@ -13,14 +13,7 @@
 
 AI calls fail. They fail because the network dropped, because the provider is down, because the model returned malformed JSON, because rate limits hit, because the model refused the prompt, because the user's API key expired. Every one of those failures is going to happen, repeatedly, in production. The question is not "how do I prevent them" — you can't — but "what does the user lose when one of them happens at the wrong moment." If the answer is "their data," the architecture is wrong.
 
-The principle here is graceful degradation: the AI layer is best-effort, and a failure in that layer must never damage the canonical data underneath it. It belongs to the family of "fail-soft" and "isolation" patterns — the same shape as circuit breakers around flaky services, write-ahead logs that survive crashes mid-transaction, and CDN fallbacks that serve stale content when the origin dies. You've already seen it in Stripe SDKs that retry idempotently on network errors, in OpenAI clients that surface a typed error instead of a half-parsed response, and in any production LLM stack that wraps every call in "if this throws, the user's record is unchanged." The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** an enumerated list of every AI failure mode and how the codebase recovers.
-- **Why here:** treating AI as best-effort with hard-fail handling means the user's data is never at the mercy of the model.
-- **Tradeoff:** "best-effort" sometimes leaves gaps (no expansion, missing caption). The user sees "couldn't run that," not "your todo is gone."
+The principle here is graceful degradation: the AI layer is best-effort, and a failure in that layer must never damage the canonical data underneath it. It belongs to the family of "fail-soft" and "isolation" patterns — the same shape as circuit breakers around flaky services, write-ahead logs that survive crashes mid-transaction, and CDN fallbacks that serve stale content when the origin dies. You've already seen it in Stripe SDKs that retry idempotently on network errors, in OpenAI clients that surface a typed error instead of a half-parsed response, and in any production LLM stack that wraps every call in "if this throws, the user's record is unchanged." The table below lays out the shape it takes here.
 
 ---
 
@@ -110,6 +103,19 @@ Each failure mode has a defined recovery path. The principle: **the canonical da
 
 ---
 
+## Quick summary
+
+Graceful-degradation for AI features is the "fail-soft + isolation" pattern — every AI failure mode has a defined recovery path that leaves the canonical data (prose, todo, entry) untouched. In this codebase that shows up as a per-failure-mode table across all 5 chains: `summarize.ts:87` wraps the caption call in its own try/catch so caption failure doesn't kill the structured summary; `expand.ts:25` caps concurrency at `MAX_CONCURRENT = 3`; `interpret.ts` adds 4 new failure surfaces (too-short, malformed-markdown, network, no-ai) via the `InterpretResult` discriminated union; `validate.ts` rejects malformed JSON before any SQLite write. The constraint that drove it is "canonical data is never blocked by AI" — the worst outcome of any AI bug is "no annotation this time," never "lost data." The cost is silent failures: a flaky network leaves classifications stuck at `type='todo'` and at single-user phase A the only signal is the `/todos` banner via `getClassifyInFlight()`.
+
+Key points to remember:
+- Every chain has a defined recovery path; nothing throws past the AI boundary.
+- The canonical SQLite write happens before or independently of the AI write — always.
+- Retry budget tracks user intent: expand retries with a stricter prompt; classify doesn't.
+- `MAX_CONCURRENT = 3` caps expand cost; classify has no cap because heuristic gating bounds volume.
+- Silent-failure modes are the gap at scale — at one user the dev is the alarm; at 1000 users a per-failure-mode counter and "AI degraded" banner become necessary.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -194,3 +200,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — added 4 new interpret-specific failure modes (too-short / over-cap / malformed-markdown / clinical-drift); bumped service count from 4 to 5. See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

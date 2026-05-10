@@ -13,15 +13,7 @@
 
 Not every relationship between two pieces of data can be expressed with a foreign key. The moment one side lives inside a JSON column, inside a document, or inside a remote system, the database engine can't help you keep them in sync — there's no constraint to violate at write time. The integrity guarantee has to move out of the schema and into your code, and most teams discover that the hard way after their first orphan row leaks into production.
 
-An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `entries.todos_json` is a JSON array of TodoItems; `todo_meta` is a separate table keyed on `todoId`. After every prose scan, the reconciler inserts missing meta rows, deletes orphans, leaves matched rows alone.
-- **Why here:** SQLite can't enforce FKs to elements of a JSON column, so the app code is the integrity gate.
-- **Checklist step:** 1 (Data model) + 5 (Failure handling)
-- **Tradeoff:** a partial reconcile leaves orphans/missing meta rows until the next commit. Acceptable — the next commit's diff sees the gap and patches it (self-healing).
+An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. The diagram below shows the shape it takes here.
 
 ---
 
@@ -108,6 +100,19 @@ JSON-in-relational hybrids are common in modern apps. Postgres has rich JSON ope
 - **No FK** — gives: JSON column flexibility (array order is meaningful, no second table for ordering). Costs: integrity is on the app.
 - **Self-healing reconciler** — gives: a missed run isn't catastrophic. Costs: between runs there can be silent inconsistency (an orphan meta row briefly).
 - **Per-entry reconcile** — gives: each call is small (handful of todos). Costs: adding a new entry-level invariant means a new reconciler.
+
+---
+
+## Quick summary
+
+An application-enforced invariant is a rule the database can't check, kept honest by a reconciler that walks both sides and patches the diff — pick one side as authoritative, accept brief drift, and make the patch step idempotent. In this codebase `entries.todos_json` is a JSON array of TodoItems and `todo_meta` is a separate table keyed on `todoId`; after every `scanTodos`, `reconcileTodoMetaForEntry` in `src/services/todos/reconcileMeta.ts` loads existing meta, inserts what's missing (consulting `heuristicClassify` and firing `scheduleClassify` async on ambiguity), and deletes orphans whose `todoId` is no longer in prose. The constraint was that SQLite can't FK to an element of a JSON column, so the app code is the only integrity gate, and `todo_meta.expanded_md` is too large to embed in the entry's JSON without bloating every entry read. The cost is that integrity now lives in TypeScript instead of the schema, and a partial reconcile leaves orphans or missing meta rows briefly — acceptable because the next commit re-runs reconcile and heals the gap. A SQLite-trigger alternative was considered and rejected because triggers can't easily run the heuristic-then-LLM conditional logic the reconciler needs.
+
+Key points to remember:
+- `todos_json` (JSON array on `entries`) and `todo_meta` (separate table keyed on `todoId`) are kept 1:1 by `reconcileTodoMetaForEntry`, not by a foreign key.
+- The reconciler runs after every prose scan; matched rows are left alone, preserving `type`, `expanded_md`, `pinned`, and `user_overridden_type` across edits.
+- Lives in step 1 (Data model) and step 5 (Failure handling) of the system-design checklist.
+- Self-healing — partial state is allowed because the next commit's diff sees the gap and patches it.
+- The cost of "no FK" is that integrity moves out of the schema and into TypeScript, where a missed call site can silently drift until the next reconcile.
 
 ---
 
@@ -199,3 +204,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

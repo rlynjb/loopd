@@ -13,14 +13,7 @@
 
 You've asked an AI chatbot a question, gotten a great answer, asked a follow-up, and watched it forget what it said two minutes ago — that's not a bug, that's the architecture. The thing you're talking to has no memory between requests, no senses, no clock, no ability to do anything on its own. Everything that looks like memory, reasoning, or "knowing you" was assembled by code on the outside and pasted into the prompt before the call.
 
-The pattern here is the mental model itself: treat a language model as a pure function from one block of text to another. It belongs to the family of "stateless service" abstractions — the same shape as HTTP handlers, pure functions, and serverless workers, where every call stands alone and any persistence lives somewhere else. You've already seen this whenever you've worked with OpenAI's chat completions endpoint, with a LangChain LLM wrapper, or with any hosted Claude or GPT API: you send tokens, you get tokens, and the server forgot you the instant it replied. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** an LLM is a stateless function from a token sequence to a probability distribution over the next token, sampled repeatedly to produce text.
-- **Why this framing matters here:** loopd's five AI features are all framed as *one function call each*. No agent loops. Every call is independent.
-- **Tradeoff:** the framing forbids stateful "the model remembers what we discussed last week" — every relevant context must travel in the prompt.
+The pattern here is the mental model itself: treat a language model as a pure function from one block of text to another. It belongs to the family of "stateless service" abstractions — the same shape as HTTP handlers, pure functions, and serverless workers, where every call stands alone and any persistence lives somewhere else. You've already seen this whenever you've worked with OpenAI's chat completions endpoint, with a LangChain LLM wrapper, or with any hosted Claude or GPT API: you send tokens, you get tokens, and the server forgot you the instant it replied. The diagram below shows the shape it takes here.
 
 ---
 
@@ -87,6 +80,19 @@ Auto-regressive language models trace back to n-gram models from the 80s, recurr
 - **Treat as pure function** — gives: trivially debuggable, retriable, testable. Costs: every relevant context must be in the prompt.
 - **No agent loop** — gives: predictable cost. Costs: no autonomous multi-step reasoning.
 - **Stateless** — gives: scales with HTTP. Costs: "remember last conversation" must be implemented in app code, not the model.
+
+---
+
+## Quick summary
+
+An LLM is a stateless function from a token sequence to a probability distribution over the next token, sampled repeatedly to produce text — every call stands alone, with no memory, no I/O, and no tools. In this codebase that framing drives every chain in `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`): one prompt in, one string out, parse, validate, persist. The constraint that made this the right call here is debuggability — the same prompt fed to the same model with the same sampler reproduces the same problem, which is how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. The cost is that "memory" — like the anti-repetition context for captions — has to be assembled by app code (a SQLite query in `summarize.ts:buildCaptionInput()` plus a string concat), not by the model.
+
+Key points to remember:
+- Tokens in, tokens out — no memory between calls, no I/O, no tools unless the surrounding code interprets the output as one.
+- All five chains follow the same shape: build prompt, single call, parse output, persist or render.
+- "Memory" like recent captions is a `getRecentAISummaries(date, 5)` call at `summarize.ts` L131, not a model property.
+- Same prompt + same sampler = same distribution — that's what makes every call independently retriable and testable.
+- The cost is that every relevant context must travel in the prompt; there is no "the model remembers last week".
 
 ---
 
@@ -174,3 +180,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (Interpret added). See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); added 4-variant key list (clean/smoother/reflective/punchy) + `summary_json.variantsTheme` persistence note.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

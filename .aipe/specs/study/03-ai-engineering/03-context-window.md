@@ -13,14 +13,7 @@
 
 You hand a model 50 pages of company docs and ask it to answer a question. What does it actually "see" when it generates the answer? Not your filesystem, not your database, not your prior conversation — just whatever bytes you stuffed into a single fixed-size buffer before pressing send. Everything competes for that space: instructions, examples, retrieved documents, prior turns, the user's actual question. When the buffer fills up, something has to be cut, and the system that cuts well wins.
 
-The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** every AI feature builds a small context — today's text, last 3 days, sibling todos (capped at 5), recent captions (capped at 5). No cross-day "memory" beyond what's explicitly added.
-- **Why here:** keep the window small enough that small fast models can do the job. Predictable cost, predictable shape.
-- **Tradeoff:** the model never sees anything you didn't explicitly hand it. No surprises, no autonomy.
+The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -91,6 +84,19 @@ The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the wi
 - **Hand-picked, capped context** — gives: predictable cost, no surprises. Costs: must remember to update caps when adding new features.
 - **No cross-day memory by default** — gives: easy to reason about. Costs: features that need history must explicitly fetch and add it.
 - **Per-feature context shape** — gives: each prompt is just-right. Costs: 4 different `buildContext`-ish helpers; no shared one-size-fits-all.
+
+---
+
+## Quick summary
+
+The context window is a fixed-size buffer that holds everything the model sees for one call, and packing it well is the central engineering discipline of any LLM-powered product. In this codebase every chain hand-picks a small, explicitly-capped context: `expand.ts:buildContext()` pulls last 3 days plus ≤5 sibling todos, `summarize.ts:buildCaptionInput()` pulls the 5 most-recent captions via `getRecentAISummaries(date, 5)` at L131, `classify.ts` sends no surrounding context at all, and `interpret.ts` runs `truncateTail` to a 2000-char cap on the single entry. The constraint that drove it is predictable cost on the highest-volume chains and being able to use small fast models — every `.slice(0, N)` and `truncateTail` is a knob that bounds spend regardless of how heavy the user's day is. The cost is that the model never sees anything you didn't explicitly hand it, and any feature needing richer history has to add its own fetch.
+
+Key points to remember:
+- Each chain owns its context shape — there is no shared `buildContext` helper.
+- Caps are explicit and greppable: `.slice(0, 3)` for recent days, `.slice(0, 5)` for siblings and captions, `MAX_INPUT_CHARS = 2000` for interpret.
+- `classify.ts` is context-free by design — a 10× input-token saving on the highest-volume chain.
+- Caps decouple cost from data size — a bad cap is still bounded; an uncapped prompt grows with the user.
+- The cost is no cross-day memory by default — features that need history must explicitly fetch and add it.
 
 ---
 
@@ -178,3 +184,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — added interpret context shape (`truncateTail` to MAX_INPUT_CHARS = 2000, MIN_TEXT_LENGTH = 20). See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`).
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

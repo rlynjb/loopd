@@ -13,15 +13,7 @@
 
 For a long time, routing was a config file: a giant lookup table that mapped URL patterns to handlers, lived in one place, and was the first thing to get out of sync with reality. Then a few frameworks noticed that the directory tree on disk already encodes the same hierarchy, and that you could just let the filesystem be the router. Adding a screen becomes "create a file." Removing one becomes "delete a file." The config file evaporates.
 
-File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** expo-router 55 file-based routing. The `app/` directory tree IS the route tree.
-- **Why here:** matches expo-router's convention so URLs and back-stack work without manual route configuration.
-- **Checklist step:** 2 (Request flow)
-- **Tradeoff:** harder to abstract a route shape across many screens — each file is its own thing. For a small app, fine.
+File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The diagram below shows the shape it takes here.
 
 ---
 
@@ -93,6 +85,19 @@ File-based routing came out of Next.js, which borrowed it from older PHP/Rails c
 - **File-as-route** — gives: zero route configuration. Costs: hard to abstract over many routes.
 - **`_layout.tsx` everywhere** — gives: scoped wrappers (e.g., a settings stack with its own header). Costs: another file per scope.
 - **`[param]` segments** — gives: type-friendly param reading. Costs: the param is always a string; you parse and validate downstream.
+
+---
+
+## Quick summary
+
+File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly — the filesystem is the router. In this codebase the `app/` directory tree is the route tree under expo-router 55: `app/_layout.tsx` (287 lines) is the boot path that initialises SQLite via `useDatabase`, runs the cloud bootstrap, and wraps providers; `[param]` directories like `app/journal/[date].tsx` define dynamic segments read via `useLocalSearchParams()`; and there is no `routes.ts`. The constraint was that a separate route registry drifts from the actual screens it documents, and convention-as-code keeps the URL and the file as the same fact. The cost is that abstracting behaviour across many routes is awkward — each file imports its own shared bits — but for loopd's ~15 screens that cost is negligible. A 200-route app or one with deeply nested back stacks would push toward React Navigation's explicit registry instead.
+
+Key points to remember:
+- `app/_layout.tsx` is the boot path that every route runs through — SQLite open, bootstrap, providers all land here before any screen mounts.
+- The file system tree is the route table; there is no `routes.ts` to keep in sync with the screens.
+- Lives in step 2 (Request flow) of the system-design checklist.
+- Dynamic segments are folder names in `[brackets]` and the param is always a string until you parse it downstream.
+- Abstracting behaviour across many routes is awkward — at ~15 screens the cost is negligible, at 200 the registry-based alternative starts paying back.
 
 ---
 
@@ -185,3 +190,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

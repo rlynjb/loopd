@@ -17,11 +17,6 @@ This is the two-pass match — a stripped-down cousin of Myers diff, which is wh
 
 ---
 
-## Quick summary
-- **What:** `scanTodosFromText` matches `[]` lines to existing TodoItems, preserving id/createdAt/classifier output across edits.
-- **Why here:** identity must survive prose edits. Pass 1 catches reorderings; Pass 2 catches "same line, different words."
-- **Tradeoff:** can't tell apart "I edited line 7" from "I deleted line 7 and added a new todo on line 7" — both look the same to the algorithm.
-
 **Real operation:** `scanTodosFromText` in `src/services/todos/scanTodos.ts`. Runs at every commit (focus blur, screen leave) on `entries.text`.
 
 ---
@@ -210,6 +205,19 @@ The two-pass match is a simplification of Myers diff: take the cheap exact-match
 
 ---
 
+## Quick summary
+
+Two-pass matching is the family of "match items across two snapshots by strongest-evidence-first, fall back to weaker evidence for the remainder" — a stripped-down cousin of Myers diff that powers git rename detection and React's keyed-list reconciliation. In this codebase `scanTodosFromText` runs at every commit (focus blur, screen leave) on `entries.text`: Pass 1 matches `[]` lines by exact text to preserve `id`, `createdAt`, and the AI classifier output across reorderings; Pass 2 falls back to line-index to catch "same line, different words" edits. The constraint is that row identity must survive prose edits — a brand-new id on every edit would invalidate `todo_meta` rows and break the 1:1 invariant the downstream reconciler depends on. The cost is that the algorithm cannot distinguish "I edited line 7" from "I deleted line 7 and added a new todo on line 7" — both look the same and inherit the old id, which can leave `meta.type` momentarily stale.
+
+Key points to remember:
+- Pass 1 is exact-text match; Pass 2 is line-index fallback for the unmatched residue.
+- Identity (`id`, `createdAt`, classifier output) survives prose edits — that is the invariant the algorithm maintains.
+- The `Set<string>` of used ids is doing correctness work, not performance work — without it two identical `[]` lines could double-claim the same existing todo.
+- Linear time on each pass — O(n + m) after Map/Set conversion; never quadratic even at high entry count.
+- The algorithm cannot tell apart "edited line 7" from "deleted-and-replaced line 7" — both inherit the prior id.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -295,3 +303,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

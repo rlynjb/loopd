@@ -13,15 +13,7 @@
 
 You've opened a notes app on the subway, typed a sentence, and watched the cursor lag because the app was busy round-tripping every keystroke to a server it couldn't reach. The lag is the network leaking into the request path. The underlying problem is that the user's writes and the publish-to-the-world step are two different operations, and most apps weld them together.
 
-Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** UI → hook → service → `database.ts` → SQLite → schedulePush → Supabase. Every layer is synchronous up to the SQLite write; the cloud catches up later.
-- **Why here:** the app must work offline (Android, journaling on the move) and the user is the only writer in Phase A.
-- **Checklist step:** 2 (Request flow)
-- **Tradeoff:** other devices won't see edits until ~5s after typing stops. Acceptable for solo use; needs a tighter loop or live subscriptions for multi-device.
+Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. The diagram below shows the shape it takes here.
 
 ---
 
@@ -120,6 +112,19 @@ If the device is offline, the writes pile up locally with `updated_at > synced_a
 
 ---
 
+## Quick summary
+
+Local-first architecture commits every user write to an on-device store synchronously and lets a background process race to mirror it somewhere durable later, decoupling availability from durability. In this codebase the chain is UI hook to service to `database.ts` to SQLite, with the only file that opens `loopd.db` being `database.ts`, and `schedulePush()` carrying the row to Supabase 5 seconds after the last write. The constraint was an Android journaling app opened on the train, in the kitchen, in bed — the user expects every keystroke to land instantly regardless of network, and Phase A has a single solo writer. The cost is that other devices won't see edits until ~5s after typing stops, and the 5-second debounce means a write is still local-only if the device dies before the push fires. The day a second device starts writing, last-write-wins becomes the load-bearing failure mode that needs CRDTs.
+
+Key points to remember:
+- UI to hook to service to `database.ts` to SQLite is synchronous; cloud catches up via `schedulePush()` 5 seconds after the last write.
+- Every synced write must bump `updated_at` AND call `schedulePush()` — both invariants enforced in the single `database.ts` funnel.
+- Lives in step 2 (Request flow) of the system-design checklist.
+- The 5-second debounce batches typing bursts but means recent writes can be lost from the cloud on app kill (still in SQLite).
+- LWW via `chooseWinner` is fine for solo sequential-device use; it becomes wrong when two writers edit the same row concurrently.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -208,3 +213,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

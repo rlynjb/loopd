@@ -13,15 +13,7 @@
 
 Every system has a line drawn on the inside of it where "we trust this request" turns into "we don't, and we need to prove who's asking." Most bugs that leak one user's data to another are caused by drawing that line in the wrong place, or by drawing it on paper and forgetting to enforce it in code. The interesting question is never "do we have auth" — it's "where does the trusted zone end, and what stops a request from crossing it without identity."
 
-A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** every Supabase write/read goes through a single hardcoded `PHASE_A_USER_ID` UUID. RLS policies exist as a migration but are not enabled.
-- **Why here:** solo product, single user; building features over the auth wire-up.
-- **Checklist step:** 4 (State ownership) + 6 (Scale concerns)
-- **Tradeoff:** until Phase B ships auth, anyone with the Supabase anon key + URL can read the data. Mitigation: keys live in SecureStore; the app has no public surface.
+A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -90,6 +82,19 @@ RLS comes from Postgres' security model where the row itself decides who can rea
 - **Hardcoded user_id (Phase A)** — gives: zero auth UI to build now. Costs: anon-key access reads everything. Mitigation: SecureStore + no public surface.
 - **Composite (user_id, id) PKs** — gives: schema-level isolation that works today and after RLS ships. Costs: every query needs the user_id; client code is verbose.
 - **RLS scaffolded but disabled** — gives: easy switch-on path. Costs: a Phase B upgrade that forgets to enable it would silently break the runtime gate.
+
+---
+
+## Quick summary
+
+A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces it on every crossing — defense in depth means the schema, the middleware, and the application code each independently refuse unauthorized access. In this codebase the schema gate is composite `(user_id, id)` primary keys declared in `supabase/migrations/0001_initial_schema.sql`, and the runtime gate is RLS staged in `supabase/migrations/0002_rls_policies.sql` but disabled; every Supabase write and read instead stamps a hardcoded `PHASE_A_USER_ID` UUID from `src/services/sync/client.ts`. The constraint was a solo product with a single user in Phase A — shipping the data layer and sync engine before the auth UI was the priority. The cost is that the Supabase anon key is functionally a password — anyone holding it can read everything, mitigated only by keys living in SecureStore and the app having no public surface. The day a real second user logs in, Phase B activates the runtime gate by replacing the hardcoded UUID with `auth.uid()` and enabling migration 0002.
+
+Key points to remember:
+- Two gates exist: composite `(user_id, id)` PKs (schema, always active) and RLS in migration 0002 (runtime, disabled in Phase A).
+- Every cloud write/read stamps a hardcoded `PHASE_A_USER_ID` UUID from `src/services/sync/client.ts`.
+- Lives in step 4 (State ownership) and step 6 (Scale concerns) of the system-design checklist.
+- The schema doesn't change when Phase B ships — composite PKs were already correct; only the client `user_id` source and the RLS toggle flip.
+- The anon key is functionally a password in Phase A — device-loss is uncovered until a launch-screen lock and at-rest encryption ship.
 
 ---
 
@@ -181,3 +186,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

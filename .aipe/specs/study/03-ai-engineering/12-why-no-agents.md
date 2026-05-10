@@ -13,14 +13,7 @@
 
 "Agent" is the most loaded word in AI engineering. It promises a model that plans, takes actions, observes the result, and adapts — autonomous, capable, intelligent. In practice, an agent is a `while` loop that re-prompts the same model with growing context until it emits a stop token or runs out of budget. Most of the time, for most jobs, that loop adds nothing a single well-designed prompt couldn't do — but it costs five to twenty times as much and fails in ways that are very hard to debug.
 
-The "no agents" decision is an architectural stance: do the smallest amount of LLM work that solves the problem, and keep the control flow in normal code where it can be read, tested, and instrumented. It belongs to the family of "prefer the boring solution" patterns — choose the deterministic state machine over the autonomous loop, the cron job over the self-scheduling worker, the explicit pipeline over the magic. You've already seen the alternative everywhere: LangChain agents, AutoGPT, BabyAGI, OpenAI's Assistants API, multi-step "researcher" demos. They are dazzling in benchmarks and treacherous in production. Many serious teams quietly rewrite their agents back into chains once the bill arrives. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** there are no agents, no LangGraph-style multi-step orchestrations, no chains-of-chains in loopd. Every AI call is one prompt, one response, one parse (or one render, for interpret).
-- **Why here:** the five jobs (summarize, caption, classify, expand, interpret) are all one-shot transformations. Multi-step doesn't add value for these.
-- **Tradeoff:** features that need multi-step reasoning (e.g., "plan a vlog from a week of entries; review each step") would need a new service file with its own loop.
+The "no agents" decision is an architectural stance: do the smallest amount of LLM work that solves the problem, and keep the control flow in normal code where it can be read, tested, and instrumented. It belongs to the family of "prefer the boring solution" patterns — choose the deterministic state machine over the autonomous loop, the cron job over the self-scheduling worker, the explicit pipeline over the magic. You've already seen the alternative everywhere: LangChain agents, AutoGPT, BabyAGI, OpenAI's Assistants API, multi-step "researcher" demos. They are dazzling in benchmarks and treacherous in production. Many serious teams quietly rewrite their agents back into chains once the bill arrives. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -109,6 +102,19 @@ _Agents not implemented — intentionally absent._ The five AI service files are
 
 ---
 
+## Quick summary
+
+"No agents" is the architectural stance of doing the smallest amount of LLM work that solves the problem and keeping control flow in normal code — prefer the boring deterministic pipeline to the autonomous loop. In this codebase that means five single-chain service files (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`), no `agent.ts`, no `orchestrator.ts`, no graph anywhere — and the surrounding patterns (heuristic-first, async fire-and-forget, validation gate, user-override lock) are app-code conventions that run before or after the model, not multi-step LLM reasoning. The constraint that drove it is that the five jobs are knowable in advance: none of them have a "decide what to do next" question for the model. The cost is a ceiling on task complexity — features that genuinely need planning, critique, and revision would have to land as a new service file with explicit iteration cap and cost ceiling, not as a modification to the existing chains.
+
+Key points to remember:
+- Five single-chain files, zero orchestrators. App fires LLM; LLM never fires LLM.
+- Each chain is one prompt, one response, one parse (or one render, for interpret).
+- `expand.ts`'s one-retry-with-stricter-prompt is a chain re-run of the same job, not a model-chosen step.
+- A chain re-runs the same job; an agent decides what job to run.
+- The day a feature needs the model to choose the next step, the agent goes in a new file with iteration cap, per-call timeout, and cost ceiling.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -193,3 +199,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (interpret added; still no agents).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

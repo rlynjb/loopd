@@ -13,15 +13,7 @@
 
 You once shipped a drag-to-reorder feature, watched users actually use it for a week, and then looked at the data: most people pinned one item to the top and let the rest fall wherever. The whole apparatus — drag handles, position integers, the bug where two items got the same rank — existed to support a flexibility nobody used. The right move is not to optimize the feature; it's to delete it and ship the simpler thing that captures the same intent.
 
-Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** as of 2026-05-05, `/todos` and the dashboard sort by `pinned` first (boolean), then `createdAt DESC`. The previous manual-reorder UI (drag handles, `position INT NOT NULL`) is gone.
-- **Why here:** in practice users pinned a handful of items and ignored the rest of the order. A single bool captures the same intent without the UI complexity.
-- **Checklist step:** 1 (Data model)
-- **Tradeoff:** a user who actually wanted "thing A before thing B before thing C" can't express that anymore. Acceptable; nobody used it that way.
+Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. The diagram below shows the shape it takes here.
 
 ---
 
@@ -108,6 +100,19 @@ The shift from "user manages an order" to "user marks priority" is older than so
 - **Boolean replaces int** — gives: trivial mental model, one less drag UI to maintain. Costs: can't express "A before B before C."
 - **Deprecated columns kept** — gives: no destructive schema change. Costs: schema noise; future readers must know which columns are live.
 - **Recency tiebreak** — gives: new captures bubble naturally. Costs: an old pinned item is below a newer pinned item — no way to override.
+
+---
+
+## Quick summary
+
+Replacing manual ordering with a single boolean flag is a specific case of downgrading the data model to match observed usage — a subtractive design move where the win comes from removing an affordance instead of adding one. In this codebase, as of 2026-05-05 the `/todos` page sorts by `meta.pinned` first then `createdAt DESC` via an inline comparator at `app/todos.tsx` L187–L194; migration `0005_todo_meta_pinned.sql` added the `pinned` column; and the pin toggle is `updateTodoMeta(row.id, { pinned: !row.meta.pinned })` in `src/services/database.ts`. The constraint was that in practice users pinned a handful of items and ignored the rest of the order, so a single bit captures the actual intent and the drag-reorder UI was deleted along with the three-stage filter. The cost is that a user who genuinely wants "A before B before C" can't express that anymore — and the legacy `position` and `stage` columns stay on the schema (deprecated) because dropping them would require a destructive cloud migration. `SmartTodoList.tsx` L41–L67 still uses the legacy position-based sort and is a known content drift waiting on a one-comparator swap.
+
+Key points to remember:
+- The live sort is two-key: `pinned` first (boolean), then `createdAt DESC` — pin acts as a sticky modifier on top of recency.
+- `position` and `stage` columns are kept on the schema for cloud round-trip compatibility but no UI reads them; the deprecation is in `src/types/todoMeta.ts`.
+- Lives in step 1 (Data model) of the system-design checklist.
+- Removing affordance is reversible while `services/todos/rank.ts:rankTodos` stays in tree — that's the recovery path if observed usage was wrong.
+- `SmartTodoList.tsx` L41–L67 has not yet migrated to the pinned-first comparator and is the documented content drift between the dashboard and `/todos`.
 
 ---
 
@@ -199,3 +204,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

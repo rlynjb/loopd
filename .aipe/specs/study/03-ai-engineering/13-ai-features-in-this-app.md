@@ -13,14 +13,7 @@
 
 "We added AI" is a sentence with no information in it. The real question is which features in the product call a model, what does each one read, what does each one return, and what does the app do with that return value. Every interesting decision in an AI-powered product is buried in those four columns, and most teams can't answer them off the top of their head — they describe the product instead of the AI inside it.
 
-A per-feature pattern map is a catalogue: one row per AI-touching feature, listing prompt shape, input, output contract, and downstream behaviour. It belongs to the family of "system inventory" documents — closer to an API spec, an event catalogue, or a feature flag registry than to a tutorial. You've already seen this shape in OpenAPI specs that enumerate every endpoint, in event-sourcing systems that document every event type, and in any LLM evals harness that has to know exactly which prompts produce which structured outputs. Without this table, you can't reason about cost, latency, blast radius, or which features will break when you change a model version. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** five features — day summarize, 4-variant caption, todo classify, todo expand, interpret. Each maps to one chain in `src/services/ai/` or `src/services/todos/`.
-- **Why here:** quick reference for the prompt shapes, input contracts, output JSON shapes (or markdown for interpret). Read this when you want to know "what does the model actually see for X?"
-- **Tradeoff:** this is a snapshot — when prompts change, this file should be re-checked.
+A per-feature pattern map is a catalogue: one row per AI-touching feature, listing prompt shape, input, output contract, and downstream behaviour. It belongs to the family of "system inventory" documents — closer to an API spec, an event catalogue, or a feature flag registry than to a tutorial. You've already seen this shape in OpenAPI specs that enumerate every endpoint, in event-sourcing systems that document every event type, and in any LLM evals harness that has to know exactly which prompts produce which structured outputs. Without this table, you can't reason about cost, latency, blast radius, or which features will break when you change a model version. Here's how the features land in this codebase.
 
 ---
 
@@ -159,6 +152,19 @@ The "per-feature spec sheet" approach is borrowed from API design — each endpo
 
 ---
 
+## Quick summary
+
+The per-feature pattern map is a system-inventory catalogue — one row per AI-touching feature with prompt shape, input, output contract, and model choice, organised like an OpenAPI spec rather than a tutorial. In this codebase five chains do five jobs: `summarize.ts` (day summarize, Sonnet/4o, structured JSON), `caption.ts` (4-variant caption, Sonnet/4o, the most opinionated prompt with `parseAndValidate`), `classify.ts` (5-mode classify, Haiku/4o-mini, heuristic-gated), `expand.ts` (per-type expand with 4 schemas, Sonnet/4o, `MAX_CONCURRENT = 3`), and `interpret.ts` (markdown reflection, Sonnet/4o, ephemeral). Four chains emit JSON for derived state; `interpret` emits markdown the user reads. The constraint that drove it is cost-and-value asymmetry: Sonnet for output quality where it earns its keep, Haiku for cheap labels, no surrounding context for classify because half the volume gets caught by the heuristic. The cost is doc drift — this catalogue is a snapshot, and when SYSTEM_PROMPTs change the file must be re-checked.
+
+Key points to remember:
+- Five chains, five jobs — four JSON contracts plus one markdown contract for interpret.
+- Sonnet 4.6 for summarize/caption/expand/interpret; Haiku 4.5 for classify.
+- Classify taxonomy is 5 modes (todo/idea/knowledge/study/reflect); was 7 pre-2026-05-10.
+- Expand has 4 per-type sub-chains (idea/knowledge/study/reflect — `'todo'` is non-expandable).
+- The doc is a snapshot; the SYSTEM_PROMPT constants in source are the truth.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -243,3 +249,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — features grew from 4 to 5 (added Interpret); thinking-mode taxonomy reduced from 7 to 5; expand types reduced from 6 to 4. See `14-interpret.md` for the new chain.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 1/Level 2/[arch] interview-Q wording 4→5 features; added caption persistence-key mapping (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`) plus the buildCaptionInput input-assembly note.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

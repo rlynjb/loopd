@@ -17,11 +17,6 @@ This is two-phase matching followed by an explicit "carryover or delete" decisio
 
 ---
 
-## Quick summary
-- **What:** `scanNutritionForEntry` matches `** food N kcal` lines in `entries.text` to existing `nutrition` rows, preserving row identity across edits.
-- **Why here:** the user can edit either the name or the kcal value on a line in-place. Both `(name, kcal)` exact match (Pass 1) and line-index fallback (Pass 2) are needed.
-- **Tradeoff:** unlike todos, *unmatched existing rows are deleted* — every row corresponds to a specific prose line, so if the line is gone, the row is gone.
-
 **Real operation:** `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts`. Runs after every entry text change via `useEntries.ts:20`.
 
 ---
@@ -237,6 +232,19 @@ Same lineage as `scanTodosFromText` — a project-specific two-phase matching pa
 
 ---
 
+## Quick summary
+
+Two-phase matching with a configurable "delete unmatched" tail is the family of "diff-then-apply where the matching is shared but the handling of right-only items is the domain rule" — same shape as file-sync tools in mirror vs additive mode, same shape as DB replication that either propagates or filters deletes. In this codebase `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts` runs after every entry text edit (called from `useEntries.ts:20`): Pass 1 matches scanned `** food N kcal` lines against existing rows by exact `(name, kcal)`, Pass 2 falls back to line-index for the unmatched residue, then the apply step inserts new lines and updates changed ones — and the delete sweep removes every existing row whose id is not in the `usedIds` Set. The constraint that makes nutrition diverge from its todo-scanner sibling is "prose is canonical": a nutrition row has no identity outside its source line, so if the line is gone the row is gone. The cost is no carryover — an accidental line deletion permanently loses the row id, mitigated only by re-typing the line as a fresh insert. At a handful of food lines per entry both brute O(n × m) and optimal O(n + m) run sub-millisecond; the Set guard is correctness, not optimization, because two identical `** apple 95 kcal` lines would otherwise double-claim the same row.
+
+Key points to remember:
+- Pass 1 key is `(name, kcal)` composite; Pass 2 key is `lineIndex` — exact-value beats line-position as evidence quality.
+- `usedIds` Set prevents two scanned lines from double-claiming the same existing row — the guard is correctness, not perf.
+- Delete-on-unmatch is the policy difference vs todos: nutrition rows are derived state, todos have carryover.
+- O(n + m) time and space after Set conversion; correctness holds even when two identical lines appear on the same entry.
+- Identity should survive the user's edit but not the user's deletion — that contract is the whole shape of the algorithm.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -317,3 +325,4 @@ Then open the file and verify.
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

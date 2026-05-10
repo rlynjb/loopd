@@ -13,15 +13,7 @@
 
 You've wired up a "save on every keystroke" autosave and watched your network tab fill up with one request per character. The user is typing fast, you're firing eighty requests in ten seconds, and the server is doing the same work eighty times to settle on a final state that one request could have produced. The naive fix is to save less often; the real fix is to save once at the end of the burst.
 
-Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `schedulePush()` (re)arms a 5-second timer. After 5s of write quiet, `pushAll()` walks the registry and pushes every dirty row.
-- **Why here:** typing fires hundreds of writes per minute (autosave per keystroke). Pushing each one would melt the network. Debouncing collapses a typing burst into a single push.
-- **Checklist step:** 2 (Request flow) + 3 (Caching)
-- **Tradeoff:** if the app is killed in the 5-second window, the latest writes never reach cloud — but they're still in local SQLite, and the next session's startup pushes them.
+Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -85,6 +77,19 @@ Debouncing originated in mechanical switches (literal bouncing) and got adopted 
 - **5s debounce** — gives: ~1 push per typing burst. Costs: up-to-5s of "writes only in SQLite" risk on app kill.
 - **Re-queue if already pushing** — gives: in-flight push isn't disrupted; new writes still land. Costs: in extreme cases the queue can starve if `pushAll()` always runs longer than 5s.
 - **Boot-time `pushAll()`** — gives: catches up anything missed last session. Costs: the first few seconds of cold-start network are spent on push, not pull.
+
+---
+
+## Quick summary
+
+Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window, decoupling the rate at which writes are produced from the rate at which they hit the network. In this codebase `schedulePush()` in `src/services/sync/schedulePush.ts` (re)arms a 5-second timer on every synced write in `src/services/database.ts`, and after 5s of write quiet `fire()` either kicks off `pushAll()` or re-arms if a push is already in flight. Typing fires hundreds of writes per minute via autosave-per-keystroke, so the constraint was "local sees the firehose, network sees the trickle" — pushing each write would melt the connection. The cost is up to 5 seconds of "in SQLite but not yet in cloud" exposure if the app is killed mid-window, which is acceptable because local SQLite is canonical and the boot-time `pushAll()` in `app/_layout.tsx` catches up on next launch.
+
+Key points to remember:
+- Every synced-table mutator in `database.ts` ends with `schedulePush()`; the timer resets on every call and only fires after 5 seconds of write quiet.
+- `fire()` re-arms via `schedulePush()` if a push is already in flight — that's what makes slow networks tolerable without clobbering in-flight work.
+- Lives in step 2 (Request flow) and step 3 (Caching) of the system-design checklist.
+- Boot-time `pushAll()` in `app/_layout.tsx` is the safety net that catches writes orphaned by an app kill inside the 5s window.
+- 5 seconds is empirical, not sacred — shorter feels chattier, longer means more risk on app kill; this is the smallest interval that batches a typing burst as one push.
 
 ---
 
@@ -176,3 +181,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

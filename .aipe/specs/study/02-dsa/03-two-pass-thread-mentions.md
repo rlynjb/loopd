@@ -17,11 +17,6 @@ This is fuzzy match with a displacement window — strongest evidence first (exa
 
 ---
 
-## Quick summary
-- **What:** match parsed-tags-from-text to existing-mention-rows. Pass 1 = exact `(threadId, sourceLine)`. Pass 2 = `(threadId, tagText)` within ±3 lines.
-- **Why here:** users often add a few lines above existing tags. The row id should survive that small shift.
-- **Tradeoff:** Pass 2 is O(n × m) but per-entry n + m is small (typically <10), so the cost is negligible.
-
 **Real operation:** `reconcileMentions` in `src/services/threads/scanThreads.ts`.
 
 ---
@@ -195,6 +190,19 @@ The ±3 fuzzy match is a tolerance window — same idea as patch-tolerance in `g
 
 ---
 
+## Quick summary
+
+Fuzzy match with a displacement window is the family of "anchor on identity, allow a bounded slip on position" — the same shape that `git apply --3way` uses for patch tolerance and that source-control "blame" uses to track lines across commits. In this codebase `reconcileMentions` matches parsed-tags-from-text against existing `thread_mentions` rows: Pass 1 demands an exact `(threadId, sourceLine)` match; Pass 2 falls back to `(threadId, tagText)` within ±3 lines for the unmatched residue. The constraint is that users often add a paragraph above a tag without moving the tag itself, so the row id should survive that small shift — a stricter algorithm would burn identity every time. The cost is that Pass 2 is O(n × m) instead of O(n + m), but per-entry n + m is bounded at a handful (typically <10), so the constant overhead of building a Map for hash lookup would exceed the savings of the linear scan it would replace. At the call site `parseTags` only returns tags within one entry, which is what makes the asymptote stop mattering.
+
+Key points to remember:
+- Same two-pass shape as the todo scanner, but Pass 2 uses a ±3 line tolerance window instead of exact line match.
+- The `used` Set is correctness, not performance — it prevents two same-text mentions on adjacent lines from double-claiming the same existing row.
+- Pass priority encodes evidence quality: exact `(threadId, sourceLine)` beats fuzzy `(threadId, tagText)` within ±3.
+- O(n × m) per pass, but n + m is bounded at the call site (one entry's worth of tags), so the constant cost is what's actually paying.
+- ±3 isn't arbitrary — it reflects observed user behaviour ("added a paragraph above the tag") rather than a chosen threshold.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -280,3 +288,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

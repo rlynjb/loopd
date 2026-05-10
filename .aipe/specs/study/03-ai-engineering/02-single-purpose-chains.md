@@ -13,14 +13,7 @@
 
 The instinct when you start building with an LLM is to chain prompts together — "first summarize, then critique the summary, then rewrite based on the critique, then format." That instinct produces systems where a single bad token three calls deep poisons everything downstream, costs five times as much as it needs to, and is impossible to debug because you can't tell which step actually failed. The fix is older than LLMs: give each call exactly one job, validate the output, move on.
 
-Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** five chains, five jobs — `summarize`, `caption`, `classify`, `expand`, `interpret`. Each is a single LLM call with a fixed system prompt + a per-call user prompt + an output contract (JSON for 4, markdown for interpret).
-- **Why here:** easier to debug (one chain fails, you know which job failed), easier to test (one expected output shape per chain), cheaper (only run what you need).
-- **Tradeoff:** no cross-chain reasoning. If a feature needs "summarize then expand each summary item," you'd write the orchestration in app code, not in a single chain.
+Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -137,6 +130,19 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
 
 ---
 
+## Quick summary
+
+Single-purpose chains is the family of "one LLM call, one job, one output contract" — each chain has a fixed system prompt, a per-call user prompt, and a contract on what it returns. In this codebase five chains do five jobs (`summarize`, `caption`, `classify`, `expand`, `interpret`), and four of them return JSON while `interpret` returns markdown. The constraint that drove it is debuggability and independent failure — caption was split out of summarize when conjoined chains started failing conjointly, and interpret was added separately because its markdown contract didn't fit the validate-and-persist shape. The cost is no cross-chain reasoning at the LLM layer — any "summarize then expand each summary item" orchestration lives in app code, not in a single chain.
+
+Key points to remember:
+- Five chains, five jobs — `summarize`, `caption`, `classify`, `expand`, `interpret`. Each is one LLM call.
+- Each chain has a fixed output contract: JSON for four, markdown for `interpret`.
+- Failures are localised — caption was split from summarize precisely so one chain's wobble doesn't kill the other.
+- `expand.ts` is four typed schemas behind one shape (idea/knowledge/study/reflect; `'todo'` is non-expandable) — that's the line drawn for "one chain".
+- The cost is no cross-chain reasoning: orchestration logic lives in app code, not in a mega-prompt.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -221,3 +227,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — chain count grew from 4 to 5 (Interpret added, with markdown-out contract). Expand types reduced from 6 to 4. Classify modes reduced from 7 to 5. See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 2 hint 4→5 chain files; corrected "expand.ts is six prompts" to 4 typed schemas (ExpandableType excludes 'todo'); updated Level 4 alternative count 6→4.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

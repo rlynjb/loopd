@@ -13,14 +13,7 @@
 
 You hit "save" and the app freezes for four seconds while an LLM thinks about your input. The interaction was instant the day before AI was added, and now it's slow on every save. The fix isn't a faster model — the fix is to stop waiting. Commit a sensible placeholder synchronously, kick off the model call in the background, and update the row when the answer comes back. The user feels nothing.
 
-Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `reconcileTodoMetaForEntry` returns synchronously. New ambiguous rows insert with `type='todo'` placeholder and fire `scheduleClassify` async; the LLM result writes back via `updateTodoMeta` + emits `CLASSIFY_PROGRESS_EVENT`.
-- **Why here:** keeping `reconcileTodoMetaForEntry` synchronous means the editor's commit doesn't block on the network. A 30-todo entry with 10 ambiguous lines would otherwise wait for 10 LLM round-trips — that's a 3-5 second pause when leaving the editor.
-- **Tradeoff:** the user briefly sees `type='todo'` on rows that the classifier later upgrades. The `/todos` screen has a small banner showing "X classifying…" via `getClassifyInFlight()`.
+Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. The diagram below shows the shape it takes here.
 
 ---
 
@@ -119,6 +112,19 @@ Fire-and-forget is the classic responsiveness pattern in UI code — kick off th
 
 ---
 
+## Quick summary
+
+Async background classification is the "fire-and-forget" pattern applied to LLM annotation — kick off the slow network call without awaiting it, let the synchronous path return, and write back when the result arrives. In this codebase `reconcileTodoMetaForEntry` inserts each new ambiguous row with a `type='todo'` placeholder and fires `scheduleClassify` without awaiting; `classifyTodo` later calls Haiku/4o-mini, `updateTodoMeta` writes the result, and `CLASSIFY_PROGRESS_EVENT` tells the `/todos` screen to re-render the badge. The constraint that drove it is editor-commit latency — a 30-todo entry with 10 ambiguous lines would otherwise wait 3-5 seconds for sequential round-trips. The cost is that failures are silent: a flaky network leaves rows stuck at `type='todo'` and the user might not notice without the `/todos` banner from `getClassifyInFlight()`.
+
+Key points to remember:
+- Synchronous insert with placeholder type, async LLM call, event-driven UI refresh.
+- The editor commit never blocks on the network — that's the rule.
+- Errors are caught and logged; `scheduleClassify` never throws.
+- Failures are eventually-consistent: the next reconcile re-fires on `null`-confidence rows.
+- No concurrency cap today — at 100+ ambiguous todos this would need a `MAX_CONCURRENT` like `expand.ts:25`.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -202,3 +208,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

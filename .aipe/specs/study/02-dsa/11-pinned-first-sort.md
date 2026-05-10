@@ -17,11 +17,6 @@ This is sort with priority partition — a two-key lexicographic comparator wher
 
 ---
 
-## Quick summary
-- **What:** sort todos so pinned rows appear above unpinned, with newest-first ordering inside each group.
-- **Why here:** the active sort on `/todos` and the dashboard. Pinned acts as a sticky modifier on top of recency.
-- **Tradeoff:** within the pinned group, an old-but-still-pinned item is below a newer pinned item — no way to override.
-
 **Real operation:** the inline `out.sort(...)` in `app/todos.tsx` (lines ~187-194) and `src/components/home/SmartTodoList.tsx`.
 
 ---
@@ -175,6 +170,19 @@ When brute force is fine: at the journaling scale of a few hundred todos, both a
 
 ---
 
+## Quick summary
+
+Stable lexicographic sort with a priority partition is the family of "two-key comparator where the first key is a boolean importance flag and the second key is a timestamp" — the same shape SQL expresses as `ORDER BY pinned DESC, created_at DESC`, the same shape email inboxes use for starred-then-recent, the same shape chat apps use for pinned-then-recent threads. In this codebase the comparator is inlined in `out.sort((a, b) => …)` at `app/todos.tsx` L187–L194 on the `/todos` screen: it compares `pinned` first (true before false), then `createdAt DESC` so newer rows surface within each group. The constraint is that pinning is a sticky modifier on top of recency, not a replacement for it — capturing actual product intent in the cheapest comparator. The cost is no expression for "pin this specific old item to the very top of the pinned group" — within the pinned partition, a newer pinned item always wins, and there's no third tier. The dashboard component `src/components/home/SmartTodoList.tsx` L41–L67 still runs the legacy position-based sort — a known content drift waiting on a one-comparator swap.
+
+Key points to remember:
+- Two-key comparator: boolean pin first, `createdAt DESC` tiebreak — `Array.prototype.sort` runs TimSort, O(n log n), in-place.
+- The policy is explicit and trivially evolvable: changing pin to a 3-tier priority is a one-line edit on `aPin = a.meta.priority`.
+- TimSort is already in the runtime and handles partially-sorted input in near-linear time — the comparator is the only code I own.
+- No way for a user to override the recency tiebreak inside the pinned group — the third tier doesn't exist yet, and the legacy `position` column is the path if demand shows up.
+- `SmartTodoList.tsx` still uses the legacy position-based sort — content drift flagged but not migrated.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -263,3 +271,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

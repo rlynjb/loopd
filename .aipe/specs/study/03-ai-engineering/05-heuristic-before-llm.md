@@ -13,14 +13,7 @@
 
 The cheapest LLM call still costs money, takes 300+ milliseconds, and can fail. If your product runs an AI on every keystroke or every new row, you'll burn through a budget that buys you nothing for inputs a regex could have answered. The fix is to ask "do I actually need a model for this?" before every call — and most of the time, on the easy inputs, the answer is no.
 
-The heuristic-first pattern is a two-stage classifier: a cheap deterministic check decides whether the input is easy enough to handle without the model, and only the residual uncertain cases pay for inference. It belongs to the family of "cascade" or "early-exit" classifiers — the same shape as spam filters that rule out obvious junk before the ML model, content moderation pipelines that block known-bad hashes before vision models, and CPU branch predictors that take the fast path when the prediction is confident. You've already seen this in production LLM stacks where a regex or BM25 layer sits in front of a vector DB, and in routing layers (LangChain routers, LiteLLM fallbacks) that send small inputs to small cheap models and only escalate when they have to. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** cheap deterministic check first; expensive LLM call only if the cheap check is uncertain.
-- **Why here:** the LLM classifier costs ~$0.0001 per todo. A heavy journaling day produces 30+ todos. Heuristic catches the easy 60-70% for free.
-- **Tradeoff:** the heuristic intentionally over-fires `null`. False negatives cost one cheap LLM call. False positives would be silent and require a manual override — bias is firmly toward null.
+The heuristic-first pattern is a two-stage classifier: a cheap deterministic check decides whether the input is easy enough to handle without the model, and only the residual uncertain cases pay for inference. It belongs to the family of "cascade" or "early-exit" classifiers — the same shape as spam filters that rule out obvious junk before the ML model, content moderation pipelines that block known-bad hashes before vision models, and CPU branch predictors that take the fast path when the prediction is confident. You've already seen this in production LLM stacks where a regex or BM25 layer sits in front of a vector DB, and in routing layers (LangChain routers, LiteLLM fallbacks) that send small inputs to small cheap models and only escalate when they have to. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -107,6 +100,19 @@ Confident `'todo'` results bypass the LLM entirely — meta is inserted with `cl
 
 ---
 
+## Quick summary
+
+Heuristic-before-LLM is a two-stage cascade classifier: a cheap deterministic check decides whether the input is easy enough to skip the model, and only the residual uncertain cases pay for inference. In this codebase every new todo runs through `heuristicClassify()` in `src/services/todos/heuristicClassify.ts` (L71–L102, regex tables L12–L62) before any LLM call — confident `'todo'` results bypass the model entirely; `null` results insert with `classifierConfidence=null` and fire `scheduleClassify()` async. The constraint that drove it is cost on the highest-volume chain — classify is ~$0.0001 per call on Haiku/4o-mini and a heavy journaling day produces 30+ todos, so the heuristic catching 60-70% for free is the whole win. The cost is a regex table to maintain and a bias toward `null` that fires more LLM calls than strictly necessary — but false negatives cost a fraction of a cent while false positives would be silent and need user-initiated overrides.
+
+Key points to remember:
+- Heuristic returns `'todo' | null` — never anything else; the asymmetry is the whole design.
+- `'todo'` bypasses the LLM entirely (`classifierConfidence='heuristic'`); `null` schedules the LLM async.
+- Bias is firmly toward `null`: false negatives cost ~$0.0001, false positives need a manual override and lock the row.
+- The same shape repeats elsewhere — `expand.ts:218` refuses to expand `meta.type == 'todo'`; `compose.ts` deterministically falls through `variants.clean → caption → summary.summary`.
+- The cost is more LLM calls than strictly necessary and a regex table that must be updated when new input shapes appear.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -190,3 +196,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block. No "7-class problem" string present in this file; classification-count drift (7→5 modes) lives in file 13 and is updated there. Heuristic returns `'todo' | null` so the heuristic-gate description is unaffected by the mode-count reduction.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

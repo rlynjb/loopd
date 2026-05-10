@@ -13,14 +13,7 @@
 
 Most AI features in a product are invisible to the user — the model output is parsed, validated, written to a database, and rendered later as if it had been there all along. But some AI features are different: the model's output *is* the artifact the user reads. There's no database row, no derived state, no downstream consumer — just text that appears on screen because a human asked for it. That second category needs a completely different posture toward validation, persistence, and trust.
 
-The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `interpretEntry(rawText)` calls Sonnet/4o with a long opinionated system prompt and returns a markdown reflection. Output is rendered in a modal in the journal screen and is **not** persisted to SQLite — purely ephemeral.
-- **Why here:** the other 4 chains all emit structured JSON for derived state. Interpret does the opposite — it's the only chain whose output is the artifact the user *reads*, not data the app *uses*.
-- **Tradeoff:** no schema = no hard validation gate. The "validator" is `cleanMarkdown` which only strips code fences and rejects empty output. The model is trusted to follow the prompt's structural suggestions.
+The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The diagram below shows the shape it takes here.
 
 ---
 
@@ -144,6 +137,19 @@ The system prompt is the longest in the codebase — 32 lines — and prescribes
 
 ---
 
+## Quick summary
+
+Interpret is the user-facing generation chain — the pattern where the model's output is the final artifact the user reads, not an intermediate value the app stores and re-renders. In this codebase `interpretEntry()` at `src/services/ai/interpret.ts` L114–L149 calls Sonnet/4o with a 32-line opinionated SYSTEM_PROMPT, runs two input guards (`MIN_TEXT_LENGTH = 20`, `MAX_INPUT_CHARS = 2000` via `truncateTail`), validates output with the 11-line `cleanMarkdown`, and returns the markdown to `InterpretModal` for render — nothing is persisted to SQLite. The constraint that drove it is that the consumer is the user, not the app: the value-per-bit of a one-time read doesn't justify a new `interpretations` table, sync mapping, conflict resolution, and soft-delete columns. The cost is no hard validation gate — model drift shows up as visibly worse output rather than a rejected call, and re-tapping the same entry costs another LLM call.
+
+Key points to remember:
+- Markdown out, no JSON, no schema — `cleanMarkdown` strips outer ``` fences and rejects empty/short output.
+- Ephemeral by design — re-opening the modal re-fires the chain; closing it discards the result.
+- `truncateTail` keeps the most-recent 2000 chars, not the first — recent thoughts matter more for reflection.
+- Some AI outputs are products, not data — that's why interpret breaks the JSON convention.
+- Prompt-level constraints (no clinical labels, no coachy language) are a soft guarantee; the user is the integrity check.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -232,3 +238,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

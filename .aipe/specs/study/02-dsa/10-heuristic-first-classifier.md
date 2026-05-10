@@ -17,11 +17,6 @@ This is the cascading-classifier pattern, sometimes called early-exit or cheap-f
 
 ---
 
-## Quick summary
-- **What:** ordered regex checks. Speculative + question first (return `null`), then modal + deadline + imperative (return `'todo'`), else `null`.
-- **Why here:** every new todo runs this on insert. The LLM classifier only fires when this returns `null`. The heuristic catches ~60-70% of cases for free.
-- **Tradeoff:** the heuristic intentionally over-fires `null`. False negatives cost one cheap LLM call. False positives would be silent and require a manual override — so the bias is firmly toward null.
-
 **Real operation:** `heuristicClassify` in `src/services/todos/heuristicClassify.ts`.
 
 ---
@@ -173,6 +168,19 @@ Every "free first, paid second" pipeline in this codebase has the same shape —
 
 ---
 
+## Quick summary
+
+Cascading classification is the family of "build a hierarchy of classifiers ordered by cost, terminate on the first one confident enough to commit" — the same shape spam filters use (rule score before ML), OCR pipelines use (whitespace detection before character recognition), CDNs use (cache check before origin fetch). In this codebase `heuristicClassify` in `src/services/todos/heuristicClassify.ts` runs ordered regex checks on every new todo: speculative + question patterns first (return `null` to defer), then modal + deadline + imperative-verb checks (return `'todo'` when confident), else `null` to fall through to the LLM. The constraint is precision-over-recall: false positives become silent wrong checkboxes the user has to clear manually, so the function is biased toward `null` and only commits `'todo'` on clear evidence. The cost is more LLM calls than strictly necessary — every ambiguous line still pays a Haiku round-trip — and a regex table that must be maintained per-locale (English-only today). Brute-force "always call the LLM" is fine financially at single-user scale; the heuristic exists primarily so typing never waits on Haiku.
+
+Key points to remember:
+- It's a cost gate, not a classifier — `null` means "I'm not sure, defer to the LLM," not "this isn't a todo."
+- Order encodes evidence priority: rule out speculative interpretations (`maybe`, `noticed`, trailing `?`) before looking for action evidence (`should`, `fix`, `by EOD`).
+- False positives are silent friction; false negatives are cheap LLM calls — the asymmetry of failure modes drives the asymmetry of the function.
+- O(R) regex passes per line with R ≈ 100, effectively O(1); the savings are wall-clock latency and Haiku $ on the 60-70% of obvious cases.
+- Non-English text falls through to `null` and the LLM picks up the slack — graceful degradation across locales.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -263,3 +271,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

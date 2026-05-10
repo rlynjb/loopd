@@ -17,11 +17,6 @@ This is the batched-upsert pattern with checkpoint-per-batch progress — the sa
 
 ---
 
-## Quick summary
-- **What:** select `WHERE updated_at > synced_at`, upsert in batches of 50 with `onConflict: 'user_id,id'`. Stamp `synced_at` per successful batch.
-- **Why here:** big payloads risk timeouts; per-row pushes risk hundreds of round-trips. 50 is the empirical sweet spot.
-- **Tradeoff:** a transient mid-batch failure leaves the failed 50 unsynced; the next push retries them (idempotent thanks to `onConflict`).
-
 **Real operation:** `pushTable` in `src/services/sync/push.ts`.
 
 ---
@@ -177,6 +172,19 @@ Batched upsert is the standard pattern for any sync engine — Salesforce Bulk A
 
 ---
 
+## Quick summary
+
+The batched-upsert pattern with checkpoint-per-batch progress is the family of "amortise per-call overhead by batching, but keep batches small enough that a failure isn't catastrophic" — the same shape as resumable file uploads, bulk-load utilities (`COPY` with commit intervals), and message-queue consumers committing offsets per batch. In this codebase `pushTable` in `src/services/sync/push.ts` selects `WHERE updated_at > synced_at`, upserts to Supabase in batches of 50 with `onConflict: 'user_id,id'`, then stamps `synced_at` per successful batch so the row stops being "dirty"; on failure it leaves `synced_at` alone so the next push retries the same batch. The constraint that made this the right call was that idempotency on the receiver (upsert-on-conflict with LWW) means the sender doesn't need a separate retry table — the SQLite `synced_at` column IS the durable retry queue. The cost is that batches are all-or-nothing (a partial-batch failure can't be expressed), and the 10 tables in the orchestrator are pushed sequentially with no cross-table transaction, so a second device pulling between table pushes can briefly see entries that reference meta the cloud doesn't yet know about. 50 is empirical, not theoretical: 100+ flakes on slow connections with `entries` text blobs, 25 wastes round-trips.
+
+Key points to remember:
+- One HTTPS round-trip per batch of 50, vs one round-trip per row in the brute-force shape — turns ~27s into ~600ms at 137 dirty rows.
+- The `synced_at` column IS the retry queue — no separate failure log, no exponential-backoff structure; the next push's predicate re-selects whatever didn't get stamped.
+- `onConflict: 'user_id,id'` + LWW means partition-induced double-apply (server applied, response dropped) is invisible — the second upsert is a semantic no-op.
+- Batch size 50 is empirically tuned: large enough to amortise round-trip overhead, small enough that a failure costs at most 50 rows on retry.
+- No cross-table transaction across the orchestrator's 10 tables — eventually consistent; the defensive `if !meta` skips in downstream readers absorb the gap at single-writer scale.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -262,3 +270,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

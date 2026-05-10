@@ -13,15 +13,7 @@
 
 Most "the database is slow" problems are actually "we put the wrong thing in the database" problems. Stuffing a hundred-megabyte video into a row meant for kilobyte text, or putting an API key into a queryable column where any read can leak it, is a category error — the storage shape doesn't match the data's needs. A serious system has more than one place to put a byte, and a rule for which place each kind of byte goes.
 
-A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** SQLite (canonical), filesystem (clips/exports), SecureStore (keys + flags), Supabase Postgres (mirror), external LLM APIs (stateless).
-- **Why here:** mixing them would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly, and you don't want secrets in a queryable table.
-- **Checklist step:** 1 (Data model)
-- **Tradeoff:** clips are device-local. If you reinstall the app, your videos are gone (cloud holds the metadata, not the bytes). Solo product, accepted.
+A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. The diagram below shows the shape it takes here.
 
 ---
 
@@ -90,6 +82,19 @@ The "different storage for different data shapes" idea is older than the cloud �
 - **5 layers** — gives: each one is small and well-suited. Costs: the app has to know which layer to ask.
 - **Clips device-local** — gives: zero upload cost, instant playback. Costs: reinstall = video loss.
 - **Cloud is mirror only** — gives: predictable read path (always SQLite). Costs: a power user expecting "log into cloud, pull state on a new device" gets metadata only, not videos.
+
+---
+
+## Quick summary
+
+A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data — structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, mirrors on a cloud database, ephemeral calls to stateless services. In this codebase that's five layers: `src/services/database.ts` (1455 lines) opens `loopd.db` as the canonical SQLite store of 12 tables; `src/services/fileManager.ts` puts clips under `/document/loopd/clips/<date>/` and exports under `/document/loopd/exports/`; `src/services/ai/config.ts` reads SecureStore for API keys and run-once flags; `src/services/sync/client.ts` mirrors 10 tables to Supabase Postgres; and the AI services in `src/services/ai/` and `src/services/todos/` make stateless HTTP calls to Anthropic and OpenAI. The constraint was that mixing storage types would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly and you don't want secrets in a queryable table. The cost is that clips are device-local: reinstall the app and the videos are gone (cloud holds the metadata in `clips_json`, not the bytes), which is accepted for a solo product but would need Supabase Storage with content-addressed URIs for a durable multi-device product.
+
+Key points to remember:
+- The chain is canonical SQLite → filesystem for blobs → SecureStore for secrets → Postgres mirror (never read first) → stateless LLM APIs; each layer does one job.
+- Reads always go to local SQLite first; Supabase is a mirror that catches up async via `schedulePush()` and pull.
+- Lives in step 1 (Data model) of the system-design checklist.
+- Clips are device-local by design — a phone loss is a video loss, but `clips_json` metadata survives because it rides the synced `entries` row.
+- The `clip_uri` column is a plain string, not a foreign key, so the migration path to Supabase Storage with content-addressed (sha256 → URL) paths is unblocked when Phase B needs it.
 
 ---
 
@@ -181,3 +186,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

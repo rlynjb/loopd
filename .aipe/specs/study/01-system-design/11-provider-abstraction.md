@@ -13,15 +13,7 @@
 
 You've shipped an integration with a third-party service and then watched the vendor change their pricing, deprecate an endpoint, or just go down for a day. If the call to that vendor was sprinkled across thirty files, you got to spend a week chasing it down. If it was behind one well-defined seam, you swapped vendors in an afternoon. The difference is not how good either vendor was — it's how prepared the codebase was for the day one of them stopped being the right answer.
 
-The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** five AI services (summarize, caption, classify, expand, interpret). Each branches on `'claude' | 'openai'`. Same provider contract, different output contracts (JSON for 4, markdown for interpret).
-- **Why here:** the app sells AI features but doesn't lock the user into one provider. SecureStore keys can be either; the user picks. Default is Claude.
-- **Checklist step:** 2 (Request flow)
-- **Tradeoff:** every caller carries the branch — there is no single `BaseModel.invoke` interface. Two providers, five callsites, ten code paths. Worth it because each path can use the provider's optimal API (e.g., `response_format: json_object` on OpenAI for the JSON chains; interpret omits it because it wants markdown out).
+The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. Here's how the shape lands in this codebase.
 
 ---
 
@@ -114,6 +106,19 @@ Multi-provider AI abstraction was popularised by LangChain's `BaseChatModel` int
 
 ---
 
+## Quick summary
+
+The strategy pattern keeps the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. In this codebase `getProvider()` in `src/services/ai/config.ts` returns `'claude' | 'openai'` from SecureStore, and every AI service file (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`) carries an explicit two-arm branch — Claude via `@anthropic-ai/sdk`, OpenAI via raw `fetch` to `/v1/chat/completions` — before converging on a shared parse/validate/persist step. The constraint was that the app sells AI features without locking the user into one provider, and unified `BaseChatModel`-style interfaces either lie about provider-specific knobs (OpenAI's `response_format: json_object`) or constrain to a lowest common denominator. The cost is that every caller carries the branch: 5 chains × 2 providers = 10 explicit code paths, with no shared layer to hold cross-cutting features like token counting or retries. At three or more providers the duplication would start to feel redundant and a `BaseChatModel`-style interface would be the better call.
+
+Key points to remember:
+- The shape every caller follows is `getProvider()` → key getter → branch → parse → validate → persist; the branch is the only divergence.
+- Live switching works because `getProvider()` reads SecureStore on every call, not from a cached union — toggling provider in `app/settings/ai.tsx` takes effect on the next AI call with no restart.
+- Lives in step 2 (Request flow) of the system-design checklist.
+- Each branch uses the provider's optimal API (e.g., `response_format: json_object` on OpenAI for the JSON chains; interpret omits it because it wants markdown out) — a unified interface would lose that.
+- 5 chains × 2 providers = 10 code paths today; at 3+ providers the duplication starts costing more than the leaky-abstraction tax of a `BaseChatModel`-style interface.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -203,3 +208,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

@@ -17,11 +17,6 @@ This is cursor-based incremental pull — the same shape as RSS feed readers (`L
 
 ---
 
-## Quick summary
-- **What:** select cloud rows where `updated_at > last_pull_at`, page by 200 ASC, run `chooseWinner(local, cloud)` per row, stamp `synced_at = serverTime` on accepted rows.
-- **Why here:** cursor-by-timestamp is monotonic — the next page picks up rows written during the loop. Server time avoids local clock skew.
-- **Tradeoff:** per-row `chooseWinner` does an extra local SELECT. Acceptable; pull is rarely the hot path.
-
 **Real operation:** `pullTable` in `src/services/sync/pull.ts`.
 
 ---
@@ -193,6 +188,19 @@ Cursor-based pagination is the standard for change-data-capture (CDC). DynamoDB 
 
 ---
 
+## Quick summary
+
+Cursor-based incremental pull is the family of "fetch only what's new since the last watermark, page through the result, resolve conflicts per row" — the same shape as RSS `If-Modified-Since`, event-sourced replication, and `WHERE updated_at > ?` CDC pipelines. In this codebase `pullTable` in `src/services/sync/pull.ts` selects cloud rows where `updated_at > last_pull_at`, pages them by 200 ASC, runs `chooseWinner(local, cloud)` per row, and stamps `synced_at = serverTime` on accepted rows so the next push doesn't re-flag them as outgoing-dirty. The constraint is that the cursor must come from a clock both sides agree on — Postgres's `get_server_time()` RPC, not the device's `Date.now()` — so clock skew between devices can't skip or duplicate rows. The cost is one local SELECT per row for the conflict gate and one extra RPC per pull for server time, both cheap relative to pull's non-hot-path role. Brute-force full-table fetch is acceptable only at initial bootstrap when "new = everything" anyway.
+
+Key points to remember:
+- Monotonic cursor (`updated_at > last_pull_at`) + page-by-200 ASC + strict `>` predicate; OFFSET pagination is racy under concurrent writes.
+- The cursor is anchored to server time, never local clock — device clock skew is the bug this prevents.
+- `chooseWinner` per row is the read counterpart of LWW writes — local edits in flight don't get overwritten by stale cloud rows.
+- Strict `>` loses ties when two rows share `updated_at` at a page boundary — composite cursor `(updated_at, id)` is the fix when collisions matter.
+- O(new) bytes on the wire, O(200) memory per page; cost scales with what changed, not with total table size.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -278,3 +286,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

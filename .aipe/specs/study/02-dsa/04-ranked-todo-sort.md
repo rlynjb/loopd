@@ -17,11 +17,6 @@ This is the multi-key comparator pattern, and it's the same shape as SQL's `ORDE
 
 ---
 
-## Quick summary
-- **What:** flatten todos across all entries, drop completed-too-long-ago, sort by (done, source priority, createdAt).
-- **Why studied:** the file is still in the repo (`src/services/todos/rank.ts`), and the concept of "compose-into-one-comparator" is broadly applicable.
-- **Status:** **legacy.** The dashboard and `/todos` no longer call `rankTodos`. They use a simpler pinned-first sort (see [11-pinned-first-sort](./11-pinned-first-sort.md)). Only `formatRelativeTime` from this file is currently imported.
-
 **Real (legacy) operation:** `rankTodos` in `src/services/todos/rank.ts`.
 
 ---
@@ -197,6 +192,19 @@ The actual sort used by `/todos` and the dashboard is documented in [11-pinned-f
 
 ---
 
+## Quick summary
+
+Multi-key comparator sort is the canonical pattern for stable lexicographic ordering — the same shape as SQL `ORDER BY a, b, c`, the same shape as a Python tuple-key in `sorted(...)`, the same shape every spreadsheet uses for multi-column sort dialogs. In this codebase `rankTodos` in `src/services/todos/rank.ts` flattens todos across all entries, drops completed-too-long-ago rows, then runs a single `Array.prototype.sort` with a fall-through comparator over three keys: done flag (bottom), source priority (carried > AI > journal), and createdAt ascending. The constraint that made this the right call was an opinionated "what should I do next" surface order — carried-from-yesterday floats above AI-generated, which floats above today's freshly written. The cost is that the function is now legacy: pinned-first sort replaced it in the live UI on 2026-05-05 for product reasons (explicit user control beat automatic prioritization), and only `formatRelativeTime` from this file is still imported. Compose-into-one-comparator is broadly applicable beyond this codebase, which is why the concept is worth keeping even though the function is dormant.
+
+Key points to remember:
+- One stable sort over flattened-then-filtered todos, with a comparator that returns the first non-zero comparison across `(done, source priority, createdAt)`.
+- Sort priority is a sequence of fall-through comparisons — each key gets one chance to decide, then falls through if equal.
+- Status is legacy: dormant in the repo. `rankTodos` is exported but unreferenced; `formatRelativeTime` is the only live export from this file.
+- O(n log n) time (TimSort) vs the brute-force selection-sort's O(n²) — at todo-list scale both are sub-millisecond, but the comparator stays explicit about the policy.
+- Replaced for product reasons, not performance — pinned-first is dumber and the user does more work, but it's predictable.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -282,3 +290,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

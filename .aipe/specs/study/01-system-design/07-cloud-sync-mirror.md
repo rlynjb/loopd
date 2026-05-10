@@ -13,15 +13,7 @@
 
 You've used an app that "syncs across devices" and watched it stall on a loading spinner because the server was the only place the data really lived. The moment the network blinked, the app was useless. That happens whenever the cloud is treated as the authoritative store and the device is treated as a thin view of it — every read becomes a remote read, every write becomes a remote write, and the user pays for both.
 
-A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** push selects `WHERE updated_at > synced_at`, upserts in batches of 50. Pull selects cloud rows newer than `last_pull_at`, applies `chooseWinner(local, cloud)` per row.
-- **Why here:** writes feel instant (no network in the request path). The 5-second push debounce trades a little staleness for vastly fewer round-trips during typing.
-- **Checklist step:** 2 (Request flow) + 4 (State ownership)
-- **Tradeoff:** every synced row carries `synced_at` (local-only) and `deleted_at`. Schema noise; worth it.
+A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The diagram below shows how it composes in this codebase.
 
 ---
 
@@ -126,6 +118,19 @@ This is the classic timestamp-cursor sync engine, descended from CouchDB and Dyn
 
 ---
 
+## Quick summary
+
+A replica-as-mirror flip makes the device authoritative and the cloud an asynchronously-updated copy that exists for durability and cross-device transfer — every read renders from the local store, no read path waits on the network. In this codebase `pushTable` in `src/services/sync/push.ts` selects local rows where `updated_at > synced_at`, batches them by 50, and upserts to Supabase with `onConflict: 'user_id,id'`; `pullTable` in `src/services/sync/pull.ts` selects cloud rows newer than `last_pull_at` in pages of 200 and runs `chooseWinner(local, cloud)` per row, with `pushAll` and `pullAll` in `orchestrator.ts` walking the 10-table `REGISTRY`, and `sync_meta` tracking `last_pull_at`, `last_push_at`, `pending_pushes`, and `last_error` per table. The constraint was instant writes — no network in the request path — and the 5-second push debounce trades a little staleness for vastly fewer round-trips during typing. The cost is schema noise (every synced row carries `synced_at` local-only and `deleted_at`), and a missed `synced_at` stamp means a row pushes forever. The pull cursor anchors to `serverTime` from a Postgres RPC instead of `Date.now()` because clock skew would otherwise drop rows in the cursor gap.
+
+Key points to remember:
+- Push and pull are separate flows sharing the 10-table `REGISTRY` and the `sync_meta` ledger; each can be retried, scheduled, and tested independently.
+- Two cursors: push uses `updated_at > synced_at` (local-only watermark), pull uses `updated_at > last_pull_at` (per-table ledger).
+- Lives in step 2 (Request flow) and step 4 (State ownership) of the system-design checklist.
+- `updated_at` is canonical and travels with the row; `synced_at` is local bookkeeping and never goes to the cloud.
+- LWW via `chooseWinner` is the resolution rule; it breaks down on bidirectional realtime where both sides write the same row in the same second.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -214,3 +219,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

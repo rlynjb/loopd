@@ -17,11 +17,6 @@ This is the N+1 query problem and its standard remedy — the dataloader / batch
 
 ---
 
-## Quick summary
-- **What:** 4 small SQL queries pull per-thread aggregates; 2 in-memory joins (todos+meta, threads+activity) compose the final card list.
-- **Why here:** the dashboard needs all of this per thread, every load. A single mega-JOIN in SQL would work but reuses the dashboard's existing `getAllEntries` cache for free.
-- **Tradeoff:** more roundtrips than a single JOIN; less than per-thread N+1 queries.
-
 **Real operation:** `getThreadCards` in `src/services/threads/getThreadCards.ts`.
 
 ---
@@ -209,6 +204,19 @@ The "fetch in bulk, join in memory" pattern is older than ORMs — it's how ever
 
 ---
 
+## Quick summary
+
+The dataloader / batched-fetch / bulk-then-join pattern is the standard remedy for the N+1 query problem — "pull the parent rows in one query, pull all the child rows for those parents in one more query keyed by parent id, then stitch the two together in memory." In this codebase `getThreadCards` in `src/services/threads/getThreadCards.ts` runs 4 small SQL queries (last-mention, this-week count, todo links, active dates) plus 2 in-memory joins (todos+meta, threads+activity) to compose the dashboard's thread card list with `lastMentionAt`, `entriesThisWeek`, `openTodos`, `recentTodos[3]`, `staleness`, and `activeDates` per thread. The constraint that made this the right call was reuse: `getAllEntries` is already the dashboard's primary in-memory cache, so two SQL roundtrips trade for one in-memory join for free. The cost is that the 4 queries are not wrapped in a transaction, so the dashboard could technically render a state that briefly never existed in the DB — invisible at single-writer scale, observable the moment a second device joins. The function is currently dead code (threads were dropped from the dashboard in commit 42ee8a6 on 2026-05-08) but the algorithm and its trade-offs are still worth studying as the canonical N+1 fix.
+
+Key points to remember:
+- 4 SQL queries + 2 in-memory joins beats both the N+1 per-thread shape and a single giant JOIN — bounded round-trips, cheap composition.
+- Round-trips are the cost; row count is the variable. Network latency dominates SQLite query time at this scale.
+- The in-memory join leans on `getAllEntries` already being a dashboard cache; the JS join is a `Map<todoId, meta>` lookup per linked todo.
+- Defensive per-row `skip` when `meta` or `todo` is missing — data drift becomes a UI gap, not a render crash.
+- No cross-table transaction across the 4 queries — eventually consistent across tables; single-writer assumption hides the race.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -295,3 +303,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

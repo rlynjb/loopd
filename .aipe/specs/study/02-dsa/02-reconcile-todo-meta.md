@@ -17,11 +17,6 @@ That shape is the reconciler pattern, and it shows up everywhere you can't lean 
 
 ---
 
-## Quick summary
-- **What:** `reconcileTodoMetaForEntry` keeps `todo_meta` 1:1 with `entries.todos_json`. Inserts missing, deletes orphans, leaves matched rows alone.
-- **Why here:** SQLite can't FK to a JSON-array element, so the reconciler is the integrity gate.
-- **Tradeoff:** a partial run leaves drift until next commit, but the next commit's diff sees the gap and patches it.
-
 **Real operation:** `reconcileTodoMetaForEntry` in `src/services/todos/reconcileMeta.ts`. Runs after `scanTodos` produces final `todos_json`.
 
 ---
@@ -181,6 +176,19 @@ The "build both index structures, then walk both sides" diff pattern is the same
 
 ---
 
+## Quick summary
+
+The reconciler pattern is the standard remedy whenever two lists are supposed to mirror each other but no foreign-key constraint enforces the relationship — walk both sides once, decide what's missing where, apply the minimum writes to make them match. In this codebase `reconcileTodoMetaForEntry` keeps `todo_meta` rows 1:1 with `entries.todos_json` after `scanTodos` produces final ids: it builds a `Map<todoId, meta>` for "do I already have a meta?" and a `Set<todoId>` for "is this meta still valid?", then inserts missing rows and deletes orphans in O(n+m). The constraint is that SQLite can't FK to a JSON-array element, so the reconciler IS the integrity gate. The cost is that a partial run between insert phase and delete phase can leave momentary drift — the invariant is eventually 1:1, not transactionally 1:1 — but the next commit's diff sees the gap and patches it. At the project's 20-todo-per-entry scale, brute force would also be sub-millisecond; the Map+Set version is chosen for clarity (`byTodoId.has(...)` reads like the invariant), not raw speed.
+
+Key points to remember:
+- Two index structures, two walks — `byTodoId` answers "does this todo have a meta?" for the insert phase; `current` answers "does this meta still have a todo?" for the delete phase.
+- The heuristic classifier runs synchronously on insert; the LLM call is fired async via `scheduleClassify` so reconcile never blocks the journaling write path.
+- O(n + m) time and space — Map/Set lookups are O(1) and each row is touched at most twice.
+- Self-healing means eventually 1:1, not transactionally 1:1 — a crash between phases leaves orphans that the next reconcile cleans up.
+- The function reads like the invariant; at 20 todos that's why the optimal version is in the codebase, not speed.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -266,3 +274,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

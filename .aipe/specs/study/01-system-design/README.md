@@ -16,7 +16,7 @@ Architectural patterns in loopd, one file per concept. Each file opens with a di
 | 08 | [Conflict: last-write-wins](./08-conflict-last-write-wins.md) | **Last-write-wins (LWW)** *(industry standard)* | Pure function; same-second ties go to cloud. |
 | 09 | [Debounced push](./09-debounced-push.md) | **Write-behind / coalesced writes** *(industry standard)* | 5s timer collapses typing bursts into one push. |
 | 10 | [Bootstrap decision tree](./10-bootstrap-decision-tree.md) | **Cold-start bootstrap** *(language agnostic)* | Four-quadrant init: push, pull, no-op, or fallback. |
-| 11 | [Provider abstraction (LLM)](./11-provider-abstraction.md) | **Adapter / Strategy pattern** *(industry standard)* | Two providers, four callsites, eight code paths. No unified interface. |
+| 11 | [Provider abstraction (LLM)](./11-provider-abstraction.md) | **Adapter / Strategy pattern** *(industry standard)* | Two providers, five chains, ten code paths. No unified interface. |
 | 12 | [Manual-touch deviation](./12-manual-touch-deviation.md) | *(no widely-used equivalent — loopd-internal)* | Documented exception to "mentions are derived from prose." |
 | 13 | [Append-only migrations](./13-append-only-migrations.md) | **Append-only schema migrations** *(industry standard)* | Schema files are immutable once committed. |
 | 14 | [File-routed UI](./14-file-routed-ui.md) | **File-based routing** *(industry standard)* | `app/` tree IS the route tree. |

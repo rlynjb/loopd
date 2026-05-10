@@ -13,15 +13,7 @@
 
 Every clean architectural rule has exactly one or two cases that don't fit, and pretending otherwise is how codebases become liars. The honest move is to keep the rule, name the exception, and write it down in the same place the rule lives — so the next reader sees both and doesn't think they've found a bug. The alternative is to weaken the rule until it accommodates everything, which is the same as having no rule.
 
-A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** dashboard tap on a thread cell in the daily-schedule grid writes a special `thread_mentions` row with `(entry_id=NULL, todo_id=NULL)`.
-- **Why here:** the daily-schedule grid lets the user mark a thread "done today" with no prose. The staleness math (`computeStaleness`, `getThreadCards`) consumes `thread_mentions` uniformly — so writing an entry-less mention row is the cleanest signal.
-- **Checklist step:** 1 (Data model)
-- **Tradeoff:** breaks Principle 11's "mentions are derived from prose" — explicitly documented as one of two allowed deviations.
+A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. Here's how the shape lands in this codebase.
 
 ---
 
@@ -85,6 +77,19 @@ Documented exceptions are common in codebases that hold otherwise-strict invaria
 - **Allow entry-less mentions** — gives: a uniform consumer interface for staleness math. Costs: the schema permits a row that isn't tied to any prose, which a careless query can return unexpectedly.
 - **One documented exception** — gives: the principle stays strict in 99% of cases. Costs: every reader of `thread_mentions` must know the exception exists.
 - **Soft-delete the touch row to "untouch"** — gives: consistent with all other deletes. Costs: an undo-touch leaves a tombstone the database has to carry.
+
+---
+
+## Quick summary
+
+A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself rather than absorbed into a weaker rule. In this codebase the daily-schedule grid in `src/components/home/DailyScheduleGrid.tsx` taps into `toggleThreadTouchToday()` in `src/services/threads/touch.ts`, which writes a `thread_mentions` row with `(entry_id=NULL, todo_id=NULL, source_line=0, tag_text='')` — the only place in the app that produces that shape. The constraint was that the dashboard needs a "I touched this thread today" signal with no prose attribution, and the cleanest way to compose with the existing staleness math (`computeStaleness`, `getThreadCards`) was to keep `thread_mentions` as the uniform feed and carve out one exception. The cost is that every reader of `thread_mentions` must know the exception exists — Principle 11's "mentions are derived from prose" is no longer literally true, and a careless `WHERE entry_id IS NOT NULL` query would silently exclude these rows. The alternative (inserting a synthetic `[]` line into the user's prose) was rejected because the journal is the user's writing and the app does not write into it.
+
+Key points to remember:
+- One row shape, one writer: `touch.ts:toggleThreadTouchToday` is the only code path that produces `(entry_id=NULL, todo_id=NULL)` in `thread_mentions`.
+- The 14-day activity strip in `getThreadCards.ts` queries `WHERE entry_id IS NULL AND todo_id IS NULL` to read these rows specifically; the staleness math consumes them uniformly because it doesn't care about shape.
+- Lives in step 1 (Data model) of the system-design checklist.
+- One documented exception is the explicit budget — a second deviation would mean Principle 11 is wrong and needs rewriting, not patching.
+- Manual-touch rows persist when an entry is deleted because they have no `entry_id` to cascade from; that's intentional but a future bulk-cleanup feature would need a `WHERE entry_date = ?` path.
 
 ---
 
@@ -176,3 +181,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

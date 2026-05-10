@@ -17,11 +17,6 @@ This is a pure decision function — sometimes called a finite-state classifier 
 
 ---
 
-## Quick summary
-- **What:** `cellStateFor` (habits) and `cellStateForThread` (threads) compute one of 5 cell states for the weekly grid.
-- **Why here:** the grid re-renders on every habit toggle, week change, and live-now tick. If `cellStateFor` were impure (DB read, async), the grid would flash.
-- **Tradeoff:** the parent has to materialise `checkedDatesByHabit: Map<string, Set<string>>` once per render and pass it down. Worth it for O(1) lookups.
-
 **Real operation:** `cellStateFor` and `cellStateForThread` in `src/components/home/cellState.ts`.
 
 ---
@@ -173,6 +168,19 @@ Pure render functions are fundamental to React (and to spreadsheet recalc engine
 
 ---
 
+## Quick summary
+
+A pure decision function is the family of "split the expensive side (gathering) from the cheap side (deciding) so the cheap side can run hot without dragging the expensive side along" — the same shape as CSS rule resolution, React `useMemo` selectors, and Redux derived state. In this codebase `cellStateFor` and `cellStateForThread` in `src/components/home/cellState.ts` map `(habit, date, today, checkedDates)` to one of five states (`done | off-day | pending | upcoming | missed`) using a short-circuiting decision tree: check-in beats cadence beats time-of-week. The constraint is that the grid re-renders on every habit toggle, week change, and live-now tick — if the function were impure (DB read, async), the grid would flash and React's reconciler couldn't skip unchanged cells. The cost is that the parent (`DailyScheduleGrid.tsx`) has to materialise `checkedDatesByHabit: Map<string, Set<string>>` once per render and pass it down; that's the data prep that turns the per-cell call into O(1). Without the Map the algorithm collapses — each cell would scan an array per call and the grid would become O(7 × N²).
+
+Key points to remember:
+- O(1) per cell short-circuiting decision tree, called 7 × N times per render.
+- The decision order encodes priority of evidence: `done` (check-in) wins over `off-day` (cadence) wins over time-of-week.
+- The `Map<string, Set<string>>` built once at the parent is what makes the per-cell call O(1) — without it the complexity argument falls apart.
+- Pure + O(1) means React's reconciler only repaints cells whose inputs actually changed.
+- Adding a 6th state would mean changing every consumer; the tree is deterministic and exhaustive, but not open for extension cheaply.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -258,3 +266,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

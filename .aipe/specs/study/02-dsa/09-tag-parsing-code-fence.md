@@ -17,11 +17,6 @@ This is lexical masking with offset preservation — what tokenizers do when the
 
 ---
 
-## Quick summary
-- **What:** `parseTags(text)` masks code regions to spaces (preserving newlines), then runs a per-line `#tag` regex with per-line dedup.
-- **Why here:** users journal in markdown-ish prose; backticked tokens like `` `git #branch` `` should not become thread mentions.
-- **Tradeoff:** the masking step allocates a same-length string. Cheap at journal-entry scale; would matter for huge inputs.
-
 **Real operation:** `parseTags` in `src/services/threads/scanThreads.ts`.
 
 ---
@@ -189,6 +184,19 @@ The "mask then parse" pattern shows up wherever embedded languages need to be ig
 
 ---
 
+## Quick summary
+
+Lexical masking with offset preservation is the family of "two-phase parsing where phase one neutralises the regions phase two must not see, while preserving the geometry phase two depends on" — overwrite the ignored regions with same-length neutral characters instead of deleting them, so downstream offsets stay honest. In this codebase `parseTags` in `src/services/threads/scanThreads.ts` masks fenced code blocks and inline backtick spans to runs of spaces (preserving newlines), then runs a per-line `#tag` regex with a per-line `seen` Set so duplicate tags on the same line collapse to one mention. The constraint is the contract with `reconcileMentions`, which keys on `(threadId, sourceLine)` — if `maskCode` shifted line numbers, every downstream join would be wrong. The cost is an extra string allocation for the mask plus a small lazy-regex backtracking risk on pathological multi-MB pastes. Both versions run sub-millisecond at journal-entry size; the space-preserving mask is the cheapest correct shape because deleting fence contents would actually break the line index.
+
+Key points to remember:
+- Mask code regions to spaces of equal length — newlines preserved so `lineIndex` survives the mask.
+- Two-step parse: erase the outer layer (markdown fences/inline code), then run the inner parser (`#tag` regex) cleanly.
+- Per-line `seen` Set dedups same-tag-on-same-line before it can collide on `(threadId, sourceLine)`.
+- O(L) for both mask passes and the per-line scan; brute "match-then-post-filter" is O(L²) because each match re-scans the prefix.
+- Regex is the wrong tool for nested fences — this is a known limit that holds because journaling prose doesn't nest.
+
+---
+
 ## Interview defense
 
 ### What an interviewer is really asking
@@ -285,3 +293,4 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

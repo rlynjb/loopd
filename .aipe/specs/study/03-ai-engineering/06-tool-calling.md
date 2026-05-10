@@ -13,14 +13,7 @@
 
 The model can't actually do anything. It can't read a file, hit an API, query a database, or look up today's weather — it can only produce text. So how do AI products that "search the web" or "run code" or "book a flight" work? They work by having the model output a structured request — "please call the search tool with these arguments" — which the surrounding app code parses, executes, and pastes back into the next call. The model is the brain; your code is the hands.
 
-Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** every loopd AI call is one-shot — prompt → output → done. No loops where the model decides "I need to search," runs a tool, and reads the result.
-- **Why here:** every AI feature is a one-shot transformation (text → structured JSON for 4 chains, text → markdown for interpret). There's nothing for the LLM to *navigate* — the data the app needs is already in hand when the call is made.
-- **Tradeoff:** when a feature legitimately needs tool use ("find the day I was sickest last month"), it would have to be added as a new service file with its own tool loop.
+Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. The diagram below shows the shape it takes here.
 
 ---
 
@@ -90,6 +83,19 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 - **No tool calling** — gives: predictable cost, simple control flow. Costs: features needing navigation can't be expressed as a single chain.
 - **One-shot transformations** — gives: trivially debuggable, retriable. Costs: hits a ceiling on task complexity.
 - **App-fires-LLM, not LLM-fires-app** — gives: the app stays in control. Costs: the model can't ask for what it needs.
+
+---
+
+## Quick summary
+
+Tool calling is the pattern that wires a stateless text model to a stateful outside world: the model emits a structured request, the app runs it, the result is fed back as an observation, and the loop continues until the model returns a final answer. This codebase deliberately does not implement it — every chain in `src/services/ai/` returns on the first response, the closest cousin being `scheduleClassify` which is app code firing an LLM call, not the model asking the app to do work. The constraint that drove it is that every loopd feature is a one-shot transformation (text → JSON for four chains, text → markdown for `interpret`) where the data the model needs is already in hand at call time via `buildContext()`. The cost is that features genuinely needing navigation — "find me the day I was sickest last month" — can't be expressed as a single chain and would require a new service file with iteration caps and timeouts.
+
+Key points to remember:
+- Every chain is one-shot: prompt → output → done. There is no observation step.
+- No `src/services/ai/agent.ts`, no orchestrator, no graph anywhere in `src/services/ai/` or `src/services/todos/`.
+- Control flow is always app-fires-LLM, never LLM-fires-app — the app stays in control of cost and iteration.
+- A tool loop is a major control-flow upgrade (runaway cost, harder debugging, tool-name hallucination) — add deliberately, not by default.
+- The cost is a ceiling on task complexity — when a feature genuinely needs navigation, tool calling goes in a new file, not into the existing chains.
 
 ---
 
@@ -177,3 +183,4 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — chain count bumped from 4 to 5 (interpret added; still no tool calling).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

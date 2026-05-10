@@ -13,15 +13,7 @@
 
 You've edited a migration that already ran on production, deployed the change, and watched the next environment go up cleanly while the previous one stayed silently broken — because the migration runner thought the work was done and never re-ran the patched file. The pain isn't the bug; it's that there's no way to detect it without diffing schemas across environments. The root cause is treating a migration as code you can revise, instead of as a transaction log entry that's already been committed.
 
-Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `supabase/migrations/000N_*.sql` files are immutable once committed. Schema changes ship as new files. The runner (`scripts/db-migrate.mjs`) applies any not-yet-applied file in order.
-- **Why here:** an applied migration is permanent. Editing `0001` after it ran on cloud would drift the schema between dev and prod.
-- **Checklist step:** 1 (Data model)
-- **Tradeoff:** the migration log gets long. Worth it for the audit trail.
+Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. The diagram below shows the shape it takes here.
 
 ---
 
@@ -88,6 +80,19 @@ Append-only migrations are the canonical Rails pattern, copied by Django, Sequel
 - **Append-only** — gives: replay determinism. Costs: log length grows; readers must walk the history to understand current state.
 - **`pg`-based runner** — gives: dev and CI both run the same script. Costs: needs `DATABASE_URL` in env; not Supabase Studio's preferred path.
 - **No `prisma migrate`-style snapshots** — gives: zero ORM coupling. Costs: schema drift is harder to detect; a tool like `pg_dump` becomes the reference.
+
+---
+
+## Quick summary
+
+Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere it is frozen, and any correction ships as a new migration that fixes the previous one. In this codebase `supabase/migrations/000N_*.sql` files are immutable once committed, and `scripts/db-migrate.mjs` (153 lines of `pg` + `dotenv`) walks the directory, queries a `_migrations` ledger table, and runs any pending file in order. The constraint was that editing `0001` after it ran on cloud would silently drift the schema between dev and prod — there's no way to detect that without diffing schemas across environments. The cost is that the migration log gets long and readers must walk the history to understand current state, which is why the 0006/0007/0008 trio narrowed the thinking-mode taxonomy across three separate files instead of one even though the net effect was a single taxonomy change. Squashing is the answer once the log gets to fifty files; today there are eight and squashing hasn't been needed.
+
+Key points to remember:
+- Schema is event-sourced; the current state is the sum of every applied migration in order, not a snapshot.
+- Every fresh environment converges on the same schema by running the same files in the same sequence — that's the whole point of the discipline.
+- Lives in step 1 (Data model) of the system-design checklist.
+- Editing a shipped migration silently diverges environments; adding `000N_fix_typo.sql` is always the cheaper insurance.
+- The 0006/0007/0008 sequence held the append-only line even when the end state was a taxonomy narrowing — three migrations on three days, no edits to prior files.
 
 ---
 
@@ -180,3 +185,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

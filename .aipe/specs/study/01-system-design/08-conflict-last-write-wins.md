@@ -13,15 +13,7 @@
 
 Two devices have been offline for an hour and they both edit the same row. They reconnect at the same moment and start pushing their changes at the server. What's there afterwards? That's the question any replicated system has to answer before it ships, because "the latest write" is not actually well-defined when "latest" depends on whose clock you trust.
 
-Last-write-wins is the simplest possible answer: attach a timestamp to every row, and on a conflict, keep the row with the bigger timestamp. It belongs to the family of "conflict resolution policies," sitting at the cheap end of a spectrum that runs through vector clocks all the way up to CRDTs and operational transforms. You've seen this in DynamoDB's default reconciliation, in Cassandra, in cookie-based session stores, and in any cache that uses TTL plus a "newer-wins" overwrite rule. It's the right call when concurrent edits are rare and "we kept the most recent one" is an acceptable answer. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** `chooseWinner(local, cloud)` returns `'local' | 'cloud'`. The result drives whether a pulled row overwrites the local copy.
-- **Why here:** solo Phase A. Two devices = the user. The honest cases (same person edits on phone, then on tablet) all resolve cleanly with this rule.
-- **Checklist step:** 5 (Failure handling)
-- **Tradeoff:** unrecoverable for true concurrent multi-user edits. Phase B may need vector clocks if two humans ever share a single workspace.
+Last-write-wins is the simplest possible answer: attach a timestamp to every row, and on a conflict, keep the row with the bigger timestamp. It belongs to the family of "conflict resolution policies," sitting at the cheap end of a spectrum that runs through vector clocks all the way up to CRDTs and operational transforms. You've seen this in DynamoDB's default reconciliation, in Cassandra, in cookie-based session stores, and in any cache that uses TTL plus a "newer-wins" overwrite rule. It's the right call when concurrent edits are rare and "we kept the most recent one" is an acceptable answer. The diagram below shows the shape it takes here.
 
 ---
 
@@ -86,6 +78,19 @@ LWW is the simplest conflict resolution rule in distributed systems. It's what C
 - **LWW** — gives: simple, fast, debuggable. Costs: silent loss in true concurrent multi-writer cases.
 - **Tie → cloud** — gives: pull path doesn't bounce. Costs: a same-second cloud row beats a same-second local row (rare; usually unimportant).
 - **Pure function** — gives: trivially testable, no flaky state. Costs: can't use richer signals (e.g., field-level merge); the whole row is the unit.
+
+---
+
+## Quick summary
+
+Last-write-wins is the simplest conflict resolution rule: attach a timestamp to every row, and on a conflict keep the row with the bigger timestamp — it sits at the cheap end of a spectrum that runs through vector clocks up to CRDTs and operational transforms. In this codebase `chooseWinner<T extends Tombstoned>(local, cloud)` in `src/services/sync/conflict.ts` (L20–L31) is a pure function that compares `updated_at` and returns `'local' | 'cloud'`, with same-second ties going to cloud (to prevent pull-path ping-pong) and malformed timestamps defaulting to cloud (to heal locally-corrupt rows); `pullTable` invokes it per row to decide whether to upsert. The constraint was solo Phase A — two devices means the same user, sequential intent, where "we kept the most recent one" is an acceptable answer. The cost is silent loss in true concurrent multi-writer cases — LWW picks the newer `updated_at` and the older write is just gone, with no log, merge, or warning, and the pure-function design means field-level merging isn't possible (the whole row is the unit). The migration to vector clocks plus per-field merge would add a `version_vector` JSON column on every synced table and teach `chooseWinner` a third `'merge'` path — roughly two weeks of work, deferred until the conflict surface actually changes.
+
+Key points to remember:
+- `chooseWinner` is a pure function returning `'local' | 'cloud'`; ties go to cloud as a termination rule, not a fairness rule.
+- LWW is the right complexity for the actual conflict surface (one user, sequential devices); it becomes wrong when two humans share a workspace.
+- Lives in step 5 (Failure handling) of the system-design checklist.
+- Malformed timestamps default to cloud so locally-corrupt rows heal toward the well-formed cloud version.
+- The cost is silent loss in concurrent multi-writer cases — no log, no merge, no warning; the migration target is vector clocks plus per-field merge.
 
 ---
 
@@ -177,3 +182,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

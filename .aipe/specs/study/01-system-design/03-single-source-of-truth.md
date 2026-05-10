@@ -13,15 +13,7 @@
 
 Most data integrity bugs are not about a write going wrong — they're about the same fact being writable in two places, and the two places drifting. Edit a customer's email in the CRM, edit it again in the billing system, and within a week you've got two different emails and no honest answer to "which is real." The cheap fix is to pick one surface as canonical and treat every other copy as a cache you can throw away.
 
-Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** prose is canonical. Markers like `[]`, `** food N kcal`, and `#tag` in `entries.text` are the source. All derived rows are rebuilt by scanners at commit time.
-- **Why here:** keeps a single editable place. Two surfaces would mean drift; this way "delete the line in your journal, the todo is gone" works without divergent code paths.
-- **Checklist step:** 1 (Data model)
-- **Tradeoff:** you can't have a todo that doesn't exist as a `[]` line — except the dashboard's quick-add path, which adds a `[]` line implicitly.
+Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). Here's how that actually works in this codebase.
 
 ---
 
@@ -96,6 +88,19 @@ The "single source of truth" idea is older than databases — it's a normalisati
 - **Prose canonical** — gives: edit-the-text deletes-the-row. Costs: every feature needs a scanner + reconciler.
 - **Scanners at commit only** — gives: keystroke path stays cheap. Costs: a few hundred ms of "stale" derived state during typing.
 - **No `scanHabits`** — gives: habits can have rich metadata (cadence, time-of-day) the user wouldn't write inline. Costs: habits are *not* declared in prose, so they don't show up in journal exports unless you mention them.
+
+---
+
+## Quick summary
+
+Single source of truth is the discipline of designating exactly one writable origin for each fact, with every other representation derived from it deterministically — pick one surface as canonical, treat everything else as a cache you can throw away. In this codebase the prose in `entries.text` is canonical; markers like `[]`, `** food N kcal`, and `#tag` are the source, and `scanTodosFromText`, `parseTags` + `reconcileMentions`, and `src/services/nutrition/scan.ts` rebuild `todos_json`, `thread_mentions`, and nutrition rows at every commit boundary (focus blur, screen leave). The constraint was a single editable place — two writable surfaces would drift, and "delete the line, the row disappears" stops working the moment a button writes directly to `todos_json`. The cost is that every prose-derived feature needs its own scanner plus reconciler, and operations with no natural prose representation (the documented manual-touch deviation) become exceptions. Habits are first-class entities by design because cadence metadata won't fit inline; that's the principled exception, not a regression.
+
+Key points to remember:
+- Prose in `entries.text` is canonical; `todos_json`, `todo_meta`, `thread_mentions`, and nutrition rows are rebuilt from prose by scanners.
+- Scanners run at commit boundaries (focus blur, screen leave), not on every keystroke — the keystroke path stays cheap.
+- Lives in step 1 (Data model) of the system-design checklist.
+- The dashboard's quick-add path preserves the invariant by appending a `[]` line to prose, not by writing directly to `todos_json`.
+- Habits have no `scanHabits` because they're first-class user-managed entities; the manual-touch deviation is the documented one-off exception.
 
 ---
 
@@ -188,3 +193,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+
+---
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

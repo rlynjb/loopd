@@ -13,14 +13,7 @@
 
 A model was trained on the public internet two years ago. You want it to answer questions about your company's internal docs, your customer's order history, or yesterday's Slack thread — none of which it has ever seen. Fine-tuning is slow and expensive; stuffing all your data into the prompt doesn't fit. So what's left? Retrieve only the few chunks that are actually relevant to the question, paste them into the prompt, and let the model answer from the documents in front of it instead of from memory.
 
-Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** RAG is the standard pattern for "let the LLM see relevant chunks of my data." Loopd doesn't do vector RAG — it hand-picks "last 3 days, 5 siblings, last 5 captions."
-- **Why here:** the data is *small*. A user with a year of journaling has ~365 entries. Hand-picked context is plenty for the small operations the app runs today.
-- **Tradeoff:** features that need "find anything semantically similar" can't be built without adding embeddings and a vector index.
+Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. The diagram below shows the shape it takes here.
 
 ---
 
@@ -102,6 +95,19 @@ RAG came out of dense-retrieval research (DPR, REALM) and was popularised in 202
 - **Hand-picked retrieval** — gives: zero infrastructure, exact control. Costs: doesn't scale to "find anything semantically similar."
 - **No embeddings yet** — gives: simple data layer. Costs: features needing semantic search can't be built without adding embedding pipeline.
 - **Caps in code** — gives: predictable cost. Costs: if data shape changes, caps need updating.
+
+---
+
+## Quick summary
+
+Retrieval-augmented generation is the standard pattern for letting a generic LLM answer specific questions about data it wasn't trained on, by embedding a corpus, vector-searching at request time, and stuffing the nearest chunks into the prompt. This codebase doesn't do vector RAG — `summarize.ts:buildCaptionInput()` calls `getRecentAISummaries(date, 5)` at L131 for caption anti-repetition, and `expand.ts:buildContext()` at L147 pulls last 3 days plus ≤5 sibling todos via SQL with explicit `.slice(0, N)` caps. The constraint that drove it is that the corpus is tiny — one user with ~365 entries per year, and the most context any chain assembles is "last 3 days plus 5 siblings plus 5 captions", which fits in the budget without semantic search. The cost is that features needing "find anything semantically similar" can't be built without adding an embedding pipeline, a vector index, and a nearest-neighbour step — none of which exist today.
+
+Key points to remember:
+- No vector RAG: no `src/services/ai/embed.ts`, no `entry_embeddings` table, no `pgvector` extension on the Supabase schema.
+- Hand-picked retrieval is just SQL with date filters and `.slice(0, N)` caps — `getRecentAISummaries(date, 5)` for captions, `buildContext()` for expand.
+- Use retrieval (vector) when the corpus exceeds the context budget; use hand-picked when it doesn't.
+- The seed for adding RAG lives in this concept file — `embed.ts`, `entry_embeddings(entry_id, vector)`, nearest-neighbour before prompt assembly.
+- The cost is no semantic search: a feature like "find everything I wrote about Project X over three years" can't be served by date filters and triggers the build.
 
 ---
 
@@ -188,3 +194,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Vector RAG is intentionally absent — anchored on hand-picked retrieval sites.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); updated Level 2 hint and codebase anchor accordingly.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).

@@ -13,15 +13,7 @@
 
 A user installs your app on a new phone. There might be a year of their data sitting in the cloud, or nothing. There might also be data on the device from a previous use, or nothing. Four combinations, and each one demands a different first move: pull from cloud, push to cloud, do nothing, or stop and ask. Pick wrong on first launch and you either lose their existing work or replace it with a stale snapshot. What's the right move? That's the question this decision tree answers.
 
-A first-run decision tree is a one-shot classifier that runs at cold start, inspects the state of both stores, and routes to exactly one initialization path before normal incremental sync takes over. It belongs to the family of "boot-time reconciliation" patterns, alongside container init scripts, package manager first-install hooks, and the way a fresh Git clone decides whether to pull from origin or set itself up empty. The two-by-two of "local has data" times "remote has data" is the same matrix every backup tool, every dotfile manager, and every multi-device sync product has had to navigate. The shape it takes in this codebase is in Quick summary below.
-
----
-
-## Quick summary
-- **What:** at boot, if cloud is configured and the bootstrap flag is unset, classify (localHasData, cloudHasData) and run initial-push, first-pull, or no-op accordingly.
-- **Why here:** "fresh device recovery" (install → first-pull) and "first cloud connect on existing app" (push existing local → cloud) are different operations. Bootstrap picks correctly.
-- **Checklist step:** 5 (Failure handling)
-- **Tradeoff:** the both-populated case can't be auto-resolved without a UI prompt. Phase A ships a pragmatic fallback (treat local as canonical) plus a warning log; Phase B should prompt.
+A first-run decision tree is a one-shot classifier that runs at cold start, inspects the state of both stores, and routes to exactly one initialization path before normal incremental sync takes over. It belongs to the family of "boot-time reconciliation" patterns, alongside container init scripts, package manager first-install hooks, and the way a fresh Git clone decides whether to pull from origin or set itself up empty. The two-by-two of "local has data" times "remote has data" is the same matrix every backup tool, every dotfile manager, and every multi-device sync product has had to navigate. The diagram below shows the shape it takes here.
 
 ---
 
@@ -104,6 +96,19 @@ Any sync engine has a bootstrap problem: "what if the local and remote disagree 
 - **Run-once flag** — gives: bootstrap doesn't repeat. Costs: clearing it (e.g., for testing) requires the dev menu.
 - **Four-way explicit decision** — gives: each branch is clearly correct except one. Costs: the awkward branch (both populated) is a known footgun in Phase A.
 - **Local-canonical fallback** — gives: doesn't lose recent local writes. Costs: can overwrite cloud silently in the rare both-populated case.
+
+---
+
+## Quick summary
+
+A first-run decision tree is a one-shot classifier that runs at cold start, inspects the state of both stores, and routes to exactly one initialization path before normal incremental sync takes over. In this codebase `bootstrapCloudSync()` in `src/services/sync/bootstrap.ts` is gated by `isCloudConfigured()` and the `cloud_initial_push_done` SecureStore flag, then classifies `(localHasData, cloudHasData)` into four quadrants — no-op, initial-push via `pushAll()`, first-pull via the all-table walker, or a fallback initial-push for the both-populated case. The constraint was that "fresh device recovery" and "first cloud connect on existing app" are different operations, and mixing them into steady-state push/pull would mean conditional branches forever. The cost is that the `local=yes cloud=yes` quadrant can't be auto-resolved — Phase A silently picks local and pushes (with a warning log), which is the known footgun in the design. The right call when a multi-device migration flow exists is a UI prompt; until then, the dev menu in `settings/cloud-sync.tsx` is the audit trail.
+
+Key points to remember:
+- The chain is `isCloudConfigured()` → `isBootstrapDone()` → classify `(localHasData, cloudHasData)` → one of four branches → `markBootstrapDone()`.
+- Steady-state sync never has to wonder if it's the first run because `cloud_initial_push_done` short-circuits subsequent boots.
+- Lives in step 5 (Failure handling) of the system-design checklist.
+- The both-populated fallback can silently overwrite cloud data — the warning log is the only audit trail in Phase A.
+- Three quadrants have unambiguous answers; the fourth needs a UI prompt that hasn't shipped yet.
 
 ---
 
@@ -195,3 +200,4 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
+Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
