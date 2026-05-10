@@ -1,4 +1,9 @@
-import { CAPTION_VARIANT_KEYS, type AISummary, type CaptionVariantKey } from '../../types/ai';
+import {
+  CAPTION_VARIANT_KEYS,
+  type AISummary,
+  type CaptionVariantKey,
+  type Interpretation,
+} from '../../types/ai';
 
 const VALID_MOODS = ['flat', 'ok', 'good', 'great', 'fired'];
 const VALID_FILTERS = ['none', 'moody', 'cool', 'film', 'muted'];
@@ -88,6 +93,45 @@ export function validateSummary(
   }
   const variantsTheme = typeof obj.variantsTheme === 'string' ? obj.variantsTheme : undefined;
 
+  // Round-trip the cached Interpretation if present. Required string fields
+  // must be non-empty; coreThemes must be a 1+ array of {label, explanation}
+  // objects. Anything malformed gets dropped (treated as no cache) so the
+  // modal will offer a fresh Interpret on next open.
+  let interpret: Interpretation | undefined;
+  if (obj.interpret && typeof obj.interpret === 'object') {
+    const i = obj.interpret as Record<string, unknown>;
+    const requiredStr = (k: string): string | null =>
+      typeof i[k] === 'string' && (i[k] as string).trim() ? (i[k] as string) : null;
+    const main = requiredStr('mainInterpretation');
+    const pattern = requiredStr('emotionalPattern');
+    const reframe = requiredStr('healthyReframe');
+    const takeaway = requiredStr('keyTakeaway');
+    const generatedAt = typeof i.generatedAt === 'string' ? i.generatedAt : null;
+    let coreThemes: Interpretation['coreThemes'] | null = null;
+    if (Array.isArray(i.coreThemes)) {
+      coreThemes = (i.coreThemes as unknown[])
+        .filter((t): t is { label: string; explanation: string } => {
+          if (!t || typeof t !== 'object') return false;
+          const o = t as Record<string, unknown>;
+          return typeof o.label === 'string' && typeof o.explanation === 'string';
+        })
+        .map(t => ({ label: t.label.trim(), explanation: t.explanation.trim() }));
+      if (coreThemes.length === 0) coreThemes = null;
+    }
+    if (main && pattern && reframe && takeaway && generatedAt && coreThemes) {
+      interpret = {
+        mainInterpretation: main,
+        coreThemes,
+        emotionalPattern: pattern,
+        healthyReframe: reframe,
+        keyTakeaway: takeaway,
+        sourceText: typeof i.sourceText === 'string' ? i.sourceText : '',
+        generatedAt,
+        model: typeof i.model === 'string' ? i.model : '',
+      };
+    }
+  }
+
   return {
     valid: errors.length === 0,
     summary: {
@@ -103,6 +147,7 @@ export function validateSummary(
       captionTheme,
       variants,
       variantsTheme,
+      interpret,
       generatedAt: new Date().toISOString(),
     },
     errors,

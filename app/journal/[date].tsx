@@ -10,6 +10,8 @@ import { InlineEntry } from '../../src/components/journal/InlineEntry';
 import { InlineTextInput, type InlineTextInputHandle } from '../../src/components/journal/InlineTextInput';
 import { NutritionAutocomplete } from '../../src/components/journal/NutritionAutocomplete';
 import { TagAutocomplete } from '../../src/components/journal/TagAutocomplete';
+import { InterpretModal } from '../../src/components/journal/InterpretModal';
+import { MIN_TEXT_LENGTH as INTERPRET_MIN } from '../../src/services/ai/interpret';
 import { createThread } from '../../src/services/threads/crud';
 import type { Thread } from '../../src/types/thread';
 import { KeyboardToolbar } from '../../src/components/journal/KeyboardToolbar';
@@ -34,6 +36,7 @@ export default function JournalScreen() {
   const [isAddingText, setIsAddingText] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [showHabitPicker, setShowHabitPicker] = useState(showHabits === '1');
+  const [showInterpret, setShowInterpret] = useState(false);
   // Per-entry in-flight clip transcodes. Tracked by id so each placeholder
   // can individually cancel the running FFmpeg session (tapping the spinner).
   type PendingClip = { pendingId: string; cancel: () => void };
@@ -123,6 +126,14 @@ export default function JournalScreen() {
       return !onlyTodos;
     })
     .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  // Combined day text for the Interpret modal — every entry's prose joined
+  // in chronological order. The interpret service truncates to last 2000
+  // chars on its end; here we just concatenate.
+  const dayText = sorted
+    .map(e => (e.text ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n');
 
   const handleTapEmptySpace = async () => {
     if (!isAddingText) {
@@ -698,12 +709,24 @@ export default function JournalScreen() {
           />
           <Text style={styles.dateText}>{formatDate(new Date(date + 'T12:00:00'))}</Text>
         </View>
-        {entries.some(e => e.clips.length > 0) && (
-          <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.vlogBtn} hitSlop={12}>
-            <Icon name="clapperboard" size={22} color={colors.accent} />
-            <Text style={styles.vlogBtnText}>Vlog</Text>
-          </Pressable>
-        )}
+        <View style={styles.titleActions}>
+          {dayText.trim().length >= INTERPRET_MIN && (
+            <Pressable
+              onPress={() => setShowInterpret(true)}
+              style={styles.titleActionBtn}
+              hitSlop={12}
+            >
+              <Icon name="sparkles" size={22} color={colors.accent} />
+              <Text style={styles.titleActionText}>Interpret</Text>
+            </Pressable>
+          )}
+          {entries.some(e => e.clips.length > 0) && (
+            <Pressable onPress={() => router.push(`/editor/${date}`)} style={styles.titleActionBtn} hitSlop={12}>
+              <Icon name="clapperboard" size={22} color={colors.accent} />
+              <Text style={styles.titleActionText}>Vlog</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       {/* Entries */}
@@ -808,6 +831,13 @@ export default function JournalScreen() {
         showHabits={showHabitPicker}
         onShowHabits={setShowHabitPicker}
       />
+
+      <InterpretModal
+        visible={showInterpret}
+        date={date}
+        dayText={dayText}
+        onClose={() => setShowInterpret(false)}
+      />
     </View>
   );
 }
@@ -877,13 +907,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textDimmer,
   },
-  vlogBtn: {
+  titleActions: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 16,
+  },
+  titleActionBtn: {
     alignItems: 'center',
-    alignSelf: 'flex-start',
     gap: 4,
     paddingTop: 2,
   },
-  vlogBtnText: {
+  titleActionText: {
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.accent,

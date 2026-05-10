@@ -13,6 +13,7 @@ import {
   House,
   Lightbulb, Bug, HelpCircle, GitBranch, GraduationCap,
   Pin, PinOff,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react-native';
 import { colors } from '../../constants/theme';
@@ -84,6 +85,8 @@ export const ICONS = {
   // Pin / unpin
   pin: Pin,
   pinOff: PinOff,
+  // AI / interpret
+  sparkles: Sparkles,
 } as const;
 
 export type IconName = keyof typeof ICONS;
