@@ -16,6 +16,7 @@ export function GlobalBottomNav() {
   const isHome = pathname === '/' || pathname === '';
   const isJournal = pathname.startsWith('/journal');
   const isTodos = pathname.startsWith('/todos');
+  const isVlogs = pathname.startsWith('/vlogs');
   const isMore = pathname.startsWith('/more');
 
   return (
@@ -33,6 +34,11 @@ export function GlobalBottomNav() {
       <Pressable onPress={() => router.push('/todos')} style={styles.tab}>
         <Icon name="listTodo" size={18} color={isTodos ? colors.accent : colors.textDim} strokeWidth={2.5} />
         <Text style={[styles.label, isTodos && { color: colors.accent }]}>Todos</Text>
+      </Pressable>
+
+      <Pressable onPress={() => router.push('/vlogs')} style={styles.tab}>
+        <Icon name="film" size={18} color={isVlogs ? colors.accent : colors.textDim} strokeWidth={2.5} />
+        <Text style={[styles.label, isVlogs && { color: colors.accent }]}>Vlogs</Text>
       </Pressable>
 
       <Pressable onPress={() => router.push('/more')} style={styles.tab}>

@@ -12,12 +12,12 @@ import { DailyScheduleLegend } from '../src/components/home/DailyScheduleLegend'
 import { startOfISOWeekStr } from '../src/services/habits/cadence';
 import { SmartTodoList } from '../src/components/home/SmartTodoList';
 import {
-  getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits, getAllEntries,
+  archivePastDays, getDayTitle, getHabits, getAllEntries,
   getAllTodoMetas, insertEntry, updateEntry,
 } from '../src/services/database';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { generateId } from '../src/utils/id';
-import type { Entry, Habit, Vlog } from '../src/types/entry';
+import type { Entry, Habit } from '../src/types/entry';
 import type { TodoMeta } from '../src/types/todoMeta';
 
 function greeting(now: Date = new Date()): string {
@@ -33,9 +33,6 @@ export default function HomeScreen() {
   const router = useRouter();
 
   const [allEntries, setAllEntries] = useState<Entry[]>([]);
-  const [vlogs, setVlogs] = useState<Vlog[]>([]);
-  const [vlogTitles, setVlogTitles] = useState<Record<string, string>>({});
-  const [vlogPreviews, setVlogPreviews] = useState<Record<string, string>>({});
   const [todayTitle, setTodayTitle] = useState('');
   const [habits, setHabits] = useState<Habit[]>([]);
   const [todoMetas, setTodoMetas] = useState<Map<string, TodoMeta>>(new Map());
@@ -44,30 +41,14 @@ export default function HomeScreen() {
 
   const loadAll = useCallback(async () => {
     await archivePastDays(today);
-    const [entries, h, v, allMetas] = await Promise.all([
+    const [entries, h, allMetas] = await Promise.all([
       getAllEntries(),
       getHabits(),
-      getVlogs(),
       getAllTodoMetas(),
     ]);
     setAllEntries(entries);
     setHabits(h);
-    setVlogs(v);
     setTodoMetas(new Map(allMetas.map((m: TodoMeta) => [m.todoId, m])));
-
-    const titles: Record<string, string> = {};
-    const previews: Record<string, string> = {};
-    for (const vlog of v) {
-      titles[vlog.date] = await getDayTitle(vlog.date);
-      const dayEntries = await getEntriesByDate(vlog.date);
-      const firstText = dayEntries.find(e => e.text)?.text;
-      if (firstText) {
-        const sentences = firstText.split(/[.!?]+/).filter(Boolean).slice(0, 2).join('. ').trim();
-        previews[vlog.date] = sentences.length > 100 ? sentences.slice(0, 100) + '...' : sentences + (firstText.includes('.') ? '.' : '');
-      }
-    }
-    setVlogTitles(titles);
-    setVlogPreviews(previews);
     setTodayTitle(await getDayTitle(today));
   }, [today]);
 
@@ -240,22 +221,6 @@ export default function HomeScreen() {
         <View style={styles.section}>
           <SmartTodoList entries={allEntries} today={today} onChanged={loadAll} metas={todoMetas} />
         </View>
-
-        {/* Past vlogs */}
-        {vlogs.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>PREVIOUS VLOGS</Text>
-            {vlogs.map(vlog => (
-              <PastVlogCard
-                key={vlog.id}
-                vlog={vlog}
-                title={vlogTitles[vlog.date]}
-                preview={vlogPreviews[vlog.date]}
-                onPress={() => router.push(`/journal/${vlog.date}`)}
-              />
-            ))}
-          </View>
-        )}
       </ScrollView>
     </View>
   );
