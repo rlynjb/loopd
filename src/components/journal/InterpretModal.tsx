@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Modal, View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { interpretEntry, MIN_TEXT_LENGTH, MAX_INPUT_CHARS } from '../../services/ai/interpret';
@@ -30,6 +31,7 @@ function tail(s: string, max = MAX_INPUT_CHARS): string {
 }
 
 export function InterpretModal({ visible, date, dayText, onClose }: Props) {
+  const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
 
   const trimmed = dayText.trim();
@@ -101,12 +103,12 @@ export function InterpretModal({ visible, date, dayText, onClose }: Props) {
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
       onRequestClose={onClose}
+      statusBarTranslucent
     >
       <View style={styles.container}>
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
           <Pressable onPress={onClose} hitSlop={12} style={styles.headerBtn}>
             <Icon name="x" size={20} color={colors.textMuted} />
           </Pressable>
@@ -149,7 +151,7 @@ export function InterpretModal({ visible, date, dayText, onClose }: Props) {
 
         {/* Footer button — Interpret / Regenerate */}
         {!tooShort && (
-          <View style={styles.footer}>
+          <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
             <Pressable
               onPress={run}
               disabled={status.kind === 'loading'}
@@ -241,7 +243,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 12,
-    paddingVertical: 12,
+    paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.cardBorder,
   },
@@ -370,7 +372,6 @@ const styles = StyleSheet.create({
   footer: {
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 24,
     borderTopWidth: 1,
     borderTopColor: colors.cardBorder,
     gap: 8,
