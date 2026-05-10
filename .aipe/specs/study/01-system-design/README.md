@@ -62,5 +62,64 @@ Architectural patterns in loopd, one file per concept. Each file opens with a di
 
 (See [`../00-overview.md`](../00-overview.md) for the full annotated map.)
 
+## The 6-step mental checklist
+
+Use this lens to walk any system — your own codebase, an interview prompt, a new repo. Walk it in order. Each step constrains the next. Every pattern below lives in one or more steps; the section is a unified framework, not a bag of tricks.
+
+```
+┌──────────────────────────────────────────────────────┐
+│  1. Data model                                       │
+│     What entities exist. What fields. What           │
+│     relationships. What's the source of truth.       │
+│                                                      │
+│  2. Request / response flow                          │
+│     Client → edge → origin → DB and back.            │
+│     Where auth sits. Where rate limiting sits.       │
+│     What's parallel, what's a waterfall.             │
+│                                                      │
+│  3. Caching layers                                   │
+│     HTTP cache · CDN · service worker · client       │
+│     memory cache · local DB. How each invalidates.   │
+│                                                      │
+│  4. State ownership                                  │
+│     Server state · URL state · client state ·        │
+│     form state. Which lives where, and why.          │
+│                                                      │
+│  5. Failure handling                                 │
+│     Slow network · offline · partial failure ·       │
+│     race conditions on concurrent edits.             │
+│                                                      │
+│  6. Scale concerns                                   │
+│     What breaks first at 10x. At 100x. What stays    │
+│     the same. What needs to be rearchitected.        │
+└──────────────────────────────────────────────────────┘
+```
+
+### Pattern → step mapping
+
+| # | Pattern                          | Checklist step(s)                          |
+|---|----------------------------------|--------------------------------------------|
+| 01 | Local-first request flow         | 2 (Request flow)                           |
+| 02 | Authentication boundary          | 4 (State ownership) + 6 (Scale concerns)   |
+| 03 | Single source of truth           | 1 (Data model)                             |
+| 04 | Two-pass matching                | 1 (Data model) + 4 (State ownership)       |
+| 05 | Soft delete                      | 1 (Data model) + 5 (Failure handling)      |
+| 06 | One-to-one invariant             | 1 (Data model) + 5 (Failure handling)      |
+| 07 | Cloud sync mirror                | 2 (Request flow) + 4 (State ownership)     |
+| 08 | Conflict last-write-wins         | 5 (Failure handling)                       |
+| 09 | Debounced push                   | 2 (Request flow) + 3 (Caching)             |
+| 10 | Bootstrap decision tree          | 5 (Failure handling)                       |
+| 11 | Provider abstraction             | 2 (Request flow)                           |
+| 12 | Manual-touch deviation           | 1 (Data model)                             |
+| 13 | Append-only migrations           | 1 (Data model)                             |
+| 14 | File-routed UI                   | 2 (Request flow)                           |
+| 15 | Storage layer summary            | 1 (Data model)                             |
+| 16 | Pin replaces reorder             | 1 (Data model)                             |
+
+Read this table as a 30-second orientation: any pattern's job in the bigger system is whichever step(s) it lives in. If you're trying to understand a single screen end-to-end, follow the chain of steps each pattern touches.
+
 ---
 Updated: 2026-05-10 — refreshed system-map snippet to reflect /vlogs route, Interpret modal, 8 migrations (was 5), and 5 AI chains (was 4).
+
+---
+Updated: 2026-05-10 — added the 6-step mental checklist + per-pattern step tagging.

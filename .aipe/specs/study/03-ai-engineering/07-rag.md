@@ -1,6 +1,7 @@
 # RAG — not used in loopd, but the seed exists
 
-> **Industry term:** Retrieval-Augmented Generation (RAG) *(industry standard)*
+**Industry name:** Retrieval-augmented generation (RAG)
+**Type:** Industry standard
 
 > Retrieval Augmented Generation: embed user data, vector-search, stuff results into the prompt. Loopd uses hand-picked retrieval instead.
 
@@ -44,13 +45,13 @@
 4. **Stuff**: put the retrieved chunks in the prompt with the user's question.
 5. **Answer**: the LLM answers using the retrieved context.
 
-Loopd skips all of this and uses hand-picked retrieval: caption.ts grabs the last 5 captions for anti-repetition; expand.ts grabs the last 3 days of entries plus their cached summaries.
+Loopd skips all of this and uses hand-picked retrieval: `summarize.ts:buildCaptionInput()` grabs the last 5 captions for anti-repetition (and hands them to caption.ts); `expand.ts:buildContext()` grabs the last 3 days of entries plus their cached summaries.
 
 ---
 
 ## Where RAG would land if added
 
-"Expand this todo with context from any past entry that mentioned similar ideas" — that's the moment to embed the corpus. Today the codebase fakes it with `getRecentAISummaries(date, 5)` for the caption's anti-repetition, which is hand-picked retrieval, not embed-and-search.
+"Expand this todo with context from any past entry that mentioned similar ideas" — that's the moment to embed the corpus. Today the codebase fakes it with `getRecentAISummaries(date, 5)` (called in `src/services/ai/summarize.ts:buildCaptionInput()` at L131) for the caption's anti-repetition, which is hand-picked retrieval, not embed-and-search.
 
 If/when added:
 - New service: `src/services/ai/embed.ts` to embed entries on commit.
@@ -63,7 +64,7 @@ If/when added:
 
 _Vector RAG not implemented — intentionally absent._ Hand-picked retrieval lives in:
 
-**Caption anti-repeat:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223 invokes `getRecentAISummaries(date, 5)` — the 5-most-recent prior captions, fetched by SQL date filter
+**Caption anti-repeat:**  `src/services/ai/summarize.ts` → `buildCaptionInput()` L111–L163 invokes `getRecentAISummaries(date, 5)` at L131 — the 5-most-recent prior captions, fetched by SQL date filter; the assembled input is then passed to `caption.ts:generateCaption()` L201–L223
 **Expand context:**       `src/services/todos/expand.ts` → `buildContext()` L147–L199 pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos via SQL queries with explicit `.slice(0, N)` caps
 **Architectural anchor:** no `src/services/ai/embed.ts`, no `entry_embeddings` table, no `pgvector` extension on the Supabase schema (`supabase/migrations/0001_initial_schema.sql`). The seed for adding RAG lives in this concept file, not in code.
 
@@ -104,7 +105,7 @@ RAG came out of dense-retrieval research (DPR, REALM) and was popularised in 202
 ### Likely questions
 
 [mid] Q: What hand-picked retrieval does this codebase actually do today?
-      A: Two places. `caption.ts` calls `getRecentAISummaries(date, 5)` to grab the last 5 captions for anti-repetition. `expand.ts:147 buildContext()` pulls the last 3 days of entries plus their cached summaries plus ≤5 sibling todos. Both are SQL queries with explicit date filters and `slice(0, N)` caps. There's no embedding, no vector index, no pgvector — just structured retrieval over SQLite.
+      A: Two places. `src/services/ai/summarize.ts:buildCaptionInput()` (L111) calls `getRecentAISummaries(date, 5)` at L131 to grab the last 5 captions for anti-repetition, then hands the assembled input to `caption.ts:generateCaption()`. `expand.ts:147 buildContext()` pulls the last 3 days of entries plus their cached summaries plus ≤5 sibling todos. Both are SQL queries with explicit date filters and `slice(0, N)` caps. There's no embedding, no vector index, no pgvector — just structured retrieval over SQLite.
 
 [senior] Q: Why not embed entries proactively, so RAG is ready when you need it?
          A: Because today's features don't need it and embedding has ongoing cost — every entry edit re-embeds, every model upgrade may need re-embedding. Adding the pipeline means an embed model choice, an embedding storage decision (SQLite blob? pgvector via Supabase?), a re-embedding strategy, and a chunking strategy. None of which pay back until I have a feature that needs semantic search. The seed of "what if RAG?" exists in the docs precisely so the day a feature lands, I know exactly what to add — `src/services/ai/embed.ts`, `entry_embeddings(entry_id, vector)`, nearest-neighbour step before prompt assembly. Until then, hand-picked retrieval is plenty.
@@ -139,7 +140,7 @@ Open the file. Compare.
 Explain "why no RAG (yet)" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
 
 Checkpoints — did you:
-- Name the specific file or function?  → `src/services/todos/expand.ts:buildContext` and `src/services/ai/caption.ts:getRecentAISummaries`
+- Name the specific file or function?  → `src/services/todos/expand.ts:buildContext` and `src/services/ai/summarize.ts:buildCaptionInput` (which calls `getRecentAISummaries` at L131)
 - Say why this approach was chosen over the alternative?
 - Name the tradeoff in one sentence?
 
@@ -177,3 +178,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Vector RAG is intentionally absent — anchored on hand-picked retrieval sites.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); updated Level 2 hint and codebase anchor accordingly.

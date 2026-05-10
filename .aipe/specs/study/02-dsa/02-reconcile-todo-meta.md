@@ -1,6 +1,7 @@
 # todo_meta reconciliation: 1:1 invariant
 
-> **Industry term:** Set-diff reconciliation (add / update / delete diff) *(language agnostic)*
+**Industry name(s):** Reconciler pattern, application-side referential integrity
+**Type:** Industry standard
 
 > Map + Set diff: build `Map<todoId, meta>` and `Set<todoId>`, then insert missing and delete orphans in O(n+m).
 
@@ -30,10 +31,12 @@
 
 ---
 
-## Brute force
+── Brute force ──────────────────────────────────
+
+Pseudocode:
 
 ```
-  // For every todo, scan all metas (O(n*m))
+  // For every todo, scan all metas (O(n × m))
   for each todo in entry.todos:
     found = existing.find(m => m.todoId == todo.id)
     if not found: insertTodoMeta(todo)
@@ -43,13 +46,30 @@
     if not found: deleteTodoMeta(meta.todoId)
 ```
 
-**Complexity:** O(n × m) time · O(1) extra space.
+Execution trace (`existing = [t-A meta, t-X meta]`, `entry.todos = [t-A, t-B, t-C]`):
 
----
+```
+  Insert phase (walk entry.todos, .find over existing):
+    t-A: existing.find(m => m.todoId=='t-A') → metaA ✓     skip
+    t-B: existing.find(m => m.todoId=='t-B') → undef       insertTodoMeta(t-B)
+    t-C: existing.find(m => m.todoId=='t-C') → undef       insertTodoMeta(t-C)
+    cost = 3 × O(m) scans = 3 × 2 = 6 ops
 
-## Optimal
+  Delete phase (walk existing, .find over entry.todos):
+    metaA: todos.find(t => t.id=='t-A') → t-A ✓            skip
+    metaX: todos.find(t => t.id=='t-X') → undef            deleteTodoMeta(t-X)
+    cost = 2 × O(n) scans = 2 × 3 = 6 ops
 
-**The insight:** build two index structures — a `Map<todoId, meta>` for O(1) "do I already have a meta?" and a `Set<todoId>` for O(1) "is this meta still valid?".
+  Total: 12 ops vs the optimal 5 ops. Same result.
+```
+
+Complexity: O(n × m) time · O(1) extra space.
+
+What goes wrong at scale: at the project's 20-todo-per-entry scale, brute force runs in 400 ops vs optimal's 40 — both sub-millisecond. The real problem isn't speed; it's that every read inside the loop hides an O(m) scan, so reading the code you can't *tell* it's O(n × m). With 10,000 todos × 10,000 metas, brute force would run ~100M ops — still under a second but a maintenance trap.
+
+── Optimal ──────────────────────────────────────
+
+The insight: build two index structures — a `Map<todoId, meta>` for O(1) "do I already have a meta?" and a `Set<todoId>` for O(1) "is this meta still valid?".
 
 ```
   existing = getTodoMetasByEntry(entry.id)
@@ -100,7 +120,7 @@
 
 ---
 
-## Comparison
+── Comparison ───────────────────────────────────
 
 ```
   ┌─────────────────┬────────────────┬──────────────────┐
@@ -108,12 +128,13 @@
   ├─────────────────┼────────────────┼──────────────────┤
   │ Time            │ O(n × m)       │ O(n + m)         │
   │ Space           │ O(1)           │ O(n + m)         │
-  │ At 20 todos     │ 400 ops        │ 40 ops           │
-  │ Self-healing    │ ✓              │ ✓                │
+  │ At 1,000 items  │ 1,000,000 ops  │ 2,000 ops        │
+  │ At 10,000 items │ 100,000,000 ops│ 20,000 ops       │
+  │ Readable?       │ yes            │ yes (clearer)    │
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-**When brute force is fine:** at the 20-todo scale of a typical entry, both run in under a millisecond. The reason the optimal version is in the codebase isn't speed — it's clarity (`byTodoId.has(...)` reads like the invariant).
+When brute force is fine: at the 20-todo scale of a typical entry, both run in under a millisecond. The reason the optimal version is in the codebase isn't speed — it's clarity (`byTodoId.has(...)` reads like the invariant).
 
 ---
 
@@ -233,3 +254,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

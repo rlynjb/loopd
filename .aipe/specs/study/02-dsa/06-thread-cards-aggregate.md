@@ -1,6 +1,7 @@
 # Thread cards aggregate — 4 SQL queries + 2 in-memory joins
 
-> **Industry term:** N+1 query avoidance (bulk fetch + in-memory join) *(industry standard)*
+**Industry name(s):** Aggregation, GROUP BY rollup
+**Type:** Industry standard · Language-agnostic
 
 > Per-dashboard-load aggregate: for each thread, compute `lastMentionAt`, `entriesThisWeek`, `openTodos`, `recentTodos[3]`, `staleness`, `activeDates`. Then sort.
 
@@ -25,7 +26,43 @@ All threads + thread_mentions + todo_meta + entries.
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (N+1 query — one query per thread):
+
+```
+  threads = getThreads(includeArchived=false)
+  cards = []
+  for each thread in threads:
+    lastMentionAt   = SELECT MAX(created_at) FROM thread_mentions WHERE thread_id=thread.id
+    entriesThisWeek = SELECT COUNT(DISTINCT entry_id) FROM thread_mentions
+                      WHERE thread_id=thread.id AND entry_date >= weekStart
+    linkedTodoIds   = SELECT DISTINCT todo_id FROM thread_mentions
+                      WHERE thread_id=thread.id AND todo_id IS NOT NULL
+    todoMetas       = SELECT * FROM todo_meta WHERE todo_id IN linkedTodoIds
+    activeDates     = SELECT DISTINCT entry_date FROM thread_mentions
+                      WHERE thread_id=thread.id AND entry_id IS NULL AND todo_id IS NULL
+    cards.push({ thread, lastMentionAt, entriesThisWeek, ... })
+  return cards.sort(...)
+```
+
+Execution trace (3 threads, 2 mentions each):
+
+```
+  thread #loopd:    5 SQL roundtrips → lastMention, weekCount, linkedTodos, metas, activeDates
+  thread #health:   5 SQL roundtrips
+  thread #journal:  5 SQL roundtrips
+  Total: 15 SQL roundtrips for 3 threads.
+  At 30 threads: 150 roundtrips per dashboard load.
+```
+
+Complexity: O(T × Q) SQL roundtrips where T=threads, Q=per-thread query count (≈5) · O(per-thread) memory.
+
+What goes wrong at scale: with 30 threads (current scale) brute force is 150 round-trips × ~2ms SQLite latency = 300ms blocking the dashboard render. With 10,000 threads it's 50,000 roundtrips, ~100s — completely unusable. The N+1 pattern is the textbook scaling failure: it's invisible at 3 threads, painful at 30, fatal at 300. Even at single-user scale (a dozen threads), the user-perceived dashboard lag is the reason to never ship this shape.
+
+── Optimal ──────────────────────────────────────
+
+The insight: pull all aggregates in bulk SQL (one query each), then join in-memory using `Map<threadId, ...>` indices. The 4-query / 2-join shape has a bounded round-trip count regardless of thread count.
 
 ```
   threads          = getThreads(includeArchived=false)            // ~10s of rows
@@ -104,17 +141,27 @@ All threads + thread_mentions + todo_meta + entries.
 
 ---
 
+── Comparison ───────────────────────────────────
+
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(T × Q) RTs   │ O(Q + T) RTs     │
+  │ Space           │ O(per-thread)  │ O(T + M + Q)     │
+  │ At 1,000 thrs   │ ~5,000 RTs     │ ~6 RTs           │
+  │ At 10,000 thrs  │ ~50,000 RTs    │ ~6 RTs           │
+  │ Readable?       │ yes            │ yes (joins clear)│
+  └─────────────────┴────────────────┴──────────────────┘
+```
+
+When brute force is fine: never on a hot render path. The N+1 pattern is the textbook scaling failure — even at 30 threads (~150 SQL roundtrips on the dashboard) it shows as visible lag. The codebase ships the 4-query + 2-join shape for exactly this reason.
+
 ## Why not run a giant JOIN in SQL?
 
 Could. But `getAllEntries` is already in memory (it's the dashboard's primary state) so reusing it is free. Two SQL roundtrips traded for one in-memory join.
 
 The "giant JOIN" alternative would push everything into Postgres-style aggregates: `SELECT thread_id, COUNT(*), MAX(updated_at), ARRAY_AGG(...)` — but SQLite's array agg is more limited, and the join shape would be cross-product-y between mentions and the entries table.
-
----
-
-## When brute force is fine
-
-The "brute" alternative is per-thread queries (N+1 pattern: for each thread, run a query). At a few dozen threads that would be hundreds of roundtrips per dashboard load. The aggregate-then-join pattern fixes it cleanly. Don't ship the N+1 version.
 
 ---
 
@@ -236,3 +283,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — flagged content drift: `getThreadCards()` is now dead code. Threads were dropped from the dashboard in commit 42ee8a6 (2026-05-08) and no UI surface calls the aggregate anymore.
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

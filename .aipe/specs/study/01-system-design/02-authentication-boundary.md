@@ -1,6 +1,7 @@
 # Authentication boundary
 
-> **Industry term:** Trust boundary *(industry standard)*
+**Industry name(s):** Authentication middleware, security boundary
+**Type:** Industry standard · Language-agnostic
 
 > Phase A has no end-user authentication — every cloud row is tagged with a single hardcoded `user_id`. RLS is *scaffolded* (migration 0002) but disabled.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** every Supabase write/read goes through a single hardcoded `PHASE_A_USER_ID` UUID. RLS policies exist as a migration but are not enabled.
 - **Why here:** solo product, single user; building features over the auth wire-up.
+- **Checklist step:** 4 (State ownership) + 6 (Scale concerns)
 - **Tradeoff:** until Phase B ships auth, anyone with the Supabase anon key + URL can read the data. Mitigation: keys live in SecureStore; the app has no public surface.
 
 ---
@@ -167,3 +169,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

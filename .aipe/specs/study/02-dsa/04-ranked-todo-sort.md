@@ -1,6 +1,7 @@
 # Ranked todo flatten + sort (legacy `rankTodos`)
 
-> **Industry term:** Composite / multi-key comparator *(language agnostic)*
+**Industry name(s):** Multi-key comparator sort, ranked sort
+**Type:** Industry standard · Language-agnostic
 
 > Array flatten across entries, then 3-key compare (done last, source priority, createdAt asc). **The `rankTodos` function is currently in the repo but no app code calls it** — kept here as it's a real algorithm worth understanding.
 
@@ -39,7 +40,51 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (selection-sort / repeated min-finding):
+
+```
+  flat = []
+  for each entry in entries:
+    for each todo in entry.todos:
+      if todo.done AND (now - completedAt > keepDoneMs): continue
+      flat.push({ ...todo, source })
+
+  // Repeated min-finding (selection sort):
+  result = []
+  while flat is not empty:
+    bestIdx = 0
+    for i in 1..flat.length:
+      if comparator(flat[i], flat[bestIdx]) < 0:
+        bestIdx = i
+    result.push(flat.splice(bestIdx, 1)[0])
+  return result
+```
+
+Execution trace (4 input todos, after flatten + filter → `[t-1 carried, t-3 journal, t-4 journal]`):
+
+```
+  Iter 1: scan 3 candidates, find best (carried beats journal) → t-1
+          result = [t-1]; remaining = [t-3, t-4]
+          comparisons: 2
+  Iter 2: scan 2 candidates, compare priority equal, createdAt 10:00 < 10:05 → t-3
+          result = [t-1, t-3]; remaining = [t-4]
+          comparisons: 1
+  Iter 3: 1 candidate → t-4
+          result = [t-1, t-3, t-4]
+          comparisons: 0
+  Total comparator calls: 3 (for n=3)
+  At n=300: ~45,000 comparator calls
+```
+
+Complexity: O(n²) time · O(n) space.
+
+What goes wrong at scale: at n = 300 (a heavy multi-day todo list), brute force runs ~45,000 comparator calls vs optimal's ~2,400. Both finish in <10ms in JS so the user never notices. The real cost is invisibility — selection-sort hides the n² behavior inside a `while` loop without making it obvious. With 10,000 items the gap widens to 50M vs 130k ops, ~0.5s vs <50ms.
+
+── Optimal ──────────────────────────────────────
+
+The insight: a single `flat.sort(comparator)` lets the engine's TimSort do n log n work, and a fall-through comparator composes the three sort keys without nested passes.
 
 ```
   flat = []
@@ -84,13 +129,23 @@
 
 **Complexity:** O(n log n) time (sort dominates) · O(n) space.
 
-**Why this would be optimal:** the alternative (group → sort within groups → concat) is also O(n log n) but allocates more arrays. Compose-into-one-comparator is the cleanest.
+**Why this is optimal:** the alternative (group → sort within groups → concat) is also O(n log n) but allocates more arrays. Compose-into-one-comparator is the cleanest.
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(n²)          │ O(n log n)       │
+  │ Space           │ O(n)           │ O(n)             │
+  │ At 1,000 items  │ 500,000 ops    │ ~10,000 ops      │
+  │ At 10,000 items │ 50,000,000 ops │ ~130,000 ops     │
+  │ Readable?       │ yes (verbose)  │ yes (concise)    │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-`rankTodos` IS the only-version-here. The brute alternative (multi-pass: group, sort each, concatenate) is also O(n log n) but more allocation-heavy. At todo-list scale (a few hundred max), both are sub-millisecond.
+When brute force is fine: at todo-list scale (a few hundred max), even O(n²) is sub-millisecond. The reason to prefer `Array.prototype.sort` isn't speed — it's that TimSort is already in the runtime, handles partially-sorted lists in near-linear time, and the comparator stays explicit about the policy.
 
 ---
 
@@ -215,3 +270,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

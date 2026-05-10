@@ -1,6 +1,7 @@
 # Two-pass matching
 
-> **Industry term:** Two-phase matching / exact-then-fallback *(language agnostic)*
+**Industry name(s):** — (project-specific composition of exact-match-by-id + line-index fallback)
+**Type:** Project-specific
 
 > Every prose-derived feature (todos, threads, mentions) matches existing rows in two passes — exact text first, line-index second — so identity survives both reorderings and same-line edits.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** Pass 1 matches by exact text (catches reorderings). Pass 2 matches by line index (catches "I edited the words on this line").
 - **Why here:** preserves the row's id, createdAt, classifier output, and expansion across edits without requiring the user to declare identity explicitly.
+- **Checklist step:** 1 (Data model) + 4 (State ownership)
 - **Tradeoff:** "I edited line 7" looks the same as "I deleted line 7 and added a new todo" to the algorithm. Acceptable; the classifier re-runs either way.
 
 ---
@@ -204,3 +206,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

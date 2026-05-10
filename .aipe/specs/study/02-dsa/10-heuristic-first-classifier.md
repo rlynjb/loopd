@@ -1,6 +1,7 @@
 # Heuristic-first classifier — cheap regex gate before the LLM
 
-> **Industry term:** Rule-based fast-path / slow-path classification *(language agnostic)*
+**Industry name(s):** Cascading classifier, cheap-first / expensive-second
+**Type:** Industry standard · Language-agnostic
 
 > Decide whether a line is *definitely a todo* (return `'todo'`) or *uncertain* (return `null`, defer to LLM). Never mis-classify a question or idea as a todo.
 
@@ -31,7 +32,34 @@
 
 ---
 
-## Pseudocode (decision-order matters)
+── Brute force ──────────────────────────────────
+
+Pseudocode (always call the LLM — no heuristic fast path):
+
+```
+  function classifyBrute(text):
+    return classifyTodo(text)   // always hits Haiku
+```
+
+Execution trace (4 incoming todos: "call mom", "is this still broken?", "noticed flicker", "fix bug by EOD"):
+
+```
+  "call mom"             → LLM call (~300ms, ~$0.0004)  → 'todo'
+  "is this still broken?"→ LLM call (~300ms, ~$0.0004)  → 'question' (mapped → null)
+  "noticed flicker"      → LLM call (~300ms, ~$0.0004)  → 'idea'
+  "fix bug by EOD"       → LLM call (~300ms, ~$0.0004)  → 'todo'
+
+  4 LLM calls. 4 × $0.0004 = $0.0016. 4 × 300ms = 1.2s.
+  At 100 todos/day: ~$0.04 + 30s of LLM time on the typing path.
+```
+
+Complexity: O(1) per todo in compute · O(1) memory · O(1) LLM calls per todo (network/$ bound).
+
+What goes wrong at scale: per-todo Haiku cost (~$0.0004) is fine at 10 todos/day but adds up: at 1,000 todos/day single-user it's $0.40/day = ~$150/year just on classification. At multi-user scale with 100,000 todos/day, it's $15k/year for a step that a regex pass could handle 60-70% of for free. Latency is the bigger pain: every new todo would pause the UI for ~300ms while the LLM responds, breaking the "typing never waits on Haiku" guarantee that makes the journaling feel instant.
+
+── Optimal ──────────────────────────────────────
+
+The insight: a cheap regex pass decides the 60-70% obvious cases (`call`, `fix`, `should`, `?`, `noticed`, ...) and only returns `null` (deferring to the LLM) on the ambiguous remainder. The asymmetry — confident `'todo'` vs ambiguous `null` — guarantees no false positives.
 
 ```
   function heuristicClassify(rawText):
@@ -78,17 +106,27 @@ Speculative + question checks come *before* modal + imperative because some sent
 
 **Complexity:** O(R) where R = total regex count (~100); roughly O(1) per line.
 
+── Comparison ───────────────────────────────────
+
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(1) net call  │ O(R) regex       │
+  │ Space           │ O(1)           │ O(R) tables      │
+  │ At 1,000 todos  │ 1,000 LLM calls│ ~300 LLM calls   │
+  │ At 10,000 todos │ 10,000 LLM     │ ~3,000 LLM       │
+  │ Readable?       │ yes            │ yes (ordered)    │
+  └─────────────────┴────────────────┴──────────────────┘
+```
+
+When brute force is fine: at single-user scale and dev/exploration loops, $0.0004 × 100 todos/day = $0.04/day — basically free. The heuristic exists for UX (typing never waits on Haiku) more than for $.
+
 ---
 
 ## The bigger pattern
 
 Every "free first, paid second" pipeline in this codebase has the same shape — heuristic classify, then LLM. Same idea: `expandTodo` checks `meta.type == 'todo'` and refuses to expand (no shape to expand into); `getProvider` reads `SecureStore` (sync, fast) before the network call.
-
----
-
-## When brute force is fine
-
-The "brute" alternative is "just call the LLM on every new todo" — works, costs money, makes typing pause for a few hundred ms while the call runs. The heuristic is what makes the typing path stay fast.
 
 ---
 
@@ -213,3 +251,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

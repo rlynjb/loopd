@@ -1,6 +1,7 @@
 # Manual-touch deviation (Principle 11)
 
-> **Industry term:** *(no widely-used equivalent — loopd-internal naming)*
+**Industry name(s):** — (project-specific exception to derived-from-prose invariant)
+**Type:** Project-specific
 
 > The only place the app writes a `thread_mentions` row whose `entry_id` and `todo_id` are both NULL. Marks "I touched this thread today" without any prose attribution.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** dashboard tap on a thread cell in the daily-schedule grid writes a special `thread_mentions` row with `(entry_id=NULL, todo_id=NULL)`.
 - **Why here:** the daily-schedule grid lets the user mark a thread "done today" with no prose. The staleness math (`computeStaleness`, `getThreadCards`) consumes `thread_mentions` uniformly — so writing an entry-less mention row is the cleanest signal.
+- **Checklist step:** 1 (Data model)
 - **Tradeoff:** breaks Principle 11's "mentions are derived from prose" — explicitly documented as one of two allowed deviations.
 
 ---
@@ -58,7 +60,7 @@ Downstream consumers (`computeStaleness`, `getThreadCards`, the 14-day activity 
 Documented exceptions are common in codebases that hold otherwise-strict invariants. The pattern is to put the exception in code where it's most visible (a service file with a name that calls out the deviation) and to describe it in the spec under the principle it breaks.
 
 ### The deeper principle
-**A documented exception beats an undocumented one — and beats a poorly-fit invariant.** The 11-principle list says "mentions are derived from prose," but the dashboard's daily-schedule grid genuinely needs a mention-shaped row that isn't from prose. Rather than weaken the principle ("mentions are mostly from prose"), loopd kept the principle strict and called out the one deviation by name.
+**A documented exception beats an undocumented one — and beats a poorly-fit invariant.** The 12-principle list says "mentions are derived from prose," but the dashboard's daily-schedule grid genuinely needs a mention-shaped row that isn't from prose. Rather than weaken the principle ("mentions are mostly from prose"), loopd kept the principle strict and called out the one deviation by name.
 
 ### Where this breaks down
 - Anyone adding a new consumer of `thread_mentions` must remember to handle the manual-touch shape. A consumer that assumes `entry_id IS NOT NULL` would silently exclude these rows.
@@ -162,3 +164,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected "11-principle list" → "12-principle list".

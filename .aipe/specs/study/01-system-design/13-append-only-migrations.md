@@ -1,6 +1,7 @@
 # Append-only Postgres migrations
 
-> **Industry term:** Append-only schema migrations *(industry standard)*
+**Industry name(s):** Append-only migrations, forward-only schema migration
+**Type:** Industry standard · Language-agnostic
 
 > Every Postgres schema change is a new file, never an edit of an existing one.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** `supabase/migrations/000N_*.sql` files are immutable once committed. Schema changes ship as new files. The runner (`scripts/db-migrate.mjs`) applies any not-yet-applied file in order.
 - **Why here:** an applied migration is permanent. Editing `0001` after it ran on cloud would drift the schema between dev and prod.
+- **Checklist step:** 1 (Data model)
 - **Tradeoff:** the migration log gets long. Worth it for the audit trail.
 
 ---
@@ -166,3 +168,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — migration count grew from 5 to 8. Added 0006 (study), 0007 (reflect), 0008 (drop bug/question/decision/content + remap to 'todo'). Three migrations instead of one because they shipped on separate days — append-only discipline held even when the net effect was a taxonomy narrowing.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

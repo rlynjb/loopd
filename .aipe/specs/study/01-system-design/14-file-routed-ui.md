@@ -1,6 +1,7 @@
 # File-routed UI (expo-router)
 
-> **Industry term:** File-based routing *(industry standard)*
+**Industry name(s):** File-based routing, convention-based routing
+**Type:** Industry standard · Language-agnostic
 
 > Every file under `app/` is a route. `[param]` directories define dynamic segments. `_layout.tsx` is a wrapper that runs on every screen.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** expo-router 55 file-based routing. The `app/` directory tree IS the route tree.
 - **Why here:** matches expo-router's convention so URLs and back-stack work without manual route configuration.
+- **Checklist step:** 2 (Request flow)
 - **Tradeoff:** harder to abstract a route shape across many screens — each file is its own thing. For a small app, fine.
 
 ---
@@ -171,3 +173,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added `/vlogs` route (`app/vlogs.tsx`, 109 lines) + bottom-nav tab. Route count grew by one.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

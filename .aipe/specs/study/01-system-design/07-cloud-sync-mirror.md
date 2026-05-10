@@ -1,6 +1,7 @@
 # Cloud sync as a mirror
 
-> **Industry term:** Eventually consistent replica / async replication *(industry standard)*
+**Industry name(s):** Cloud sync mirror, replication-as-mirror
+**Type:** Industry standard · Language-agnostic
 
 > The local DB is canonical. Cloud is a mirror. Push and pull are independent flows that share the registry of 10 syncable tables.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** push selects `WHERE updated_at > synced_at`, upserts in batches of 50. Pull selects cloud rows newer than `last_pull_at`, applies `chooseWinner(local, cloud)` per row.
 - **Why here:** writes feel instant (no network in the request path). The 5-second push debounce trades a little staleness for vastly fewer round-trips during typing.
+- **Checklist step:** 2 (Request flow) + 4 (State ownership)
 - **Tradeoff:** every synced row carries `synced_at` (local-only) and `deleted_at`. Schema noise; worth it.
 
 ---
@@ -200,3 +202,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

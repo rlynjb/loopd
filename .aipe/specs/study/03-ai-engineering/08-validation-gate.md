@@ -1,6 +1,7 @@
 # Validation as a hard gate
 
-> **Industry term:** Output guardrails / schema-validated outputs *(industry standard)*
+**Industry name:** Output validation, schema gate, structured output
+**Type:** Industry standard · Language-agnostic
 
 > Every callsite parses and *re-validates* the LLM output before writing to SQLite. The model is treated as untrusted input, even when its instructions are explicit.
 
@@ -44,7 +45,7 @@ The output of every LLM call is treated like input from an untrusted client. The
 The second step is per-feature validation: `validateSummary` checks every clipId in `clipOrder` exists; `validateExpansion` checks the per-type required fields; `parseAndValidate` for caption checks all 4 variants present.
 
 If validation fails, the behaviour depends on the feature:
-- **caption** — skip; the structured summary still saves.
+- **caption** — skip; the structured summary still saves. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }` and on success `summarize.ts:91–92` persists those as `summary_json.variants` and `summary_json.variantsTheme` — note the theme key is *renamed* on persistence (`detectedTheme` → `variantsTheme`), not pass-through; the variants object is pass-through.
 - **expand** — retry once with a stricter system prompt (`"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."`). After that, give up and return `{ ok: false, reason: 'malformed' }`.
 - **summarize** — skip; surface error in `ai_summaries.error` for the next render.
 - **classify** — skip; the meta row stays at heuristic-or-null type.
@@ -170,3 +171,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added interpret's cleanMarkdown gate + input-side guards as the 5th validation flow (markdown out, no schema). See `14-interpret.md`.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; added persistence-key mapping for caption (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`).

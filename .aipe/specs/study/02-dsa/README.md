@@ -17,6 +17,9 @@ Every algorithm in this section is grounded in a real loopd operation. Each file
 | 09 | [Tag parsing with code-fence masking](./09-tag-parsing-code-fence.md) | **Lexical region masking (offset-preserving)** *(language agnostic)* | Mask code regions to spaces (preserve offsets), then per-line regex. |
 | 10 | [Heuristic-first classifier](./10-heuristic-first-classifier.md) | **Rule-based fast-path / slow-path classification** *(language agnostic)* | Ordered regex checks. Returns `'todo'` or `null`; `null` defers to LLM. |
 | 11 | [Pinned-first sort (live)](./11-pinned-first-sort.md) | **Stable sort with priority key / multi-key comparator** *(language agnostic)* | Two-key comparator: pinned first, then createdAt DESC. |
+| 12 | [Two-pass scan: nutrition prose](./12-two-pass-scan-nutrition.md) | **Two-phase matching / exact-then-fallback** *(project-specific)* | Same shape as scanTodos applied to `** food N kcal` markers. Delete-on-unmatch. |
+| 13 | [AI summary variant generation](./13-ai-summary-variant-generation.md) | **Multi-output prompt fan-out** *(project-specific)* | 4 tonal variants + theme in one LLM call. Shared context for noun consistency. |
+| 14 | [First-pull bootstrap](./14-firstpull-bootstrap.md) | **Full-table bootstrap / initial replication** *(industry standard)* | Reset every `last_pull_at` to NULL, reuse `pullAll()`. No separate restore path. |
 
 ## Complexity cheat sheet
 
@@ -30,7 +33,7 @@ Every algorithm in this section is grounded in a real loopd operation. Each file
 │ rankTodos (legacy; not currently called)   │ O(n log n)   │ O(n)    │ ✓ fine       │
 │ /todos + dashboard pinned-first sort       │ O(n log n)   │ O(1)    │ ✓ fine       │
 │ parseTags (single text)                    │ O(L)         │ O(L)    │ ✓ fine       │
-│ getThreadCards (dashboard load)            │ O(T + M + Q) │ O(T+M+Q)│ ✓ fine       │
+│ getThreadCards (dead code post-2026-05-08) │ O(T + M + Q) │ O(T+M+Q)│ ✓ fine       │
 │ heuristicClassify (per todo)               │ O(R) ≈ O(1)  │ O(1)    │ ✓ fine       │
 │ classifyTodo (LLM)                         │ O(1) calls   │ O(1)    │ ✓ network bound — async per todo │
 │ expandTodo (LLM)                           │ O(1) calls   │ O(1)    │ ✓ capped at 3 in-flight  │
@@ -40,6 +43,9 @@ Every algorithm in this section is grounded in a real loopd operation. Each file
 │ cellStateFor (per grid cell)               │ O(1)         │ O(1)    │ ✓ fine       │
 │ DailyScheduleGrid render (7 × N habits)    │ O(7N)        │ O(N)    │ ✓ fine       │
 │ summarize (LLM call + JSON parse)          │ O(1) call    │ O(P)    │ ✓ network    │
+│ scanNutritionForEntry (per entry)          │ O(n + m)     │ O(n+m)  │ ✓ fine       │
+│ generateCaption (4-variant fan-out)        │ O(1) call    │ O(P)    │ ✓ network    │
+│ firstPullAll (full-table bootstrap)        │ O(N/200) net │ O(200)  │ ✓ paginated  │
 └────────────────────────────────────────────┴──────────────┴─────────┴──────────────┘
 ```
 
@@ -52,3 +58,4 @@ The honest scaling concern in this codebase is not algorithm complexity but **pe
 ## Update log
 
 - **2026-05-07** — sort row corrected: `/todos` and the dashboard now use the pinned-first comparator (file 11), not the deprecated NULL-position rule. The `rankTodos` row is annotated as "not currently called" — the function lives in `rank.ts` but no app code consumes it.
+- **2026-05-10** — added 3 new operations (files 12-14: nutrition scan, AI caption variants, first-pull bootstrap) + dead-code annotation on `getThreadCards` (threads dropped from dashboard in commit 42ee8a6).

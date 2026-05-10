@@ -1,6 +1,7 @@
 # Storage layer summary
 
-> **Industry term:** Persistence layer / storage tier *(industry standard)*
+**Industry name(s):** Storage layer, data access layer (DAL)
+**Type:** Industry standard · Language-agnostic
 
 > Five storage layers, each with one job. Clips are big and binary, so they go to the filesystem. Secrets go to Keystore. Everything else lives in SQLite, mirrored to Postgres async.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** SQLite (canonical), filesystem (clips/exports), SecureStore (keys + flags), Supabase Postgres (mirror), external LLM APIs (stateless).
 - **Why here:** mixing them would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly, and you don't want secrets in a queryable table.
+- **Checklist step:** 1 (Data model)
 - **Tradeoff:** clips are device-local. If you reinstall the app, your videos are gone (cloud holds the metadata, not the bytes). Solo product, accepted.
 
 ---
@@ -48,12 +50,12 @@
 
 ## In this codebase
 
-**SQLite:**         `src/services/database.ts` (1387 lines) — opens `loopd.db`, runs schema migrations on first call, exposes typed CRUD for 12 tables.
+**SQLite:**         `src/services/database.ts` (1455 lines) — opens `loopd.db`, runs schema migrations on first call, exposes typed CRUD for 12 tables.
 **Filesystem:**     `src/services/fileManager.ts` — clip + export path helpers (`/document/loopd/clips/<date>/`, `/exports/<date>.mp4`), including `repairBareClipUris` defensive resolver.
 **SecureStore:**    `src/services/ai/config.ts` (50 lines) — `getProvider`, `getAnthropicKey`, `getOpenAIKey`. Other SecureStore consumers: `src/services/sync/client.ts` (Supabase URL + anon key), `src/services/sync/bootstrap.ts` (`cloud_initial_push_done` flag).
 **Postgres:**       `src/services/sync/client.ts` — Supabase JS client init. Reads from SecureStore so URL and anon key are user-supplied.
 **Per-table glue:** `src/services/sync/tables/*` — one file per synced table, exporting the mapper functions between SQLite and Postgres row shapes.
-**External LLMs:**  `src/services/ai/{summarize,caption,classify,expand}.ts` — stateless HTTP calls; no client-side persistence beyond cached responses in `ai_summaries`.
+**External LLMs:**  `src/services/ai/{summarize,caption,interpret}.ts` + `src/services/todos/{classify,expand}.ts` — stateless HTTP calls; no client-side persistence beyond cached responses in `ai_summaries`.
 
 ---
 
@@ -167,3 +169,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + added missing 5th chain `interpret` to External LLMs list.

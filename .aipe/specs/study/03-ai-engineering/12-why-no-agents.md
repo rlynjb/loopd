@@ -1,6 +1,7 @@
 # Why no agents, no chains-of-chains
 
-> **Industry term:** *(no industry rename — descriptive)*
+**Industry name:** — (architecture decision: chains over agent loops)
+**Type:** Project-specific
 
 > The codebase deliberately stops at single chains. Every pattern surrounding the LLM (heuristic-first, async classify, validation gate, user-override lock) lives *outside* the model — in app code that calls one function and consumes its output.
 
@@ -182,3 +183,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Agents are intentionally absent — anchored on the closest single-chain sites.
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (interpret added; still no agents).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

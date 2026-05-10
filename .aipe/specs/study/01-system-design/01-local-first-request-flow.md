@@ -1,6 +1,7 @@
 # Local-first request flow
 
-> **Industry term:** Local-first software / Offline-first architecture *(industry standard)*
+**Industry name(s):** Local-first architecture, offline-first design
+**Type:** Industry standard · Language-agnostic
 
 > Every user action commits to local SQLite first; the cloud lags by 5 seconds via a debounced background push.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** UI → hook → service → `database.ts` → SQLite → schedulePush → Supabase. Every layer is synchronous up to the SQLite write; the cloud catches up later.
 - **Why here:** the app must work offline (Android, journaling on the move) and the user is the only writer in Phase A.
+- **Checklist step:** 2 (Request flow)
 - **Tradeoff:** other devices won't see edits until ~5s after typing stops. Acceptable for solo use; needs a tighter loop or live subscriptions for multi-device.
 
 ---
@@ -74,7 +76,7 @@ If the device is offline, the writes pile up locally with `updated_at > synced_a
 
 ## In this codebase
 
-**SQLite mouth:**     `src/services/database.ts` — the only file that opens `loopd.db`. Every mutator stamps `updated_at` and calls `schedulePush()`. The 1387-line file *is* the funnel — the hard guarantee that "DB is canonical" lives here.
+**SQLite mouth:**     `src/services/database.ts` — the only file that opens `loopd.db`. Every mutator stamps `updated_at` and calls `schedulePush()`. The 1455-line file *is* the funnel — the hard guarantee that "DB is canonical" lives here.
 **React wrappers:**   `src/hooks/{useEntries,useDatabase,useHabits,useDayTitle,useExport,useProject}.ts` — thin state hooks that own a query each and delegate mutations into `database.ts`.
 **Debouncer:**        `src/services/sync/schedulePush.ts` → `schedulePush()` L14–L21 (5s window via `PUSH_DEBOUNCE_MS = 5_000` at L9, internal `fire()` at L22)
 **Orchestrator:**     `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — walks the 10-table `REGISTRY` defined at L25
@@ -194,3 +196,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected database.ts line count to 1455.

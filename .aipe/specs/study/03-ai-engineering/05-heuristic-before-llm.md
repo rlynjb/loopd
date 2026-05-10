@@ -1,6 +1,7 @@
 # Heuristic before LLM (the cost gate)
 
-> **Industry term:** Pre-filter / cost-aware fast path *(language agnostic)*
+**Industry name:** Cascading classifier, cheap-first / expensive-second
+**Type:** Industry standard · Language-agnostic
 
 > Every new todo runs through `heuristicClassify` first (regex-only, no network). The LLM classifier is fired only when the heuristic returns `null`.
 
@@ -179,3 +180,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block. No "7-class problem" string present in this file; classification-count drift (7→5 modes) lives in file 13 and is updated there. Heuristic returns `'todo' | null` so the heuristic-gate description is unaffected by the mode-count reduction.

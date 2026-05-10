@@ -1,6 +1,7 @@
 # Tag parsing with code-fence masking — single-pass regex with offset preservation
 
-> **Industry term:** Lexical region masking (offset-preserving) *(language agnostic)*
+**Industry name(s):** Tokenizer with mask regions, exclusion-aware regex
+**Type:** Industry standard · Language-agnostic
 
 > Strip fenced code blocks and inline code spans before applying the `#tag` regex, so backticked tokens don't register. Preserve byte offsets so line indices stay stable.
 
@@ -33,7 +34,47 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (single regex, no code-fence masking; post-filter false positives):
+
+```
+  function parseTagsBrute(text):
+    out = []
+    matches = text.matchAll(/(^|[^\w-])#([a-zA-Z][a-zA-Z0-9-]*)/g)
+    for m in matches:
+      offset = m.index
+      // After the fact, decide if this match was inside a code region.
+      // This requires re-scanning the text from 0 to count fence/backtick state.
+      if isInsideCode(text, offset):
+        continue   // false positive — drop it
+      lineIndex = text.slice(0, offset).split('\n').length - 1
+      out.push({ slug, tagText: m[2], lineIndex })
+    return out
+```
+
+Execution trace (text with 3 `#tag` candidates: line 0 prose, line 1 inside backticks, line 5 prose):
+
+```
+  regex match 1: "#loopd" at offset 11
+    isInsideCode(text, 11)?  scan 0..11, fence-depth=0, backtick-depth=0 → false
+    keep. lineIndex computed by slicing → 0
+  regex match 2: "#main" at offset 38 (inside `git checkout #main`)
+    isInsideCode(text, 38)?  scan 0..38, hit backtick at offset 36 → true
+    drop.
+  regex match 3: "#health" at offset 110 (after fenced block ends)
+    isInsideCode(text, 110)? scan 0..110, fence opens line 2, closes line 4, depth=0 again
+    keep. lineIndex slicing → 5
+  Result: same 2 tags as optimal — but each match requires a fresh 0..offset scan.
+```
+
+Complexity: O(L²) worst case — each match's `isInsideCode` and `lineIndex` re-scan the prefix · O(L) space.
+
+What goes wrong at scale: at journal-entry size (a few KB) the L² behavior is invisible. At a 1MB paste it's 1 trillion compare ops worst case — multi-second JS hang. The deeper problem: any approach that decides "was this match in code?" *after* matching makes line-number computation O(matches × text-length). Masking up-front collapses that to one O(L) pass.
+
+── Optimal ──────────────────────────────────────
+
+The insight: mask code regions to *same-length space runs* before regex, so line indices stay stable and a single per-line scan finds all tags in one O(L) pass.
 
 ```
   function maskCode(text):
@@ -87,11 +128,22 @@ The reconcile pass (`reconcileMentions`) keys on `sourceLine`. If `maskCode` col
 
 **Complexity:** O(L) for the regex masks · O(L) for the per-line scan, where L = text length.
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(L²) worst    │ O(L)             │
+  │ Space           │ O(L)           │ O(L)             │
+  │ At 1,000 chars  │ ~1,000,000 ops │ ~1,000 ops       │
+  │ At 10,000 chars │ ~100,000,000   │ ~10,000 ops      │
+  │ Readable?       │ no (post-filter│ yes              │
+  │                 │  re-scans)     │                  │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-There isn't really a brute version that's correct. Naive `text.match(/#tag/g)` would mis-match inside code; stripping fences with `.replace(..., '')` would shift line numbers and break reconcile. The space-preserving mask is the cheapest correct shape.
+When brute force is fine: at a few KB per entry both run sub-millisecond. But brute force is also *incorrect*: stripping fences with `.replace(..., '')` shifts line numbers and breaks reconcile. The space-preserving mask is the cheapest correct shape.
 
 ---
 
@@ -221,3 +273,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

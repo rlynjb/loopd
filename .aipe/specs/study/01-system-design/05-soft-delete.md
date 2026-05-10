@@ -1,6 +1,7 @@
 # Soft delete and the deleted_at column
 
-> **Industry term:** Soft delete / tombstone pattern *(industry standard)*
+**Industry name(s):** Soft delete, tombstoning, logical deletion
+**Type:** Industry standard · Language-agnostic
 
 > Every synced table has a `deleted_at TEXT` column. Deletes write a timestamp, not a `DELETE FROM` row. Reads filter it out.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** soft-delete via `deleted_at` timestamp. Every read filters `WHERE deleted_at IS NULL`. Every write that "deletes" stamps the column and bumps `updated_at`.
 - **Why here:** the cloud sync layer must learn about deletions; a hard `DELETE FROM` would just make the row vanish locally and cloud would re-pull it as if still alive.
+- **Checklist step:** 1 (Data model) + 5 (Failure handling)
 - **Tradeoff:** the database grows monotonically. A 30-day vacuum is in the spec but deferred — volume is small enough that it doesn't matter yet.
 
 ---
@@ -160,3 +162,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

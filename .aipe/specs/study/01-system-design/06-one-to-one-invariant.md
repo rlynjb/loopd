@@ -1,6 +1,7 @@
 # The 1:1 invariant (and why it's not a foreign key)
 
-> **Industry term:** Application-level referential integrity *(language agnostic)*
+**Industry name(s):** Application-enforced invariant, reconciler pattern
+**Type:** Project-specific
 
 > Every `TodoItem` in `entries.todos_json` has exactly one matching `todo_meta` row. SQLite can't FK to a JSON-array element, so the application reconciler is the enforcement.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** `entries.todos_json` is a JSON array of TodoItems; `todo_meta` is a separate table keyed on `todoId`. After every prose scan, the reconciler inserts missing meta rows, deletes orphans, leaves matched rows alone.
 - **Why here:** SQLite can't enforce FKs to elements of a JSON column, so the app code is the integrity gate.
+- **Checklist step:** 1 (Data model) + 5 (Failure handling)
 - **Tradeoff:** a partial reconcile leaves orphans/missing meta rows until the next commit. Acceptable — the next commit's diff sees the gap and patches it (self-healing).
 
 ---
@@ -185,3 +187,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

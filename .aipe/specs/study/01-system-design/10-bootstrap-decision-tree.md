@@ -1,6 +1,7 @@
 # Bootstrap decision tree
 
-> **Industry term:** Cold-start bootstrap *(language agnostic)*
+**Industry name(s):** Bootstrap, first-run decision tree
+**Type:** Project-specific
 
 > Runs once per install on the first cold start with cloud configured. Decides whether to push, pull, or do nothing. Sets a SecureStore flag so it never runs again.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** at boot, if cloud is configured and the bootstrap flag is unset, classify (localHasData, cloudHasData) and run initial-push, first-pull, or no-op accordingly.
 - **Why here:** "fresh device recovery" (install → first-pull) and "first cloud connect on existing app" (push existing local → cloud) are different operations. Bootstrap picks correctly.
+- **Checklist step:** 5 (Failure handling)
 - **Tradeoff:** the both-populated case can't be auto-resolved without a UI prompt. Phase A ships a pragmatic fallback (treat local as canonical) plus a warning log; Phase B should prompt.
 
 ---
@@ -181,3 +183,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

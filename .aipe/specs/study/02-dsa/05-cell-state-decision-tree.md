@@ -1,6 +1,7 @@
 # Daily-schedule grid cell state — pure decision tree, O(1) per cell
 
-> **Industry term:** Pure decision function / lookup table *(language agnostic)*
+**Industry name(s):** Decision tree, finite state classification
+**Type:** Industry standard · Language-agnostic
 
 > Map (habit, date, today, checkedDates) → one of 5 states (`done | off-day | pending | upcoming | missed`). Pure, no DB.
 
@@ -30,7 +31,47 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (compute every branch with no early-out):
+
+```
+  function cellStateForBrute(habit, dateStr, todayStr, checkedDates):
+    // Evaluate every predicate up-front, no short-circuit
+    isChecked   = checkedDates has dateStr
+    date        = parse(dateStr + 'T12:00:00')
+    isDue       = isDueOn(habit, date)
+    isToday     = dateStr == todayStr
+    isFuture    = dateStr  > todayStr
+    isPast      = dateStr  < todayStr
+
+    // Then walk a flat list to pick the matching state
+    if isChecked:                       return 'done'
+    if not isDue:                       return 'off-day'
+    if isToday:                         return 'pending'
+    if isFuture:                        return 'upcoming'
+    if isPast and isDue and !isChecked: return 'missed'
+    return 'pending'  // unreachable
+```
+
+Execution trace (specific_days = M/W/F → days [1,3,5]; today Thu day=4; checkedDates = {05-05, 05-06}):
+
+```
+  Tue 05-05  isChecked=true   isDue=false  isToday=false  isFuture=false
+             walk: isChecked  → 'done'   (4 predicates evaluated; one branch wins)
+  Thu 05-07  isChecked=false  isDue=false  isToday=true   isFuture=false
+             walk: not checked, not due → 'off-day'  (4 predicates still evaluated)
+  Mon 05-04  isChecked=false  isDue=true   isToday=false  isFuture=false  isPast=true
+             walk: not checked, due, not today, not future, past+due+uncheck'd → 'missed'
+```
+
+Complexity: O(1) per cell (still constant, but every predicate runs every time) · O(1) space.
+
+What goes wrong at scale: O(1) doesn't get worse, but the constant grows — every predicate runs, including the `parse(dateStr)` Date allocation and `isDueOn` switch. At 7 days × 100 habits = 700 cells per render, brute does ~3,500 predicate evaluations vs optimal's ~700 short-circuited. On a 60Hz UI, the render-budget-per-frame difference is measurable on low-end Android. The bigger trap: an impure brute-force version (DB read per cell) would turn O(1) into O(network), and that's the actual mistake to avoid.
+
+── Optimal ──────────────────────────────────────
+
+The insight: order the branches by frequency-and-evidence-priority so the cheapest dominant case (`done` check via O(1) Set) short-circuits before parsing the date.
 
 ```
   function cellStateFor(habit, dateStr, todayStr, checkedDates):
@@ -64,6 +105,22 @@
 
 **Complexity:** O(1) per cell · O(1) space (the `Set.has` is constant; `isDueOn` is a switch).
 
+── Comparison ───────────────────────────────────
+
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(1) (5 preds) │ O(1) (1-5 preds) │
+  │ Space           │ O(1)           │ O(1)             │
+  │ At 1,000 cells  │ ~5,000 preds   │ ~1,500 preds     │
+  │ At 10,000 cells │ ~50,000 preds  │ ~15,000 preds    │
+  │ Readable?       │ yes            │ yes (priority)   │
+  └─────────────────┴────────────────┴──────────────────┘
+```
+
+When brute force is fine: never matters for correctness — both return the same state. The optimal version's win is purely constant-factor + readability: the branch order encodes "check-in beats cadence beats time-of-week," which is a business rule worth making visible.
+
 ---
 
 ## Why pure matters here
@@ -71,12 +128,6 @@
 The grid re-renders on every habit toggle, week change, and live-now tick. If `cellStateFor` were impure (DB read, async), the grid would flash and the user would see in-flight states. Keeping the function pure means React's reconciler only re-renders cells whose state actually changed.
 
 The `checkedDatesByHabit: Map<string, Set<string>>` is built once per render at the parent and passed down. N habits with O(1) map lookup each means the entire grid renders in O(7N) — N habits times 7 days.
-
----
-
-## When brute force is fine
-
-There's no brute version here — the function is already O(1). The "alternative" would be making it impure (e.g., querying SQLite per cell), which would be both slower and incorrect (renders racing the DB).
 
 ---
 
@@ -195,3 +246,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

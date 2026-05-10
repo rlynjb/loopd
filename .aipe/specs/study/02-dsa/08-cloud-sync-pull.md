@@ -1,6 +1,7 @@
 # Cloud sync pull — paginated, conflict-resolved, server-time anchored
 
-> **Industry term:** Cursor-based pagination / watermark sync *(industry standard)*
+**Industry name(s):** Cursor-based pagination, incremental pull
+**Type:** Industry standard · Language-agnostic
 
 > Pull only what's new since last pull, in 200-row pages, resolving conflicts row-by-row. Anchor to server time, not local clock.
 
@@ -29,7 +30,40 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (full-table fetch every pull, no cursor):
+
+```
+  serverTime = await getServerTime()
+  page = supabase.from(table).select('*')   // no .gt, no .order, no .limit
+  for cloudRow in page:
+    localRow = SELECT * FROM <table> WHERE id = cloudRow.id
+    winner = chooseWinner(localRow, cloudRow)
+    if winner == 'cloud':
+      table.localUpsert(cloudToLocal(cloudRow))
+  recordPullSuccess(table, serverTime)
+```
+
+Execution trace (cloud has 10,000 rows total; only 350 new since last pull; user pulls):
+
+```
+  page = SELECT * FROM table  → 10,000 rows
+  scan 10,000 rows:
+    9,650 of them are identical to local (chooseWinner says local-wins or no-op)
+    350 are newer → upsert + stamp synced_at
+  network: 1 huge query, ~5MB payload
+  At 100ms server response: feasible but the payload size dominates.
+  At 1M rows: payload is 500MB, request times out.
+```
+
+Complexity: O(N) network bytes for the *full table* (N=total rows, not N=new rows) · O(N) memory at once.
+
+What goes wrong at scale: the brute version costs you in proportion to total table size, not to what changed. With 10,000 cloud rows and 1 new one, brute pulls all 10,000 — ~5MB on the wire vs ~500B for the cursor version. At 1M rows, brute is 500MB per pull and times out at the HTTP layer. The whole point of incremental sync is to make pull cost proportional to *new data*, not to *total data*; brute force loses that property.
+
+── Optimal ──────────────────────────────────────
+
+The insight: a monotonic cursor (`updated_at > last_pull_at`) makes the cost proportional to *new* rows only. Pagination keeps memory bounded. Anchoring to server time (RPC) avoids local clock skew.
 
 ```
   serverTime = await getServerTime()                      // RPC, anchors the pull window
@@ -95,11 +129,21 @@ OFFSET pagination would miss rows that arrive during the loop (the window shifts
 
 Local clock skew. If the device clock is 30s behind, pulling rows newer-than-Date.now() would race the cloud's own timestamps and miss data. The server's clock is the authority.
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(N) bytes     │ O(new) bytes     │
+  │ Space           │ O(N)           │ O(200) page      │
+  │ At 1,000 rows   │ pull all 1,000 │ pull new only    │
+  │ At 10,000 rows  │ pull all 10k   │ pull new only    │
+  │ Readable?       │ yes            │ yes              │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-The "brute" alternative is full-table pull (no cursor, no pagination). On any non-trivial table that's unworkable — would re-pull every row every time. Pagination is mandatory.
+When brute force is fine: only on initial bootstrap when "new = everything" anyway (see [14-firstpull-bootstrap](./14-firstpull-bootstrap.md)). For every subsequent pull, brute is wrong by an order of magnitude.
 
 ---
 
@@ -222,3 +266,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

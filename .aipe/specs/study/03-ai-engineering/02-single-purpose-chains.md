@@ -1,6 +1,7 @@
 # Single-purpose chains (loopd's only pattern)
 
-> **Industry term:** Single-step chain / one-shot LLM call *(industry standard — LangChain)*
+**Industry name:** Prompt chaining, single-purpose chain, decomposition pattern
+**Type:** Industry standard
 
 > Every AI feature is a single LLM call with one job. The model writes JSON. The app parses, validates, and persists. No chains-of-chains, no multi-step plans.
 
@@ -145,15 +146,15 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
        A: I'd collapse if I could get the same output quality with one prompt and the failure correlation stopped mattering — e.g., if the caption rules got short enough that summarize could absorb them without quality loss. I'd fan out if a feature genuinely needed multi-step reasoning where the output of step 1 had to be reviewed before step 2 — for instance, "draft a vlog plan, critique it, refine it". Today none of the five jobs need that. Each one is a one-shot transformation: text in, JSON or markdown out, done.
 
 ### The question candidates always dodge
-Q: You say "one job per chain", but `expand.ts` actually selects between 6 different system prompts based on type. Isn't that 6 chains masquerading as one?
+Q: You say "one job per chain", but `expand.ts` actually selects between 4 different system prompts based on type. Isn't that 4 chains masquerading as one?
 
-A: Fair — and yes, in a strict reading it's six chains in one file. The reason I count it as one is that the *shape* is uniform: read meta, pick prompt, single call, validate, persist. The per-type schemas differ but the orchestration is identical. If I extracted six files I'd have six copies of the same control flow with one parameter swapped. The line I drew is "one chain = one call shape with one validation contract". The 'bug' validator and the 'idea' validator differ in required fields, which is what `validateExpansion` switches on. So I'll grant the criticism: `expand.ts` is the closest thing in the codebase to a chain *family*, and if I added a seventh type it would be a fair moment to ask whether the file should split. With six and stable, the duplication-saved beats the abstraction-cost.
+A: Fair — and yes, in a strict reading it's four chains in one file (one per `ExpandableType` — `idea / knowledge / study / reflect`; `'todo'` is excluded via `Exclude<TodoType, 'todo'>` so plain todos have no expansion shape). The reason I count it as one is that the *shape* is uniform: read meta, pick prompt, single call, validate, persist. The per-type schemas differ but the orchestration is identical. If I extracted four files I'd have four copies of the same control flow with one parameter swapped. The line I drew is "one chain = one call shape with one validation contract". The 'idea' validator and the 'reflect' validator differ in required fields, which is what `validateExpansion` switches on. So I'll grant the criticism: `expand.ts` is the closest thing in the codebase to a chain *family*, and if I added a fifth expandable type it would be a fair moment to ask whether the file should split. With four typed schemas and stable, the duplication-saved beats the abstraction-cost.
 
 ### One-line anchors
 - "Caption was split out of summarize. That's the test of whether single-purpose pays."
 - "One chain, one job, one validation contract."
 - "Failures should be local. A chain that does five things fails in 5! ways."
-- "`expand.ts` is six prompts, one shape — that's the line I drew."
+- "`expand.ts` is 4 typed schemas, one shape — that's the line I drew."
 
 ---
 
@@ -171,7 +172,7 @@ Open the file. Compare.
 Explain single-purpose chains to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
 
 Checkpoints — did you:
-- Name the specific file or function?  → name 2 of the 4 chain files
+- Name the specific file or function?  → name 2 of the 5 chain files
 - Say why this approach was chosen over the alternative?
 - Name the tradeoff in one sentence?
 
@@ -190,8 +191,8 @@ Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
 "If you were starting this project today with the same constraints, would you make the same decision? Why or why not? If you'd change it, what would you do instead and what would that cost?"
 
 Reference the actual code:
-→ Point to `src/services/todos/expand.ts` (the chain *family* with 6 system prompts) to support what exists
-→ Point to where you'd extract per-type chains into 6 separate files if you chose the alternative
+→ Point to `src/services/todos/expand.ts` (the chain *family* with 4 typed schemas — idea/knowledge/study/reflect; ExpandableType excludes 'todo') to support what exists
+→ Point to where you'd extract per-type chains into 4 separate files if you chose the alternative
 
 There is no right answer. The point is specificity. Vague answers mean you don't know the code well enough to have an opinion about it yet.
 
@@ -210,3 +211,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — chain count grew from 4 to 5 (Interpret added, with markdown-out contract). Expand types reduced from 6 to 4. Classify modes reduced from 7 to 5. See `14-interpret.md`.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 2 hint 4→5 chain files; corrected "expand.ts is six prompts" to 4 typed schemas (ExpandableType excludes 'todo'); updated Level 4 alternative count 6→4.

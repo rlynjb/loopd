@@ -1,6 +1,7 @@
 # Debounced push trigger
 
-> **Industry term:** Write-behind / coalesced writes *(industry standard)*
+**Industry name(s):** Debouncing, write coalescing
+**Type:** Industry standard · Language-agnostic
 
 > Every write site calls `schedulePush()`. The timer resets on every call. Five seconds after the last call fires, `pushAll()` runs.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** `schedulePush()` (re)arms a 5-second timer. After 5s of write quiet, `pushAll()` walks the registry and pushes every dirty row.
 - **Why here:** typing fires hundreds of writes per minute (autosave per keystroke). Pushing each one would melt the network. Debouncing collapses a typing burst into a single push.
+- **Checklist step:** 2 (Request flow) + 3 (Caching)
 - **Tradeoff:** if the app is killed in the 5-second window, the latest writes never reach cloud — but they're still in local SQLite, and the next session's startup pushes them.
 
 ---
@@ -162,3 +164,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

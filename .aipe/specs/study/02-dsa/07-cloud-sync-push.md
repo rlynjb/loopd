@@ -1,6 +1,7 @@
 # Cloud sync push — batch upsert with mid-batch failure tolerance
 
-> **Industry term:** Batch upsert with bounded pagination *(industry standard)*
+**Industry name(s):** Outbox-style push, batched upsert
+**Type:** Industry standard · Language-agnostic
 
 > Push only what changed, in chunks small enough that one failure doesn't strand the whole table.
 
@@ -29,7 +30,44 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (per-row upsert in a loop):
+
+```
+  dirty = table.localQueryDirty()
+  succeeded, failed = 0, 0
+  for row in dirty:
+    cloudRow = localToCloud(row)
+    err = supabase.from(table).upsert([cloudRow], onConflict: 'user_id,id')
+    if err: failed++; continue
+    table.localMarkSynced(row.id, now)
+    succeeded++
+  return { attempted: dirty.length, succeeded, failed }
+```
+
+Execution trace (137 dirty rows, one HTTPS roundtrip each):
+
+```
+  row 1   upsert OK   137 - 1 = 136 remaining
+  row 2   upsert OK   135 remaining
+  ...
+  row 73  upsert ERR  log failure, continue
+  ...
+  row 137 upsert OK   0 remaining
+
+  Network: 137 HTTPS round-trips
+  At 200ms latency: 137 × 200ms = 27.4s of pushing for one user typing burst
+  Wall-clock dominated by latency, not compute.
+```
+
+Complexity: O(n) network round-trips (one per row) · O(1) memory.
+
+What goes wrong at scale: at 137 dirty rows × 200ms typical mobile latency = ~27s push time, blocking the next sync window and exhausting the device's HTTP connection pool. At 10,000 dirty rows it's ~33 minutes — unusable. The batch shape collapses n into ⌈n/50⌉ = 200 round-trips for the same 10k rows, ~40s. The per-row brute-force version is the most common shape an engineer reaches for first; it's also the most common reason sync engines feel slow.
+
+── Optimal ──────────────────────────────────────
+
+The insight: batches of 50 amortise the per-round-trip overhead. Per-batch idempotency (via `onConflict + LWW`) means a failed batch leaves `synced_at` unstamped and the next push retries automatically — the SQLite predicate IS the retry queue.
 
 ```
   dirty = table.localQueryDirty()                  // SELECT * WHERE updated_at > synced_at
@@ -78,11 +116,21 @@
 
 One giant upsert would make a 50KB+ payload that supabase-js doesn't love, and a network blip would lose all 137 rows of progress. 50 is small enough to retry cheaply, big enough that 200 todos = 4 round-trips.
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(n) RTs       │ O(n / 50) RTs    │
+  │ Space           │ O(1)           │ O(50)            │
+  │ At 1,000 items  │ 1,000 RTs      │ 20 RTs           │
+  │ At 10,000 items │ 10,000 RTs     │ 200 RTs          │
+  │ Readable?       │ yes            │ yes              │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-The "brute" alternative is per-row upserts (one HTTP call per dirty row). At 137 dirty rows on a typing burst, that's 137 round-trips × ~200ms = 27 seconds of pushing. Don't ship that. Batched is the only viable shape at scale.
+When brute force is fine: never on a real sync path — latency dominates. The only place per-row is OK is a small dev script (<20 rows). Even then, batching is one extra line of code.
 
 ---
 
@@ -202,3 +250,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

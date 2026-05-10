@@ -1,6 +1,7 @@
 # Pin replaces manual reorder
 
-> **Industry term:** *(no industry equivalent — feature-specific)*
+**Industry name(s):** — (project-specific simplification: boolean pin replacing position-based reorder)
+**Type:** Project-specific
 
 > The /todos page swapped a user-managed integer `position` column for a single boolean `pinned`. The `position` column is kept on the schema (deprecated) but no UI reads it.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** as of 2026-05-05, `/todos` and the dashboard sort by `pinned` first (boolean), then `createdAt DESC`. The previous manual-reorder UI (drag handles, `position INT NOT NULL`) is gone.
 - **Why here:** in practice users pinned a handful of items and ignored the rest of the order. A single bool captures the same intent without the UI complexity.
+- **Checklist step:** 1 (Data model)
 - **Tradeoff:** a user who actually wanted "thing A before thing B before thing C" can't express that anymore. Acceptable; nobody used it that way.
 
 ---
@@ -185,3 +187,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses legacy position-based sort.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

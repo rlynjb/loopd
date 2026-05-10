@@ -1,6 +1,7 @@
 # Conflict resolution: last-write-wins
 
-> **Industry term:** Last-write-wins (LWW) *(industry standard)*
+**Industry name(s):** Last-write-wins (LWW), Lamport-style conflict resolution
+**Type:** Industry standard · Language-agnostic
 
 > Pure function in `sync/conflict.ts`. Compares `updated_at` timestamps; whichever side is newer wins. Same-second ties go to cloud.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** `chooseWinner(local, cloud)` returns `'local' | 'cloud'`. The result drives whether a pulled row overwrites the local copy.
 - **Why here:** solo Phase A. Two devices = the user. The honest cases (same person edits on phone, then on tablet) all resolve cleanly with this rule.
+- **Checklist step:** 5 (Failure handling)
 - **Tradeoff:** unrecoverable for true concurrent multi-user edits. Phase B may need vector clocks if two humans ever share a single workspace.
 
 ---
@@ -163,3 +165,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

@@ -1,6 +1,7 @@
 # Async background classification — fire and forget
 
-> **Industry term:** Fire-and-forget / async write-behind *(industry standard)*
+**Industry name:** Asynchronous task / background job pattern
+**Type:** Industry standard · Language-agnostic
 
 > The prose scan completes synchronously. Each new ambiguous todo fires an LLM call without awaiting it. The result lands later via DB write + event.
 
@@ -191,3 +192,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

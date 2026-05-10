@@ -1,6 +1,7 @@
 # Tool calling — not used in loopd
 
-> **Industry term:** Tool use / function calling *(industry standard)*
+**Industry name:** Tool calling, function calling
+**Type:** Industry standard
 
 > The codebase deliberately does not implement tool calling, agents, or any loop where the LLM asks the app to do something and read the result back.
 
@@ -166,3 +167,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Tool calling is intentionally absent — anchored on the closest single-call sites.
 Updated: 2026-05-10 — chain count bumped from 4 to 5 (interpret added; still no tool calling).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

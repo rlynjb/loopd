@@ -1,6 +1,7 @@
 # Interpret — long-form markdown chain
 
-> **Industry term:** *(no industry rename — feature-specific)*
+**Industry name:** Inline summarization, interpret chain
+**Type:** Project-specific
 
 > A user-triggered AI chain that reads a journal entry and writes back a multi-section markdown reflection. Different shape from the other 4 chains — markdown out, no JSON, no schema validation, ephemeral.
 
@@ -219,3 +220,6 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

@@ -1,6 +1,7 @@
 # Pinned-first sort — the live /todos and dashboard ordering
 
-> **Industry term:** Stable sort with priority key / multi-key comparator *(language agnostic)*
+**Industry name(s):** Stable sort with pinned partition
+**Type:** Language-agnostic
 
 > Two-key compare: `pinned` first (true before false), then `createdAt DESC` (newest first). Replaces the legacy `rankTodos` / position-based sort.
 
@@ -32,7 +33,58 @@
 
 ---
 
-## Pseudocode
+── Brute force ──────────────────────────────────
+
+Pseudocode (O(n²) selection sort with two passes — find pinned, then find non-pinned by comparator):
+
+```
+  result = []
+  remaining = rows.slice()
+
+  // Pass 1: drain pinned in createdAt DESC order via selection
+  while remaining has any pinned:
+    best = null
+    for r in remaining:
+      if !r.meta.pinned: continue
+      if best == null OR r.createdAt > best.createdAt: best = r
+    result.push(best); remaining.remove(best)
+
+  // Pass 2: drain non-pinned in createdAt DESC order via selection
+  while remaining is not empty:
+    best = null
+    for r in remaining:
+      if best == null OR r.createdAt > best.createdAt: best = r
+    result.push(best); remaining.remove(best)
+
+  return result
+```
+
+Execution trace (input: t-1 unpinned 09:00, t-2 pinned 10:00, t-3 unpinned 05-06, t-4 pinned 11:00):
+
+```
+  Pass 1 (pinned only):
+    iter 1: scan 4, candidates [t-2, t-4], best = t-4 (11:00) → result=[t-4]
+            comparisons: 4
+    iter 2: scan 3, candidates [t-2], best = t-2 → result=[t-4, t-2]
+            comparisons: 3
+    iter 3: scan 2, no pinned → exit Pass 1
+
+  Pass 2 (rest):
+    iter 1: scan 2, best = t-1 (newer) → result=[t-4, t-2, t-1]
+            comparisons: 2
+    iter 2: scan 1, t-3 → result=[t-4, t-2, t-1, t-3]
+            comparisons: 1
+
+  Total: 10 comparisons for n=4. At n=300, ~45,000.
+```
+
+Complexity: O(n²) time · O(n) extra space (the `remaining` copy).
+
+What goes wrong at scale: at n = 300 (a heavy todo list), brute force runs ~45,000 comparisons vs TimSort's ~2,400. Both finish in <10ms in JS so the user never feels it. The cost is invisibility — two nested `while` loops obscure the n² behavior. With 10,000 items the gap is 50M ops vs 130k, ~0.5s vs <50ms. At journaling scale (a few hundred max), brute force is fine; at the design level, it's a warning sign the moment someone considers "import 10k todos."
+
+── Optimal ──────────────────────────────────────
+
+The insight: a two-key comparator handed to `Array.prototype.sort` lets TimSort do one O(n log n) pass with stable ordering, and the comparator stays explicit about policy ("pin first, then recency").
 
 ```
   rows.sort((a, b) => {
@@ -59,11 +111,21 @@
 
 **Complexity:** O(n log n) time (Array.prototype.sort uses TimSort) · O(1) extra space (in-place).
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(n²)          │ O(n log n)       │
+  │ Space           │ O(n) copy      │ O(1) in-place    │
+  │ At 1,000 items  │ 500,000 ops    │ ~10,000 ops      │
+  │ At 10,000 items │ 50,000,000 ops │ ~130,000 ops     │
+  │ Readable?       │ yes (verbose)  │ yes (concise)    │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-There's no slower version that's interesting. The constants are small (todos in the hundreds at most), TimSort handles partially-sorted lists in near-linear time, and the comparator is two cheap reads.
+When brute force is fine: at the journaling scale of a few hundred todos, both are sub-millisecond. The reason to prefer `Array.prototype.sort` is that TimSort is already in the runtime and handles partially-sorted lists in near-linear time — the comparator stays the only piece of code I own.
 
 ---
 
@@ -189,3 +251,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses position-based sort, not pinned-first.
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

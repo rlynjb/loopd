@@ -1,6 +1,7 @@
 # What an LLM actually is (in one diagram)
 
-> **Industry term:** *(pedagogical — no industry rename)*
+**Industry name:** Large language model (LLM), token-prediction model, autoregressive transformer
+**Type:** Industry standard
 
 > A function. Tokens in → tokens out. No memory, no I/O, no tools.
 
@@ -89,7 +90,7 @@ On "what is an LLM" the question almost never tests definitions — it tests whe
 ### Likely questions
 
 [mid] Q: If the LLM is stateless, how does loopd give it any "memory" at all — for example, anti-repetition across captions?
-      A: It's not memory; it's context I assemble in app code. `caption.ts` calls `getRecentAISummaries(date, 5)` and pastes those into the prompt for each new caption. The model sees the last 5 captions as input tokens; it doesn't remember them. If I forgot to fetch and paste, the model would happily re-use the same opening line every day. The "memory" is a SQLite query plus a string concat.
+      A: It's not memory; it's context I assemble in app code. `src/services/ai/summarize.ts:buildCaptionInput()` (L111) calls `getRecentAISummaries(date, 5)` at L131 and pastes those into the caption prompt input. The model sees the last 5 captions as input tokens; it doesn't remember them. If I forgot to fetch and paste, the model would happily re-use the same opening line every day. The "memory" is a SQLite query plus a string concat — assembled by `summarize.ts` before it hands the prompt input to `caption.ts:generateCaption()`. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }`; summarize.ts:91–92 then persists those as `summary_json.variants` and `summary_json.variantsTheme` (the theme key is renamed on write).
 
 [senior] Q: Why frame an LLM as a function instead of as an "AI assistant"? What does that buy you in this codebase?
          A: Framing it as a pure function makes every AI call independently retriable, independently testable, and independently debuggable. The same prompt fed to the same model with the same sampler gives the same distribution — that's how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. If I treated it as an assistant with state, I couldn't reason about "what did the model see at call time" — and that's the question I always need to answer when something looks wrong.
@@ -100,7 +101,7 @@ On "what is an LLM" the question almost never tests definitions — it tests whe
 ### The question candidates always dodge
 Q: If it's just a function, why does everyone — including you, sometimes — anthropomorphise it?
 
-A: Because the output looks like reasoning. It isn't. An LLM is a probability distribution sampled token by token; what comes out reads like thought because the training corpus was thought-shaped. The error class I see most often in the wild is treating the LLM like a database (asking it to recall) or a planner (asking it to commit). In this codebase the validation gate exists exactly because I don't trust the model to be more than a token-predictor — I parse, I check the schema, I reject. The classify chain is the cleanest example: I send 50 tokens of input, get 50 tokens of output, and treat the result as "the model's guess at one of 7 labels", not "the model's understanding of my todo". Once you internalise that, every architectural choice in `src/services/ai/` becomes obvious.
+A: Because the output looks like reasoning. It isn't. An LLM is a probability distribution sampled token by token; what comes out reads like thought because the training corpus was thought-shaped. The error class I see most often in the wild is treating the LLM like a database (asking it to recall) or a planner (asking it to commit). In this codebase the validation gate exists exactly because I don't trust the model to be more than a token-predictor — I parse, I check the schema, I reject. The classify chain is the cleanest example: I send 50 tokens of input, get 50 tokens of output, and treat the result as "the model's guess at one of 5 labels", not "the model's understanding of my todo". Once you internalise that, every architectural choice in `src/services/ai/` becomes obvious.
 
 ### One-line anchors
 - "Tokens in, tokens out. Everything else is in app code."
@@ -135,7 +136,7 @@ Answer this without looking at the file:
 
 A user reports that the `punchy` caption variant has been suspiciously similar across the last 3 days — same opening clause, same sentence rhythm. Where in the codebase does the "memory" that's *supposed* to prevent that live? What would happen if the function that fetches it returned `[]` due to a SQLite bug — would the caption call fail, or just produce repetitive output? Why does that distinction matter for "treat the model as a function"?
 
-Write your answer. 3–5 sentences minimum. Then open `src/services/ai/caption.ts` L201–L223 and trace `getRecentAISummaries(date, 5)` to verify.
+Write your answer. 3–5 sentences minimum. Then open `src/services/ai/summarize.ts:buildCaptionInput()` L111–L163 and trace `getRecentAISummaries(date, 5)` at L131 to verify — the recent-captions fetch lives in summarize.ts (the caption input assembler), not in caption.ts itself.
 
 ### Level 4 — Defend the decision you'd change
 Pick the biggest tradeoff from the Tradeoffs section. Answer in writing:
@@ -163,3 +164,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (Interpret added). See `14-interpret.md`.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); added 4-variant key list (clean/smoother/reflective/punchy) + `summary_json.variantsTheme` persistence note.

@@ -1,6 +1,7 @@
 # Failure modes the codebase explicitly handles
 
-> **Industry term:** Graceful degradation / failure mode analysis *(industry standard)*
+**Industry name:** Failure modes, FMEA-lite for AI features
+**Type:** Language-agnostic
 
 > AI is best-effort. Every callsite makes sure that an AI failure leaves the canonical data (the prose, the todo, the entry) untouched. The worst outcome of any AI bug is "no AI annotation this time," never "lost data."
 
@@ -183,3 +184,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added 4 new interpret-specific failure modes (too-short / over-cap / malformed-markdown / clinical-drift); bumped service count from 4 to 5. See `14-interpret.md`.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

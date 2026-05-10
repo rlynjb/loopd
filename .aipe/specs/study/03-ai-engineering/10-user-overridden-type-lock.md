@@ -1,6 +1,7 @@
 # user_overridden_type — the manual lock
 
-> **Industry term:** Sticky user override / manual override flag *(language agnostic)*
+**Industry name:** — (project-specific override flag pattern: user_overridden_type)
+**Type:** Project-specific
 
 > A single boolean column on `todo_meta`. When the user manually picks a type from the picker, the column flips to `true`. From then on, every AI-driven path MUST read this flag and refuse to overwrite.
 
@@ -167,3 +168,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.

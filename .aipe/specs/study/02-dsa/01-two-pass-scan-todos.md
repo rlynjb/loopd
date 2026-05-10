@@ -1,6 +1,7 @@
 # Two-pass scan: matching prose lines to existing todos
 
-> **Industry term:** Two-phase matching / exact-then-fallback *(language agnostic)*
+**Industry name(s):** — (project-specific composition of exact-match-by-id + line-index fallback)
+**Type:** Project-specific
 
 > Map + Set in two passes — exact text first, then line-index fallback. Preserves todo identity across edits without requiring the user to declare it.
 
@@ -39,7 +40,9 @@
 
 ---
 
-## Brute force
+── Brute force ──────────────────────────────────
+
+Pseudocode:
 
 ```
   for each line in text:
@@ -48,10 +51,10 @@
         match!
       else if line.lineIndex equals existing.sourceLine:
         match!
-  // O(n × m) with backtracking on duplicates
+  // re-scan whole file from offset 0 for every TodoItem
 ```
 
-**Execution trace** (lines = 4 [], existing = 3):
+Execution trace (lines = 4 `[]`, existing = 3):
 
 ```
   step  line                  scan over existing                  claim
@@ -63,15 +66,13 @@
   4     line 4 "idea: ..."    NOT a [] line, skipped                —
 ```
 
-**Complexity:** O(n × m) time · O(n) space — where n = `[]` lines, m = existing todos.
+Complexity: O(n × m) time · O(n) space — where n = `[]` lines, m = existing todos.
 
-**What goes wrong at scale:** a single entry rarely has more than 20-30 todos in this app, so even at O(n × m) the absolute count is tiny (600 ops max). Scale isn't the issue here. The issue is *correctness* on duplicates: a naive loop matches the same existing todo to two different lines.
+What goes wrong at scale: a single entry rarely has more than 20-30 todos in this app, so even at O(n × m) the absolute count is tiny (600 ops max). Scale isn't the issue here. The bigger issue is *correctness* on duplicates: a naive loop matches the same existing todo to two different lines. With 10,000 lines × 10,000 existing todos the cost would be ~100M ops, but the codebase never reaches that — the correctness gap (Set-of-used guard) is the reason to rewrite, not speed.
 
----
+── Optimal ──────────────────────────────────────
 
-## Optimal
-
-**The insight:** track which existing ids are already claimed (`Set`), and iterate matches in two distinct passes — exact text first (so reorderings always win), line-index second (so single-line edits keep their identity).
+The insight: track which existing ids are already claimed (`Set`), and iterate matches in two distinct passes — exact text first (so reorderings always win), line-index second (so single-line edits keep their identity).
 
 ```
   matches = collectMatches(text)             // de-duped [] lines
@@ -146,9 +147,7 @@
 
 **Why it's faster:** the brute-force version does O(m) work *inside* the line loop (re-scanning existing each time) and re-checks already-claimed rows. With a `Set<string>` of used ids and a guarded `Map<int, TodoItem>` of claims, each existing row is touched at most twice (once per pass).
 
----
-
-## Comparison
+── Comparison ───────────────────────────────────
 
 ```
   ┌─────────────────┬────────────────┬──────────────────┐
@@ -156,13 +155,13 @@
   ├─────────────────┼────────────────┼──────────────────┤
   │ Time            │ O(n × m)       │ O(n + m) amort.  │
   │ Space           │ O(n)           │ O(n + m)         │
-  │ At 30 todos     │ 900 ops        │ 60 ops           │
-  │ At 300 todos    │ 90,000 ops     │ 600 ops          │
-  │ Correctness     │ duplicates ✗   │ Set-guarded ✓    │
+  │ At 1,000 items  │ 1,000,000 ops  │ 2,000 ops        │
+  │ At 10,000 items │ 100,000,000 ops│ 20,000 ops       │
+  │ Readable?       │ yes            │ yes              │
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-**When brute force is fine:** never. The Set guard isn't an optimization — it's correctness. Two `[]` lines with the same text would both claim the same todo and one would be reused twice.
+When brute force is fine: never. The Set guard isn't an optimization — it's correctness. Two `[]` lines with the same text would both claim the same todo and one would be reused twice. At the project's actual scale (20-30 todos per entry) the speed delta is invisible, but the correctness gap is real even at n = 2.
 
 ---
 
@@ -284,3 +283,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

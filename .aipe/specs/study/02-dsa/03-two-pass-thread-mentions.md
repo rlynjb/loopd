@@ -1,6 +1,7 @@
 # Two-pass thread mention reconcile — line-shift tolerant
 
-> **Industry term:** Fuzzy match with displacement tolerance *(language agnostic)*
+**Industry name(s):** — (project-specific composition of exact-match + line-index fallback)
+**Type:** Project-specific
 
 > Same shape as the todo two-pass, but Pass 2 uses `±3 line shift` instead of exact line match.
 
@@ -33,7 +34,47 @@
 
 ---
 
-## Optimal (the only one in the codebase — no separate brute version)
+── Brute force ──────────────────────────────────
+
+Pseudocode:
+
+```
+  for each parsed-tag in parsed:
+    for each existing-mention in existing:
+      if existing.threadId == p.threadId
+         AND (existing.sourceLine == p.lineIndex
+              OR (existing.tagText.lower == p.tagText.lower
+                  AND |existing.sourceLine - p.lineIndex| <= 3)):
+        match!
+        break
+  // re-scan whole `existing` array per parsed entry
+```
+
+Execution trace (`parsed = [{th1, line 5, "loopd"}, {th2, line 7, "Health"}]`, `existing = [m1{th1, line 5}, m2{th2, line 4, "health"}]`):
+
+```
+  parsed[0] (th1, line 5, "loopd"):
+    scan existing:
+      m1: threadId match, sourceLine == 5 ✓     match m1
+    cost: 1 scan step before match
+
+  parsed[1] (th2, line 7, "Health"):
+    scan existing:
+      m1: threadId mismatch (th1 != th2)        skip
+      m2: threadId match, sourceLine 4 != 7;
+          tagText match, |4 - 7| = 3 ≤ 3 ✓     match m2
+    cost: 2 scan steps before match
+
+  Total: 3 scan steps. No claim guard — naive matches risk double-claim if two parsed entries scan the same row first.
+```
+
+Complexity: O(n × m) time · O(n) space — where n = parsed tags, m = existing mentions.
+
+What goes wrong at scale: at per-entry scale (typically <10 mentions, n × m < 100), brute force is essentially the same as the optimal version — the codebase deliberately keeps brute-force shape for Pass 2 because building a Map for 5-element lookup costs more than the scan it would replace. With 10,000 mentions × 10,000 parsed tags brute force would run ~100M ops; that's the threshold where indexing actually pays. Real bug at scale: no `used` Set means two same-text mentions on adjacent lines can both claim the same existing row.
+
+── Optimal ──────────────────────────────────────
+
+The insight: a `used` Set prevents double-claim; pass-priority encodes evidence quality (exact-line beats fuzzy-line). Per-pass loop is still O(n × m) but bounded by per-entry counts.
 
 ```
   claimed = empty Map<int, mention>
@@ -94,11 +135,21 @@
 
 **Complexity:** O(n × m) per pass time · O(n) space. Within an entry, n + m is small (typically <10).
 
----
+── Comparison ───────────────────────────────────
 
-## When brute force is fine
+```
+  ┌─────────────────┬────────────────┬──────────────────┐
+  │                 │ Brute force    │ Optimal          │
+  ├─────────────────┼────────────────┼──────────────────┤
+  │ Time            │ O(n × m)       │ O(n × m) bounded │
+  │ Space           │ O(n)           │ O(n)             │
+  │ At 1,000 items  │ 1,000,000 ops  │ 1,000,000 ops    │
+  │ At 10,000 items │ 100,000,000 ops│ 100,000,000 ops  │
+  │ Readable?       │ yes            │ yes (Set guard)  │
+  └─────────────────┴────────────────┴──────────────────┘
+```
 
-Here. Pass 2 is the cheap path. The `find` is linear over a per-entry list — no Map needed because the predicate is "threadId AND text AND |line shift| ≤ 3", which doesn't index cleanly. At per-entry scale (handful of mentions), the constant overhead of building a Map exceeds the savings.
+When brute force is fine: here. Pass 2 is the cheap path. The `find` is linear over a per-entry list — no Map needed because the predicate is "threadId AND text AND |line shift| ≤ 3", which doesn't index cleanly. At per-entry scale (handful of mentions), the constant overhead of building a Map exceeds the savings. The "optimal" version isn't asymptotically better — it just adds the `used` Set guard for correctness against double-claim.
 
 ---
 
@@ -217,3 +268,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.

@@ -1,6 +1,7 @@
 # Single-source-of-truth principle
 
-> **Industry term:** Single source of truth (SSOT) *(industry standard)*
+**Industry name(s):** Single source of truth (SSOT), canonical data store
+**Type:** Industry standard · Language-agnostic
 
 > The journal text in `entries.text` is the only writable surface for drops; everything else (`todos_json`, `todo_meta`, `nutrition`, `thread_mentions`) is derived state, rebuilt from prose at commit time.
 
@@ -11,6 +12,7 @@
 ## Quick summary
 - **What:** prose is canonical. Markers like `[]`, `** food N kcal`, and `#tag` in `entries.text` are the source. All derived rows are rebuilt by scanners at commit time.
 - **Why here:** keeps a single editable place. Two surfaces would mean drift; this way "delete the line in your journal, the todo is gone" works without divergent code paths.
+- **Checklist step:** 1 (Data model)
 - **Tradeoff:** you can't have a todo that doesn't exist as a `[]` line — except the dashboard's quick-add path, which adds a `[]` line implicitly.
 
 ---
@@ -174,3 +176,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.

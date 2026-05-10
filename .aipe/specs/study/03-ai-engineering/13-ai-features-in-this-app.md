@@ -1,6 +1,7 @@
 # How this codebase uses AI specifically
 
-> **Industry term:** *(no industry rename — codebase-specific)*
+**Industry name:** AI feature catalogue, per-feature pattern map
+**Type:** Project-specific
 
 > Per-feature: prompt shape, input, output. Five chains, each one-job — four emit JSON, one (interpret) emits markdown.
 
@@ -63,8 +64,13 @@
           with example body lines for each, plus universal rules
           (no "I"/"you"/"we"; no hashtags; no questions; no platitudes).
   Input:  { date, rawLog[], recentCaptions?, mood?, themeHint? }
+          (assembled by summarize.ts:buildCaptionInput() L111; recentCaptions
+          come from getRecentAISummaries(date, 5) at summarize.ts:131)
   Output: { variants: { clean, smoother, reflective, punchy }, detectedTheme }
-          All four required; partial output treated as malformed.
+          All four variants required; partial output treated as malformed.
+          Persisted by summarize.ts:91–92 as:
+            summary_json.variants       ← captionOut.variants (pass-through)
+            summary_json.variantsTheme  ← captionOut.detectedTheme (key RENAMED)
 
   Todo classify
   ─────────────
@@ -158,7 +164,7 @@ On the per-feature reference page, the interviewer is testing whether I can move
 [senior] Q: Why Sonnet 4.6 for summarize/caption/expand but Haiku 4.5 for classify? Walk me through the model-choice reasoning.
          A: Cost and task complexity. Summarize, caption, and expand all produce ~1024-token structured JSON with real reasoning content — clip orderings, tonal voice variants, typed expansions with multiple required fields. Sonnet at ~$0.04/call earns its keep on output quality. Classify is a 7-class label problem with ~50 tokens out — Haiku 4.5 (or gpt-4o-mini on the OpenAI side) handles it cheaply. The cost asymmetry is roughly 50×: Sonnet calls are dollars per heavy day if I let them rip, Haiku calls are cents. The model choice mirrors the value asymmetry — caption quality matters per-day, classify accuracy matters per-todo and the heuristic already filters half.
 
-[arch] Q: How would you redesign these four features if cost dropped 100× — say Sonnet at $0.0004/call?
+[arch] Q: How would you redesign these five features if cost dropped 100× — say Sonnet at $0.0004/call?
        A: I'd merge less, not more. The current splits exist because of failure isolation (caption split out of summarize) and cost pressure (no surrounding context for classify). At 100× cheaper, I'd send classify the surrounding entry text — accuracy goes up at no real cost. I'd drop the heuristic gate because it stops paying back. I might add a new feature like "weekly synthesis" that today would be too expensive to run automatically. The single-chain shape stays — that's about debuggability and failure isolation, not cost — but the inputs grow.
 
 ### The question candidates always dodge
@@ -177,7 +183,7 @@ A: I don't, automatically. The doc warns the reader at the top: "this is a snaps
 ## Validate your understanding
 
 ### Level 1 — Reconstruct the diagram
-Close this file. Open a blank document or whiteboard. Draw the per-feature shape from memory (4 features × pattern × why). Label every column.
+Close this file. Open a blank document or whiteboard. Draw the per-feature shape from memory (5 features × pattern × why). Label every column.
 
 Open the file. Compare.
 
@@ -188,7 +194,7 @@ Open the file. Compare.
 Explain the five AI features to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
 
 Checkpoints — did you:
-- Name the specific file or function?  → name all 4 chain files, plus the model used for each
+- Name the specific file or function?  → name all 5 chain files, plus the model used for each
 - Say why this approach was chosen over the alternative?
 - Name the tradeoff in one sentence?
 
@@ -227,3 +233,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — features grew from 4 to 5 (added Interpret); thinking-mode taxonomy reduced from 7 to 5; expand types reduced from 6 to 4. See `14-interpret.md` for the new chain.
+Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 1/Level 2/[arch] interview-Q wording 4→5 features; added caption persistence-key mapping (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`) plus the buildCaptionInput input-assembly note.
