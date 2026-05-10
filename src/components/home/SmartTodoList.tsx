@@ -95,14 +95,10 @@ export function SmartTodoList({ entries, today: _today, onChanged, metas }: Prop
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.headerRow}>
-        <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
-          <Text style={styles.label}>DROPS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
-        </Pressable>
-        <Pressable onPress={() => router.push('/todos')} hitSlop={10} style={styles.linkBtn}>
-          <Icon name="arrowRight" size={14} color={colors.accent} />
-        </Pressable>
-      </View>
+      <Pressable onPress={() => router.push('/todos')} hitSlop={6} style={styles.headerRow}>
+        <Text style={styles.label}>DROPS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
+        <Icon name="arrowRight" size={14} color={colors.accent} />
+      </Pressable>
 
       {visible.map(t => {
         const isEditing = editingId === t.id;
@@ -156,13 +152,14 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     marginBottom: 2,
   },
   label: {
     fontFamily: fonts.mono,
     fontSize: 11,
+    fontWeight: '700',
     color: colors.accent,
     letterSpacing: 1,
   },
@@ -216,8 +213,5 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-  },
-  linkBtn: {
-    padding: 4,
   },
 });

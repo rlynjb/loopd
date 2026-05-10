@@ -193,12 +193,14 @@ export default function HomeScreen() {
             Threads were removed from this surface 2026-05-10. */}
         {habits.length > 0 && (
           <View style={styles.section}>
-            <View style={styles.sectionHeader}>
+            <Pressable
+              onPress={() => router.push('/more')}
+              style={styles.sectionHeader}
+              hitSlop={6}
+            >
               <Text style={styles.sectionLabel}>DAILY SCHEDULE</Text>
-              <Pressable onPress={() => router.push('/more')} hitSlop={10} style={styles.sectionLinkBtn}>
-                <Icon name="arrowRight" size={14} color={colors.accent} />
-              </Pressable>
-            </View>
+              <Icon name="arrowRight" size={14} color={colors.accent} />
+            </Pressable>
 
             <DailyScheduleHeader weekStart={weekStart} today={today} />
             <DailyScheduleGrid
@@ -286,6 +288,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontFamily: fonts.mono,
     fontSize: 11,
+    fontWeight: '700',
     color: colors.accent,
     letterSpacing: 1,
     marginBottom: 14,
@@ -312,14 +315,14 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     marginTop: 4,
   },
-  // Anchors + Threads (folded in from former Today page)
+  // Title row that doubles as a tap target — label + arrow icon side
+  // by side, both linking to the corresponding manage / detail page.
+  // alignItems flex-start lets the icon visually anchor to the top of
+  // the label box; the marginBottom on sectionLabel provides the gap
+  // below the row.
   sectionHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  sectionLinkBtn: {
-    padding: 4,
+    alignItems: 'flex-start',
+    gap: 8,
   },
 });
