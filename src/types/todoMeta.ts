@@ -5,11 +5,7 @@
 export type TodoType =
   | 'todo'
   | 'idea'
-  | 'bug'
-  | 'question'
-  | 'decision'
   | 'knowledge'
-  | 'content'
   | 'study'
   | 'reflect';
 
@@ -62,39 +58,11 @@ export type IdeaExpansion = {
   firstStep: string;
 };
 
-export type BugExpansion = {
-  observed: string;
-  expected: string;
-  suspectedCause: string;
-  reproSteps: string[];
-};
-
-export type QuestionExpansion = {
-  answer: string;
-  confidence: 'high' | 'medium' | 'low';
-  followUps: string[];
-  toVerify: string;
-};
-
-export type DecisionExpansion = {
-  decision: string;
-  reason: string;
-  tradeoff: string;
-  revisitWhen: string;
-};
-
 export type KnowledgeExpansion = {
   concept: string;
   whereUsed: string;
   whyItMatters: string;
   example: string;
-};
-
-export type ContentExpansion = {
-  hook: string;
-  keyPoints: string[];
-  format: 'post' | 'video' | 'thread' | 'tutorial' | 'vlog';
-  draftOutline: string;
 };
 
 // 'study' captures a learning *intention* — something the user wants to
@@ -126,11 +94,7 @@ export type ReflectExpansion = {
 // switch type-safe.
 export type TodoExpansion =
   | { type: 'idea';      data: IdeaExpansion }
-  | { type: 'bug';       data: BugExpansion }
-  | { type: 'question';  data: QuestionExpansion }
-  | { type: 'decision';  data: DecisionExpansion }
   | { type: 'knowledge'; data: KnowledgeExpansion }
-  | { type: 'content';   data: ContentExpansion }
   | { type: 'study';     data: StudyExpansion }
   | { type: 'reflect';   data: ReflectExpansion };
 

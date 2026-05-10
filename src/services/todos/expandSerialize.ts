@@ -14,34 +14,6 @@ export function serializeExpansion(expansion: TodoExpansion): string {
         h('First Step'), p(d.firstStep),
       ].join('\n\n').trim();
     }
-    case 'bug': {
-      const d = expansion.data;
-      return [
-        h('Observed'), p(d.observed),
-        h('Expected'), p(d.expected),
-        h('Suspected Cause'), p(d.suspectedCause),
-        h('Repro Steps'), bullets(d.reproSteps),
-      ].join('\n\n').trim();
-    }
-    case 'question': {
-      const d = expansion.data;
-      const parts = [
-        h('Answer'), p(d.answer),
-        `**Confidence:** ${d.confidence}`,
-      ];
-      if (d.followUps.length > 0) parts.push(h('Follow-ups'), bullets(d.followUps));
-      parts.push(h('To Verify'), p(d.toVerify));
-      return parts.join('\n\n').trim();
-    }
-    case 'decision': {
-      const d = expansion.data;
-      return [
-        h('Decision'), p(d.decision),
-        h('Reason'), p(d.reason),
-        h('Tradeoff'), p(d.tradeoff),
-        h('Revisit When'), p(d.revisitWhen),
-      ].join('\n\n').trim();
-    }
     case 'knowledge': {
       const d = expansion.data;
       return [
@@ -50,16 +22,6 @@ export function serializeExpansion(expansion: TodoExpansion): string {
         h('Why It Matters'), p(d.whyItMatters),
         h('Example'), p(d.example),
       ].join('\n\n').trim();
-    }
-    case 'content': {
-      const d = expansion.data;
-      const parts = [
-        h('Hook'), p(d.hook),
-        `**Format:** ${d.format}`,
-      ];
-      if (d.keyPoints.length > 0) parts.push(h('Key Points'), bullets(d.keyPoints));
-      parts.push(h('Draft Outline'), p(d.draftOutline));
-      return parts.join('\n\n').trim();
     }
     case 'study': {
       const d = expansion.data;

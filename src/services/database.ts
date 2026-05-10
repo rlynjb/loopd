@@ -201,7 +201,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       position INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content','study','reflect')),
+      CHECK (type IN ('todo','idea','knowledge','study','reflect')),
       CHECK (stage IN ('todo','in_progress','backlog')),
       CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
     );
@@ -384,18 +384,32 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await database.execAsync(`UPDATE vlogs SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE thread_mentions SET updated_at = created_at WHERE updated_at IS NULL`);
 
-  // CHECK-constraint widening on todo_meta.type — 'study' added 2026-05-09,
-  // 'reflect' added 2026-05-10. SQLite can't ALTER a CHECK in place, so
-  // recreate the table when the existing schema lacks the most recent
-  // value ('reflect'). Idempotent: noop on fresh installs (the CREATE
-  // TABLE above already includes 'reflect') and after the migration has
-  // run once. Placed after the sync-columns loop so synced_at/deleted_at
+  // CHECK-constraint history on todo_meta.type:
+  //   - 2026-05-09: added 'study'
+  //   - 2026-05-10: added 'reflect'
+  //   - 2026-05-10 (later): dropped 'bug' / 'question' / 'decision' / 'content'
+  //     down to the compact 5-value set. Existing rows with those types are
+  //     remapped to 'todo' first so the new CHECK doesn't reject them on the
+  //     INSERT SELECT.
+  //
+  // SQLite can't ALTER a CHECK in place. Trigger fires when 'bug' is still
+  // present in the table-definition SQL — true on every install shipped
+  // before this commit. After the migration runs once, 'bug' is gone and
+  // subsequent boots skip. Fresh installs hit the new CREATE TABLE above
+  // directly. Placed after the sync-columns loop so synced_at/deleted_at
   // are guaranteed present on the source row before INSERT SELECT.
   try {
     const todoMetaSchema = await database.getFirstAsync<{ sql: string }>(
       "SELECT sql FROM sqlite_master WHERE type='table' AND name='todo_meta'"
     );
-    if (todoMetaSchema?.sql && !todoMetaSchema.sql.includes("'reflect'")) {
+    if (todoMetaSchema?.sql && todoMetaSchema.sql.includes("'bug'")) {
+      // Remap rows whose type is being dropped. user_overridden_type is
+      // cleared so the classifier is allowed to pick a new valid type later.
+      await database.execAsync(`
+        UPDATE todo_meta
+        SET type = 'todo', user_overridden_type = 0
+        WHERE type IN ('bug','question','decision','content');
+      `);
       await database.execAsync(`
         CREATE TABLE todo_meta_new (
           todo_id TEXT PRIMARY KEY,
@@ -415,7 +429,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
           deleted_at TEXT,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
-          CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content','study','reflect')),
+          CHECK (type IN ('todo','idea','knowledge','study','reflect')),
           CHECK (stage IN ('todo','in_progress','backlog')),
           CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
         );
@@ -432,7 +446,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_todo_meta_updated ON todo_meta(updated_at);
         CREATE INDEX IF NOT EXISTS idx_todo_meta_created ON todo_meta(created_at);
       `);
-      console.log('[loopd] Migrated todo_meta: widened type CHECK to include study + reflect');
+      console.log('[loopd] Migrated todo_meta: narrowed type CHECK to {todo, idea, knowledge, study, reflect}');
     }
   } catch (e) {
     console.warn('[loopd] todo_meta type-CHECK migration error:', e);

@@ -10,9 +10,8 @@ import {
 } from './expandPrompts';
 import { serializeExpansion } from './expandSerialize';
 import type {
-  TodoMeta, TodoExpansion, ExpandableType, IdeaExpansion, BugExpansion,
-  QuestionExpansion, DecisionExpansion, KnowledgeExpansion, ContentExpansion,
-  StudyExpansion, ReflectExpansion,
+  TodoMeta, TodoExpansion, ExpandableType, IdeaExpansion,
+  KnowledgeExpansion, StudyExpansion, ReflectExpansion,
 } from '../../types/todoMeta';
 import type { Entry, TodoItem } from '../../types/entry';
 
@@ -90,53 +89,12 @@ function validateExpansion(type: ExpandableType, data: unknown): TodoExpansion |
       if (!d.what || !d.why) return null;
       return { type, data: d };
     }
-    case 'bug': {
-      const d: BugExpansion = {
-        observed: str('observed'), expected: str('expected'),
-        suspectedCause: str('suspectedCause'), reproSteps: arr('reproSteps'),
-      };
-      if (!d.observed) return null;
-      return { type, data: d };
-    }
-    case 'question': {
-      const conf = (o.confidence as string)?.toLowerCase?.();
-      if (conf !== 'high' && conf !== 'medium' && conf !== 'low') return null;
-      const d: QuestionExpansion = {
-        answer: str('answer'),
-        confidence: conf,
-        followUps: arr('followUps'),
-        toVerify: str('toVerify'),
-      };
-      if (!d.answer) return null;
-      return { type, data: d };
-    }
-    case 'decision': {
-      const d: DecisionExpansion = {
-        decision: str('decision'), reason: str('reason'),
-        tradeoff: str('tradeoff'), revisitWhen: str('revisitWhen'),
-      };
-      if (!d.decision) return null;
-      return { type, data: d };
-    }
     case 'knowledge': {
       const d: KnowledgeExpansion = {
         concept: str('concept'), whereUsed: str('whereUsed'),
         whyItMatters: str('whyItMatters'), example: str('example'),
       };
       if (!d.concept) return null;
-      return { type, data: d };
-    }
-    case 'content': {
-      const fmt = (o.format as string)?.toLowerCase?.();
-      const validFormats = ['post', 'video', 'thread', 'tutorial', 'vlog'] as const;
-      if (!validFormats.includes(fmt as typeof validFormats[number])) return null;
-      const d: ContentExpansion = {
-        hook: str('hook'),
-        keyPoints: arr('keyPoints'),
-        format: fmt as ContentExpansion['format'],
-        draftOutline: str('draftOutline'),
-      };
-      if (!d.hook) return null;
       return { type, data: d };
     }
     case 'study': {

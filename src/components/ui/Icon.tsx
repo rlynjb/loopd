@@ -11,7 +11,7 @@ import {
   Bold, Type, Italic,
   Save, Download, Upload, Camera, LayoutDashboard, Film,
   House,
-  Lightbulb, Bug, HelpCircle, GitBranch, GraduationCap, Eye,
+  Lightbulb, GitBranch, GraduationCap, Eye,
   Pin, PinOff,
   Sparkles,
   type LucideIcon,
@@ -78,11 +78,10 @@ export const ICONS = {
   house: House,
   // Thinking-mode badges
   lightbulb: Lightbulb,
-  bug: Bug,
-  helpCircle: HelpCircle,
-  gitBranch: GitBranch,
   graduationCap: GraduationCap,
   eye: Eye,
+  // Misc (still used outside thinking-modes)
+  gitBranch: GitBranch,
   // Pin / unpin
   pin: Pin,
   pinOff: PinOff,
