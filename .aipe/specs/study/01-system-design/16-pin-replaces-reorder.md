@@ -1,5 +1,7 @@
 # Pin replaces manual reorder
 
+> **Industry term:** *(no industry equivalent — feature-specific)*
+
 > The /todos page swapped a user-managed integer `position` column for a single boolean `pinned`. The `position` column is kept on the schema (deprecated) but no UI reads it.
 
 **See also:** → [02-dsa/04-ranked-todo-sort](../02-dsa/04-ranked-todo-sort.md) · → [02-dsa/11-pinned-first-sort](../02-dsa/11-pinned-first-sort.md) · → [13-append-only-migrations](./13-append-only-migrations.md)

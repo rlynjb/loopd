@@ -1,5 +1,7 @@
 # Tool calling — not used in loopd
 
+> **Industry term:** Tool use / function calling *(industry standard)*
+
 > The codebase deliberately does not implement tool calling, agents, or any loop where the LLM asks the app to do something and read the result back.
 
 **See also:** → [01-what-an-llm-is](./01-what-an-llm-is.md) · → [12-why-no-agents](./12-why-no-agents.md)
@@ -7,8 +9,8 @@
 ---
 
 ## Quick summary
-- **What:** every loopd AI call is one-shot — prompt → JSON → done. No loops where the model decides "I need to search," runs a tool, and reads the result.
-- **Why here:** every AI feature is a one-shot transformation (text → structured JSON). There's nothing for the LLM to *navigate* — the data the app needs is already in hand when the call is made.
+- **What:** every loopd AI call is one-shot — prompt → output → done. No loops where the model decides "I need to search," runs a tool, and reads the result.
+- **Why here:** every AI feature is a one-shot transformation (text → structured JSON for 4 chains, text → markdown for interpret). There's nothing for the LLM to *navigate* — the data the app needs is already in hand when the call is made.
 - **Tradeoff:** when a feature legitimately needs tool use ("find the day I was sickest last month"), it would have to be added as a new service file with its own tool loop.
 
 ---
@@ -46,10 +48,11 @@ The closest cousin loopd does have is `scheduleClassify` — but that's app code
 
 ## In this codebase
 
-_Not implemented — intentionally absent._ The four AI services all return on the first response. The closest reference points showing the single-call shape:
+_Not implemented — intentionally absent._ The five AI services all return on the first response. The closest reference points showing the single-call shape:
 
 **No tool loop:**           `src/services/ai/summarize.ts` → `summarize()` L42–L105 — single Anthropic SDK call (`callClaude` L12–L22) or OpenAI fetch (`callOpenAI` L24–L40); the return is final
-**No tool dispatch:**       `src/services/todos/expand.ts` → `expandTodo()` L211–L266 — even when validation fails, the retry at L234–L247 is a re-call of the same chain, not a model-chosen tool invocation
+**No tool dispatch:**       `src/services/todos/expand.ts` → `expandTodo()` L191+ — even when validation fails, the retry pattern is a re-call of the same chain with a stricter prompt, not a model-chosen tool invocation
+**No tool loop (interpret):** `src/services/ai/interpret.ts` → `interpretEntry()` L114–L149 — markdown out, single call, no observation step (the 5th chain, added 2026-05-10)
 **No agent loop file:**     no `src/services/ai/agent.ts`, no `orchestrator.ts`, no graph anywhere in `src/services/ai/` or `src/services/todos/`
 **Architectural anchor:**   the rule is documented in [02-single-purpose-chains](./02-single-purpose-chains.md) and [12-why-no-agents](./12-why-no-agents.md) — adding tool-calling means a new service file, not a modification
 
@@ -88,8 +91,8 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 
 ### Likely questions
 
-[mid] Q: Concretely, what does "no tool calling" mean for the four chains in this codebase?
-      A: It means every call returns on the first response. `summarize`, `caption`, `classify`, `expand` all hand the model a prompt, get back a JSON string, parse it, and persist. Nowhere in the codebase does the model emit something like `{tool: "search_entries"}` and the app run a SQL query and feed the result back. The closest cousin is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work. The control flow is always: app decides → LLM responds → app persists.
+[mid] Q: Concretely, what does "no tool calling" mean for the five chains in this codebase?
+      A: It means every call returns on the first response. `summarize`, `caption`, `classify`, `expand`, and `interpret` all hand the model a prompt, get back a string (JSON for the first four, markdown for interpret), parse or clean it, and persist or render. Nowhere in the codebase does the model emit something like `{tool: "search_entries"}` and the app run a SQL query and feed the result back. The closest cousin is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work. The control flow is always: app decides → LLM responds → app persists or renders.
 
 [senior] Q: Is there a feature in loopd today where adding tool calling would be a clear win?
          A: Not today. Every feature is a one-shot transformation: "summarise this day", "caption this day", "classify this line", "expand this todo". The data the model needs is already in hand at call time, packed into the prompt by `buildContext()`. Tool calling pays off when the model needs to *navigate* — search a corpus, query a DB, hit an external API — and the cost of stuffing every possibility into the prompt is too high. Loopd's prompts are small and the corpus is one user's journal. Nothing to navigate.
@@ -100,7 +103,7 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 ### The question candidates always dodge
 Q: Tool calling and agents are the standard way to build AI apps in 2026. Are you sure you're not just behind on the tooling?
 
-A: I'm not behind on the tooling — I read the Claude tool-use API and OpenAI's `tools` parameter and I deliberately didn't reach for them. Tool calling turns the LLM from a function into a loop, and a loop has runaway cost, harder debugging, and tool-name hallucination as failure modes. Adding it without a feature that needs it would burn budget for no quality gain. The four chains in `src/services/ai/` work because the data they need fits in the prompt; the moment a feature genuinely needs to navigate (search across the archive, hit an external API, run code) I'd add tools — in a new service file, with iteration caps and timeouts. The decision isn't "tools are bad", it's "tools are the wrong tool for one-shot transformations". I'll grant the dodge though: if I'm wrong about a future feature, the day it ships will look like "we should have built the tool-loop sooner".
+A: I'm not behind on the tooling — I read the Claude tool-use API and OpenAI's `tools` parameter and I deliberately didn't reach for them. Tool calling turns the LLM from a function into a loop, and a loop has runaway cost, harder debugging, and tool-name hallucination as failure modes. Adding it without a feature that needs it would burn budget for no quality gain. The five chains (four in `src/services/ai/` plus `src/services/todos/classify.ts`) work because the data they need fits in the prompt; the moment a feature genuinely needs to navigate (search across the archive, hit an external API, run code) I'd add tools — in a new service file, with iteration caps and timeouts. The decision isn't "tools are bad", it's "tools are the wrong tool for one-shot transformations". I'll grant the dodge though: if I'm wrong about a future feature, the day it ships will look like "we should have built the tool-loop sooner".
 
 ### One-line anchors
 - "Tools turn an LLM from a function into a loop. Add them deliberately."
@@ -162,3 +165,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Tool calling is intentionally absent — anchored on the closest single-call sites.
+Updated: 2026-05-10 — chain count bumped from 4 to 5 (interpret added; still no tool calling).

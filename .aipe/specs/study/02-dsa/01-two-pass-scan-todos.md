@@ -1,5 +1,7 @@
 # Two-pass scan: matching prose lines to existing todos
 
+> **Industry term:** Two-phase matching / exact-then-fallback *(language agnostic)*
+
 > Map + Set in two passes — exact text first, then line-index fallback. Preserves todo identity across edits without requiring the user to declare it.
 
 **See also:** → [02-reconcile-todo-meta](./02-reconcile-todo-meta.md) · → [03-two-pass-thread-mentions](./03-two-pass-thread-mentions.md) · → [01-system-design/04-two-pass-matching](../01-system-design/04-two-pass-matching.md)

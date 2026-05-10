@@ -1,5 +1,7 @@
 # Failure modes the codebase explicitly handles
 
+> **Industry term:** Graceful degradation / failure mode analysis *(industry standard)*
+
 > AI is best-effort. Every callsite makes sure that an AI failure leaves the canonical data (the prose, the todo, the entry) untouched. The worst outcome of any AI bug is "no AI annotation this time," never "lost data."
 
 **See also:** → [08-validation-gate](./08-validation-gate.md) · → [10-user-overridden-type-lock](./10-user-overridden-type-lock.md)
@@ -19,7 +21,7 @@
   ┌──────────────────────────────┬──────────────────────────────────────────────┐
   │ Failure                      │ How loopd recovers                            │
   ├──────────────────────────────┼──────────────────────────────────────────────┤
-  │ No API key configured        │ all 4 services return early; UI shows banner │
+  │ No API key configured        │ all 5 services return early; UI shows banner │
   │ Network error                │ caller catches, returns null; row stays in   │
   │                              │ pre-AI state and is retried on next event    │
   │ Malformed JSON (model drift) │ expand: 1 retry with stricter prompt; others:│
@@ -32,6 +34,16 @@
   │ MAX_CONCURRENT exceeded      │ expandTodo returns { ok:false, reason:'in-flight-cap'} │
   │ Heuristic uncertain          │ deferred to async LLM; UI shows type='todo' │
   │                              │  in the meantime                              │
+  │ Interpret: input < 20 chars  │ returns { ok:false, reason:'too-short' };    │
+  │  (MIN_TEXT_LENGTH guard)     │ modal shows "entry too short"; no API call   │
+  │ Interpret: input > 2000 chars│ truncateTail keeps the most-recent 2000;     │
+  │  (MAX_INPUT_CHARS cap)       │ silent — no error, just bounded prompt       │
+  │ Interpret: empty/whitespace  │ cleanMarkdown returns null →                  │
+  │  model output                │ { ok:false, reason:'malformed' };             │
+  │                              │ user sees error UI, can re-tap                │
+  │ Interpret: clinical-language │ NOT caught — slips through. Prompt forbids   │
+  │  drift                       │  it but no post-call filter. User dismisses   │
+  │                              │  the modal.                                   │
   └──────────────────────────────┴──────────────────────────────────────────────┘
 ```
 
@@ -56,9 +68,10 @@ Each failure mode has a defined recovery path. The principle: **the canonical da
 
 **Caption isolation:**    `src/services/ai/summarize.ts` → `summarize()` L42–L105 wraps the caption call in its own try/catch at L87–L96 (caption can fail; structured summary still saves)
 **Concurrency cap:**      `src/services/todos/expand.ts` → `MAX_CONCURRENT = 3` at L25 — over-cap returns `{ ok:false, reason:'in-flight-cap'}`
-**One-retry pattern:**    `src/services/todos/expand.ts` → `expandTodo()` L211–L266; the inner `callOnce` invocation pair lives at L234–L247
-**All validators:**       `src/services/ai/validate.ts` → `validateSummary()` L7–L110 + `parseAndValidate()` for caption in `caption.ts` L169–L199 + `validateExpansion()` in `expand.ts` L77–L142
-**Key gate:**             `src/services/ai/config.ts` → key getters L18–L40 (whole file is L1–L50); every chain returns `{ error: 'no API key' }` on the early-return when these come back empty
+**Interpret guards:**     `src/services/ai/interpret.ts` → `MIN_TEXT_LENGTH = 20` (L16) + `MAX_INPUT_CHARS = 2000` (L17) + `truncateTail()` L58–L61 + `cleanMarkdown()` L98–L108. `InterpretResult` (L52) discriminates `'no-ai' | 'too-short' | 'malformed' | 'network'`.
+**One-retry pattern:**    `src/services/todos/expand.ts` → `expandTodo()` L191+; the inner `callOnce` invocation pair re-fires with a stricter prompt on validation failure
+**All validators:**       `src/services/ai/validate.ts` → `validateSummary()` L12+ + `parseAndValidate()` for caption in `caption.ts` L169–L199 + `validateExpansion()` in `expand.ts` L77–L142 + `cleanMarkdown()` for interpret in `interpret.ts` L98–L108
+**Key gate:**             `src/services/ai/config.ts` → key getters L18–L40 (whole file is L1–L50); every chain returns an error reason on early-return when these come back empty
 
 ---
 
@@ -169,3 +182,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added 4 new interpret-specific failure modes (too-short / over-cap / malformed-markdown / clinical-drift); bumped service count from 4 to 5. See `14-interpret.md`.

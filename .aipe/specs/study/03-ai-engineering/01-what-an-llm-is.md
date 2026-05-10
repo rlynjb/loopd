@@ -1,5 +1,7 @@
 # What an LLM actually is (in one diagram)
 
+> **Industry term:** *(pedagogical — no industry rename)*
+
 > A function. Tokens in → tokens out. No memory, no I/O, no tools.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [06-tool-calling](./06-tool-calling.md)
@@ -8,7 +10,7 @@
 
 ## Quick summary
 - **What:** an LLM is a stateless function from a token sequence to a probability distribution over the next token, sampled repeatedly to produce text.
-- **Why this framing matters here:** loopd's four AI features are all framed as *one function call each*. No agent loops. Every call is independent.
+- **Why this framing matters here:** loopd's five AI features are all framed as *one function call each*. No agent loops. Every call is independent.
 - **Tradeoff:** the framing forbids stateful "the model remembers what we discussed last week" — every relevant context must travel in the prompt.
 
 ---
@@ -41,14 +43,14 @@ This framing keeps the AI surface debuggable: when something looks wrong, you ca
 
 ## In this codebase
 
-Every AI service follows the same shape: build prompt → single call → parse output → persist. Reference files:
+Every AI service follows the same shape: build prompt → single call → parse output → persist (or render, for interpret). Reference files:
 
-**Chains:**       `src/services/ai/summarize.ts:summarize()` L42–L105, `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90–L120, `expand.ts:expandTodo()` L211–L266
-**Config:**       `src/services/ai/config.ts` → `getProvider()` L9–L12 + key getters L18–L40
-**Prompt build:** `src/services/ai/prompt.ts` → `SYSTEM` const L4–L27, `buildPrompt()` L29–L59
-**Validators:**   `src/services/ai/validate.ts` → `validateSummary()` L7–L110
+**Chains (5):**     `src/services/ai/summarize.ts:summarize()` L42–L105, `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90+, `expand.ts:expandTodo()` L191+, `src/services/ai/interpret.ts:interpretEntry()` L114–L149
+**Config:**         `src/services/ai/config.ts` → `getProvider()` L9–L12 + key getters L18–L40
+**Prompt build:**   `src/services/ai/prompt.ts` → `SYSTEM` const L4–L27, `buildPrompt()` L29–L59
+**Validators:**     `src/services/ai/validate.ts` → `validateSummary()` L12+ (caption/expand/interpret validators live in their own files)
 
-No agent loop. No retry-with-tool-result. No multi-turn dialog state. Every call is a pure function from prompt to JSON.
+No agent loop. No retry-with-tool-result. No multi-turn dialog state. Every call is a pure function from prompt to output (JSON for 4 chains, markdown for interpret).
 
 ---
 
@@ -160,3 +162,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — bumped chain count from 4 to 5 (Interpret added). See `14-interpret.md`.

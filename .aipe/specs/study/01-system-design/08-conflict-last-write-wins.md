@@ -1,5 +1,7 @@
 # Conflict resolution: last-write-wins
 
+> **Industry term:** Last-write-wins (LWW) *(industry standard)*
+
 > Pure function in `sync/conflict.ts`. Compares `updated_at` timestamps; whichever side is newer wins. Same-second ties go to cloud.
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [05-soft-delete](./05-soft-delete.md)

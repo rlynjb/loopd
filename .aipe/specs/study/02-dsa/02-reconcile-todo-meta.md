@@ -1,5 +1,7 @@
 # todo_meta reconciliation: 1:1 invariant
 
+> **Industry term:** Set-diff reconciliation (add / update / delete diff) *(language agnostic)*
+
 > Map + Set diff: build `Map<todoId, meta>` and `Set<todoId>`, then insert missing and delete orphans in O(n+m).
 
 **See also:** → [01-two-pass-scan-todos](./01-two-pass-scan-todos.md) · → [10-heuristic-first-classifier](./10-heuristic-first-classifier.md) · → [01-system-design/06-one-to-one-invariant](../01-system-design/06-one-to-one-invariant.md)

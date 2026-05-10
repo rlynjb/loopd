@@ -1,5 +1,7 @@
 # Provider abstraction — read on every call, no shared interface
 
+> **Industry term:** Adapter / Strategy pattern *(industry standard)*
+
 > Each callsite branches on `'claude' | 'openai'`. Same prompts, same JSON contract, different SDK calls.
 
 **See also:** → [01-system-design/11-provider-abstraction](../01-system-design/11-provider-abstraction.md) · → [02-single-purpose-chains](./02-single-purpose-chains.md)
@@ -90,9 +92,9 @@ Per-call branches (all 4 callsites follow this exact shape):
 ## In this codebase
 
 **Provider read:**   `src/services/ai/config.ts` → `getProvider()` L9–L12, `getAnthropicKey()` + `getOpenAIKey()` L18–L40 (whole file is L1–L50)
-**Branch sites:**    `src/services/ai/summarize.ts:summarize()` L42–L105 (helpers `callClaude` L12–L22, `callOpenAI` L24–L40), `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90–L120, `expand.ts:expandTodo()` L211–L266 — each carries the explicit `provider == 'openai' ? callOpenAI : callClaude` branch
+**Branch sites (5):** `src/services/ai/summarize.ts:summarize()` L42–L105 (helpers `callClaude` L12–L22, `callOpenAI` L24–L40), `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90+, `expand.ts:expandTodo()` L191+, `src/services/ai/interpret.ts:interpretEntry()` L114–L149 (helpers `callClaude` L63–L74, `callOpenAI` L76–L93) — each carries the explicit `provider == 'openai' ? callOpenAI : callClaude` branch
 **Toggle:**          `app/settings/ai.tsx` writes the new provider name to SecureStore — next AI call picks it up live
-**Default:**         `claude` — Anthropic SDK gets the canonical path; OpenAI is the maintained alternate via raw `fetch` to `/v1/chat/completions` with `response_format: json_object`
+**Default:**         `claude` — Anthropic SDK gets the canonical path; OpenAI is the maintained alternate via raw `fetch` to `/v1/chat/completions` (with `response_format: json_object` for the JSON chains; interpret omits it because it wants markdown out)
 
 ---
 
@@ -203,3 +205,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added with its own callClaude/callOpenAI pair).

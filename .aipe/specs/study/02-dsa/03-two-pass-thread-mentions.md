@@ -1,5 +1,7 @@
 # Two-pass thread mention reconcile — line-shift tolerant
 
+> **Industry term:** Fuzzy match with displacement tolerance *(language agnostic)*
+
 > Same shape as the todo two-pass, but Pass 2 uses `±3 line shift` instead of exact line match.
 
 **See also:** → [01-two-pass-scan-todos](./01-two-pass-scan-todos.md) · → [09-tag-parsing-code-fence](./09-tag-parsing-code-fence.md)

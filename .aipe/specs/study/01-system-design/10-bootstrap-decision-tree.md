@@ -1,5 +1,7 @@
 # Bootstrap decision tree
 
+> **Industry term:** Cold-start bootstrap *(language agnostic)*
+
 > Runs once per install on the first cold start with cloud configured. Decides whether to push, pull, or do nothing. Sets a SecureStore flag so it never runs again.
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [09-debounced-push](./09-debounced-push.md)

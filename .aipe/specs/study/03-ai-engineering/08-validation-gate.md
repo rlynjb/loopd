@@ -1,5 +1,7 @@
 # Validation as a hard gate
 
+> **Industry term:** Output guardrails / schema-validated outputs *(industry standard)*
+
 > Every callsite parses and *re-validates* the LLM output before writing to SQLite. The model is treated as untrusted input, even when its instructions are explicit.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [11-failure-modes](./11-failure-modes.md)
@@ -46,15 +48,17 @@ If validation fails, the behaviour depends on the feature:
 - **expand** — retry once with a stricter system prompt (`"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."`). After that, give up and return `{ ok: false, reason: 'malformed' }`.
 - **summarize** — skip; surface error in `ai_summaries.error` for the next render.
 - **classify** — skip; the meta row stays at heuristic-or-null type.
+- **interpret** — different shape entirely: validation is `cleanMarkdown` (11 lines), which strips an outer ``` fence and rejects empty/whitespace-only output as `'malformed'`. There is no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions; tone or section drift slips through. The user is the integrity check (they see the modal output and dismiss it if wrong).
 
 ---
 
 ## In this codebase
 
-**Summary validator:**   `src/services/ai/validate.ts` → `validateSummary()` L7–L110 — checks every clipId in `clipOrder` exists, trims fit clip duration, etc.
-**Caption validator:**   `src/services/ai/caption.ts` → `parseAndValidate()` L169–L199 (with `normalizeVariant()` L158–L167) — checks all 4 variants present
-**Expand validator:**    `src/services/todos/expand.ts` → `validateExpansion()` L77–L142 — per-type required fields. One-retry pattern at L234–L247 (`callOnce` invoked twice with stricter prompt on second attempt)
-**Caller:**              `src/services/ai/summarize.ts` → `summarize()` L42–L105 calls `validateSummary` and persists or surfaces error in `ai_summaries.error`
+**Summary validator:**     `src/services/ai/validate.ts` → `validateSummary()` L12+ — checks every clipId in `clipOrder` exists, trims fit clip duration, etc.
+**Caption validator:**     `src/services/ai/caption.ts` → `parseAndValidate()` L169–L199 (with `normalizeVariant()` L158–L167) — checks all 4 variants present
+**Expand validator:**      `src/services/todos/expand.ts` → `validateExpansion()` L77–L142 — per-type required fields (4 types now: idea/knowledge/study/reflect). One-retry pattern with stricter prompt on second attempt
+**Interpret "validator":** `src/services/ai/interpret.ts` → `cleanMarkdown()` L98–L108 — 11 lines, strips outer ``` fences, rejects empty/<20-char output. Plus the input-side guards `MIN_TEXT_LENGTH = 20` (L16) and `MAX_INPUT_CHARS = 2000` (L17, applied via `truncateTail` L58–L61).
+**Caller:**                `src/services/ai/summarize.ts` → `summarize()` L42–L105 calls `validateSummary` and persists or surfaces error in `ai_summaries.error`
 
 ---
 
@@ -165,3 +169,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added interpret's cleanMarkdown gate + input-side guards as the 5th validation flow (markdown out, no schema). See `14-interpret.md`.

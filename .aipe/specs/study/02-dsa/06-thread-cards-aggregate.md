@@ -1,5 +1,7 @@
 # Thread cards aggregate — 4 SQL queries + 2 in-memory joins
 
+> **Industry term:** N+1 query avoidance (bulk fetch + in-memory join) *(industry standard)*
+
 > Per-dashboard-load aggregate: for each thread, compute `lastMentionAt`, `entriesThisWeek`, `openTodos`, `recentTodos[3]`, `staleness`, `activeDates`. Then sort.
 
 **See also:** → [05-cell-state-decision-tree](./05-cell-state-decision-tree.md) · → [01-system-design/12-manual-touch-deviation](../01-system-design/12-manual-touch-deviation.md)
@@ -121,7 +123,8 @@ The "brute" alternative is per-thread queries (N+1 pattern: for each thread, run
 **Orchestrator:**     `src/services/threads/getThreadCards.ts` → `getThreadCards()` L17–L131 (sort helper `sortCards` L139–L158)
 **Staleness math:**   `src/services/threads/staleness.ts` → `computeStaleness()` (pure cadence + last-touch rank)
 **SQL helpers:**      `src/services/database.ts` → `getLastMentionByThread`, `getAllTodoMetas`, the per-thread `entriesThisWeek` count, the `WHERE entry_id IS NULL AND todo_id IS NULL` manual-touch query
-**Consumer:**         `src/components/home/DailyScheduleGrid.tsx` — calls on every dashboard load
+
+> ⚠ **Content drift flagged 2026-05-10**: `getThreadCards()` is currently **dead code**. As of commit 42ee8a6 (2026-05-08, "dashboard: TODOS title links to /todos; lock schedule to current week; drop threads + per-row x button"), threads were removed from the dashboard and `DailyScheduleGrid.tsx` no longer calls `getThreadCards`. Verify with `grep -r "getThreadCards" src/ app/ --include="*.ts*"` — the only hit is a doc comment in `src/types/thread.ts:44`. The function still exports cleanly and the algorithm is still correct, but no UI surface consumes it. Status is the same as `rankTodos` in [04-ranked-todo-sort](./04-ranked-todo-sort.md): kept for the recovery path if threads return to the dashboard, but currently unreachable. The cleanup is "extract `computeStaleness`, then delete the rest of the file" — the staleness math is reused in `more/threads.tsx`'s detail view, the aggregate is not.
 
 ---
 
@@ -232,3 +235,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — flagged content drift: `getThreadCards()` is now dead code. Threads were dropped from the dashboard in commit 42ee8a6 (2026-05-08) and no UI surface calls the aggregate anymore.

@@ -1,5 +1,7 @@
 # Storage layer summary
 
+> **Industry term:** Persistence layer / storage tier *(industry standard)*
+
 > Five storage layers, each with one job. Clips are big and binary, so they go to the filesystem. Secrets go to Keystore. Everything else lives in SQLite, mirrored to Postgres async.
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [02-authentication-boundary](./02-authentication-boundary.md)

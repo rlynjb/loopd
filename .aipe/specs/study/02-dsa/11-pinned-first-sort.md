@@ -1,5 +1,7 @@
 # Pinned-first sort — the live /todos and dashboard ordering
 
+> **Industry term:** Stable sort with priority key / multi-key comparator *(language agnostic)*
+
 > Two-key compare: `pinned` first (true before false), then `createdAt DESC` (newest first). Replaces the legacy `rankTodos` / position-based sort.
 
 **See also:** → [04-ranked-todo-sort](./04-ranked-todo-sort.md) · → [01-system-design/16-pin-replaces-reorder](../01-system-design/16-pin-replaces-reorder.md)

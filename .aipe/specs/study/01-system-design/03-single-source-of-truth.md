@@ -1,5 +1,7 @@
 # Single-source-of-truth principle
 
+> **Industry term:** Single source of truth (SSOT) *(industry standard)*
+
 > The journal text in `entries.text` is the only writable surface for drops; everything else (`todos_json`, `todo_meta`, `nutrition`, `thread_mentions`) is derived state, rebuilt from prose at commit time.
 
 **See also:** → [04-two-pass-matching](./04-two-pass-matching.md) · → [06-one-to-one-invariant](./06-one-to-one-invariant.md) · → [12-manual-touch-deviation](./12-manual-touch-deviation.md)

@@ -1,5 +1,7 @@
 # Heuristic-first classifier — cheap regex gate before the LLM
 
+> **Industry term:** Rule-based fast-path / slow-path classification *(language agnostic)*
+
 > Decide whether a line is *definitely a todo* (return `'todo'`) or *uncertain* (return `null`, defer to LLM). Never mis-classify a question or idea as a todo.
 
 **See also:** → [02-reconcile-todo-meta](./02-reconcile-todo-meta.md) · → [03-ai-engineering/05-heuristic-before-llm](../03-ai-engineering/05-heuristic-before-llm.md)

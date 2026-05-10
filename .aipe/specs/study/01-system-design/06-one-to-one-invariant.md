@@ -1,5 +1,7 @@
 # The 1:1 invariant (and why it's not a foreign key)
 
+> **Industry term:** Application-level referential integrity *(language agnostic)*
+
 > Every `TodoItem` in `entries.todos_json` has exactly one matching `todo_meta` row. SQLite can't FK to a JSON-array element, so the application reconciler is the enforcement.
 
 **See also:** → [03-single-source-of-truth](./03-single-source-of-truth.md) · → [04-two-pass-matching](./04-two-pass-matching.md) · → [02-dsa/02-reconcile-todo-meta](../02-dsa/02-reconcile-todo-meta.md)

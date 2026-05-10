@@ -1,5 +1,7 @@
 # Daily-schedule grid cell state — pure decision tree, O(1) per cell
 
+> **Industry term:** Pure decision function / lookup table *(language agnostic)*
+
 > Map (habit, date, today, checkedDates) → one of 5 states (`done | off-day | pending | upcoming | missed`). Pure, no DB.
 
 **See also:** → [06-thread-cards-aggregate](./06-thread-cards-aggregate.md)

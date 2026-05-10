@@ -1,15 +1,16 @@
 # Provider abstraction (LLM)
 
+> **Industry term:** Adapter / Strategy pattern *(industry standard)*
+
 > Every AI service file imports `getProvider`, branches twice (once on the request, once on the model id), then converges on the same downstream parse step.
 
 **See also:** → [03-ai-engineering/04-provider-abstraction](../03-ai-engineering/04-provider-abstraction.md) · → [03-ai-engineering/02-single-purpose-chains](../03-ai-engineering/02-single-purpose-chains.md)
 
 ---
 
-## Quick summary
-- **What:** four AI services (summarize, caption, classify, expand). Each branches on `'claude' | 'openai'`. Same prompts, same JSON contract, different SDK calls.
+- **What:** five AI services (summarize, caption, classify, expand, interpret). Each branches on `'claude' | 'openai'`. Same provider contract, different output contracts (JSON for 4, markdown for interpret).
 - **Why here:** the app sells AI features but doesn't lock the user into one provider. SecureStore keys can be either; the user picks. Default is Claude.
-- **Tradeoff:** every caller carries the branch — there is no single `BaseModel.invoke` interface. Two providers, four callsites, eight code paths. Worth it because each path can use the provider's optimal API.
+- **Tradeoff:** every caller carries the branch — there is no single `BaseModel.invoke` interface. Two providers, five callsites, ten code paths. Worth it because each path can use the provider's optimal API (e.g., `response_format: json_object` on OpenAI for the JSON chains; interpret omits it because it wants markdown out).
 
 ---
 
@@ -55,7 +56,7 @@ After both branches return, the rest of the function is shared: extract JSON, va
 ## In this codebase
 
 **Provider read:**   `src/services/ai/config.ts` → `getProvider()` L9–L12, `getAnthropicKey()` + `getOpenAIKey()` L18–L40 (whole file is L1–L50)
-**Branch sites:**    `src/services/ai/summarize.ts` L42–L105, `caption.ts:generateCaption()` L201–L223, `classify.ts:classifyTodo()` L90–L120, `expand.ts:expandTodo()` L211–L266 — each carries the `provider == 'openai' ? callOpenAI : callClaude` branch explicitly
+**Branch sites (5):** `src/services/ai/summarize.ts` L42–L105, `caption.ts:generateCaption()` L201–L223, `src/services/todos/classify.ts:classifyTodo()` L90+, `expand.ts:expandTodo()` L191+, `src/services/ai/interpret.ts:interpretEntry()` L114–L149 (helpers `callClaude` L63–L74, `callOpenAI` L76–L93) — each carries the `provider == 'openai' ? callOpenAI : callClaude` branch explicitly
 **User toggle:**     `app/settings/ai.tsx` writes the new provider name to SecureStore — next AI call picks it up live (no restart, no cache invalidation)
 **Default:**         `claude` (Anthropic SDK gets the canonical path; OpenAI is the maintained alternate via raw `fetch`)
 
@@ -186,3 +187,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added). 4 callsites × 2 providers became 5 × 2 = 10 code paths.

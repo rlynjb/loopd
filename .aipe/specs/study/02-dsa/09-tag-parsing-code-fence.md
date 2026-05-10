@@ -1,5 +1,7 @@
 # Tag parsing with code-fence masking — single-pass regex with offset preservation
 
+> **Industry term:** Lexical region masking (offset-preserving) *(language agnostic)*
+
 > Strip fenced code blocks and inline code spans before applying the `#tag` regex, so backticked tokens don't register. Preserve byte offsets so line indices stay stable.
 
 **See also:** → [03-two-pass-thread-mentions](./03-two-pass-thread-mentions.md)

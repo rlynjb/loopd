@@ -1,5 +1,7 @@
 # Local-first request flow
 
+> **Industry term:** Local-first software / Offline-first architecture *(industry standard)*
+
 > Every user action commits to local SQLite first; the cloud lags by 5 seconds via a debounced background push.
 
 **See also:** → [05-soft-delete](./05-soft-delete.md) · → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [09-debounced-push](./09-debounced-push.md)

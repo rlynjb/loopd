@@ -1,5 +1,7 @@
 # Single-purpose chains (loopd's only pattern)
 
+> **Industry term:** Single-step chain / one-shot LLM call *(industry standard — LangChain)*
+
 > Every AI feature is a single LLM call with one job. The model writes JSON. The app parses, validates, and persists. No chains-of-chains, no multi-step plans.
 
 **See also:** → [01-what-an-llm-is](./01-what-an-llm-is.md) · → [08-validation-gate](./08-validation-gate.md) · → [13-ai-features-in-this-app](./13-ai-features-in-this-app.md)
@@ -7,8 +9,8 @@
 ---
 
 ## Quick summary
-- **What:** four chains, four jobs — `summarize`, `caption`, `classify`, `expand`. Each is a single LLM call with a fixed system prompt + a per-call user prompt + a JSON output contract.
-- **Why here:** easier to debug (one chain fails, you know which job failed), easier to test (one expected JSON shape per chain), cheaper (only run what you need).
+- **What:** five chains, five jobs — `summarize`, `caption`, `classify`, `expand`, `interpret`. Each is a single LLM call with a fixed system prompt + a per-call user prompt + an output contract (JSON for 4, markdown for interpret).
+- **Why here:** easier to debug (one chain fails, you know which job failed), easier to test (one expected output shape per chain), cheaper (only run what you need).
 - **Tradeoff:** no cross-chain reasoning. If a feature needs "summarize then expand each summary item," you'd write the orchestration in app code, not in a single chain.
 
 ---
@@ -16,7 +18,7 @@
 ## Single-purpose chains — diagram
 
 ```
-  ┌──── 4 chains, 4 different jobs ──────────────────────────────────┐
+  ┌──── 5 chains, 5 different jobs ──────────────────────────────────┐
   │                                                                   │
   │   summarize.ts ─── one job: structured editor data + caption      │
   │                    Sonnet 4.6 · gpt-4o · ~1024 tokens out         │
@@ -24,12 +26,18 @@
   │   caption.ts ───── one job: 4 tonal voice variants of one day     │
   │                    Sonnet 4.6 · gpt-4o · ~768 tokens out          │
   │                                                                   │
-  │   classify.ts ─── one job: pick 1 of 7 thinking modes             │
+  │   classify.ts ─── one job: pick 1 of 5 thinking modes             │
+  │                    (todo / idea / knowledge / study / reflect)    │
   │                    Haiku 4.5 · gpt-4o-mini · ~50 tokens out       │
   │                                                                   │
-  │   expand.ts ───── one job per type (idea/bug/question/decision/   │
-  │                   knowledge/content) — typed JSON expansion       │
+  │   expand.ts ───── one job per type (idea / knowledge / study /    │
+  │                   reflect) — typed JSON expansion                  │
   │                    Sonnet 4.6 · gpt-4o · ~1024 tokens out         │
+  │                                                                   │
+  │   interpret.ts ── one job: long-form markdown reflection on a     │
+  │                   journal entry. User-triggered via modal.        │
+  │                    Sonnet 4.6 · gpt-4o · ~1800 tokens out         │
+  │                    Output: markdown (NOT JSON), NOT persisted.    │
   │                                                                   │
   └───────────────────────────────────────────────────────────────────┘
 ```
@@ -38,24 +46,26 @@
 
 ## How it works
 
-Each AI service file owns one job. It builds a system prompt that says exactly what the JSON shape should be, builds a user prompt with the live data, calls the model once, parses, validates, and persists.
+Each AI service file owns one job. It builds a system prompt that says exactly what the output shape should be, builds a user prompt with the live data, calls the model once, parses (or cleans, for interpret), validates, and persists (or renders, for interpret).
 
-The 4 chains:
+The 5 chains:
 - **summarize** — produces the structured editor data (clip order, trims, filter, mood) + a freeform summary string.
 - **caption** — produces 4 tonal voice variants (clean / smoother / reflective / punchy) of one day's text.
-- **classify** — picks 1 of 7 thinking modes for one todo line.
-- **expand** — runs a per-type chain (one of 6 templates) to produce typed JSON expansion of a todo.
+- **classify** — picks 1 of 5 thinking modes (todo/idea/knowledge/study/reflect) for one todo line. Was 7 modes pre-2026-05-10.
+- **expand** — runs a per-type chain (one of 4 templates: idea/knowledge/study/reflect — `'todo'` is non-expandable) to produce typed JSON expansion of a todo.
+- **interpret** — produces a long-form markdown reflection on a journal entry. User-triggered, ephemeral, **markdown out, not JSON**. The only chain whose output is a piece of writing the user reads, not data the app uses.
 
-Caption was *split out* of summarize when the 4-variant prompt was added — caption failures don't fail summarize. That split is itself an example of "single-purpose": each chain should fail independently.
+Caption was *split out* of summarize when the 4-variant prompt was added — caption failures don't fail summarize. Interpret was *added separately* in 2026-05-10 because its output contract (markdown, not JSON) doesn't fit the validate-and-persist pattern of the other 4. Both moves are examples of "single-purpose": each chain should fail independently.
 
 ---
 
 ## In this codebase
 
-**Chain 1 (summarize):** `src/services/ai/summarize.ts` → `summarize()` L42–L105 — uses `SYSTEM_PROMPT` defined inline; validated by `validate.ts:validateSummary` L7–L110
-**Chain 2 (caption):**   `src/services/ai/caption.ts` → `generateCaption()` L201–L223 — `SYSTEM_PROMPT` constant L24–L100 (most opinionated prompt in the codebase, 4 named voices); validated by `parseAndValidate()` L169–L199
-**Chain 3 (classify):**  `src/services/todos/classify.ts` → `classifyTodo()` L90–L120 — `SYSTEM_PROMPT` L12–L25, no surrounding context (cost optimisation)
-**Chain 4 (expand):**    `src/services/todos/expand.ts` → `expandTodo()` L211–L266 — selects one of 6 system prompts via `getSystemPrompt(meta.type)` from `src/services/todos/expandPrompts.ts:66`; validator `validateExpansion` L77–L142, one-retry pattern at L234–L247
+**Chain 1 (summarize):** `src/services/ai/summarize.ts` → `summarize()` L42–L105 — uses `SYSTEM_PROMPT` defined inline; validated by `validate.ts:validateSummary` L12+
+**Chain 2 (caption):**   `src/services/ai/caption.ts` → `generateCaption()` L201–L223 — structured `SYSTEM_PROMPT` L24–L100 (4 named voices); validated by `parseAndValidate()` L169–L199
+**Chain 3 (classify):**  `src/services/todos/classify.ts` → `classifyTodo()` L90+ — `SYSTEM_PROMPT` L12–L25 (5 modes as of 2026-05-10), no surrounding context (cost optimisation)
+**Chain 4 (expand):**    `src/services/todos/expand.ts` → `expandTodo()` L191+ — selects one of 4 system prompts via `getSystemPrompt(meta.type)` from `src/services/todos/expandPrompts.ts:50`; validator `validateExpansion` L77–L142
+**Chain 5 (interpret):** `src/services/ai/interpret.ts` → `interpretEntry()` L114–L149 — 32-line `SYSTEM_PROMPT` L19–L50 (longest in the codebase, prescribes markdown structure); validator `cleanMarkdown()` L98–L108 (NOT a JSON schema — strips fences, rejects empty)
 
 ```
 Pseudocode (the pattern, applied uniformly):
@@ -111,15 +121,17 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
 ## Tradeoffs
 
 - **Single-purpose chains** — gives: easy debugging, independent failure modes, cheap. Costs: no cross-chain reasoning.
-- **JSON output contract** — gives: parse + validate is mechanical. Costs: prompt must be very explicit; one model upgrade can break the shape.
+- **JSON output contract (4 chains)** — gives: parse + validate is mechanical. Costs: prompt must be very explicit; one model upgrade can break the shape.
+- **Markdown contract (interpret only)** — gives: long-form prose the user reads. Costs: no schema validation; tone drift only visible to the user, not catchable post-call.
 - **Caption split from summarize** — gives: caption errors don't lose the structured summary. Costs: two calls instead of one when both are needed.
+- **Interpret kept separate from summarize** — gives: failure independence + a different output contract per chain. Costs: prompts can drift apart over time; no shared "reflection" logic.
 
 ---
 
 ## Interview defense
 
 ### What an interviewer is really asking
-"Why four chains and not one big chain, or a graph?" — they want to see whether I picked single-purpose deliberately or fell into it. The clue I want to drop early: caption was *split out* of summarize. That's evidence I didn't start here; I moved here when conjoined chains failed conjointly.
+"Why five chains and not one big chain, or a graph?" — they want to see whether I picked single-purpose deliberately or fell into it. Two clues I want to drop early: caption was *split out* of summarize (when the 4-variant prompt got long enough that summarize started failing along with it), and interpret was *added separately* (because its output contract — markdown, not JSON — didn't fit the validate-and-persist shape of the other four). Both moves are evidence I didn't start at single-purpose; I moved here when conjoined chains failed conjointly or when contracts diverged.
 
 ### Likely questions
 
@@ -130,7 +142,7 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
          A: They were one chain originally. The 4-variant caption prompt is the most opinionated in the codebase (`caption.ts:SYSTEM_PROMPT` defines four named voices with body-line examples and universal rules — no "I", no hashtags, no questions). When the caption prompt got long and started failing on edge cases, the structured summary was failing with it — one model wobble killed both outputs. Splitting them meant caption could fail and summarize would still save. The cost is one extra LLM call when both are needed; the benefit is independent failure modes. That's the defining tradeoff of single-purpose.
 
 [arch] Q: At what point would you collapse multiple chains back into one? Or fan out into a chain-of-chains?
-       A: I'd collapse if I could get the same output quality with one prompt and the failure correlation stopped mattering — e.g., if the caption rules got short enough that summarize could absorb them without quality loss. I'd fan out if a feature genuinely needed multi-step reasoning where the output of step 1 had to be reviewed before step 2 — for instance, "draft a vlog plan, critique it, refine it". Today none of the four jobs need that. Each one is a one-shot transformation: text in, JSON out, done.
+       A: I'd collapse if I could get the same output quality with one prompt and the failure correlation stopped mattering — e.g., if the caption rules got short enough that summarize could absorb them without quality loss. I'd fan out if a feature genuinely needed multi-step reasoning where the output of step 1 had to be reviewed before step 2 — for instance, "draft a vlog plan, critique it, refine it". Today none of the five jobs need that. Each one is a one-shot transformation: text in, JSON or markdown out, done.
 
 ### The question candidates always dodge
 Q: You say "one job per chain", but `expand.ts` actually selects between 6 different system prompts based on type. Isn't that 6 chains masquerading as one?
@@ -197,3 +209,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — chain count grew from 4 to 5 (Interpret added, with markdown-out contract). Expand types reduced from 6 to 4. Classify modes reduced from 7 to 5. See `14-interpret.md`.

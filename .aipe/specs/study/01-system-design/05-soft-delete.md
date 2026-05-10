@@ -1,5 +1,7 @@
 # Soft delete and the deleted_at column
 
+> **Industry term:** Soft delete / tombstone pattern *(industry standard)*
+
 > Every synced table has a `deleted_at TEXT` column. Deletes write a timestamp, not a `DELETE FROM` row. Reads filter it out.
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [01-local-first-request-flow](./01-local-first-request-flow.md)

@@ -1,5 +1,7 @@
 # RAG — not used in loopd, but the seed exists
 
+> **Industry term:** Retrieval-Augmented Generation (RAG) *(industry standard)*
+
 > Retrieval Augmented Generation: embed user data, vector-search, stuff results into the prompt. Loopd uses hand-picked retrieval instead.
 
 **See also:** → [03-context-window](./03-context-window.md) · → [06-tool-calling](./06-tool-calling.md)

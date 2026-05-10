@@ -1,5 +1,7 @@
 # Async background classification — fire and forget
 
+> **Industry term:** Fire-and-forget / async write-behind *(industry standard)*
+
 > The prose scan completes synchronously. Each new ambiguous todo fires an LLM call without awaiting it. The result lands later via DB write + event.
 
 **See also:** → [05-heuristic-before-llm](./05-heuristic-before-llm.md) · → [02-dsa/02-reconcile-todo-meta](../02-dsa/02-reconcile-todo-meta.md)

@@ -1,5 +1,7 @@
 # Why no agents, no chains-of-chains
 
+> **Industry term:** *(no industry rename — descriptive)*
+
 > The codebase deliberately stops at single chains. Every pattern surrounding the LLM (heuristic-first, async classify, validation gate, user-override lock) lives *outside* the model — in app code that calls one function and consumes its output.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [06-tool-calling](./06-tool-calling.md) · → [01-what-an-llm-is](./01-what-an-llm-is.md)
@@ -7,8 +9,8 @@
 ---
 
 ## Quick summary
-- **What:** there are no agents, no LangGraph-style multi-step orchestrations, no chains-of-chains in loopd. Every AI call is one prompt, one response, one parse.
-- **Why here:** the four jobs (summarize, caption, classify, expand) are all one-shot transformations. Multi-step doesn't add value for these.
+- **What:** there are no agents, no LangGraph-style multi-step orchestrations, no chains-of-chains in loopd. Every AI call is one prompt, one response, one parse (or one render, for interpret).
+- **Why here:** the five jobs (summarize, caption, classify, expand, interpret) are all one-shot transformations. Multi-step doesn't add value for these.
 - **Tradeoff:** features that need multi-step reasoning (e.g., "plan a vlog from a week of entries; review each step") would need a new service file with its own loop.
 
 ---
@@ -60,12 +62,13 @@ The criteria for adding an agent:
 
 ## In this codebase
 
-_Agents not implemented — intentionally absent._ The four AI service files are all single-chain:
+_Agents not implemented — intentionally absent._ The five AI service files are all single-chain:
 
 **Single-chain anchor 1:**  `src/services/ai/summarize.ts` → `summarize()` L42–L105 (no observation step; one parse, one validate, one persist)
 **Single-chain anchor 2:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223
-**Single-chain anchor 3:**  `src/services/todos/classify.ts` → `classifyTodo()` L90–L120
-**Closest to agent:**       `src/services/todos/expand.ts` → `expandTodo()` L211–L266 with the one-retry pattern at L234–L247 — but the retry is a re-call of the same chain with a stricter prompt, not a model-chosen tool invocation
+**Single-chain anchor 3:**  `src/services/todos/classify.ts` → `classifyTodo()` L90+
+**Single-chain anchor 4:**  `src/services/ai/interpret.ts` → `interpretEntry()` L114–L149 — markdown out, no observation step (the 5th chain, added 2026-05-10)
+**Closest to agent:**       `src/services/todos/expand.ts` → `expandTodo()` L191+ with the one-retry pattern — but the retry is a re-call of the same chain with a stricter prompt, not a model-chosen tool invocation
 **Architectural anchor:**   no `src/services/ai/agent.ts`, no `orchestrator.ts`, no graph anywhere in `src/services/ai/` or `src/services/todos/`
 
 ---
@@ -100,7 +103,7 @@ _Agents not implemented — intentionally absent._ The four AI service files are
 ## Interview defense
 
 ### What an interviewer is really asking
-"Why no agents?" is the most loaded AI question in 2026. Half the field is shipping LangGraph state machines for problems that don't need them; the other half is shipping nothing because they can't decide. The interviewer wants to see I picked single-chain because the *steps are knowable in advance* — not because I was scared of complexity. The clue: I want to enumerate the four jobs (summarize/caption/classify/expand) and show that none of them have a "decide what to do next" question.
+"Why no agents?" is the most loaded AI question in 2026. Half the field is shipping LangGraph state machines for problems that don't need them; the other half is shipping nothing because they can't decide. The interviewer wants to see I picked single-chain because the *steps are knowable in advance* — not because I was scared of complexity. The clue: I want to enumerate the five jobs (summarize/caption/classify/expand/interpret) and show that none of them have a "decide what to do next" question.
 
 ### Likely questions
 
@@ -116,7 +119,7 @@ _Agents not implemented — intentionally absent._ The four AI service files are
 ### The question candidates always dodge
 Q: Isn't `expand.ts` essentially a chained call? It picks a system prompt based on type, then validates, then maybe retries with a stricter prompt. Where exactly does single-chain end and agent begin?
 
-A: Partly. But also: at one user with at most three days of context per chain, the steps ARE knowable in advance. `expand.ts` reads `meta.type`, looks up `getSystemPrompt(meta.type)` — that's a deterministic table, not a model decision. The retry with stricter prompt is a re-call of the same chain, not a new step the model chose. An agent is when the model says "I want to call tool X" and the orchestrator runs X and feeds the result back. `expand.ts` never asks the model what to do next; it just runs the chain again with a different system message if validation failed. The line I draw: a chain re-runs the same job; an agent decides what job to run. Adding an agent loop here means more cost, more failure modes, and no capability gain — none of the four jobs need the model to decide. I'd add agents the day the steps stop being knowable in advance, for example the day the user asks the model "show me everything I wrote about Project X" across the full archive.
+A: Partly. But also: at one user with at most three days of context per chain, the steps ARE knowable in advance. `expand.ts` reads `meta.type`, looks up `getSystemPrompt(meta.type)` — that's a deterministic table, not a model decision. The retry with stricter prompt is a re-call of the same chain, not a new step the model chose. An agent is when the model says "I want to call tool X" and the orchestrator runs X and feeds the result back. `expand.ts` never asks the model what to do next; it just runs the chain again with a different system message if validation failed. The line I draw: a chain re-runs the same job; an agent decides what job to run. Adding an agent loop here means more cost, more failure modes, and no capability gain — none of the five jobs need the model to decide. I'd add agents the day the steps stop being knowable in advance, for example the day the user asks the model "show me everything I wrote about Project X" across the full archive.
 
 ### One-line anchors
 - "Single chain re-runs the same job. An agent decides what job to run."
@@ -178,3 +181,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Agents are intentionally absent — anchored on the closest single-chain sites.
+Updated: 2026-05-10 — bumped chain count from 4 to 5 (interpret added; still no agents).

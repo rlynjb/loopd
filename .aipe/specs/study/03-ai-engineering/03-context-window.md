@@ -1,5 +1,7 @@
 # Context window — how loopd packs it
 
+> **Industry term:** Context window *(industry standard)*
+
 > The model only sees what's in the window for *this call*. Loopd hand-picks small, capped slices per feature.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [07-rag](./07-rag.md)
@@ -40,18 +42,20 @@ Per feature, loopd picks a fixed shape:
 - **classify** — text-only, ~50 tokens out. Context-free for cost: the surrounding entry isn't sent. Spec §5.3 calls this out as deliberate.
 - **summarize** — full day (all entries for one date) + clip metadata + habits list. ~1024 tokens out.
 - **caption** — `rawLog[]` (sentence-split entry text + done todo bullets) + last 5 captions for anti-repetition + mood. The 5 recent captions are the *only* multi-day context.
-- **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four; even so, each part is capped.
+- **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four JSON chains; even so, each part is capped.
+- **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` (most-recent 2000 chars; not the first 2000) and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
 
-The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the window predictable: `siblingTodos.slice(0, 5)`, `recentDates.slice(0, 3)`. Without those caps, a heavy journaling day could blow past the model's budget.
+The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the window predictable: `siblingTodos.slice(0, 5)`, `recentDates.slice(0, 3)`. For interpret, the cap is the input itself (`truncateTail`). Without those caps, a heavy journaling day could blow past the model's budget.
 
 ---
 
 ## In this codebase
 
-**Largest cap-set:**  `src/services/todos/expand.ts` → `buildContext()` L147–L199 — explicit `.slice(0, 3)` for recentDates and `.slice(0, 5)` for sibling todos
-**Caption context:**  `src/services/ai/caption.ts` → `generateCaption()` L201–L223 invokes `getRecentAISummaries(date, 5)` for anti-repetition (5 most-recent prior captions)
-**Day-shaped:**       `src/services/ai/summarize.ts` → `summarize()` L42–L105, `buildCaptionInput()` L111–L163 — packs the whole day, bounded only by per-day text
-**Context-free:**     `src/services/todos/classify.ts` → `classifyTodo()` L90–L120 — `SYSTEM_PROMPT` L12–L25 — no surrounding context at all (cost optimisation)
+**Largest cap-set:**   `src/services/todos/expand.ts` → `buildContext()` L147–L199 — explicit `.slice(0, 3)` for recentDates and `.slice(0, 5)` for sibling todos
+**Caption context:**   `src/services/ai/caption.ts` → `generateCaption()` L201–L223 invokes `getRecentAISummaries(date, 5)` for anti-repetition (5 most-recent prior captions)
+**Day-shaped:**        `src/services/ai/summarize.ts` → `summarize()` L42–L105, `buildCaptionInput()` L111–L163 — packs the whole day, bounded only by per-day text
+**Context-free:**      `src/services/todos/classify.ts` → `classifyTodo()` L90+ — `SYSTEM_PROMPT` L12–L25 — no surrounding context at all (cost optimisation)
+**Tail-truncated:**    `src/services/ai/interpret.ts` → `interpretEntry()` L114–L149 with `truncateTail()` L58–L61 — single-entry text only, capped to `MAX_INPUT_CHARS = 2000` (L17). Recent thoughts beat morning notes for reflection.
 
 ---
 
@@ -92,7 +96,7 @@ The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the wi
       A: Yes, more context would help, and yes I deliberately don't send it. Classify runs on every new ambiguous todo line — a heavy journaling day produces 30+ todos, and at $0.0001 per call on Haiku/4o-mini the cost is already trivial only because the prompt is ~50 tokens in, ~50 out. Adding the surrounding entry text would multiply input tokens by 10× for marginal accuracy gain on a 7-class problem where the heuristic already caught the obvious ones. I traded accuracy for cost predictability and it's the right trade for this app.
 
 [senior] Q: Why per-feature `buildContext` instead of one shared context-builder?
-         A: Because the four chains need different shapes. `expand.ts:147 buildContext()` pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos. `caption.ts` pulls 5 recent captions for anti-repetition plus mood. `summarize.ts` packs the whole day. `classify.ts` pulls nothing. A unified builder would either send too much (every chain pays for context it doesn't need) or expose so many flags that the call site looks like a config object. Each chain owns its context shape, with explicit `.slice(0, N)` caps that you can grep for and reason about.
+         A: Because the five chains need different shapes. `expand.ts:147 buildContext()` pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos. `caption.ts` pulls 5 recent captions for anti-repetition plus mood. `summarize.ts` packs the whole day. `classify.ts` pulls nothing. `interpret.ts` pulls one entry's text and `truncateTail`s it to 2000 chars — no recent-summary dependency, no sibling context, just the entry's most-recent words. A unified builder would either send too much (every chain pays for context it doesn't need) or expose so many flags that the call site looks like a config object. Each chain owns its context shape, with explicit `.slice(0, N)` or `truncateTail` caps that you can grep for and reason about.
 
 [arch] Q: At a million-token context window, do these caps still matter?
        A: They matter less for *fitting* and more for *cost and quality*. A 1M-token prompt costs roughly 1M-tokens-worth, and the model's recall in the middle of a giant context is documented to dip. The caps in `expand.ts` aren't there because I'm scared of the context limit; they're there because last-3-days is the right amount for the task and the rest is noise. If I moved to a 1M-token model I'd keep the caps.
@@ -162,3 +166,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added interpret context shape (`truncateTail` to MAX_INPUT_CHARS = 2000, MIN_TEXT_LENGTH = 20). See `14-interpret.md`.

@@ -1,5 +1,7 @@
 # Authentication boundary
 
+> **Industry term:** Trust boundary *(industry standard)*
+
 > Phase A has no end-user authentication — every cloud row is tagged with a single hardcoded `user_id`. RLS is *scaffolded* (migration 0002) but disabled.
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [13-append-only-migrations](./13-append-only-migrations.md)

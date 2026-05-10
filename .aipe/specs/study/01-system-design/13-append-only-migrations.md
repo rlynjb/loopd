@@ -1,5 +1,7 @@
 # Append-only Postgres migrations
 
+> **Industry term:** Append-only schema migrations *(industry standard)*
+
 > Every Postgres schema change is a new file, never an edit of an existing one.
 
 **See also:** → [02-authentication-boundary](./02-authentication-boundary.md) · → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md)
@@ -17,11 +19,16 @@
 
 ```
   supabase/migrations/
-    0001_initial_schema.sql       ── 10 mirror tables, composite (user_id, id) PKs
-    0002_rls_policies.sql         ── RLS policies (currently DISABLED in Phase A)
-    0003_server_time_rpc.sql      ── RPC the pull path uses
-    0004_relax_fks.sql            ── adjust FKs to allow soft-delete edge cases
-    0005_todo_meta_pinned.sql     ── ADD COLUMN pinned
+    0001_initial_schema.sql            ── 10 mirror tables, composite (user_id, id) PKs
+    0002_rls_policies.sql              ── RLS policies (currently DISABLED in Phase A)
+    0003_server_time_rpc.sql           ── RPC the pull path uses
+    0004_relax_fks.sql                 ── adjust FKs to allow soft-delete edge cases
+    0005_todo_meta_pinned.sql          ── ADD COLUMN pinned
+    0006_todo_meta_type_study.sql      ── widen type CHECK to include 'study' (2026-05-09)
+    0007_todo_meta_type_reflect.sql    ── widen type CHECK to include 'reflect' (2026-05-10)
+    0008_todo_meta_type_reduce.sql     ── DROP {bug, question, decision, content};
+                                          remap existing rows to 'todo';
+                                          clear user_overridden_type (2026-05-10)
 
   Apply path:
     node scripts/db-migrate.mjs --all-pending
@@ -42,8 +49,9 @@ Append-only means: never edit `0001` even if you find a typo two days later. Eit
 
 ## In this codebase
 
-**Migrations dir:** `supabase/migrations/` — currently 5 files: `0001_initial_schema.sql`, `0002_rls_policies.sql`, `0003_server_time_rpc.sql`, `0004_relax_fks.sql`, `0005_todo_meta_pinned.sql`. Append-only; never edit a committed file.
+**Migrations dir:** `supabase/migrations/` — currently 8 files (was 5 pre-2026-05-09). Append-only; never edit a committed file. The 0006/0007/0008 trio narrowed the thinking-mode taxonomy from 7 modes to 5 in the most disruptive way the rule allows: 0006 added `study`, 0007 added `reflect`, 0008 dropped `bug/question/decision/content` and remapped affected rows to `todo`. Three migrations instead of one because each shipped on a separate day; no edit of the prior files even though the end state is "narrowed taxonomy".
 **Runner:**         `scripts/db-migrate.mjs` (153 lines) — uses `pg` + `dotenv`. Connects via `DATABASE_URL`, queries a `_migrations` ledger table, runs pending files in order. Run with `node scripts/db-migrate.mjs --all-pending`.
+**Local SQLite:**   `src/services/database.ts` — handles the same `CHECK` constraint dance via a recreate-table block (SQLite can't `ALTER TABLE … DROP CONSTRAINT` like Postgres can; it has to copy the table). The 0006/0007 migration block was repurposed to also cover 0008's reduce.
 
 ---
 
@@ -157,3 +165,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — migration count grew from 5 to 8. Added 0006 (study), 0007 (reflect), 0008 (drop bug/question/decision/content + remap to 'todo'). Three migrations instead of one because they shipped on separate days — append-only discipline held even when the net effect was a taxonomy narrowing.

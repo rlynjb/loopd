@@ -1,5 +1,7 @@
 # Cloud sync pull — paginated, conflict-resolved, server-time anchored
 
+> **Industry term:** Cursor-based pagination / watermark sync *(industry standard)*
+
 > Pull only what's new since last pull, in 200-row pages, resolving conflicts row-by-row. Anchor to server time, not local clock.
 
 **See also:** → [07-cloud-sync-push](./07-cloud-sync-push.md) · → [01-system-design/07-cloud-sync-mirror](../01-system-design/07-cloud-sync-mirror.md) · → [01-system-design/08-conflict-last-write-wins](../01-system-design/08-conflict-last-write-wins.md)

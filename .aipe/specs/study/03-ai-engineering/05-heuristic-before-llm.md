@@ -1,5 +1,7 @@
 # Heuristic before LLM (the cost gate)
 
+> **Industry term:** Pre-filter / cost-aware fast path *(language agnostic)*
+
 > Every new todo runs through `heuristicClassify` first (regex-only, no network). The LLM classifier is fired only when the heuristic returns `null`.
 
 **See also:** → [02-dsa/10-heuristic-first-classifier](../02-dsa/10-heuristic-first-classifier.md) · → [09-async-classification](./09-async-classification.md)

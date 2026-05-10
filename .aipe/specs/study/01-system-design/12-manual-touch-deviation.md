@@ -1,5 +1,7 @@
 # Manual-touch deviation (Principle 11)
 
+> **Industry term:** *(no widely-used equivalent — loopd-internal naming)*
+
 > The only place the app writes a `thread_mentions` row whose `entry_id` and `todo_id` are both NULL. Marks "I touched this thread today" without any prose attribution.
 
 **See also:** → [03-single-source-of-truth](./03-single-source-of-truth.md)

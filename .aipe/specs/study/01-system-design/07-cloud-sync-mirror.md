@@ -1,5 +1,7 @@
 # Cloud sync as a mirror
 
+> **Industry term:** Eventually consistent replica / async replication *(industry standard)*
+
 > The local DB is canonical. Cloud is a mirror. Push and pull are independent flows that share the registry of 10 syncable tables.
 
 **See also:** → [01-local-first-request-flow](./01-local-first-request-flow.md) · → [05-soft-delete](./05-soft-delete.md) · → [08-conflict-last-write-wins](./08-conflict-last-write-wins.md) · → [09-debounced-push](./09-debounced-push.md) · → [10-bootstrap-decision-tree](./10-bootstrap-decision-tree.md)

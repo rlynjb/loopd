@@ -4,19 +4,19 @@ Every algorithm in this section is grounded in a real loopd operation. Each file
 
 ## Index
 
-| # | Operation | One-line |
-|---|---|---|
-| 01 | [Two-pass scan: matching prose lines to existing todos](./01-two-pass-scan-todos.md) | Map + Set, exact text then line-index. Identity survives prose edits. |
-| 02 | [todo_meta reconciliation: 1:1 invariant](./02-reconcile-todo-meta.md) | Map + Set diff: insert missing, delete orphans, leave matches. |
-| 03 | [Two-pass thread mention reconcile (line-shift tolerant)](./03-two-pass-thread-mentions.md) | Pass 2 uses `±3 line shift` tolerance for moved tags. |
-| 04 | [Ranked todo flatten + sort (legacy)](./04-ranked-todo-sort.md) | Compose-into-one-comparator. Currently dead code; only `formatRelativeTime` is consumed. |
-| 05 | [Daily-schedule grid cell state](./05-cell-state-decision-tree.md) | Pure decision tree, O(1) per cell. |
-| 06 | [Thread cards aggregate](./06-thread-cards-aggregate.md) | 4 SQL queries + 2 in-memory joins. Avoids N+1. |
-| 07 | [Cloud sync push](./07-cloud-sync-push.md) | Batch upsert (50/batch) with mid-batch failure tolerance. |
-| 08 | [Cloud sync pull](./08-cloud-sync-pull.md) | Cursor-by-timestamp pagination (200/page) anchored to server time. |
-| 09 | [Tag parsing with code-fence masking](./09-tag-parsing-code-fence.md) | Mask code regions to spaces (preserve offsets), then per-line regex. |
-| 10 | [Heuristic-first classifier](./10-heuristic-first-classifier.md) | Ordered regex checks. Returns `'todo'` or `null`; `null` defers to LLM. |
-| 11 | [Pinned-first sort (live)](./11-pinned-first-sort.md) | Two-key comparator: pinned first, then createdAt DESC. |
+| # | Operation | Industry term | One-line |
+|---|---|---|---|
+| 01 | [Two-pass scan: matching prose lines to existing todos](./01-two-pass-scan-todos.md) | **Two-phase matching / exact-then-fallback** *(language agnostic)* | Map + Set, exact text then line-index. Identity survives prose edits. |
+| 02 | [todo_meta reconciliation: 1:1 invariant](./02-reconcile-todo-meta.md) | **Set-diff reconciliation (add / update / delete diff)** *(language agnostic)* | Map + Set diff: insert missing, delete orphans, leave matches. |
+| 03 | [Two-pass thread mention reconcile (line-shift tolerant)](./03-two-pass-thread-mentions.md) | **Fuzzy match with displacement tolerance** *(language agnostic)* | Pass 2 uses `±3 line shift` tolerance for moved tags. |
+| 04 | [Ranked todo flatten + sort (legacy)](./04-ranked-todo-sort.md) | **Composite / multi-key comparator** *(language agnostic)* | Compose-into-one-comparator. Currently dead code; only `formatRelativeTime` is consumed. |
+| 05 | [Daily-schedule grid cell state](./05-cell-state-decision-tree.md) | **Pure decision function / lookup table** *(language agnostic)* | Pure decision tree, O(1) per cell. |
+| 06 | [Thread cards aggregate](./06-thread-cards-aggregate.md) | **N+1 query avoidance (bulk fetch + in-memory join)** *(industry standard)* | 4 SQL queries + 2 in-memory joins. Avoids N+1. |
+| 07 | [Cloud sync push](./07-cloud-sync-push.md) | **Batch upsert with bounded pagination** *(industry standard)* | Batch upsert (50/batch) with mid-batch failure tolerance. |
+| 08 | [Cloud sync pull](./08-cloud-sync-pull.md) | **Cursor-based pagination / watermark sync** *(industry standard)* | Cursor-by-timestamp pagination (200/page) anchored to server time. |
+| 09 | [Tag parsing with code-fence masking](./09-tag-parsing-code-fence.md) | **Lexical region masking (offset-preserving)** *(language agnostic)* | Mask code regions to spaces (preserve offsets), then per-line regex. |
+| 10 | [Heuristic-first classifier](./10-heuristic-first-classifier.md) | **Rule-based fast-path / slow-path classification** *(language agnostic)* | Ordered regex checks. Returns `'todo'` or `null`; `null` defers to LLM. |
+| 11 | [Pinned-first sort (live)](./11-pinned-first-sort.md) | **Stable sort with priority key / multi-key comparator** *(language agnostic)* | Two-key comparator: pinned first, then createdAt DESC. |
 
 ## Complexity cheat sheet
 

@@ -1,5 +1,7 @@
 # Cloud sync push — batch upsert with mid-batch failure tolerance
 
+> **Industry term:** Batch upsert with bounded pagination *(industry standard)*
+
 > Push only what changed, in chunks small enough that one failure doesn't strand the whole table.
 
 **See also:** → [08-cloud-sync-pull](./08-cloud-sync-pull.md) · → [01-system-design/07-cloud-sync-mirror](../01-system-design/07-cloud-sync-mirror.md) · → [01-system-design/09-debounced-push](../01-system-design/09-debounced-push.md)

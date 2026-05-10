@@ -1,5 +1,7 @@
 # File-routed UI (expo-router)
 
+> **Industry term:** File-based routing *(industry standard)*
+
 > Every file under `app/` is a route. `[param]` directories define dynamic segments. `_layout.tsx` is a wrapper that runs on every screen.
 
 **See also:** → [01-local-first-request-flow](./01-local-first-request-flow.md) · → [15-storage-layer-summary](./15-storage-layer-summary.md)
@@ -28,6 +30,7 @@
    │    └── [date].tsx            ── /editor/2026-05-07
    ├── threads/
    │    └── [id].tsx              ── /threads/<threadId>
+   ├── vlogs.tsx                  ── /vlogs       (added 2026-05-08, bottom-nav tab)
    ├── more/
    │    ├── index.tsx, habits.tsx, threads.tsx, nutrition.tsx
    └── settings/
@@ -49,9 +52,10 @@ Navigation uses `useRouter().push('/path')`. Hardware back goes to the previous 
 ## In this codebase
 
 **Boot path:**         `app/_layout.tsx` (287 lines) — initialises SQLite via `useDatabase`, runs cloud bootstrap, wraps providers (gesture handler, theme, fonts). Every route runs through this wrapper.
-**Static routes:**     `app/index.tsx` (Today/dashboard), `app/todos.tsx` (1020 lines).
+**Static routes:**     `app/index.tsx` (Today/dashboard), `app/todos.tsx` (1020 lines), `app/vlogs.tsx` (109 lines, dedicated vlogs tab — added 2026-05-08).
 **Dynamic routes:**    `app/todos/[id].tsx`, `app/journal/[date].tsx`, `app/editor/[date].tsx`, `app/threads/[id].tsx`. Each reads its segment via `useLocalSearchParams<{ id?: string; date?: string }>()`.
 **Nested groups:**     `app/more/{index,habits,threads,nutrition}.tsx`, `app/settings/{ai,cloud-sync,index,updates}.tsx`.
+**Bottom nav:**        `src/components/nav/GlobalBottomNav.tsx` (L19, L39) — `pathname.startsWith('/vlogs')` detects the new tab; `router.push('/vlogs')` navigates. Bottom-nav tabs added in commit 78d70fb.
 **Convention:**        the file system tree IS the route table — there is no `routes.ts`.
 
 ---
@@ -166,3 +170,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
+Updated: 2026-05-10 — added `/vlogs` route (`app/vlogs.tsx`, 109 lines) + bottom-nav tab. Route count grew by one.

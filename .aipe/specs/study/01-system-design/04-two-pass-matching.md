@@ -1,5 +1,7 @@
 # Two-pass matching
 
+> **Industry term:** Two-phase matching / exact-then-fallback *(language agnostic)*
+
 > Every prose-derived feature (todos, threads, mentions) matches existing rows in two passes — exact text first, line-index second — so identity survives both reorderings and same-line edits.
 
 **See also:** → [03-single-source-of-truth](./03-single-source-of-truth.md) · → [06-one-to-one-invariant](./06-one-to-one-invariant.md) · → [02-dsa/01-two-pass-scan-todos](../02-dsa/01-two-pass-scan-todos.md)

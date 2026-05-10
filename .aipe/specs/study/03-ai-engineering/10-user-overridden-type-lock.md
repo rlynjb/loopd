@@ -1,5 +1,7 @@
 # user_overridden_type — the manual lock
 
+> **Industry term:** Sticky user override / manual override flag *(language agnostic)*
+
 > A single boolean column on `todo_meta`. When the user manually picks a type from the picker, the column flips to `true`. From then on, every AI-driven path MUST read this flag and refuse to overwrite.
 
 **See also:** → [09-async-classification](./09-async-classification.md) · → [11-failure-modes](./11-failure-modes.md)

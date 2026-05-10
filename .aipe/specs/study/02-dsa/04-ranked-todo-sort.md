@@ -1,5 +1,7 @@
 # Ranked todo flatten + sort (legacy `rankTodos`)
 
+> **Industry term:** Composite / multi-key comparator *(language agnostic)*
+
 > Array flatten across entries, then 3-key compare (done last, source priority, createdAt asc). **The `rankTodos` function is currently in the repo but no app code calls it** — kept here as it's a real algorithm worth understanding.
 
 **See also:** → [11-pinned-first-sort](./11-pinned-first-sort.md) · → [01-system-design/16-pin-replaces-reorder](../01-system-design/16-pin-replaces-reorder.md)

@@ -1,5 +1,7 @@
 # Debounced push trigger
 
+> **Industry term:** Write-behind / coalesced writes *(industry standard)*
+
 > Every write site calls `schedulePush()`. The timer resets on every call. Five seconds after the last call fires, `pushAll()` runs.
 
 **See also:** → [01-local-first-request-flow](./01-local-first-request-flow.md) · → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md)
