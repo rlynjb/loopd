@@ -13,7 +13,20 @@
 
 You corrected the AI's guess yesterday — flipped a category from "task" to "note" because the model got it wrong. Today you open the app and it's back to "task." The next batch run silently undid your correction, the model is wrong in the same way again, and you have to fix it a second time. Multiply by a month and the user concludes the AI doesn't listen. The right behaviour is for a human edit to outrank any future automated edit, forever, until the user explicitly clears it.
 
-This is the "sticky override" pattern — a flag that marks a field as "manually set, hands off." It belongs to the family of "human-in-the-loop" and "authoritative source" patterns, alongside the way email clients respect a manual "not spam" forever, the way version control respects a manual merge resolution over automatic re-merges, and the way recommender systems mark a "don't recommend this" flag as permanent. You've already seen it any time a product gave you the option to "always trust this sender" or "lock this value." Every AI feature that writes back to a field a user can also write to needs some version of this rule. The diagram below shows the shape it takes here.
+This is the "sticky override" pattern — a flag that marks a field as "manually set, hands off." It belongs to the family of "human-in-the-loop" and "authoritative source" patterns, alongside the way email clients respect a manual "not spam" forever, the way version control respects a manual merge resolution over automatic re-merges, and the way recommender systems mark a "don't recommend this" flag as permanent. You've already seen it any time a product gave you the option to "always trust this sender" or "lock this value." Every AI feature that writes back to a field a user can also write to needs some version of this rule. The next block walks the mechanics.
+
+---
+
+## How it works
+
+The flag lives on `todo_meta` as a single boolean. It defaults to `false` on insert.
+
+When the user picks a type from the manual picker (in `/todos` or the todo detail screen), the update sets both `type` AND `user_overridden_type=true` in the same write.
+
+Every AI-driven update path consults the flag:
+- `scheduleClassify`'s success handler reads the current meta before writing — if `user_overridden_type=true`, it skips.
+- The catch-up classifier (the migration that fills `null` types on existing rows) reads the flag and skips locked rows.
+- Any future "retroactive re-classify" feature must do the same. The diagram below contrasts the two shapes end-to-end.
 
 ---
 
@@ -31,19 +44,6 @@ This is the "sticky override" pattern — a flag that marks a field as "manually
                                            BUT: write path checks user_overridden_type
                                                 → SKIPS the update ✓
 ```
-
----
-
-## How it works
-
-The flag lives on `todo_meta` as a single boolean. It defaults to `false` on insert.
-
-When the user picks a type from the manual picker (in `/todos` or the todo detail screen), the update sets both `type` AND `user_overridden_type=true` in the same write.
-
-Every AI-driven update path consults the flag:
-- `scheduleClassify`'s success handler reads the current meta before writing — if `user_overridden_type=true`, it skips.
-- The catch-up classifier (the migration that fills `null` types on existing rows) reads the flag and skips locked rows.
-- Any future "retroactive re-classify" feature must do the same.
 
 ---
 
@@ -185,3 +185,6 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

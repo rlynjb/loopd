@@ -13,55 +13,11 @@
 
 The instinct on a new feature called "first-time setup" is to write a second code path: a dedicated bulk-loader that knows it's the first run, with its own pagination, its own error handling, its own everything. That code path is then untested in production until someone gets a new device — i.e., months later, with no observability. The better move is to notice that "first run" is just the degenerate case of "incremental run" with the cursor pinned to the beginning of time. Reset the watermark to null, call the regular sync, done. One code path. One set of bugs.
 
-This is the "special case is a parameter, not a fork" principle — the same instinct behind null-object pattern, behind "epoch zero" timestamps that make `WHERE updated_at > 0` cover all rows, behind sentinel rows in databases that make "first" and "subsequent" use the same INSERT. The family is "reduce the surface area by making the rare path a configuration of the common path." Initial replication in CDC systems works this way. Cold-cache fills in CDNs work this way. The cost is one extra pass at install time that re-pages through everything; the benefit is that the install-time code path was exercised on every normal sync for months before it ever ran in anger. Here's how this codebase applies that pattern.
+This is the "special case is a parameter, not a fork" principle — the same instinct behind null-object pattern, behind "epoch zero" timestamps that make `WHERE updated_at > 0` cover all rows, behind sentinel rows in databases that make "first" and "subsequent" use the same INSERT. The family is "reduce the surface area by making the rare path a configuration of the common path." Initial replication in CDC systems works this way. Cold-cache fills in CDNs work this way. The cost is one extra pass at install time that re-pages through everything; the benefit is that the install-time code path was exercised on every normal sync for months before it ever ran in anger. The data and the mechanics are in the next blocks.
 
 ---
 
 **Real operation:** `firstPullAll` in `src/services/sync/firstPull.ts`. Called from `bootstrapCloudSync` in `src/services/sync/bootstrap.ts:82` when local is empty and cloud has data.
-
----
-
-## Primary diagram
-
-```
-                    bootstrapCloudSync()
-                             │
-                  ┌──────────┴──────────┐
-                  ▼                     ▼
-            localHasData()?        cloudHasData()?
-                  │                     │
-                  └──────────┬──────────┘
-                             │
-       ┌─────────────┬───────┴────────┬──────────────────┐
-       ▼             ▼                ▼                  ▼
-   no/no          yes/no          no/yes            yes/yes
-   no-op       initial-push   ► first-pull ◄    initial-push-fallback
-                                    │
-                                    ▼
-                            firstPullAll()
-                                    │
-                            ┌───────┴────────┐
-                            ▼                ▼
-            for t in SYNCED_TABLES (10):     │
-              UPSERT sync_meta               │
-              SET last_pull_at = NULL        │
-                            │                ▼
-                            └────────────► pullAll()
-                                              │
-                                              ▼
-                                pullTable(table) for each table
-                                cursor = last_pull_at ?? '1970-01-01...'
-                                → walks 200-row pages until end
-                                → applies via chooseWinner+upsert
-                                → stamps last_pull_at = serverTime
-                                              │
-                                              ▼
-                              local SQLite populated from cloud
-                                              │
-                                              ▼
-                                markBootstrapDone() (SecureStore)
-                              { action: 'first-pull', pulled: N }
-```
 
 ---
 
@@ -190,7 +146,51 @@ Complexity: ⌈N/200⌉ network round-trips across all tables · O(200) memory p
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: only on a dev fixture where you know the total cloud row count is tiny and the device is online. In production, paginated reuse is the only viable shape — and the brute version doesn't actually exist in the codebase because `firstPullAll` reuses `pullTable`.
+When brute force is fine: only on a dev fixture where you know the total cloud row count is tiny and the device is online. In production, paginated reuse is the only viable shape — and the brute version doesn't actually exist in the codebase because `firstPullAll` reuses `pullTable`. The diagram below shows it end-to-end.
+
+---
+
+## Primary diagram
+
+```
+                    bootstrapCloudSync()
+                             │
+                  ┌──────────┴──────────┐
+                  ▼                     ▼
+            localHasData()?        cloudHasData()?
+                  │                     │
+                  └──────────┬──────────┘
+                             │
+       ┌─────────────┬───────┴────────┬──────────────────┐
+       ▼             ▼                ▼                  ▼
+   no/no          yes/no          no/yes            yes/yes
+   no-op       initial-push   ► first-pull ◄    initial-push-fallback
+                                    │
+                                    ▼
+                            firstPullAll()
+                                    │
+                            ┌───────┴────────┐
+                            ▼                ▼
+            for t in SYNCED_TABLES (10):     │
+              UPSERT sync_meta               │
+              SET last_pull_at = NULL        │
+                            │                ▼
+                            └────────────► pullAll()
+                                              │
+                                              ▼
+                                pullTable(table) for each table
+                                cursor = last_pull_at ?? '1970-01-01...'
+                                → walks 200-row pages until end
+                                → applies via chooseWinner+upsert
+                                → stamps last_pull_at = serverTime
+                                              │
+                                              ▼
+                              local SQLite populated from cloud
+                                              │
+                                              ▼
+                                markBootstrapDone() (SecureStore)
+                              { action: 'first-pull', pulled: N }
+```
 
 ---
 
@@ -332,3 +332,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

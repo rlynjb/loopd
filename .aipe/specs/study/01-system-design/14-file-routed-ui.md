@@ -13,7 +13,17 @@
 
 For a long time, routing was a config file: a giant lookup table that mapped URL patterns to handlers, lived in one place, and was the first thing to get out of sync with reality. Then a few frameworks noticed that the directory tree on disk already encodes the same hierarchy, and that you could just let the filesystem be the router. Adding a screen becomes "create a file." Removing one becomes "delete a file." The config file evaporates.
 
-File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The diagram below shows the shape it takes here.
+File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The next block walks the mechanics.
+
+---
+
+## How it works
+
+expo-router scans `app/` at build time and generates a route map. `_layout.tsx` at any level wraps the children below it. Dynamic segments are folder names in `[brackets]` and the param is read with `useLocalSearchParams()`.
+
+The root `_layout.tsx` is the boot path: it initialises SQLite (via `useDatabase`), runs the bootstrap (cloud sync init), and wraps everything in providers (gesture handler, theme, fonts).
+
+Navigation uses `useRouter().push('/path')`. Hardware back goes to the previous file in the stack. There is no manual route table. Here's the diagram of the whole flow.
 
 ---
 
@@ -38,16 +48,6 @@ File-based routing is the convention that a directory layout, with naming rules 
    └── settings/
         └── ai.tsx, cloud-sync.tsx, index.tsx, updates.tsx
 ```
-
----
-
-## How it works
-
-expo-router scans `app/` at build time and generates a route map. `_layout.tsx` at any level wraps the children below it. Dynamic segments are folder names in `[brackets]` and the param is read with `useLocalSearchParams()`.
-
-The root `_layout.tsx` is the boot path: it initialises SQLite (via `useDatabase`), runs the bootstrap (cloud sync init), and wraps everything in providers (gesture handler, theme, fonts).
-
-Navigation uses `useRouter().push('/path')`. Hardware back goes to the previous file in the stack. There is no manual route table.
 
 ---
 
@@ -191,3 +191,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

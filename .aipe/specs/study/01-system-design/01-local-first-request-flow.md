@@ -13,54 +13,7 @@
 
 You've opened a notes app on the subway, typed a sentence, and watched the cursor lag because the app was busy round-tripping every keystroke to a server it couldn't reach. The lag is the network leaking into the request path. The underlying problem is that the user's writes and the publish-to-the-world step are two different operations, and most apps weld them together.
 
-Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. The diagram below shows the shape it takes here.
-
----
-
-## Local-first request flow — diagram
-
-```
-  User taps a button on the Today screen
-                │
-                ▼
-        ┌────────────────┐
-        │  React screen  │  app/index.tsx (or any app/* route)
-        └───────┬────────┘
-                │  imperative call
-                ▼
-        ┌────────────────┐
-        │  React hook    │  useEntries.editEntry, useHabits.toggle, etc
-        └───────┬────────┘
-                │  delegate
-                ▼
-        ┌────────────────┐
-        │  Service       │  src/services/<domain>/<verb>.ts
-        └───────┬────────┘
-                │  SQL via expo-sqlite
-                ▼
-        ┌────────────────┐
-        │  database.ts   │  the ONLY file that opens loopd.db
-        └───────┬────────┘
-                │   1. write (INSERT / UPDATE)
-                │   2. set updated_at = now
-                │   3. schedulePush()       ← debounced 5s timer
-                ▼
-        ┌────────────────┐
-        │  loopd.db      │  SQLite, WAL, single-process
-        └───────┬────────┘
-                │  reads on next tick
-                ▼
-        UI re-renders
-                │
-                │  (5 seconds later, in the background)
-                ▼
-        ┌────────────────┐
-        │  pushAll()     │  walks the SyncableTable registry
-        └───────┬────────┘
-                │  HTTPS upsert
-                ▼
-        Supabase Postgres
-```
+Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. Here's how that actually works in this codebase.
 
 ---
 
@@ -70,7 +23,63 @@ The UI never talks to Supabase directly. Every write path runs through the hook 
 
 When a write hits SQLite, the row is immediately visible to the next read. The screen rebuilds from local state; nothing waits on the network. The cloud catches up via a debounced timer that fires `pushAll()` 5 seconds after the last write event.
 
-If the device is offline, the writes pile up locally with `updated_at > synced_at`. On the next session that has network, `pushAll()` selects exactly those dirty rows and upserts them.
+If the device is offline, the writes pile up locally with `updated_at > synced_at`. On the next session that has network, `pushAll()` selects exactly those dirty rows and upserts them. The full picture is below.
+
+---
+
+## Local-first request flow — diagram
+
+```
+┌─ UI layer ──────────────────────────────────────────────┐
+│   User taps a button on the Today screen                │
+│                │                                        │
+│                ▼                                        │
+│        ┌────────────────┐                               │
+│        │  React screen  │  app/index.tsx (or any app/*) │
+│        └───────┬────────┘                               │
+│                │  imperative call                       │
+│                ▼                                        │
+│        ┌────────────────┐                               │
+│        │  React hook    │  useEntries.editEntry, etc    │
+│        └───────┬────────┘                               │
+└────────────────┼────────────────────────────────────────┘
+                 │  delegate
+                 ▼
+┌─ Service layer ─────────────────────────────────────────┐
+│        ┌────────────────┐                               │
+│        │  Service       │  src/services/<domain>/<verb> │
+│        └───────┬────────┘                               │
+│                │  SQL via expo-sqlite                   │
+│                ▼                                        │
+│        ┌────────────────┐                               │
+│        │  database.ts   │  ONLY file that opens loopd.db│
+│        └───────┬────────┘                               │
+│                │   1. write (INSERT / UPDATE)           │
+│                │   2. set updated_at = now              │
+│                │   3. schedulePush()  ← debounced 5s    │
+└────────────────┼────────────────────────────────────────┘
+                 ▼
+┌─ Storage layer ─────────────────────────────────────────┐
+│        ┌────────────────┐                               │
+│        │  loopd.db      │  SQLite, WAL, single-process  │
+│        └───────┬────────┘                               │
+│                │  reads on next tick                    │
+│                ▼                                        │
+│        UI re-renders (back up to UI layer)              │
+└────────────────┬────────────────────────────────────────┘
+                 │  (5 seconds later, in the background)
+                 ▼
+┌─ Network / sync layer ──────────────────────────────────┐
+│        ┌────────────────┐                               │
+│        │  pushAll()     │  walks SyncableTable registry │
+│        └───────┬────────┘                               │
+│                │  HTTPS upsert                          │
+└────────────────┼────────────────────────────────────────┘
+                 ▼
+┌─ Provider layer ────────────────────────────────────────┐
+│        Supabase Postgres                                │
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -216,3 +225,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.

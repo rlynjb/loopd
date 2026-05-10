@@ -13,7 +13,22 @@
 
 The instinct when you start building with an LLM is to chain prompts together — "first summarize, then critique the summary, then rewrite based on the critique, then format." That instinct produces systems where a single bad token three calls deep poisons everything downstream, costs five times as much as it needs to, and is impossible to debug because you can't tell which step actually failed. The fix is older than LLMs: give each call exactly one job, validate the output, move on.
 
-Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The diagram below shows how it composes in this codebase.
+Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The next block walks the mechanics.
+
+---
+
+## How it works
+
+Each AI service file owns one job. It builds a system prompt that says exactly what the output shape should be, builds a user prompt with the live data, calls the model once, parses (or cleans, for interpret), validates, and persists (or renders, for interpret).
+
+The 5 chains:
+- **summarize** — produces the structured editor data (clip order, trims, filter, mood) + a freeform summary string.
+- **caption** — produces 4 tonal voice variants (clean / smoother / reflective / punchy) of one day's text.
+- **classify** — picks 1 of 5 thinking modes (todo/idea/knowledge/study/reflect) for one todo line. Was 7 modes pre-2026-05-10.
+- **expand** — runs a per-type chain (one of 4 templates: idea/knowledge/study/reflect — `'todo'` is non-expandable) to produce typed JSON expansion of a todo.
+- **interpret** — produces a long-form markdown reflection on a journal entry. User-triggered, ephemeral, **markdown out, not JSON**. The only chain whose output is a piece of writing the user reads, not data the app uses.
+
+Caption was *split out* of summarize when the 4-variant prompt was added — caption failures don't fail summarize. Interpret was *added separately* in 2026-05-10 because its output contract (markdown, not JSON) doesn't fit the validate-and-persist pattern of the other 4. Both moves are examples of "single-purpose": each chain should fail independently. The full picture is below.
 
 ---
 
@@ -43,21 +58,6 @@ Single-purpose chains belong to the same family as Unix pipes, microservices, an
   │                                                                   │
   └───────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## How it works
-
-Each AI service file owns one job. It builds a system prompt that says exactly what the output shape should be, builds a user prompt with the live data, calls the model once, parses (or cleans, for interpret), validates, and persists (or renders, for interpret).
-
-The 5 chains:
-- **summarize** — produces the structured editor data (clip order, trims, filter, mood) + a freeform summary string.
-- **caption** — produces 4 tonal voice variants (clean / smoother / reflective / punchy) of one day's text.
-- **classify** — picks 1 of 5 thinking modes (todo/idea/knowledge/study/reflect) for one todo line. Was 7 modes pre-2026-05-10.
-- **expand** — runs a per-type chain (one of 4 templates: idea/knowledge/study/reflect — `'todo'` is non-expandable) to produce typed JSON expansion of a todo.
-- **interpret** — produces a long-form markdown reflection on a journal entry. User-triggered, ephemeral, **markdown out, not JSON**. The only chain whose output is a piece of writing the user reads, not data the app uses.
-
-Caption was *split out* of summarize when the 4-variant prompt was added — caption failures don't fail summarize. Interpret was *added separately* in 2026-05-10 because its output contract (markdown, not JSON) doesn't fit the validate-and-persist pattern of the other 4. Both moves are examples of "single-purpose": each chain should fail independently.
 
 ---
 
@@ -228,3 +228,4 @@ Updated: 2026-05-10 — chain count grew from 4 to 5 (Interpret added, with mark
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 2 hint 4→5 chain files; corrected "expand.ts is six prompts" to 4 typed schemas (ExpandableType excludes 'todo'); updated Level 4 alternative count 6→4.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (list of 5 sibling chains within the same service layer — no architectural boundaries crossed).

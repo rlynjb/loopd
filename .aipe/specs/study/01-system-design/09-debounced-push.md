@@ -13,23 +13,7 @@
 
 You've wired up a "save on every keystroke" autosave and watched your network tab fill up with one request per character. The user is typing fast, you're firing eighty requests in ten seconds, and the server is doing the same work eighty times to settle on a final state that one request could have produced. The naive fix is to save less often; the real fix is to save once at the end of the burst.
 
-Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. The diagram below shows how it composes in this codebase.
-
----
-
-## Debounced push — diagram
-
-```
-  user keystroke ──┐
-  user keystroke ──┤        clearTimeout(timer)
-  user keystroke ──┼──▶     timer = setTimeout(fire, 5000)
-  user keystroke ──┘                                │
-                                                    │ 5s of no calls
-                                                    ▼
-                                               fire():
-                                                 if pushing: schedulePush()  ← re-queue
-                                                 else:        pushAll()
-```
+Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. Here's how that actually works in this codebase.
 
 ---
 
@@ -41,7 +25,38 @@ When the timer fires, `fire()` checks whether a push is already in flight. If ye
 
 `pushAll()` walks the SyncableTable registry and runs `pushTable()` per table. Any table with no dirty rows returns early. The orchestration is sequential per table — Supabase is the bottleneck, not the local query.
 
-The 5-second value is a tuning knob. Shorter feels chattier (more round-trips per typing burst), longer means more risk of unsaved-to-cloud state on app kill. 5s is the empirical sweet spot for journaling cadence.
+The 5-second value is a tuning knob. Shorter feels chattier (more round-trips per typing burst), longer means more risk of unsaved-to-cloud state on app kill. 5s is the empirical sweet spot for journaling cadence. The full picture is below.
+
+---
+
+## Debounced push — diagram
+
+```
+  ┌─ UI / write sites ──────────────────────┐
+  │  user keystroke ──┐                     │
+  │  user keystroke ──┤                     │
+  │  user keystroke ──┼──▶ schedulePush()   │
+  │  user keystroke ──┘                     │
+  └─────────────────────┬───────────────────┘
+                        │
+                        ▼
+  ┌─ Service layer (sync) ──────────────────┐
+  │  clearTimeout(timer)                    │
+  │  timer = setTimeout(fire, 5000)         │
+  │                  │                      │
+  │                  │ 5s of no calls       │
+  │                  ▼                      │
+  │  fire():                                │
+  │    if pushing: schedulePush()  ← re-queue│
+  │    else:        pushAll()               │
+  └─────────────────────┬───────────────────┘
+                        │
+                        ▼
+  ┌─ Network / Provider ────────────────────┐
+  │  pushAll() → per-table upserts to       │
+  │  Supabase Postgres                      │
+  └─────────────────────────────────────────┘
+```
 
 ---
 
@@ -182,3 +197,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.

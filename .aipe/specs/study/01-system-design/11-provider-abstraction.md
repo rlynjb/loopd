@@ -13,36 +13,7 @@
 
 You've shipped an integration with a third-party service and then watched the vendor change their pricing, deprecate an endpoint, or just go down for a day. If the call to that vendor was sprinkled across thirty files, you got to spend a week chasing it down. If it was behind one well-defined seam, you swapped vendors in an afternoon. The difference is not how good either vendor was — it's how prepared the codebase was for the day one of them stopped being the right answer.
 
-The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. Here's how the shape lands in this codebase.
-
----
-
-## Provider abstraction — diagram
-
-```
-  callsite: summarize(date) / classifyTodo(text) / expandTodo(...)  / generateCaption(...)
-                                       │
-                                       ▼
-                            ┌──────────────────────┐
-                            │  ai/config.ts        │
-                            │  getProvider() → 'claude' | 'openai'
-                            └─────────┬────────────┘
-                                      │
-                ┌─────────────────────┼─────────────────────┐
-                ▼                                           ▼
-        provider == 'claude'                        provider == 'openai'
-                │                                           │
-                ▼                                           ▼
-        @anthropic-ai/sdk                            raw fetch + JSON
-        models.create({ ... })                       /v1/chat/completions
-                │                                           │
-                └─────────────────────┬─────────────────────┘
-                                      ▼
-                       same shape: string of model output
-                                      │
-                                      ▼
-                      callsite parses + validates + persists
-```
+The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. The next block walks the mechanics.
 
 ---
 
@@ -52,7 +23,42 @@ The strategy pattern is a way to keep the call site stable while letting the imp
 
 The branches are intentionally explicit. The Claude branch uses `@anthropic-ai/sdk` directly; the OpenAI branch uses raw `fetch` to `/v1/chat/completions` so the codebase can pass `response_format: json_object` (Claude doesn't have that knob).
 
-After both branches return, the rest of the function is shared: extract JSON, validate against schema, persist to SQLite, return.
+After both branches return, the rest of the function is shared: extract JSON, validate against schema, persist to SQLite, return. Here's the diagram of the whole flow.
+
+---
+
+## Provider abstraction — diagram
+
+```
+┌─ Service layer (AI callsites) ──────────────────────────────────────────┐
+│  summarize(date) / classifyTodo(text) / expandTodo(...) / generateCaption(...)
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─ Service layer (config) ────────────────────────────────────────────────┐
+│                            ┌──────────────────────┐                     │
+│                            │  ai/config.ts        │                     │
+│                            │  getProvider() → 'claude' | 'openai'       │
+│                            └─────────┬────────────┘                     │
+└──────────────────────────────────────┼──────────────────────────────────┘
+                                       │
+                ┌──────────────────────┼──────────────────────┐
+                ▼                                             ▼
+┌─ Provider: Anthropic ──────────┐          ┌─ Provider: OpenAI ─────────┐
+│  provider == 'claude'          │          │  provider == 'openai'      │
+│  @anthropic-ai/sdk             │          │  raw fetch + JSON          │
+│  models.create({ ... })        │          │  /v1/chat/completions      │
+└──────────────┬─────────────────┘          └──────────────┬─────────────┘
+               │                                           │
+               └─────────────────────┬─────────────────────┘
+                                     ▼
+┌─ Service layer (post-call) ─────────────────────────────────────────────┐
+│                  same shape: string of model output                     │
+│                                  │                                      │
+│                                  ▼                                      │
+│                 callsite parses + validates + persists                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -209,3 +215,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.

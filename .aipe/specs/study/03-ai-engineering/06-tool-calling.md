@@ -13,7 +13,15 @@
 
 The model can't actually do anything. It can't read a file, hit an API, query a database, or look up today's weather — it can only produce text. So how do AI products that "search the web" or "run code" or "book a flight" work? They work by having the model output a structured request — "please call the search tool with these arguments" — which the surrounding app code parses, executes, and pastes back into the next call. The model is the brain; your code is the hands.
 
-Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. The diagram below shows the shape it takes here.
+Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. How it works generally is in the next block.
+
+---
+
+## How it works (in agents that use tools, which loopd doesn't)
+
+The model is given a list of "tools" with their input schemas. Its output may include a tool call: `{ tool: "search_entries", input: { query: "sickest" } }`. The orchestrator runs the tool (a SQL query, an HTTP call, a calculation), packages the result as an "observation," and re-prompts the model with the original conversation + the observation. The model can then issue another tool call or a final answer. This loops until done.
+
+**Loopd doesn't do any of this.** Every call is final the moment the JSON is parsed. The diagram below contrasts the two shapes end-to-end.
 
 ---
 
@@ -23,20 +31,17 @@ Tool calling is the pattern that wires a stateless text model to a stateful outs
   Every loopd AI call:                  An agent with tools (NOT loopd):
   ────────────────────────              ────────────────────────────────
 
-   prompt → JSON → done                  prompt → tool? → run tool
-                                                     ▲          │
-                                                     │          ▼
-                                                     │     observation
-                                                     └──────────┘
+  ┌─ App layer ──────────┐              ┌─ App / orchestrator ──────────────┐
+  │  prompt → JSON       │              │  prompt → dispatch → observation  │
+  │  → done              │              │     ▲                  │          │
+  └──────────┬───────────┘              └─────┼──────────────────┼──────────┘
+             │                                │                  ▼
+             ▼                          ┌─ Provider (LLM) ──┐  ┌─ Tool (SQL/HTTP) ─┐
+  ┌─ Provider (LLM) ─────┐              │  emits tool call  │  │  runs the call    │
+  │  one-shot response   │              └────────┬──────────┘  └─────────┬─────────┘
+  └──────────────────────┘                       │                       │
+                                                 └────────── loop ───────┘
 ```
-
----
-
-## How it works (in agents that use tools, which loopd doesn't)
-
-The model is given a list of "tools" with their input schemas. Its output may include a tool call: `{ tool: "search_entries", input: { query: "sickest" } }`. The orchestrator runs the tool (a SQL query, an HTTP call, a calculation), packages the result as an "observation," and re-prompts the model with the original conversation + the observation. The model can then issue another tool call or a final answer. This loops until done.
-
-**Loopd doesn't do any of this.** Every call is final the moment the JSON is parsed.
 
 ---
 
@@ -184,3 +189,6 @@ Updated: 2026-05-10 — chain count bumped from 4 to 5 (interpret added; still n
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added App / Provider / Tool layer labels to the contrast diagram since it crosses boundaries.

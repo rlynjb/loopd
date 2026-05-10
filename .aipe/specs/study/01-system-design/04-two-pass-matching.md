@@ -13,7 +13,19 @@
 
 You have a list of items the user wrote yesterday and a fresh list they wrote today. Some are the same, some moved around, some had a typo fixed in place. Which row in today's list is "really" which row from yesterday? If you get it wrong, every piece of metadata you've attached — created-at, tags, AI classifications — points at the wrong line. That's the question this pattern answers.
 
-Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. The diagram below shows the shape it takes here.
+Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+The scanner produces a list of "matches" (every `[]` line found in the prose). The matcher then walks the list twice.
+
+Pass 1 looks for an existing todo whose text equals the match's text (case-insensitive). If found and the existing row hasn't been claimed by an earlier pass, claim it. This catches the common case: nothing changed except line position.
+
+Pass 2 walks the still-unclaimed matches and looks for an existing todo whose `sourceLine` equals the match's current line index. This catches the case: the user edited the words but the line position is the same.
+
+Anything left unmatched is a new todo. Anything unmatched on the existing side is a "carryover" (its line is gone from prose; the row is preserved with `sourceLine` cleared). The full picture is below.
 
 ---
 
@@ -42,18 +54,6 @@ Exact-then-fallback matching is a layered reconciliation strategy: try the stric
                       │ (sourceLine match)          │
                       └─────────────────────────────┘
 ```
-
----
-
-## How it works
-
-The scanner produces a list of "matches" (every `[]` line found in the prose). The matcher then walks the list twice.
-
-Pass 1 looks for an existing todo whose text equals the match's text (case-insensitive). If found and the existing row hasn't been claimed by an earlier pass, claim it. This catches the common case: nothing changed except line position.
-
-Pass 2 walks the still-unclaimed matches and looks for an existing todo whose `sourceLine` equals the match's current line index. This catches the case: the user edited the words but the line position is the same.
-
-Anything left unmatched is a new todo. Anything unmatched on the existing side is a "carryover" (its line is gone from prose; the row is preserved with `sourceLine` cleared).
 
 ---
 
@@ -226,3 +226,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a single-function algorithm trace (Pass 1 / Pass 2 decision logic), not a cross-layer composition.

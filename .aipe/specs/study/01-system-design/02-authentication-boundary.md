@@ -13,29 +13,7 @@
 
 Every system has a line drawn on the inside of it where "we trust this request" turns into "we don't, and we need to prove who's asking." Most bugs that leak one user's data to another are caused by drawing that line in the wrong place, or by drawing it on paper and forgetting to enforce it in code. The interesting question is never "do we have auth" — it's "where does the trusted zone end, and what stops a request from crossing it without identity."
 
-A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The diagram below shows how it composes in this codebase.
-
----
-
-## Authentication boundary — diagram
-
-```
-  ┌── Phase A (current) ─────────────────────────────────┐    ┌── Phase B (planned) ─┐
-  │                                                      │    │                      │
-  │   App                                                │    │   App                │
-  │    │                                                 │    │    │                 │
-  │    │  every cloud write/read includes a hardcoded    │    │    │  Supabase auth   │
-  │    │  PHASE_A_USER_ID (UUID in client.ts)            │    │    │  → access token  │
-  │    ▼                                                 │    │    ▼                 │
-  │   Supabase                                           │    │   RLS on every       │
-  │    │                                                 │    │   row: user_id =     │
-  │    │  RLS scaffolded but DISABLED                    │    │   auth.uid()         │
-  │    │  composite (user_id, id) PKs ARE the schema     │    │                      │
-  │    │  gate against cross-user reads                  │    │   Schema gate stays  │
-  │    ▼                                                 │    │   the same           │
-  │   Postgres                                           │    │                      │
-  └──────────────────────────────────────────────────────┘    └──────────────────────┘
-```
+A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The next block walks the mechanics.
 
 ---
 
@@ -47,7 +25,41 @@ The **schema gate** is composite primary keys: every synced table has `PRIMARY K
 
 The **runtime gate** is RLS. Migration `0002_rls_policies.sql` defines policies that filter every query to `user_id = auth.uid()`. In Phase A this migration is in the file system but the policies are not installed; the user_id is hardcoded client-side.
 
-Phase B activates the runtime gate: ship Supabase auth, drop the hardcoded id, enable RLS. The schema gate doesn't change because it was already correct.
+Phase B activates the runtime gate: ship Supabase auth, drop the hardcoded id, enable RLS. The schema gate doesn't change because it was already correct. The diagram below shows it end-to-end.
+
+---
+
+## Authentication boundary — diagram
+
+```
+┌─ App layer (client) ────────────────────────────────────────────────────────────────┐
+│                                                                                     │
+│  ┌── Phase A (current) ─────────────────────┐    ┌── Phase B (planned) ──────────┐  │
+│  │   App                                    │    │   App                         │  │
+│  │    │                                     │    │    │                          │  │
+│  │    │  every cloud write/read includes a  │    │    │  Supabase auth           │  │
+│  │    │  hardcoded PHASE_A_USER_ID          │    │    │  → access token          │  │
+│  │    │  (UUID in client.ts)                │    │    │                          │  │
+│  └────┼─────────────────────────────────────┘    └────┼──────────────────────────┘  │
+└───────┼─────────────────────────────────────────────── ┼──────────────────────────── ┘
+        ▼                                                ▼
+┌─ Network / auth boundary ───────────────────────────────────────────────────────────┐
+│   Supabase API                                                                      │
+│    │                                                                                │
+│    │  Phase A: anon key, no auth.uid()                                              │
+│    │  Phase B: bearer token, auth.uid() populated                                   │
+└────┼────────────────────────────────────────────────────────────────────────────────┘
+     ▼
+┌─ Storage layer (Postgres) ──────────────────────────────────────────────────────────┐
+│                                                                                     │
+│   Phase A:                              Phase B:                                    │
+│    RLS scaffolded but DISABLED           RLS on every row:                          │
+│    composite (user_id, id) PKs ARE       user_id = auth.uid()                       │
+│    the schema gate against                                                          │
+│    cross-user reads                      Schema gate stays the same                 │
+│                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -189,3 +201,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.

@@ -13,7 +13,22 @@
 
 A model will return malformed JSON, invent a field you didn't ask for, drop a required field, or quietly switch from an array to an object — and it will do all of this on a prompt that worked yesterday. Every system that writes LLM output to a database without checking it first eventually has a row that crashes a render two weeks later, and nobody can figure out why. The model is producing text; the only thing standing between that text and your storage layer is a parse + a check.
 
-The validation gate treats every model output as untrusted input — the same way you'd treat a JSON payload from a public API. It belongs to the family of "parse, don't validate" patterns: convert the raw output into a strongly-typed value at the boundary, reject anything that doesn't conform, and never let unchecked data into the core of the system. You've already seen this shape in Zod or Pydantic schemas at HTTP boundaries, in JSON Schema validators on webhooks, in OpenAI's "structured outputs" mode that constrains the model to a schema at decode time, and in Instructor / Outlines / LangChain output parsers that retry on validation failure. The diagram below shows the shape it takes here.
+The validation gate treats every model output as untrusted input — the same way you'd treat a JSON payload from a public API. It belongs to the family of "parse, don't validate" patterns: convert the raw output into a strongly-typed value at the boundary, reject anything that doesn't conform, and never let unchecked data into the core of the system. You've already seen this shape in Zod or Pydantic schemas at HTTP boundaries, in JSON Schema validators on webhooks, in OpenAI's "structured outputs" mode that constrains the model to a schema at decode time, and in Instructor / Outlines / LangChain output parsers that retry on validation failure. The next block walks the mechanics.
+
+---
+
+## How it works
+
+The output of every LLM call is treated like input from an untrusted client. The first step is `parseJson`: regex out the `{…}` substring (in case the model added a preamble), `JSON.parse`. If that throws, return `null`.
+
+The second step is per-feature validation: `validateSummary` checks every clipId in `clipOrder` exists; `validateExpansion` checks the per-type required fields; `parseAndValidate` for caption checks all 4 variants present.
+
+If validation fails, the behaviour depends on the feature:
+- **caption** — skip; the structured summary still saves. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }` and on success `summarize.ts:91–92` persists those as `summary_json.variants` and `summary_json.variantsTheme` — note the theme key is *renamed* on persistence (`detectedTheme` → `variantsTheme`), not pass-through; the variants object is pass-through.
+- **expand** — retry once with a stricter system prompt (`"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."`). After that, give up and return `{ ok: false, reason: 'malformed' }`.
+- **summarize** — skip; surface error in `ai_summaries.error` for the next render.
+- **classify** — skip; the meta row stays at heuristic-or-null type.
+- **interpret** — different shape entirely: validation is `cleanMarkdown` (11 lines), which strips an outer ``` fence and rejects empty/whitespace-only output as `'malformed'`. There is no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions; tone or section drift slips through. The user is the integrity check (they see the modal output and dismiss it if wrong). The full picture is below.
 
 ---
 
@@ -36,21 +51,6 @@ The validation gate treats every model output as untrusted input — the same wa
          │
          ├─ if null AFTER first call → caption-style: skip; expand-style: retry once with stricter system prompt
 ```
-
----
-
-## How it works
-
-The output of every LLM call is treated like input from an untrusted client. The first step is `parseJson`: regex out the `{…}` substring (in case the model added a preamble), `JSON.parse`. If that throws, return `null`.
-
-The second step is per-feature validation: `validateSummary` checks every clipId in `clipOrder` exists; `validateExpansion` checks the per-type required fields; `parseAndValidate` for caption checks all 4 variants present.
-
-If validation fails, the behaviour depends on the feature:
-- **caption** — skip; the structured summary still saves. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }` and on success `summarize.ts:91–92` persists those as `summary_json.variants` and `summary_json.variantsTheme` — note the theme key is *renamed* on persistence (`detectedTheme` → `variantsTheme`), not pass-through; the variants object is pass-through.
-- **expand** — retry once with a stricter system prompt (`"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."`). After that, give up and return `{ ok: false, reason: 'malformed' }`.
-- **summarize** — skip; surface error in `ai_summaries.error` for the next render.
-- **classify** — skip; the meta row stays at heuristic-or-null type.
-- **interpret** — different shape entirely: validation is `cleanMarkdown` (11 lines), which strips an outer ``` fence and rejects empty/whitespace-only output as `'malformed'`. There is no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions; tone or section drift slips through. The user is the integrity check (they see the modal output and dismiss it if wrong).
 
 ---
 
@@ -188,3 +188,6 @@ Updated: 2026-05-10 — added interpret's cleanMarkdown gate + input-side guards
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; added persistence-key mapping for caption (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`).
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

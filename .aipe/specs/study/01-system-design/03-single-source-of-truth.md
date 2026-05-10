@@ -13,7 +13,17 @@
 
 Most data integrity bugs are not about a write going wrong — they're about the same fact being writable in two places, and the two places drifting. Edit a customer's email in the CRM, edit it again in the billing system, and within a week you've got two different emails and no honest answer to "which is real." The cheap fix is to pick one surface as canonical and treat every other copy as a cache you can throw away.
 
-Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). Here's how that actually works in this codebase.
+Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). The next block walks the mechanics.
+
+---
+
+## How it works
+
+Every prose-derived feature has the same shape: a scanner reads `entries.text`, produces an array of structured rows, and a reconciler diffs those rows against what's already in the DB. Inserts what's new, deletes what's gone, leaves matching rows alone (preserving identity, classifier output, manual overrides).
+
+The scanners run at commit boundaries — focus blur, screen leave, save events — not on every keystroke. The keystroke path autosaves the prose to SQLite; the scanners catch up at the next natural pause.
+
+Habits are an exception: they're first-class user-managed entities, not derived from prose. There's no `scanHabits` because the user creates and edits habits directly in the more/habits screen. Here's the diagram of the whole flow.
 
 ---
 
@@ -37,16 +47,6 @@ Single source of truth is the discipline of designating exactly one writable ori
         ▼
   todo_meta (1:1 with each TodoItem in todos_json)
 ```
-
----
-
-## How it works
-
-Every prose-derived feature has the same shape: a scanner reads `entries.text`, produces an array of structured rows, and a reconciler diffs those rows against what's already in the DB. Inserts what's new, deletes what's gone, leaves matching rows alone (preserving identity, classifier output, manual overrides).
-
-The scanners run at commit boundaries — focus blur, screen leave, save events — not on every keystroke. The keystroke path autosaves the prose to SQLite; the scanners catch up at the next natural pause.
-
-Habits are an exception: they're first-class user-managed entities, not derived from prose. There's no `scanHabits` because the user creates and edits habits directly in the more/habits screen.
 
 ---
 
@@ -196,3 +196,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a pure data-flow within one logical canonical-to-derived plane, not a cross-layer composition.

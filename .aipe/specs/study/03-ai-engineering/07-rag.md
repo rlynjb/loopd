@@ -13,28 +13,7 @@
 
 A model was trained on the public internet two years ago. You want it to answer questions about your company's internal docs, your customer's order history, or yesterday's Slack thread — none of which it has ever seen. Fine-tuning is slow and expensive; stuffing all your data into the prompt doesn't fit. So what's left? Retrieve only the few chunks that are actually relevant to the question, paste them into the prompt, and let the model answer from the documents in front of it instead of from memory.
 
-Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. The diagram below shows the shape it takes here.
-
----
-
-## RAG — diagram
-
-```
-  RAG pattern (NOT loopd):             What loopd does instead:
-  ──────────────────────               ─────────────────────────
-
-   user question                        explicit context block in the prompt
-        │                                       │
-        ▼                                       ▼
-   embed → vector search                 callsite hand-picks N items
-        │                                (last 3 days, 5 siblings, 5 captions)
-        ▼                                       │
-   stuff into prompt                            ▼
-        │                                stuff into prompt
-        ▼                                       │
-   LLM answers                                  ▼
-                                         LLM answers
-```
+Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. How it works generally is in the next block.
 
 ---
 
@@ -46,7 +25,40 @@ Retrieval-augmented generation is the pattern that lets a generic model answer s
 4. **Stuff**: put the retrieved chunks in the prompt with the user's question.
 5. **Answer**: the LLM answers using the retrieved context.
 
-Loopd skips all of this and uses hand-picked retrieval: `summarize.ts:buildCaptionInput()` grabs the last 5 captions for anti-repetition (and hands them to caption.ts); `expand.ts:buildContext()` grabs the last 3 days of entries plus their cached summaries.
+Loopd skips all of this and uses hand-picked retrieval: `summarize.ts:buildCaptionInput()` grabs the last 5 captions for anti-repetition (and hands them to caption.ts); `expand.ts:buildContext()` grabs the last 3 days of entries plus their cached summaries. The diagram below contrasts the two shapes end-to-end.
+
+---
+
+## RAG — diagram
+
+```
+  RAG pattern (NOT loopd):                     What loopd does instead:
+  ──────────────────────                       ─────────────────────────
+
+  ┌─ App layer ──────────────┐                 ┌─ App layer ───────────────────────┐
+  │  user question           │                 │  callsite hand-picks N items      │
+  └────────────┬─────────────┘                 │  (last 3 days, 5 siblings,        │
+               │                               │   5 captions) via SQL             │
+               ▼                               └──────────────┬────────────────────┘
+  ┌─ Provider (embed model) ─┐                                │
+  │  embed query → vector    │                                ▼
+  └────────────┬─────────────┘                 ┌─ App layer ───────────────────────┐
+               │                               │  stuff into prompt                │
+               ▼                               └──────────────┬────────────────────┘
+  ┌─ Storage (vector DB) ────┐                                │
+  │  top-k nearest vectors   │                                ▼
+  └────────────┬─────────────┘                 ┌─ Provider (LLM) ──────────────────┐
+               │                               │  LLM answers                      │
+               ▼                               └───────────────────────────────────┘
+  ┌─ App layer ──────────────┐
+  │  stuff into prompt       │
+  └────────────┬─────────────┘
+               │
+               ▼
+  ┌─ Provider (LLM) ─────────┐
+  │  LLM answers             │
+  └──────────────────────────┘
+```
 
 ---
 
@@ -195,3 +207,6 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); updated Level 2 hint and codebase anchor accordingly.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added App / Provider / Storage layer labels to the contrast diagram since it crosses boundaries.

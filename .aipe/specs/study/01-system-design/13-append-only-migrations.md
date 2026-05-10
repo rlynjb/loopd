@@ -13,31 +13,7 @@
 
 You've edited a migration that already ran on production, deployed the change, and watched the next environment go up cleanly while the previous one stayed silently broken — because the migration runner thought the work was done and never re-ran the patched file. The pain isn't the bug; it's that there's no way to detect it without diffing schemas across environments. The root cause is treating a migration as code you can revise, instead of as a transaction log entry that's already been committed.
 
-Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. The diagram below shows the shape it takes here.
-
----
-
-## Append-only migrations — diagram
-
-```
-  supabase/migrations/
-    0001_initial_schema.sql            ── 10 mirror tables, composite (user_id, id) PKs
-    0002_rls_policies.sql              ── RLS policies (currently DISABLED in Phase A)
-    0003_server_time_rpc.sql           ── RPC the pull path uses
-    0004_relax_fks.sql                 ── adjust FKs to allow soft-delete edge cases
-    0005_todo_meta_pinned.sql          ── ADD COLUMN pinned
-    0006_todo_meta_type_study.sql      ── widen type CHECK to include 'study' (2026-05-09)
-    0007_todo_meta_type_reflect.sql    ── widen type CHECK to include 'reflect' (2026-05-10)
-    0008_todo_meta_type_reduce.sql     ── DROP {bug, question, decision, content};
-                                          remap existing rows to 'todo';
-                                          clear user_overridden_type (2026-05-10)
-
-  Apply path:
-    node scripts/db-migrate.mjs --all-pending
-                       │
-                       ▼
-    pg client connects, walks files in order, executes any not yet applied
-```
+Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. Here's how that actually works in this codebase.
 
 ---
 
@@ -45,7 +21,39 @@ Forward-only schema migrations are an append-only ledger: once a migration has b
 
 Each migration is a numbered SQL file. The runner connects to Postgres using `pg` + `dotenv`, queries a `_migrations` ledger table for what's already applied, and runs every newer file in order. After a successful run, the ledger is updated.
 
-Append-only means: never edit `0001` even if you find a typo two days later. Either ship a `0006_fix_typo.sql` that does an `ALTER`, or accept the drift. The discipline keeps every environment converging on the same schema by the same path.
+Append-only means: never edit `0001` even if you find a typo two days later. Either ship a `0006_fix_typo.sql` that does an `ALTER`, or accept the drift. The discipline keeps every environment converging on the same schema by the same path. The diagram below shows it end-to-end.
+
+---
+
+## Append-only migrations — diagram
+
+```
+┌─ Source tree (append-only ledger) ──────────────────────────────────────┐
+│  supabase/migrations/                                                   │
+│    0001_initial_schema.sql            ── 10 mirror tables, (user_id,id) │
+│    0002_rls_policies.sql              ── RLS (DISABLED in Phase A)      │
+│    0003_server_time_rpc.sql           ── RPC the pull path uses         │
+│    0004_relax_fks.sql                 ── FK adjust for soft-delete edges│
+│    0005_todo_meta_pinned.sql          ── ADD COLUMN pinned              │
+│    0006_todo_meta_type_study.sql      ── widen type CHECK +'study'      │
+│    0007_todo_meta_type_reflect.sql    ── widen type CHECK +'reflect'    │
+│    0008_todo_meta_type_reduce.sql     ── DROP {bug,question,decision,   │
+│                                          content}; remap rows to 'todo' │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─ CLI / runner ──────────────────────────────────────────────────────────┐
+│  node scripts/db-migrate.mjs --all-pending                              │
+│      ↓                                                                  │
+│  pg client connects, queries _migrations ledger,                        │
+│  walks files in order, executes any not yet applied                     │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │
+                                   ▼
+┌─ Storage layer (Supabase Postgres) ─────────────────────────────────────┐
+│  schema updated; _migrations ledger appended                            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -186,3 +194,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.

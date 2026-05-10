@@ -13,7 +13,21 @@
 
 Most "the database is slow" problems are actually "we put the wrong thing in the database" problems. Stuffing a hundred-megabyte video into a row meant for kilobyte text, or putting an API key into a queryable column where any read can leak it, is a category error — the storage shape doesn't match the data's needs. A serious system has more than one place to put a byte, and a rule for which place each kind of byte goes.
 
-A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. The diagram below shows the shape it takes here.
+A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+**SQLite** is canonical. Every read in the app goes here first. WAL mode for single-process concurrency. 12 tables — 10 synced + 2 local-only (`sync_meta` ledger, deprecated `sync_deletions`).
+
+**Filesystem** holds clip URIs under `/document/loopd/clips/<date>/` and exports under `/document/loopd/exports/<date>.mp4`. The `clip_uri` column on `entries` (legacy single-clip) and the `clips_json` column point at absolute paths. `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
+
+**SecureStore** is Android Keystore-backed key/value. Stores LLM API keys (`anthropic_api_key`, `openai_api_key`), provider preference (`ai_provider`), Supabase config (`supabase_url`, `supabase_anon_key`), and run-once flags (`cloud_initial_push_done`, per-feature backfill flags).
+
+**Supabase Postgres** is the mirror — never canonical. Reads always go to local SQLite; cloud catches up async via push.
+
+**External LLMs** are stateless — Anthropic and OpenAI never hold loopd's data beyond the request lifecycle. The full picture is below.
 
 ---
 
@@ -31,20 +45,6 @@ A storage layer breakdown is the deliberate split of persistence across several 
   │ Anthropic / OpenAI           │ stateless — never persists user data   │
   └──────────────────────────────┴────────────────────────────────────────┘
 ```
-
----
-
-## How it works
-
-**SQLite** is canonical. Every read in the app goes here first. WAL mode for single-process concurrency. 12 tables — 10 synced + 2 local-only (`sync_meta` ledger, deprecated `sync_deletions`).
-
-**Filesystem** holds clip URIs under `/document/loopd/clips/<date>/` and exports under `/document/loopd/exports/<date>.mp4`. The `clip_uri` column on `entries` (legacy single-clip) and the `clips_json` column point at absolute paths. `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
-
-**SecureStore** is Android Keystore-backed key/value. Stores LLM API keys (`anthropic_api_key`, `openai_api_key`), provider preference (`ai_provider`), Supabase config (`supabase_url`, `supabase_anon_key`), and run-once flags (`cloud_initial_push_done`, per-feature backfill flags).
-
-**Supabase Postgres** is the mirror — never canonical. Reads always go to local SQLite; cloud catches up async via push.
-
-**External LLMs** are stateless — Anthropic and OpenAI never hold loopd's data beyond the request lifecycle.
 
 ---
 
@@ -187,3 +187,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped adding outer layer labels because the diagram is itself a storage-layer enumeration — adding a wrapper would be redundant.

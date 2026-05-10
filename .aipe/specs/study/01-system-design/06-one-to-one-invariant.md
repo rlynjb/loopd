@@ -13,7 +13,17 @@
 
 Not every relationship between two pieces of data can be expressed with a foreign key. The moment one side lives inside a JSON column, inside a document, or inside a remote system, the database engine can't help you keep them in sync — there's no constraint to violate at write time. The integrity guarantee has to move out of the schema and into your code, and most teams discover that the hard way after their first orphan row leaks into production.
 
-An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. The diagram below shows the shape it takes here.
+An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+The reconciler runs after every `scanTodos`. Its inputs are the freshly-scanned `todos[]` and the existing `todo_meta` rows for that entry. Its output is a series of inserts and deletes that bring `todo_meta` back into 1:1 alignment.
+
+Matched rows are left alone — that's how `type` (the classifier output), `expanded_md` (the AI expansion), `pinned`, and `user_overridden_type` survive prose edits. Insert paths that have a heuristic confidence skip the LLM classifier; ambiguous ones fire `scheduleClassify` async.
+
+Why not an FK? `todos_json` is a JSON column on the `entries` row. Each TodoItem is an array element with its own UUID. SQLite has no syntax for "FK to the `id` field of an array element." The application reconciler is therefore the only enforcement mechanism. Here's the diagram of the whole flow.
 
 ---
 
@@ -38,16 +48,6 @@ An application-enforced invariant is a rule that the database can't check, kept 
   SQLite cannot foreign-key to an element of a JSON column.
   So the application reconciler IS the enforcement.
 ```
-
----
-
-## How it works
-
-The reconciler runs after every `scanTodos`. Its inputs are the freshly-scanned `todos[]` and the existing `todo_meta` rows for that entry. Its output is a series of inserts and deletes that bring `todo_meta` back into 1:1 alignment.
-
-Matched rows are left alone — that's how `type` (the classifier output), `expanded_md` (the AI expansion), `pinned`, and `user_overridden_type` survive prose edits. Insert paths that have a heuristic confidence skip the LLM classifier; ambiguous ones fire `scheduleClassify` async.
-
-Why not an FK? `todos_json` is a JSON column on the `entries` row. Each TodoItem is an array element with its own UUID. SQLite has no syntax for "FK to the `id` field of an array element." The application reconciler is therefore the only enforcement mechanism.
 
 ---
 
@@ -207,3 +207,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a schema-shape illustration (JSON column vs side table) entirely within the storage layer, not a cross-layer composition.

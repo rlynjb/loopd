@@ -13,37 +13,7 @@
 
 You've installed a new database in a side project and realised the SDK is identical to the last one. Same `client.query()`, same `client.connect()` — the implementation behind it is completely different but the call sites don't know that. That's not an accident. It's a pattern with a name, and it's load-bearing in every system that needs to swap one piece for another without rewriting everything that talks to it.
 
-Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface. It belongs to the family of "decouple the consumer from the producer" patterns, alongside dependency injection and the adapter pattern. You've already seen this in React's renderer abstraction (DOM, native, server — same component tree), in database drivers (Postgres, MySQL, SQLite behind the same query API), and in LLM client wrappers like LangChain or LiteLLM that put one `invoke()` over OpenAI, Anthropic, and a dozen others. The diagram below shows how it composes in this codebase.
-
----
-
-## Provider abstraction — diagram
-
-```
-  Each callsite (summarize / caption / classify / expand / interpret)
-                        │
-                        ▼
-                 ┌──────────────────┐
-                 │  ai/config.ts    │
-                 │  getProvider()   │  ← reads SecureStore: 'claude' | 'openai'
-                 │  getXxxKey()     │
-                 └──────────┬───────┘
-                            │
-                  ┌─────────┴─────────┐
-                  ▼                   ▼
-         provider == 'claude'   provider == 'openai'
-                  │                   │
-                  ▼                   ▼
-         Anthropic SDK          raw fetch /v1/chat/completions
-         models.create({...})   response_format: json_object
-                  │                   │
-                  └─────────┬─────────┘
-                            ▼
-                 string of model output
-                            │
-                            ▼
-                 caller-specific parser + validator
-```
+Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface. It belongs to the family of "decouple the consumer from the producer" patterns, alongside dependency injection and the adapter pattern. You've already seen this in React's renderer abstraction (DOM, native, server — same component tree), in database drivers (Postgres, MySQL, SQLite behind the same query API), and in LLM client wrappers like LangChain or LiteLLM that put one `invoke()` over OpenAI, Anthropic, and a dozen others. Here's how that actually works in this codebase.
 
 ---
 
@@ -56,7 +26,47 @@ The branches are intentionally explicit. The Claude branch uses `@anthropic-ai/s
 After both branches return, the rest of the function is shared: extract JSON, validate against schema, persist to SQLite, return.
 
 **What changes when you swap providers:** the model identifier and the API client. That's it.
-**What doesn't change:** the prompts, the JSON shape the model is asked to produce, the validators, the persist layer.
+**What doesn't change:** the prompts, the JSON shape the model is asked to produce, the validators, the persist layer. The diagram below shows the whole flow end-to-end, with the layers it crosses.
+
+---
+
+## Provider abstraction — diagram
+
+```
+┌─ Service layer (AI callsites) ──────────────────────────────────────┐
+│  Each callsite (summarize / caption / classify / expand / interpret)│
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+┌─ Config layer (SecureStore-backed) ─────────────────────────────────┐
+│                       ┌──────────────────┐                          │
+│                       │  ai/config.ts    │                          │
+│                       │  getProvider()   │ ← reads SecureStore:     │
+│                       │  getXxxKey()     │   'claude' | 'openai'    │
+│                       └──────────┬───────┘                          │
+└──────────────────────────────────┼──────────────────────────────────┘
+                                   │
+                         ┌─────────┴─────────┐
+                         ▼                   ▼
+                provider == 'claude'   provider == 'openai'
+                         │                   │
+┌─ Provider / network layer ──────┼───────────────────┼───────────────┐
+│                                 ▼                   ▼               │
+│                       Anthropic SDK          raw fetch              │
+│                       models.create({...})   /v1/chat/completions   │
+│                                              response_format:       │
+│                                              json_object            │
+└─────────────────────────────────┼───────────────────┼───────────────┘
+                                  │                   │
+                                  └─────────┬─────────┘
+                                            ▼
+                                 string of model output
+                                            │
+                                            ▼
+┌─ Service layer (parse/validate) ────────────────────────────────────┐
+│                 caller-specific parser + validator                  │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -224,3 +234,4 @@ Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added with
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; corrected "four providers × four callsites = eight functions" to "5 chains × 2 providers = 10 explicit branch arms" throughout (diagram, pseudocode header, mid/senior/arch/dodge interview answers, Level 4).
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Added architectural-layer labels (Service → Config → Provider/network → Service) since the flow crosses callsite, config-store, SDK/network, and parse/validate boundaries.

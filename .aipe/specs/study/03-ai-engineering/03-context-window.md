@@ -13,7 +13,21 @@
 
 You hand a model 50 pages of company docs and ask it to answer a question. What does it actually "see" when it generates the answer? Not your filesystem, not your database, not your prior conversation — just whatever bytes you stuffed into a single fixed-size buffer before pressing send. Everything competes for that space: instructions, examples, retrieved documents, prior turns, the user's actual question. When the buffer fills up, something has to be cut, and the system that cuts well wins.
 
-The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. The diagram below shows how it composes in this codebase.
+The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. How it shows up here is in the next block.
+
+---
+
+## How it works
+
+Per feature, loopd picks a fixed shape:
+
+- **classify** — text-only, ~50 tokens out. Context-free for cost: the surrounding entry isn't sent. Spec §5.3 calls this out as deliberate.
+- **summarize** — full day (all entries for one date) + clip metadata + habits list. ~1024 tokens out.
+- **caption** — `rawLog[]` (sentence-split entry text + done todo bullets) + last 5 captions for anti-repetition + mood. The 5 recent captions are the *only* multi-day context.
+- **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four JSON chains; even so, each part is capped.
+- **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` (most-recent 2000 chars; not the first 2000) and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
+
+The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the window predictable: `siblingTodos.slice(0, 5)`, `recentDates.slice(0, 3)`. For interpret, the cap is the input itself (`truncateTail`). Without those caps, a heavy journaling day could blow past the model's budget. The diagram below shows the budget shape at a glance.
 
 ---
 
@@ -34,20 +48,6 @@ The context window is the model's entire universe for one call, and managing it 
   │  Total: bounded by max_tokens — everything competes for space.       │
   └─────────────────────────────────────────────────────────────────────┘
 ```
-
----
-
-## How it works
-
-Per feature, loopd picks a fixed shape:
-
-- **classify** — text-only, ~50 tokens out. Context-free for cost: the surrounding entry isn't sent. Spec §5.3 calls this out as deliberate.
-- **summarize** — full day (all entries for one date) + clip metadata + habits list. ~1024 tokens out.
-- **caption** — `rawLog[]` (sentence-split entry text + done todo bullets) + last 5 captions for anti-repetition + mood. The 5 recent captions are the *only* multi-day context.
-- **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four JSON chains; even so, each part is capped.
-- **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` (most-recent 2000 chars; not the first 2000) and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
-
-The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the window predictable: `siblingTodos.slice(0, 5)`, `recentDates.slice(0, 3)`. For interpret, the cap is the input itself (`truncateTail`). Without those caps, a heavy journaling day could blow past the model's budget.
 
 ---
 
@@ -185,3 +185,4 @@ Updated: 2026-05-10 — added interpret context shape (`truncateTail` to MAX_INP
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`).
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (token-budget bar visualization, conceptual — no architectural boundaries crossed).

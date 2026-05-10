@@ -13,56 +13,7 @@
 
 Most AI features in a product are invisible to the user — the model output is parsed, validated, written to a database, and rendered later as if it had been there all along. But some AI features are different: the model's output *is* the artifact the user reads. There's no database row, no derived state, no downstream consumer — just text that appears on screen because a human asked for it. That second category needs a completely different posture toward validation, persistence, and trust.
 
-The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The diagram below shows the shape it takes here.
-
----
-
-## Interpret — diagram
-
-```
-  Journal screen "Interpret" button
-              │
-              ▼
-   ┌──────────────────────────┐
-   │  InterpretModal opens    │  (src/components/journal/InterpretModal.tsx)
-   └──────────┬───────────────┘
-              │  rawText = entries[date].text
-              ▼
-   ┌──────────────────────────┐
-   │  interpretEntry(rawText) │  (src/services/ai/interpret.ts)
-   └──────────┬───────────────┘
-              │
-              │  guard 1: text.length < MIN_TEXT_LENGTH (20)
-              │           → { ok: false, reason: 'too-short' }
-              │
-              │  guard 2: no API key
-              │           → { ok: false, reason: 'no-ai' }
-              │
-              │  truncateTail(text, MAX_INPUT_CHARS = 2000)
-              │  ↑ keeps most-recent 2000 chars (not first)
-              ▼
-   ┌──────────────────────────┐
-   │  callClaude / callOpenAI │  Sonnet 4.6 / gpt-4o
-   │  TEMPERATURE = 0.7       │  max_tokens = 1800
-   │  SYSTEM_PROMPT = long-form mirror prompt (32 lines)
-   └──────────┬───────────────┘
-              │  raw markdown string
-              ▼
-   ┌──────────────────────────┐
-   │  cleanMarkdown(raw)      │  strip ``` fences, trim, reject < 20 chars
-   └──────────┬───────────────┘
-              │  string | null
-              ▼
-   ┌──────────────────────────┐
-   │  Interpretation object   │  { markdown, sourceText, generatedAt, model }
-   │  rendered in modal       │  via InterpretMarkdown.tsx (selectable text)
-   └──────────────────────────┘
-              │
-              ▼
-        UI shows it.
-        Modal closes.
-        Nothing persists.
-```
+The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The next block walks the mechanics.
 
 ---
 
@@ -76,7 +27,66 @@ Two guards run before the network call. `MIN_TEXT_LENGTH = 20` skips entries too
 
 The output isn't persisted to SQLite. The result lives in the modal's React state until close. There is no `interpretations` table, no `last_interpretation` field on `entries`, no caching. Re-opening the modal re-fires the chain.
 
-The system prompt is the longest in the codebase — 32 lines — and prescribes a structural template (opening bold + blockquote → numbered themes → "healthy side" / "part to watch" / "deeper fear" / "honest interpretation" / "strongest line" / "final thought" sections with emoji-prefixed H2 headings). The prompt explicitly says **"skip any section that doesn't fit the user's actual content; do not pad"** — a 3-section response on a flat day is better than a forced 11-section read of nothing.
+The system prompt is the longest in the codebase — 32 lines — and prescribes a structural template (opening bold + blockquote → numbered themes → "healthy side" / "part to watch" / "deeper fear" / "honest interpretation" / "strongest line" / "final thought" sections with emoji-prefixed H2 headings). The prompt explicitly says **"skip any section that doesn't fit the user's actual content; do not pad"** — a 3-section response on a flat day is better than a forced 11-section read of nothing. Here's the diagram of the whole flow.
+
+---
+
+## Interpret — diagram
+
+```
+  ┌─ UI layer ──────────────────────────────────────────────────────┐
+  │  Journal screen "Interpret" button                              │
+  │              │                                                  │
+  │              ▼                                                  │
+  │   ┌──────────────────────────┐                                  │
+  │   │  InterpretModal opens    │  (src/components/journal/        │
+  │   └──────────┬───────────────┘   InterpretModal.tsx)            │
+  └──────────────┼──────────────────────────────────────────────────┘
+                 │  rawText = entries[date].text
+                 ▼
+  ┌─ Service layer ─────────────────────────────────────────────────┐
+  │   ┌──────────────────────────┐                                  │
+  │   │  interpretEntry(rawText) │  (src/services/ai/interpret.ts)  │
+  │   └──────────┬───────────────┘                                  │
+  │              │                                                  │
+  │              │  guard 1: text.length < MIN_TEXT_LENGTH (20)     │
+  │              │           → { ok: false, reason: 'too-short' }   │
+  │              │                                                  │
+  │              │  guard 2: no API key                             │
+  │              │           → { ok: false, reason: 'no-ai' }       │
+  │              │                                                  │
+  │              │  truncateTail(text, MAX_INPUT_CHARS = 2000)      │
+  │              │  ↑ keeps most-recent 2000 chars (not first)      │
+  └──────────────┼──────────────────────────────────────────────────┘
+                 ▼
+  ┌─ Provider layer ────────────────────────────────────────────────┐
+  │   ┌──────────────────────────┐                                  │
+  │   │  callClaude / callOpenAI │  Sonnet 4.6 / gpt-4o             │
+  │   │  TEMPERATURE = 0.7       │  max_tokens = 1800               │
+  │   │  SYSTEM_PROMPT = long-form mirror prompt (32 lines)         │
+  │   └──────────┬───────────────┘                                  │
+  └──────────────┼──────────────────────────────────────────────────┘
+                 │  raw markdown string
+                 ▼
+  ┌─ Service layer ─────────────────────────────────────────────────┐
+  │   ┌──────────────────────────┐                                  │
+  │   │  cleanMarkdown(raw)      │  strip ``` fences, trim,         │
+  │   └──────────┬───────────────┘  reject < 20 chars               │
+  └──────────────┼──────────────────────────────────────────────────┘
+                 │  string | null
+                 ▼
+  ┌─ UI layer ──────────────────────────────────────────────────────┐
+  │   ┌──────────────────────────┐                                  │
+  │   │  Interpretation object   │  { markdown, sourceText,         │
+  │   │  rendered in modal       │    generatedAt, model }          │
+  │   └──────────────────────────┘  via InterpretMarkdown.tsx       │
+  │                                 (selectable text)               │
+  │                                                                 │
+  │        UI shows it.                                             │
+  │        Modal closes.                                            │
+  │        Nothing persists.                                        │
+  └─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -239,3 +249,6 @@ Then open the file and verify.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added UI / Service / Provider layer labels to the chain diagram since it crosses boundaries.

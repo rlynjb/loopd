@@ -13,7 +13,17 @@
 
 You've asked an AI chatbot a question, gotten a great answer, asked a follow-up, and watched it forget what it said two minutes ago — that's not a bug, that's the architecture. The thing you're talking to has no memory between requests, no senses, no clock, no ability to do anything on its own. Everything that looks like memory, reasoning, or "knowing you" was assembled by code on the outside and pasted into the prompt before the call.
 
-The pattern here is the mental model itself: treat a language model as a pure function from one block of text to another. It belongs to the family of "stateless service" abstractions — the same shape as HTTP handlers, pure functions, and serverless workers, where every call stands alone and any persistence lives somewhere else. You've already seen this whenever you've worked with OpenAI's chat completions endpoint, with a LangChain LLM wrapper, or with any hosted Claude or GPT API: you send tokens, you get tokens, and the server forgot you the instant it replied. The diagram below shows the shape it takes here.
+The pattern here is the mental model itself: treat a language model as a pure function from one block of text to another. It belongs to the family of "stateless service" abstractions — the same shape as HTTP handlers, pure functions, and serverless workers, where every call stands alone and any persistence lives somewhere else. You've already seen this whenever you've worked with OpenAI's chat completions endpoint, with a LangChain LLM wrapper, or with any hosted Claude or GPT API: you send tokens, you get tokens, and the server forgot you the instant it replied. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+The model takes a sequence of tokens (the "prompt") and produces a probability distribution over the vocabulary. A sampler picks a token (greedy, top-k, top-p, temperature). That token is appended to the input; the loop runs again. The output stops when a stop token appears or the max-tokens budget is exhausted.
+
+Crucially: nothing happens between calls. No state persists. No I/O is performed. No tools are invoked unless the surrounding code interprets the output as a tool call (see [06-tool-calling](./06-tool-calling.md)). The "model" is a pure function from token sequence to token sequence.
+
+This framing keeps the AI surface debuggable: when something looks wrong, you can re-run a single call deterministically by re-sending the same prompt. The diagram below shows it end-to-end.
 
 ---
 
@@ -30,16 +40,6 @@ The pattern here is the mental model itself: treat a language model as a pure fu
   │     (no memory, no I/O, no tools)    │
   └─────────────────────────────────────┘
 ```
-
----
-
-## How it works
-
-The model takes a sequence of tokens (the "prompt") and produces a probability distribution over the vocabulary. A sampler picks a token (greedy, top-k, top-p, temperature). That token is appended to the input; the loop runs again. The output stops when a stop token appears or the max-tokens budget is exhausted.
-
-Crucially: nothing happens between calls. No state persists. No I/O is performed. No tools are invoked unless the surrounding code interprets the output as a tool call (see [06-tool-calling](./06-tool-calling.md)). The "model" is a pure function from token sequence to token sequence.
-
-This framing keeps the AI surface debuggable: when something looks wrong, you can re-run a single call deterministically by re-sending the same prompt.
 
 ---
 
@@ -181,3 +181,4 @@ Updated: 2026-05-10 — bumped chain count from 4 to 5 (Interpret added). See `1
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); added 4-variant key list (clean/smoother/reflective/punchy) + `summary_json.variantsTheme` persistence note.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (purely conceptual LLM I/O box, no architectural boundaries to cross).

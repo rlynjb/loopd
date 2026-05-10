@@ -13,7 +13,24 @@
 
 You once shipped a drag-to-reorder feature, watched users actually use it for a week, and then looked at the data: most people pinned one item to the top and let the rest fall wherever. The whole apparatus — drag handles, position integers, the bug where two items got the same rank — existed to support a flexibility nobody used. The right move is not to optimize the feature; it's to delete it and ship the simpler thing that captures the same intent.
 
-Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. The diagram below shows the shape it takes here.
+Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+The `pinned` column landed via migration `0005_todo_meta_pinned.sql` and a corresponding local schema bump. The /todos page reads `meta.pinned` per row and sorts:
+
+```
+  pinned: true rows first
+  same-pin: createdAt DESC (newest at top)
+```
+
+The dashboard's `SmartTodoList` matches this exactly. New captures land at the top because they're newest by `createdAt`. Pin acts as a sticky modifier on top of recency.
+
+The `position` column stays on the schema because dropping it would require a destructive Postgres migration and the cloud round-trip still includes it (it's just always `null` on writes now). The `stage` column is in the same boat — kept on the schema with a single-value default, no UI surface.
+
+The same commit that introduced `pinned` removed the drag-reorder gestures and the three-stage status filter, and added the `Swipeable` wrapper for swipe-to-delete on each todo row. The diagram below shows it end-to-end.
 
 ---
 
@@ -45,23 +62,6 @@ Replacing manual ordering with a single boolean flag is a specific case of "down
   UI:
     pin icon (toggle), no drag, no stage filter, swipe-to-delete added
 ```
-
----
-
-## How it works
-
-The `pinned` column landed via migration `0005_todo_meta_pinned.sql` and a corresponding local schema bump. The /todos page reads `meta.pinned` per row and sorts:
-
-```
-  pinned: true rows first
-  same-pin: createdAt DESC (newest at top)
-```
-
-The dashboard's `SmartTodoList` matches this exactly. New captures land at the top because they're newest by `createdAt`. Pin acts as a sticky modifier on top of recency.
-
-The `position` column stays on the schema because dropping it would require a destructive Postgres migration and the cloud round-trip still includes it (it's just always `null` on writes now). The `stage` column is in the same boat — kept on the schema with a single-value default, no UI surface.
-
-The same commit that introduced `pinned` removed the drag-reorder gestures and the three-stage status filter, and added the `Swipeable` wrapper for swipe-to-delete on each todo row.
 
 ---
 
@@ -205,3 +205,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

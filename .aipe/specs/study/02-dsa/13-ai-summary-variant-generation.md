@@ -13,50 +13,11 @@
 
 When you need a model to produce several related outputs about the same thing — four headline variants, three captions, five summary styles — the obvious approach is to call the model four times in parallel and pick the best one. The non-obvious approach, and the right one when the outputs must agree on facts, is to ask for all of them in a single call with a structured output schema. Four parallel calls produce four independent stories about the same day; one call producing four variants produces four voices of the same story. Same facts, same nouns, four tones.
 
-This is multi-output structured prompting — a specific application of the broader "ask for all the related stuff at once and validate the whole shape or reject it" discipline. The family is "constrained generation with all-or-nothing validation," and it's the same shape OpenAI's function-calling, JSON schema modes, and tool-use APIs all encourage. Adjacent patterns: chain-of-thought wrapped in a structured envelope, multi-question quiz generation, code-with-tests emitted together. The trade-off is bimodal — one good output or no output at all, no partial credit — and that's a feature, not a bug, when consistency between the parts is what makes the whole useful. Here's how this codebase applies that pattern.
+This is multi-output structured prompting — a specific application of the broader "ask for all the related stuff at once and validate the whole shape or reject it" discipline. The family is "constrained generation with all-or-nothing validation," and it's the same shape OpenAI's function-calling, JSON schema modes, and tool-use APIs all encourage. Adjacent patterns: chain-of-thought wrapped in a structured envelope, multi-question quiz generation, code-with-tests emitted together. The trade-off is bimodal — one good output or no output at all, no partial credit — and that's a feature, not a bug, when consistency between the parts is what makes the whole useful. Here's the data and the mechanics.
 
 ---
 
 **Real operation:** `generateCaption` in `src/services/ai/caption.ts`; persistence in `src/services/ai/summarize.ts` L87–L96.
-
----
-
-## Primary diagram
-
-```
-       day's entries + mood + recentCaptions[5]
-                       │
-                       ▼
-                buildCaptionInput()
-                       │
-                       ▼
-        ┌─────────────────────────────────┐
-        │  generateCaption (ONE LLM call) │
-        │  system prompt: 4 voices spec   │
-        │  max_tokens: 768                │
-        └──────────────┬──────────────────┘
-                       ▼
-              raw text response
-                       │
-                       ▼
-              parseAndValidate()
-        ┌──────────────┴──────────────┐
-        ▼                             ▼
-   any variant missing            all 4 ok
-   → return null                  → { variants, detectedTheme }
-                                              │
-                                              ▼
-                                  summary.variants       = output.variants
-                                  summary.variantsTheme  = output.detectedTheme
-                                              │
-                                              ▼
-                                  upsertAISummary(date, JSON, model)
-                                              │
-                                              ▼
-                                  ai_summaries.summary_json
-                                  { ..., variants: {clean,smoother,
-                                    reflective,punchy}, variantsTheme }
-```
 
 ---
 
@@ -196,7 +157,46 @@ Complexity: O(1) LLM round-trip for all 4 variants + theme · O(V) memory for pa
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: never for this UX. The shared-context single-call is the whole point — four variants of the same day must use the same nouns. Parallel calls give you latency parity but not noun consistency; only single-call shares the context once.
+When brute force is fine: never for this UX. The shared-context single-call is the whole point — four variants of the same day must use the same nouns. Parallel calls give you latency parity but not noun consistency; only single-call shares the context once. Here's the diagram of the whole flow.
+
+---
+
+## Primary diagram
+
+```
+       day's entries + mood + recentCaptions[5]
+                       │
+                       ▼
+                buildCaptionInput()
+                       │
+                       ▼
+        ┌─────────────────────────────────┐
+        │  generateCaption (ONE LLM call) │
+        │  system prompt: 4 voices spec   │
+        │  max_tokens: 768                │
+        └──────────────┬──────────────────┘
+                       ▼
+              raw text response
+                       │
+                       ▼
+              parseAndValidate()
+        ┌──────────────┴──────────────┐
+        ▼                             ▼
+   any variant missing            all 4 ok
+   → return null                  → { variants, detectedTheme }
+                                              │
+                                              ▼
+                                  summary.variants       = output.variants
+                                  summary.variantsTheme  = output.detectedTheme
+                                              │
+                                              ▼
+                                  upsertAISummary(date, JSON, model)
+                                              │
+                                              ▼
+                                  ai_summaries.summary_json
+                                  { ..., variants: {clean,smoother,
+                                    reflective,punchy}, variantsTheme }
+```
 
 ---
 
@@ -332,3 +332,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

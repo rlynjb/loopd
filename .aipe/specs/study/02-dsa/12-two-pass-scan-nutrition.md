@@ -13,42 +13,11 @@
 
 The same matching shape that survives prose edits for one kind of line should work for any other kind — once you have the pattern, you re-use it. The risk is in the *cleanup rule*, not the matching. If unmatched existing rows should hang around (because they might be coming back), you keep them. If unmatched existing rows are dead by definition (because every row corresponds to exactly one line in the source, and the line is gone), you delete them. Same matching pass, different end-of-loop policy, completely different lifecycle.
 
-This is two-phase matching followed by an explicit "carryover or delete" decision — the same shape as a diff applied as a sync (compute the diff, then choose whether removals propagate). You've seen this in file-sync tools where "mirror" mode deletes destination files missing from the source and "additive" mode does not. You've seen it in database replication where deletes can either replicate or be filtered out. The family is "diff-then-apply with a configurable handling of right-only items." The matching is shared; the apply step is where the domain rules live. Here's how this codebase applies that pattern.
+This is two-phase matching followed by an explicit "carryover or delete" decision — the same shape as a diff applied as a sync (compute the diff, then choose whether removals propagate). You've seen this in file-sync tools where "mirror" mode deletes destination files missing from the source and "additive" mode does not. You've seen it in database replication where deletes can either replicate or be filtered out. The family is "diff-then-apply with a configurable handling of right-only items." The matching is shared; the apply step is where the domain rules live. The data and the walkthrough are in the next blocks.
 
 ---
 
 **Real operation:** `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts`. Runs after every entry text change via `useEntries.ts:20`.
-
----
-
-## Primary diagram
-
-```
-                        entry.text
-                            │
-                            ▼
-                    collectMatches()
-              ┌─────────────┴─────────────┐
-              ▼                           ▼
-    ScannedMatch[]                  existing nutrition rows
-    { lineIndex, name, kcal }        (getNutritionByEntry)
-              │                           │
-              └──────────────┬────────────┘
-                             ▼
-                  Pass 1 — exact (name, kcal)
-                  → claim by id (Set guard)
-                             │
-                             ▼
-                  Pass 2 — line-index fallback
-                  → claim remaining (Set guard)
-                             │
-                             ▼
-              ┌──────────────┴──────────────┐
-              ▼                             ▼
-        claimed match                   unmatched
-        → updateNutrition               (scanned)  → insertNutrition
-        if anything changed             (existing) → deleteNutrition
-```
 
 ---
 
@@ -192,7 +161,38 @@ Complexity: O(n + m) time after the Set conversion · O(n + m) space.
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: at the typical scale of a handful of food lines per entry, both versions are sub-millisecond. The Set guard isn't an optimization — it's correctness. Two identical `** apple 95 kcal` lines on the same entry would double-claim the same row without it.
+When brute force is fine: at the typical scale of a handful of food lines per entry, both versions are sub-millisecond. The Set guard isn't an optimization — it's correctness. Two identical `** apple 95 kcal` lines on the same entry would double-claim the same row without it. The diagram below shows the whole flow end-to-end.
+
+---
+
+## Primary diagram
+
+```
+                        entry.text
+                            │
+                            ▼
+                    collectMatches()
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+    ScannedMatch[]                  existing nutrition rows
+    { lineIndex, name, kcal }        (getNutritionByEntry)
+              │                           │
+              └──────────────┬────────────┘
+                             ▼
+                  Pass 1 — exact (name, kcal)
+                  → claim by id (Set guard)
+                             │
+                             ▼
+                  Pass 2 — line-index fallback
+                  → claim remaining (Set guard)
+                             │
+                             ▼
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+        claimed match                   unmatched
+        → updateNutrition               (scanned)  → insertNutrition
+        if anything changed             (existing) → deleteNutrition
+```
 
 ---
 
@@ -326,3 +326,4 @@ Then open the file and verify.
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

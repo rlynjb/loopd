@@ -13,7 +13,15 @@
 
 Every clean architectural rule has exactly one or two cases that don't fit, and pretending otherwise is how codebases become liars. The honest move is to keep the rule, name the exception, and write it down in the same place the rule lives — so the next reader sees both and doesn't think they've found a bug. The alternative is to weaken the rule until it accommodates everything, which is the same as having no rule.
 
-A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. Here's how the shape lands in this codebase.
+A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. How it shows up here is in the next block.
+
+---
+
+## How it works
+
+The daily-schedule grid renders one row per thread per visible week. Each cell is a date. Tapping the cell for "today" toggles a manual-touch — if there's already a manual-touch row for `(thread_id, today)`, soft-delete it; otherwise insert a new one with `entry_id=NULL`, `todo_id=NULL`, `source_line=0`, `tag_text=''`.
+
+Downstream consumers (`computeStaleness`, `getThreadCards`, the 14-day activity strip) read `thread_mentions` uniformly. The 14-day activity strip specifically queries `WHERE entry_id IS NULL AND todo_id IS NULL` to build the `activeDates` set per thread; the staleness label uses any non-deleted mention regardless of shape. The full picture is below.
 
 ---
 
@@ -34,14 +42,6 @@ A documented exception is an explicit, narrow carve-out from an architectural in
                                               dashboard tap on a thread
                                               row in the daily-schedule grid
 ```
-
----
-
-## How it works
-
-The daily-schedule grid renders one row per thread per visible week. Each cell is a date. Tapping the cell for "today" toggles a manual-touch — if there's already a manual-touch row for `(thread_id, today)`, soft-delete it; otherwise insert a new one with `entry_id=NULL`, `todo_id=NULL`, `source_line=0`, `tag_text=''`.
-
-Downstream consumers (`computeStaleness`, `getThreadCards`, the 14-day activity strip) read `thread_mentions` uniformly. The 14-day activity strip specifically queries `WHERE entry_id IS NULL AND todo_id IS NULL` to build the `activeDates` set per thread; the staleness label uses any non-deleted mention regardless of shape.
 
 ---
 
@@ -182,3 +182,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Che
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

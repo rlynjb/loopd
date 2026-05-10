@@ -13,7 +13,37 @@
 
 You hit "save" and the app freezes for four seconds while an LLM thinks about your input. The interaction was instant the day before AI was added, and now it's slow on every save. The fix isn't a faster model — the fix is to stop waiting. Commit a sensible placeholder synchronously, kick off the model call in the background, and update the row when the answer comes back. The user feels nothing.
 
-Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. The diagram below shows the shape it takes here.
+Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. Here's how that actually works in this codebase.
+
+---
+
+## How it works
+
+`reconcileTodoMetaForEntry` walks new todos. For each one, it calls heuristic, inserts a meta row immediately (synchronous), and if heuristic returned `null`, fires `scheduleClassify` *without awaiting*. The function returns as soon as all the synchronous inserts are done.
+
+`scheduleClassify` is a tiny wrapper that calls `classifyTodo` and on success calls `updateTodoMeta` with the result. It catches errors and never throws — the user shouldn't see classification failures.
+
+The `/todos` screen subscribes to `CLASSIFY_PROGRESS_EVENT`. When the event fires, it re-fetches the metas and the badges update. This gives the user a "live" feel without the editor commit being blocked.
+
+```
+Pseudocode (reconcileMeta.ts):
+  function reconcileTodoMetaForEntry(entry):
+    for each todo not in existing:
+      heur = heuristicClassify(todo.text)
+      meta = buildMeta(todo, heur)
+      await insertTodoMeta(meta)                    ← synchronous
+      if heur == null AND !todo.done:
+        scheduleClassify(todo.id, todo.text)        ← FIRE, do NOT await
+    for each meta not in current:
+      await deleteTodoMeta(meta.todoId)
+
+  function scheduleClassify(todoId, text):
+    classifyTodo(text)
+      .then(result => result && updateTodoMeta(todoId, {...}))
+      .catch(err => log warning)                    ← never throws
+```
+
+The diagram below shows the sync-then-async timeline end-to-end.
 
 ---
 
@@ -45,34 +75,6 @@ Fire-and-forget classification belongs to the family of "asynchronous job" patte
        ▼
   /todos screen subscribes via on(CLASSIFY_PROGRESS_EVENT)
   → re-fetches metas, re-renders the type badge
-```
-
----
-
-## How it works
-
-`reconcileTodoMetaForEntry` walks new todos. For each one, it calls heuristic, inserts a meta row immediately (synchronous), and if heuristic returned `null`, fires `scheduleClassify` *without awaiting*. The function returns as soon as all the synchronous inserts are done.
-
-`scheduleClassify` is a tiny wrapper that calls `classifyTodo` and on success calls `updateTodoMeta` with the result. It catches errors and never throws — the user shouldn't see classification failures.
-
-The `/todos` screen subscribes to `CLASSIFY_PROGRESS_EVENT`. When the event fires, it re-fetches the metas and the badges update. This gives the user a "live" feel without the editor commit being blocked.
-
-```
-Pseudocode (reconcileMeta.ts):
-  function reconcileTodoMetaForEntry(entry):
-    for each todo not in existing:
-      heur = heuristicClassify(todo.text)
-      meta = buildMeta(todo, heur)
-      await insertTodoMeta(meta)                    ← synchronous
-      if heur == null AND !todo.done:
-        scheduleClassify(todo.id, todo.text)        ← FIRE, do NOT await
-    for each meta not in current:
-      await deleteTodoMeta(meta.todoId)
-
-  function scheduleClassify(todoId, text):
-    classifyTodo(text)
-      .then(result => result && updateTodoMeta(todoId, {...}))
-      .catch(err => log warning)                    ← never throws
 ```
 
 ---
@@ -209,3 +211,6 @@ Updated: 2026-05-07 — added Validate your understanding section + structured c
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.

@@ -13,33 +13,7 @@
 
 You've used an app that "syncs across devices" and watched it stall on a loading spinner because the server was the only place the data really lived. The moment the network blinked, the app was useless. That happens whenever the cloud is treated as the authoritative store and the device is treated as a thin view of it — every read becomes a remote read, every write becomes a remote write, and the user pays for both.
 
-A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The diagram below shows how it composes in this codebase.
-
----
-
-## Cloud sync mirror — diagram
-
-```
-  ┌─ Local SQLite ─────────────────┐         ┌─ Cloud (Supabase) ─────────────┐
-  │                                │         │                                │
-  │   updated_at = canonical       │         │   updated_at = canonical       │
-  │   synced_at  = local-only      │         │   (never has synced_at)        │
-  │   deleted_at = soft-tombstone  │         │   deleted_at = soft-tombstone  │
-  │                                │         │                                │
-  │   read: WHERE deleted_at NULL  │         │   read: server-side filtered   │
-  │                                │         │                                │
-  └────────┬───────────────────────┘         └─────────────▲──────────────────┘
-           │                                                │
-           │ push:  WHERE updated_at > synced_at            │
-           │        upsert in batches of 50                 │
-           ├────────────────────────────────────────────────┤
-           │ pull:  WHERE updated_at > last_pull_at         │
-           │        per-row chooseWinner(local, cloud)      │
-           │                                                │
-           ▼                                                │
-   sync_meta (per-table ledger)                             │
-   last_pull_at, last_push_at, pending_pushes               │
-```
+A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The next block walks the mechanics.
 
 ---
 
@@ -51,7 +25,41 @@ Push selects local rows where `updated_at > synced_at` (or `synced_at IS NULL`),
 
 Pull selects cloud rows where `updated_at > sync_meta[table].last_pull_at`, in pages of 200, ordered ASC. For each cloud row it loads the local counterpart and runs `chooseWinner` (last-write-wins). If cloud wins, upserts locally and stamps `synced_at = serverTime`. If local wins, skips.
 
-The pull anchors to `serverTime` (a Postgres RPC) instead of `Date.now()` — local clock skew would otherwise create races against the cloud's own timestamps.
+The pull anchors to `serverTime` (a Postgres RPC) instead of `Date.now()` — local clock skew would otherwise create races against the cloud's own timestamps. The full picture is below.
+
+---
+
+## Cloud sync mirror — diagram
+
+```
+┌─ Local storage layer (device) ─────┐         ┌─ Provider layer (Supabase) ────┐
+│                                    │         │                                │
+│   updated_at = canonical           │         │   updated_at = canonical       │
+│   synced_at  = local-only          │         │   (never has synced_at)        │
+│   deleted_at = soft-tombstone      │         │   deleted_at = soft-tombstone  │
+│                                    │         │                                │
+│   read: WHERE deleted_at NULL      │         │   read: server-side filtered   │
+│                                    │         │                                │
+└────────┬───────────────────────────┘         └─────────────▲──────────────────┘
+         │                                                   │
+         │  ┌─ Network / sync layer ────────────────────────┐│
+         │  │ push: WHERE updated_at > synced_at            ││
+         │  │       upsert in batches of 50                 ││
+         ├──┤                                               ├┤
+         │  │ pull: WHERE updated_at > last_pull_at         ││
+         │  │       per-row chooseWinner(local, cloud)      ││
+         │  └───────────────────────────────────────────────┘│
+         ▼                                                   │
+┌─ Local storage layer (bookkeeping) ┐                       │
+│   sync_meta (per-table ledger)     │                       │
+│   last_pull_at, last_push_at,      │                       │
+│   pending_pushes                   │                       │
+└────────────────────────────────────┘                       │
+                                                             │
+                                       (cloud writes go ─────┘
+                                        through Network layer
+                                        back to provider)
+```
 
 ---
 
@@ -222,3 +230,6 @@ Updated: 2026-05-10 — added Why care block (template v1.18.0).
 
 ---
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
