@@ -287,7 +287,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontFamily: fonts.mono,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: '700',
     color: colors.accent,
     letterSpacing: 1,
