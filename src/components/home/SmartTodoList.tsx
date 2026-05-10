@@ -97,13 +97,11 @@ export function SmartTodoList({ entries, today: _today, onChanged, metas }: Prop
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
         <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
-          <Text style={styles.label}>TODOS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
+          <Text style={styles.label}>DROPS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
         </Pressable>
-        {sorted.length > MAX_ROWS && (
-          <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
-            <Text style={styles.seeAllText}>see all →</Text>
-          </Pressable>
-        )}
+        <Pressable onPress={() => router.push('/todos')} hitSlop={10} style={styles.linkBtn}>
+          <Icon name="arrowRight" size={14} color={colors.accent} />
+        </Pressable>
       </View>
 
       {visible.map(t => {
@@ -219,10 +217,7 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: colors.textDim,
   },
-  seeAllText: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-    letterSpacing: 0.5,
+  linkBtn: {
+    padding: 4,
   },
 });

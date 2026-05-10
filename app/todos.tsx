@@ -10,7 +10,6 @@ import { TypeChangePicker } from '../src/components/todos/TypeChangePicker';
 import { TagAutocomplete } from '../src/components/journal/TagAutocomplete';
 import {
   getAllEntries, getAllTodoMetas, updateTodoMeta,
-  getThreads, getTodoThreadLinks,
 } from '../src/services/database';
 import { addTodo, updateTodo, deleteTodo } from '../src/services/todos/crud';
 import { createThread } from '../src/services/threads/crud';
@@ -27,7 +26,6 @@ import type { TodoMeta, TodoType } from '../src/types/todoMeta';
 
 type Status = 'all' | 'open' | 'done';
 type CategoryFilter = 'all' | TodoType;
-type ThreadFilter = 'all' | string; // 'all' or a thread ID
 
 // Flat row shape used by the list — joins TodoItem with its parent entry's
 // id/date and the matching todo_meta row (default placeholder if missing).
@@ -63,9 +61,6 @@ export default function TodosScreen() {
   const [metas, setMetas] = useState<Map<string, TodoMeta>>(new Map());
   const [status, setStatus] = useState<Status>('open');
   const [category, setCategory] = useState<CategoryFilter>('all');
-  const [threadFilter, setThreadFilter] = useState<ThreadFilter>('all');
-  const [threads, setThreads] = useState<Thread[]>([]);
-  const [todoThreadLinks, setTodoThreadLinks] = useState<Map<string, Set<string>>>(new Map());
   const [adding, setAdding] = useState(false);
   const [newText, setNewText] = useState('');
   // Cursor tracking for the tag autocomplete strip. Mirrors the journal
@@ -98,20 +93,16 @@ export default function TodosScreen() {
   const addingRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [allEntries, allMetas, ambiguous, ai, allThreads, links] = await Promise.all([
+    const [allEntries, allMetas, ambiguous, ai] = await Promise.all([
       getAllEntries(),
       getAllTodoMetas(),
       countAmbiguousNotDone(),
       isClassifierAvailable(),
-      getThreads(),
-      getTodoThreadLinks(),
     ]);
     setEntries(allEntries);
     setMetas(new Map(allMetas.map(m => [m.todoId, m])));
     setAmbiguousCount(ambiguous);
     setAiAvailable(ai);
-    setThreads(allThreads);
-    setTodoThreadLinks(links);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -209,24 +200,9 @@ export default function TodosScreen() {
         if (!r.done) return false;
       }
       if (category !== 'all' && r.meta.type !== category) return false;
-      if (threadFilter !== 'all') {
-        const linkedThreadIds = todoThreadLinks.get(r.id);
-        if (!linkedThreadIds || !linkedThreadIds.has(threadFilter)) return false;
-      }
       return true;
     });
-  }, [allRows, status, category, threadFilter, todoThreadLinks]);
-
-  // Per-thread counts so the chip can show "loopd 5" etc.
-  const threadCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const r of allRows) {
-      const ids = todoThreadLinks.get(r.id);
-      if (!ids) continue;
-      for (const tid of ids) counts.set(tid, (counts.get(tid) ?? 0) + 1);
-    }
-    return counts;
-  }, [allRows, todoThreadLinks]);
+  }, [allRows, status, category]);
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<TodoType, number>();
@@ -425,7 +401,7 @@ export default function TodosScreen() {
           <Icon name="chevronLeft" size={22} color={colors.textMuted} />
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.title}>todos</Text>
+          <Text style={styles.title}>drops</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
         <Pressable
@@ -489,90 +465,47 @@ export default function TodosScreen() {
         </ScrollView>
       </View>
 
-      {/* Category filter — horizontal scroll for the 8 chips */}
+      {/* Thinking-mode filter — wraps to the next line so all chips are
+          visible without horizontal scrolling. */}
       <View style={[styles.filterRow, styles.catFilterWrap]}>
-        <Text style={styles.filterLabel}>Drops:</Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.catScroll}
-          contentContainerStyle={styles.catFilters}
-          keyboardShouldPersistTaps="handled"
-        >
-        <Pressable
-          onPress={() => setCategory('all')}
-          style={[styles.catPill, category === 'all' && styles.catPillActive]}
-        >
-          <Text style={[styles.catPillText, category === 'all' && styles.catPillTextActive]}>
-            ALL {allRows.length}
-          </Text>
-        </Pressable>
-        {TYPES_IN_ORDER.map(t => {
-          const meta = TYPE_META[t];
-          const count = categoryCounts.get(t) ?? 0;
-          const active = category === t;
-          return (
-            <Pressable
-              key={t}
-              onPress={() => setCategory(t)}
-              style={[
-                styles.catPill,
-                active && {
-                  borderColor: meta.color,
-                  backgroundColor: `${meta.color}15`,
-                },
-              ]}
-            >
-              <Icon name={meta.icon} size={11} color={active ? meta.color : colors.textDim} />
-              <Text style={[
-                styles.catPillText,
-                active && { color: meta.color },
-              ]}>
-                {meta.label.toLowerCase()} {count}
-              </Text>
-            </Pressable>
-          );
-        })}
-        </ScrollView>
-      </View>
-
-      {/* Threads filter — only renders if at least one thread exists. */}
-      {threads.length > 0 && (
-        <View style={[styles.filterRow, styles.catFilterWrap]}>
-          <Text style={styles.filterLabel}>Threads:</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.catScroll}
-            contentContainerStyle={styles.catFilters}
-            keyboardShouldPersistTaps="handled"
+        <Text style={styles.filterLabel}>Thinking-mode:</Text>
+        <View style={styles.catFiltersWrap}>
+          <Pressable
+            onPress={() => setCategory('all')}
+            style={[styles.catPill, category === 'all' && styles.catPillActive]}
           >
-            <Pressable
-              onPress={() => setThreadFilter('all')}
-              style={[styles.catPill, threadFilter === 'all' && styles.catPillActive]}
-            >
-              <Text style={[styles.catPillText, threadFilter === 'all' && styles.catPillTextActive]}>
-                ALL
-              </Text>
-            </Pressable>
-            {threads.map(t => {
-              const active = threadFilter === t.id;
-              const count = threadCounts.get(t.id) ?? 0;
-              return (
-                <Pressable
-                  key={t.id}
-                  onPress={() => setThreadFilter(t.id)}
-                  style={[styles.catPill, active && styles.catPillActive]}
-                >
-                  <Text style={[styles.catPillText, active && styles.catPillTextActive]}>
-                    #{t.slug} {count}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+            <Text style={[styles.catPillText, category === 'all' && styles.catPillTextActive]}>
+              ALL {allRows.length}
+            </Text>
+          </Pressable>
+          {TYPES_IN_ORDER.map(t => {
+            const meta = TYPE_META[t];
+            const count = categoryCounts.get(t) ?? 0;
+            const active = category === t;
+            return (
+              <Pressable
+                key={t}
+                onPress={() => setCategory(t)}
+                style={[
+                  styles.catPill,
+                  active && {
+                    borderColor: meta.color,
+                    backgroundColor: `${meta.color}15`,
+                  },
+                ]}
+              >
+                <Icon name={meta.icon} size={11} color={active ? meta.color : colors.textDim} />
+                <Text style={[
+                  styles.catPillText,
+                  active && { color: meta.color },
+                ]}>
+                  {meta.label.toLowerCase()} {count}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
-      )}
+      </View>
 
       <ScrollView
         style={styles.scroll}
@@ -848,21 +781,21 @@ const styles = StyleSheet.create({
   pillTextActive: {
     color: colors.accent,
   },
-  catScroll: {
-    flexGrow: 0,
-    flexShrink: 1,
-  },
-  catFilters: {
-    paddingRight: 20,
-    paddingVertical: 6,
-    gap: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  // Spacing below the drops row, applied to the wrapper instead of the
-  // chip area's content container so chip vertical-centering stays clean.
+  // The thinking-mode filter row stacks the label above the chips so
+  // they have the full row width to wrap into. Status filter still uses
+  // the inline-row layout (only 3 chips, fits horizontally).
   catFilterWrap: {
-    paddingBottom: 6,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingTop: 8,
+    paddingBottom: 8,
+    paddingRight: 20,
+  },
+  catFiltersWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   catPill: {
     flexDirection: 'row',

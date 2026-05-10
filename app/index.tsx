@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
+import { Icon } from '../src/components/ui/Icon';
 import { HomeHeader } from '../src/components/home/HomeHeader';
 import { PastVlogCard } from '../src/components/home/PastVlogCard';
 import { DailyScheduleGrid } from '../src/components/home/DailyScheduleGrid';
@@ -194,8 +195,8 @@ export default function HomeScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionLabel}>DAILY SCHEDULE</Text>
-              <Pressable onPress={() => router.push('/more')} hitSlop={6}>
-                <Text style={styles.sectionLink}>manage →</Text>
+              <Pressable onPress={() => router.push('/more')} hitSlop={10} style={styles.sectionLinkBtn}>
+                <Icon name="arrowRight" size={14} color={colors.accent} />
               </Pressable>
             </View>
 
@@ -318,9 +319,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 12,
   },
-  sectionLink: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.accent,
+  sectionLinkBtn: {
+    padding: 4,
   },
 });
