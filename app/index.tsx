@@ -1,5 +1,5 @@
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, fonts } from '../src/constants/theme';
@@ -15,13 +15,10 @@ import {
   getVlogs, getEntriesByDate, archivePastDays, getDayTitle, getHabits, getAllEntries,
   getAllTodoMetas, insertEntry, updateEntry,
 } from '../src/services/database';
-import { getThreadCards } from '../src/services/threads/getThreadCards';
-import { toggleThreadTouchToday } from '../src/services/threads/touch';
 import { getTodayString, formatDate } from '../src/utils/time';
 import { generateId } from '../src/utils/id';
 import type { Entry, Habit, Vlog } from '../src/types/entry';
 import type { TodoMeta } from '../src/types/todoMeta';
-import type { ThreadCard } from '../src/types/thread';
 
 function greeting(now: Date = new Date()): string {
   const h = now.getHours();
@@ -42,24 +39,21 @@ export default function HomeScreen() {
   const [todayTitle, setTodayTitle] = useState('');
   const [habits, setHabits] = useState<Habit[]>([]);
   const [todoMetas, setTodoMetas] = useState<Map<string, TodoMeta>>(new Map());
-  const [threadCards, setThreadCards] = useState<ThreadCard[]>([]);
 
   const today = getTodayString();
 
   const loadAll = useCallback(async () => {
     await archivePastDays(today);
-    const [entries, h, v, allMetas, cards] = await Promise.all([
+    const [entries, h, v, allMetas] = await Promise.all([
       getAllEntries(),
       getHabits(),
       getVlogs(),
       getAllTodoMetas(),
-      getThreadCards(),
     ]);
     setAllEntries(entries);
     setHabits(h);
     setVlogs(v);
-    setTodoMetas(new Map(allMetas.map(m => [m.todoId, m])));
-    setThreadCards(cards);
+    setTodoMetas(new Map(allMetas.map((m: TodoMeta) => [m.todoId, m])));
 
     const titles: Record<string, string> = {};
     const previews: Record<string, string> = {};
@@ -113,10 +107,8 @@ export default function HomeScreen() {
     return total;
   }, [todayEntries]);
 
-  // Map habitId -> set of YYYY-MM-DD where it was logged across ALL entries.
-  // No cutoff: past-week navigation can scroll arbitrarily far back, and the
-  // DailyScheduleGrid only renders the visible week's 7 cells anyway, so the
-  // memory cost is bounded by total entries (small).
+  // Map habitId -> set of YYYY-MM-DD where it was logged across all entries.
+  // The grid only consults the current week's 7 cells, so memory stays small.
   const checkedDatesByHabit = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const h of habits) map.set(h.id, new Set());
@@ -128,40 +120,10 @@ export default function HomeScreen() {
     return map;
   }, [allEntries, habits]);
 
-  // Week-nav state — driven by ?week=YYYY-MM-DD URL param.
-  // Validation: must be a Monday and not > current week's Monday.
-  const params = useLocalSearchParams<{ week?: string }>();
-  const currentWeekStart = useMemo(() => startOfISOWeekStr(today), [today]);
-  const weekStart = useMemo(() => {
-    const raw = params.week;
-    if (!raw) return currentWeekStart;
-    // Validate: must look like YYYY-MM-DD, must be a Monday, must not be future.
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return currentWeekStart;
-    if (startOfISOWeekStr(raw) !== raw) return currentWeekStart; // not a Monday
-    if (raw > currentWeekStart) return currentWeekStart;
-    return raw;
-  }, [params.week, currentWeekStart]);
-  const isCurrentWeek = weekStart === currentWeekStart;
-
-  const onPrevWeek = useCallback(() => {
-    const d = new Date(weekStart + 'T12:00:00');
-    d.setDate(d.getDate() - 7);
-    router.setParams({ week: d.toISOString().slice(0, 10) });
-  }, [weekStart, router]);
-  const onNextWeek = useCallback(() => {
-    if (isCurrentWeek) return;
-    const d = new Date(weekStart + 'T12:00:00');
-    d.setDate(d.getDate() + 7);
-    const next = d.toISOString().slice(0, 10);
-    if (next >= currentWeekStart) {
-      router.setParams({ week: undefined });
-    } else {
-      router.setParams({ week: next });
-    }
-  }, [weekStart, currentWeekStart, isCurrentWeek, router]);
-  const onJumpToToday = useCallback(() => {
-    router.setParams({ week: undefined });
-  }, [router]);
+  // Week is locked to the current ISO week (Monday-anchored). The previous
+  // prev/next-week navigation was dropped 2026-05-10 — dashboard always shows
+  // the current 7 days only.
+  const weekStart = useMemo(() => startOfISOWeekStr(today), [today]);
 
   const [offDayMode, setOffDayMode] = useOffDayMode();
 
@@ -245,11 +207,9 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* DAILY SCHEDULE — habits weekly grid (new) + threads strip (kept).
-            Per docs/loopd-daily-schedule-grid-spec.md: habits get the 7-column
-            weekday grid; threads keep their 14-cell trailing strip below.
-            Mixed visual language is the v1 trade-off (spec §13 option a). */}
-        {(habits.length > 0 || threadCards.length > 0) && (
+        {/* DAILY SCHEDULE — habits-only weekly grid, current week locked.
+            Threads were removed from this surface 2026-05-10. */}
+        {habits.length > 0 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionLabel}>DAILY SCHEDULE</Text>
@@ -258,29 +218,18 @@ export default function HomeScreen() {
               </Pressable>
             </View>
 
-            <DailyScheduleHeader
-              weekStart={weekStart}
-              today={today}
-              isCurrentWeek={isCurrentWeek}
-              onPrevWeek={onPrevWeek}
-              onNextWeek={onNextWeek}
-              onJumpToToday={onJumpToToday}
-            />
+            <DailyScheduleHeader weekStart={weekStart} today={today} />
             <DailyScheduleGrid
               habits={habits}
-              threads={threadCards}
+              threads={[]}
               checkedDatesByHabit={checkedDatesByHabit}
               weekStart={weekStart}
               today={today}
               offDayMode={offDayMode}
-              isReadOnly={!isCurrentWeek}
+              isReadOnly={false}
               onToggleHabitToday={toggleHabitToday}
-              onToggleThreadToday={async (threadId, slug) => {
-                await toggleThreadTouchToday(threadId, slug, today);
-                loadAll();
-              }}
+              onToggleThreadToday={() => { /* no-op: threads removed from grid */ }}
               onTapHabit={() => router.push('/more/habits')}
-              onTapThread={thread => router.push(`/threads/${thread.id}`)}
             />
             <OffDayToggle mode={offDayMode} onChange={setOffDayMode} />
             <DailyScheduleLegend />

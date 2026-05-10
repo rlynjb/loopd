@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { formatRelativeTime } from '../../services/todos/rank';
-import { updateTodo, deleteTodo } from '../../services/todos/crud';
+import { updateTodo } from '../../services/todos/crud';
 import { TypeBadge } from '../todos/TypeBadge';
 import type { Entry, TodoItem } from '../../types/entry';
 import type { TodoMeta } from '../../types/todoMeta';
@@ -79,12 +79,6 @@ export function SmartTodoList({ entries, today: _today, onChanged, metas }: Prop
     } catch (e) { console.warn('[todos] toggle failed:', e); }
   }, [onChanged]);
 
-  const handleDelete = useCallback(async (t: DashboardTodo) => {
-    try { await deleteTodo(t.entryId, t.id); onChanged(); } catch (e) {
-      console.warn('[todos] delete failed:', e);
-    }
-  }, [onChanged]);
-
   const startEdit = useCallback((t: DashboardTodo) => {
     setEditingId(t.id);
     setEditText(t.text);
@@ -102,7 +96,9 @@ export function SmartTodoList({ entries, today: _today, onChanged, metas }: Prop
   return (
     <View style={styles.wrap}>
       <View style={styles.headerRow}>
-        <Text style={styles.label}>TODOS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
+        <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
+          <Text style={styles.label}>TODOS {sorted.length > 0 ? `(${sorted.length})` : ''}</Text>
+        </Pressable>
         {sorted.length > MAX_ROWS && (
           <Pressable onPress={() => router.push('/todos')} hitSlop={6}>
             <Text style={styles.seeAllText}>see all →</Text>
@@ -148,9 +144,6 @@ export function SmartTodoList({ entries, today: _today, onChanged, metas }: Prop
                 <Text style={styles.meta}>{time}</Text>
               </View>
             </View>
-            <Pressable onPress={() => handleDelete(t)} hitSlop={10} style={styles.deleteBtn}>
-              <Icon name="x" size={14} color={colors.textDim} />
-            </Pressable>
           </View>
         );
       })}
@@ -225,9 +218,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.mono,
     fontSize: 9,
     color: colors.textDim,
-  },
-  deleteBtn: {
-    padding: 4,
   },
   seeAllText: {
     fontFamily: fonts.mono,
