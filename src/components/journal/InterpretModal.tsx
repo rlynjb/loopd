@@ -7,6 +7,7 @@ import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { interpretEntry, MIN_TEXT_LENGTH, MAX_INPUT_CHARS } from '../../services/ai/interpret';
 import { getAISummary, upsertAISummary } from '../../services/database';
+import { InterpretMarkdown } from './InterpretMarkdown';
 import type { AISummary, Interpretation } from '../../types/ai';
 
 type Props = {
@@ -52,7 +53,7 @@ export function InterpretModal({ visible, date, dayText, onClose }: Props) {
         if (!cached) return;
         const parsed = JSON.parse(cached.summaryJson);
         const interp = parsed?.interpret as Interpretation | undefined;
-        if (interp && interp.mainInterpretation) {
+        if (interp && interp.markdown) {
           setStatus({ kind: 'result', interpretation: interp });
         }
       } catch { /* ignore parse errors — fresh state */ }
@@ -188,33 +189,7 @@ function Sections({ interpretation, stale }: { interpretation: Interpretation; s
           </Text>
         </View>
       )}
-
-      <Section label="Main interpretation" body={interpretation.mainInterpretation} />
-
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Core themes</Text>
-        <View style={styles.themes}>
-          {interpretation.coreThemes.map((t, i) => (
-            <View key={`${t.label}-${i}`} style={styles.theme}>
-              <Text style={styles.themeLabel}>{t.label}</Text>
-              <Text style={styles.themeExplanation}>{t.explanation}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      <Section label="Emotional pattern" body={interpretation.emotionalPattern} />
-      <Section label="Healthy reframe" body={interpretation.healthyReframe} />
-      <Section label="Key takeaway" body={interpretation.keyTakeaway} highlighted />
-    </View>
-  );
-}
-
-function Section({ label, body, highlighted }: { label: string; body: string; highlighted?: boolean }) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionLabel}>{label}</Text>
-      <Text style={[styles.sectionBody, highlighted && styles.sectionBodyHighlight]}>{body}</Text>
+      <InterpretMarkdown markdown={interpretation.markdown} />
     </View>
   );
 }
@@ -312,7 +287,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   sections: {
-    gap: 24,
+    gap: 16,
   },
   staleBanner: {
     backgroundColor: 'rgba(212, 146, 42, 0.12)',
@@ -320,54 +295,13 @@ const styles = StyleSheet.create({
     borderLeftColor: colors.amber,
     paddingVertical: 10,
     paddingHorizontal: 12,
+    marginBottom: 8,
   },
   staleText: {
     fontFamily: fonts.body,
     fontSize: 12,
     color: colors.amber,
     lineHeight: 16,
-  },
-  section: {
-    gap: 8,
-  },
-  sectionLabel: {
-    fontFamily: fonts.mono,
-    fontSize: 10,
-    color: colors.textDim,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  sectionBody: {
-    fontFamily: fonts.body,
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.text,
-  },
-  sectionBodyHighlight: {
-    fontFamily: fonts.heading,
-    fontSize: 16,
-    lineHeight: 24,
-    letterSpacing: -0.2,
-    color: colors.accent,
-  },
-  themes: {
-    gap: 10,
-  },
-  theme: {
-    paddingVertical: 6,
-  },
-  themeLabel: {
-    fontFamily: fonts.body,
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 2,
-  },
-  themeExplanation: {
-    fontFamily: fonts.body,
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.textMuted,
   },
   footer: {
     paddingHorizontal: 20,

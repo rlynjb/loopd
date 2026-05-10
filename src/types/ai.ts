@@ -37,19 +37,20 @@ export type CaptionOutput = {
   detectedTheme: string;
 };
 
-// Per-day journal interpretation — see docs/interpret-spec.md.
-// User-triggered from the journal page; cached on ai_summaries.summary_json
-// so the modal opens instantly on revisits and the result round-trips
-// through cloud sync uniformly with the rest of the AISummary.
+// Per-day journal interpretation. User-triggered from the journal page;
+// cached on ai_summaries.summary_json so the modal opens instantly on
+// revisits and the result round-trips through cloud sync uniformly with
+// the rest of the AISummary.
+//
+// Stored as long-form markdown (multi-section essay with emoji headings,
+// blockquotes, bullets, bold) rather than fixed structured fields — this
+// gives the model room to mirror the user's specific entry rather than
+// shoehorning it into a schema. See InterpretMarkdown for the renderer.
 //
 // `sourceText` snapshots the day's combined entry text at generation time
 // so the modal can flag staleness when the user has typed since.
 export type Interpretation = {
-  mainInterpretation: string;
-  coreThemes: { label: string; explanation: string }[];
-  emotionalPattern: string;
-  healthyReframe: string;
-  keyTakeaway: string;
+  markdown: string;
   sourceText: string;
   generatedAt: string;
   model: string;

@@ -1,54 +1,60 @@
 import { getProvider, getAnthropicKey, getOpenAIKey } from './config';
 import type { Interpretation } from '../../types/ai';
 
-// Per docs/interpret-spec.md §model-config.
+// Long-form interpretation chain. Output is markdown — multi-section essay
+// with emoji-prefixed H2 headings, blockquoted impact lines, bulleted
+// thinking, occasional bold inline emphasis, and a final "strongest line +
+// final thought" kicker. The structure is suggested, not rigid: the model
+// follows the user's actual content rather than padding empty sections.
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
-const MAX_TOKENS = 800;
+// Bigger budget than the prior structured-JSON pass: the new format averages
+// 600–1000 tokens of prose. Cap leaves headroom for longer entries.
+const MAX_TOKENS = 1800;
 const TEMPERATURE = 0.7;
 
 export const MIN_TEXT_LENGTH = 20;
 export const MAX_INPUT_CHARS = 2000;
 
-const SYSTEM_PROMPT = `You are an emotionally intelligent journal interpreter.
+const SYSTEM_PROMPT = `You are an emotionally intelligent journal interpreter. The user has written a journal entry; your job is to mirror it back to them in long-form prose that helps them see what's underneath their own words.
 
-Analyze the user's journal entry and explain what it may
-reveal about their mindset, emotional patterns, values,
-and deeper themes.
+You are not a therapist. You are not a coach. You are a calm, observant friend who reads carefully and reflects honestly. Never diagnose. Never use clinical labels ("trauma", "paranoid", "anxious", "avoidant"). Never moralize, never motivate, never lecture.
 
-Do not diagnose. Do not judge. Do not over-motivate.
-Keep the tone calm, grounded, reflective, and honest.
+Output valid markdown — no preamble, no JSON, no code fences around the whole thing. Use this approximate structure (skip any section that doesn't fit the user's actual content; do not pad):
 
-Use this exact structure and return valid JSON only —
-no preamble, no explanation outside the JSON:
+  • Opening: 1–2 sentences naming what the entry sounds like, with one bolded re-statement of the underlying drive in their voice.
+  • A blockquote on its own line with that drive, e.g. > **"I can't afford to lose momentum or dependence on myself."**
+  • A horizontal rule (---)
+  • ## 🧠 Main themes I see — followed by 2–4 numbered subsections (### 1. <Theme name>, ### 2. <Theme name>, ...). Each names a theme, then unpacks it with a mix of: short paragraphs, bulleted lists ("- thing", "- thing"), bolded one-line re-statements, and a blockquote pulling the user's own line that gave you that read.
+  • ## ⚖️ Healthy side of this — what this mindset gives them. Bullets.
+  • ## ⚠️ The part to watch carefully — gentle, never alarmist. Use a "stay X vs never feel Y" comparison, not a warning.
+  • ## 🧠 Your deeper fear (I think) — short. Say what it isn't, then what it likely is, in a blockquote.
+  • ## 💡 What's actually happening — a wider read on the entry's emotional architecture.
+  • ## 🔑 My honest interpretation — one or two lines, blockquoted, that crystallize the whole thing.
+  • ## 🧭 The healthiest version of this mindset — show "Not: X / But: Y" with both quoted.
+  • ## 💬 The strongest line in everything you wrote — pull the literal user line that carries the most weight, blockquote it, then one sentence on why.
+  • ## 🧠 Final thought — close warmly. Bullet what they're really building. End on what those things represent to them.
 
-{
-  "mainInterpretation": "2–4 sentences on the deeper meaning",
-  "coreThemes": [
-    { "label": "Theme name", "explanation": "One sentence" },
-    { "label": "Theme name", "explanation": "One sentence" },
-    { "label": "Theme name", "explanation": "One sentence" }
-  ],
-  "emotionalPattern": "One paragraph explaining the repeating emotional or behavioural pattern",
-  "healthyReframe": "Rewrite the intense or protective thought into a more grounded version",
-  "keyTakeaway": "One powerful insight the user can carry forward"
-}
+Voice rules:
+  • Conversational and grounded. Short paragraphs. Visual whitespace between thoughts. Use blockquotes liberally for impact lines and for the user's own quoted phrases.
+  • Use markdown bold (**…**) for one-line distillations of underlying drives.
+  • Use bullet lists ("- item") for "you're using X / Y / Z" parallel structures and for "what they're building" summaries.
+  • Use horizontal rules (---) between major sections.
+  • Speak in first person ("I see…", "this tells me…", "probably…"). Hedge ("probably", "I think", "this may reflect") rather than assert.
+  • Quote the user back to themselves in their own words when you have something specific to point to.
+  • Never recommend therapy, journaling more, productivity systems, or any external tool.
+  • Never start with "Today you…" or "It sounds like you…" formulaically. Start with what the entry actually reads as.
 
-Tone rules:
-  → Calm, honest, reflective, emotionally intelligent
-  → Not clinical, not motivational, not judgmental
-  → Never diagnose or label the user
-  → Never say: "you have trauma", "you are paranoid", "you need therapy", "this is unhealthy"
-  → Prefer language like: "this sounds like…", "a theme here is…", "this may reflect…", "a healthier framing could be…"
+If the entry is short, light, or doesn't carry deep emotional content, drop sections. A 3-section interpretation of a flat day is better than a forced 11-section read of nothing.
 
-Minimum 3 core themes, maximum 5.`;
+Return ONLY the markdown body. No preface, no signoff, no JSON wrapper.`;
 
 export type InterpretResult =
   | { ok: true; interpretation: Interpretation }
   | { ok: false; reason: 'no-ai' | 'too-short' | 'malformed' | 'network'; message?: string };
 
-// Keep the most recent 2000 chars — per spec §Input. The user's most recent
-// thought matters more than older sentences from earlier in the day.
+// Keep the most recent 2000 chars — the user's most recent thought matters
+// more than older sentences from earlier in the day.
 function truncateTail(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(s.length - max);
@@ -75,7 +81,6 @@ async function callOpenAI(apiKey: string, user: string): Promise<string> {
       model: OPENAI_MODEL,
       max_tokens: MAX_TOKENS,
       temperature: TEMPERATURE,
-      response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: `User journal entry:\n${user}` },
@@ -87,63 +92,25 @@ async function callOpenAI(apiKey: string, user: string): Promise<string> {
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-function parseJson(raw: string): unknown | null {
-  try {
-    const cleaned = raw.replace(/```(?:json)?\s*|```\s*/g, '').trim();
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start < 0 || end <= start) return null;
-    return JSON.parse(cleaned.slice(start, end + 1));
-  } catch {
-    return null;
+// Strips an outer ```markdown code fence if the model wrapped its response.
+// Required headings/bullets aren't enforced — caller renders whatever comes
+// back. Empty / whitespace-only output is treated as malformed.
+function cleanMarkdown(raw: string): string | null {
+  let s = raw.trim();
+  if (s.startsWith('```')) {
+    // strip leading ``` or ```markdown
+    s = s.replace(/^```(?:markdown|md)?\s*\n?/i, '');
+    s = s.replace(/\n?```\s*$/i, '');
+    s = s.trim();
   }
-}
-
-// Validate the parsed JSON against the spec shape. Required fields must be
-// non-empty strings; coreThemes must be a non-empty array of {label,
-// explanation} pairs. Returns null on shape mismatch — caller retries once.
-function validate(data: unknown, sourceText: string, model: string): Interpretation | null {
-  if (!data || typeof data !== 'object') return null;
-  const o = data as Record<string, unknown>;
-  const str = (k: string): string | null =>
-    typeof o[k] === 'string' && (o[k] as string).trim() ? (o[k] as string).trim() : null;
-
-  const main = str('mainInterpretation');
-  const pattern = str('emotionalPattern');
-  const reframe = str('healthyReframe');
-  const takeaway = str('keyTakeaway');
-  if (!main || !pattern || !reframe || !takeaway) return null;
-
-  if (!Array.isArray(o.coreThemes)) return null;
-  const coreThemes = (o.coreThemes as unknown[])
-    .map(t => {
-      if (!t || typeof t !== 'object') return null;
-      const obj = t as Record<string, unknown>;
-      const label = typeof obj.label === 'string' ? obj.label.trim() : '';
-      const explanation = typeof obj.explanation === 'string' ? obj.explanation.trim() : '';
-      if (!label || !explanation) return null;
-      return { label, explanation };
-    })
-    .filter((t): t is { label: string; explanation: string } => t !== null);
-  if (coreThemes.length === 0) return null;
-
-  return {
-    mainInterpretation: main,
-    coreThemes,
-    emotionalPattern: pattern,
-    healthyReframe: reframe,
-    keyTakeaway: takeaway,
-    sourceText,
-    generatedAt: new Date().toISOString(),
-    model,
-  };
+  if (!s || s.length < 20) return null;
+  return s;
 }
 
 // Run the interpretation chain for a single piece of journal text. Provider
-// follows the user's configured preference (Claude → OpenAI fallback). One
-// retry on malformed JSON with a stricter system instruction. Snapshots
-// `sourceText` (the truncated input that actually reached the model) so the
-// modal can detect staleness later.
+// follows the user's configured preference (Claude → OpenAI fallback).
+// Snapshots `sourceText` (the truncated input that actually reached the
+// model) so the modal can detect staleness later.
 export async function interpretEntry(rawText: string): Promise<InterpretResult> {
   const text = rawText.trim();
   if (text.length < MIN_TEXT_LENGTH) return { ok: false, reason: 'too-short' };
@@ -156,26 +123,22 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
   const useOpenAI = provider === 'openai';
   const modelId = useOpenAI ? OPENAI_MODEL : CLAUDE_MODEL;
 
-  const callOnce = async (extra?: string): Promise<Interpretation | null> => {
-    const userMsg = extra ? `${truncated}\n\n${extra}` : truncated;
-    try {
-      const raw = useOpenAI
-        ? await callOpenAI(apiKey, userMsg)
-        : await callClaude(apiKey, userMsg);
-      const parsed = parseJson(raw);
-      return parsed ? validate(parsed, truncated, modelId) : null;
-    } catch (err) {
-      throw err;
-    }
-  };
-
   try {
-    let interp = await callOnce();
-    if (!interp) {
-      interp = await callOnce('Your previous reply was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema. No commentary.');
-    }
-    if (!interp) return { ok: false, reason: 'malformed' };
-    return { ok: true, interpretation: interp };
+    const raw = useOpenAI
+      ? await callOpenAI(apiKey, truncated)
+      : await callClaude(apiKey, truncated);
+    const md = cleanMarkdown(raw);
+    if (!md) return { ok: false, reason: 'malformed' };
+
+    return {
+      ok: true,
+      interpretation: {
+        markdown: md,
+        sourceText: truncated,
+        generatedAt: new Date().toISOString(),
+        model: modelId,
+      },
+    };
   } catch (err) {
     return {
       ok: false,
