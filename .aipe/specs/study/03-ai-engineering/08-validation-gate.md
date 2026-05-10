@@ -1,11 +1,19 @@
 # Validation as a hard gate
 
-**Industry name:** Output validation, schema gate, structured output
+**Industry name(s):** Output validation, schema gate, structured output
 **Type:** Industry standard · Language-agnostic
 
 > Every callsite parses and *re-validates* the LLM output before writing to SQLite. The model is treated as untrusted input, even when its instructions are explicit.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [11-failure-modes](./11-failure-modes.md)
+
+---
+
+## Why care
+
+A model will return malformed JSON, invent a field you didn't ask for, drop a required field, or quietly switch from an array to an object — and it will do all of this on a prompt that worked yesterday. Every system that writes LLM output to a database without checking it first eventually has a row that crashes a render two weeks later, and nobody can figure out why. The model is producing text; the only thing standing between that text and your storage layer is a parse + a check.
+
+The validation gate treats every model output as untrusted input — the same way you'd treat a JSON payload from a public API. It belongs to the family of "parse, don't validate" patterns: convert the raw output into a strongly-typed value at the boundary, reject anything that doesn't conform, and never let unchecked data into the core of the system. You've already seen this shape in Zod or Pydantic schemas at HTTP boundaries, in JSON Schema validators on webhooks, in OpenAI's "structured outputs" mode that constrains the model to a schema at decode time, and in Instructor / Outlines / LangChain output parsers that retry on validation failure. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -172,3 +180,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added interpret's cleanMarkdown gate + input-side guards as the 5th validation flow (markdown out, no schema). See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; added persistence-key mapping for caption (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`).
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

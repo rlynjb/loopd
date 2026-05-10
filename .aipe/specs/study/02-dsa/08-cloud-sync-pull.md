@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Every "pull what's new since I last checked" feature you've ever used has the same hidden trap: which clock do you trust? If the client picks the cursor from its own clock, a phone that's two minutes fast will skip rows; a phone that's two minutes slow will re-pull the same rows forever. The right answer is to ask the server what time it thinks it is, anchor the cursor to that, and never use the local clock for the watermark. Clock skew between devices is the bug, and stamping with the server's clock is the fix.
+
+This is cursor-based incremental pull — the same shape as RSS feed readers (`Last-Modified` / `If-Modified-Since`), the same shape as event-sourced replication, the same shape as the `WHERE updated_at > ?` pattern in every CDC (change-data-capture) pipeline. The family is "monotonic-cursor sync" — the cursor only moves forward, the predicate is `> cursor`, and pagination is just slicing the result by size. The detail that separates the working version from the broken version is twofold: the cursor must come from a clock both sides agree on (server time, or a logical timestamp), and the per-page write must stamp the row so the next pull doesn't re-flag it as outgoing-dirty. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** select cloud rows where `updated_at > last_pull_at`, page by 200 ASC, run `chooseWinner(local, cloud)` per row, stamp `synced_at = serverTime` on accepted rows.
 - **Why here:** cursor-by-timestamp is monotonic — the next page picks up rows written during the loop. Server time avoids local clock skew.
@@ -267,3 +275,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

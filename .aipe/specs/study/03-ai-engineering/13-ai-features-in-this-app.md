@@ -1,11 +1,19 @@
 # How this codebase uses AI specifically
 
-**Industry name:** AI feature catalogue, per-feature pattern map
+**Industry name(s):** AI feature catalogue, per-feature pattern map
 **Type:** Project-specific
 
 > Per-feature: prompt shape, input, output. Five chains, each one-job — four emit JSON, one (interpret) emits markdown.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [03-context-window](./03-context-window.md) · → [04-provider-abstraction](./04-provider-abstraction.md) · → [08-validation-gate](./08-validation-gate.md)
+
+---
+
+## Why care
+
+"We added AI" is a sentence with no information in it. The real question is which features in the product call a model, what does each one read, what does each one return, and what does the app do with that return value. Every interesting decision in an AI-powered product is buried in those four columns, and most teams can't answer them off the top of their head — they describe the product instead of the AI inside it.
+
+A per-feature pattern map is a catalogue: one row per AI-touching feature, listing prompt shape, input, output contract, and downstream behaviour. It belongs to the family of "system inventory" documents — closer to an API spec, an event catalogue, or a feature flag registry than to a tutorial. You've already seen this shape in OpenAPI specs that enumerate every endpoint, in event-sourcing systems that document every event type, and in any LLM evals harness that has to know exactly which prompts produce which structured outputs. Without this table, you can't reason about cost, latency, blast radius, or which features will break when you change a model version. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -234,3 +242,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — features grew from 4 to 5 (added Interpret); thinking-mode taxonomy reduced from 7 to 5; expand types reduced from 6 to 4. See `14-interpret.md` for the new chain.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 1/Level 2/[arch] interview-Q wording 4→5 features; added caption persistence-key mapping (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`) plus the buildCaptionInput input-assembly note.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

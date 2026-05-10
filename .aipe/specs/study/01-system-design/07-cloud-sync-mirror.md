@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've used an app that "syncs across devices" and watched it stall on a loading spinner because the server was the only place the data really lived. The moment the network blinked, the app was useless. That happens whenever the cloud is treated as the authoritative store and the device is treated as a thin view of it — every read becomes a remote read, every write becomes a remote write, and the user pays for both.
+
+A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** push selects `WHERE updated_at > synced_at`, upserts in batches of 50. Pull selects cloud rows newer than `last_pull_at`, applies `chooseWinner(local, cloud)` per row.
 - **Why here:** writes feel instant (no network in the request path). The 5-second push debounce trades a little staleness for vastly fewer round-trips during typing.
@@ -203,3 +211,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

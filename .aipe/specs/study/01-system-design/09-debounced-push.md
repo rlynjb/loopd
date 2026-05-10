@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've wired up a "save on every keystroke" autosave and watched your network tab fill up with one request per character. The user is typing fast, you're firing eighty requests in ten seconds, and the server is doing the same work eighty times to settle on a final state that one request could have produced. The naive fix is to save less often; the real fix is to save once at the end of the burst.
+
+Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** `schedulePush()` (re)arms a 5-second timer. After 5s of write quiet, `pushAll()` walks the registry and pushes every dirty row.
 - **Why here:** typing fires hundreds of writes per minute (autosave per keystroke). Pushing each one would melt the network. Debouncing collapses a typing burst into a single push.
@@ -165,3 +173,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

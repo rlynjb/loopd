@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've opened a notes app on the subway, typed a sentence, and watched the cursor lag because the app was busy round-tripping every keystroke to a server it couldn't reach. The lag is the network leaking into the request path. The underlying problem is that the user's writes and the publish-to-the-world step are two different operations, and most apps weld them together.
+
+Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** UI → hook → service → `database.ts` → SQLite → schedulePush → Supabase. Every layer is synchronous up to the SQLite write; the cloud catches up later.
 - **Why here:** the app must work offline (Android, journaling on the move) and the user is the only writer in Phase A.
@@ -197,3 +205,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected database.ts line count to 1455.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

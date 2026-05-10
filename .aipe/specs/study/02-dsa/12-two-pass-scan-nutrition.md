@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+The same matching shape that survives prose edits for one kind of line should work for any other kind — once you have the pattern, you re-use it. The risk is in the *cleanup rule*, not the matching. If unmatched existing rows should hang around (because they might be coming back), you keep them. If unmatched existing rows are dead by definition (because every row corresponds to exactly one line in the source, and the line is gone), you delete them. Same matching pass, different end-of-loop policy, completely different lifecycle.
+
+This is two-phase matching followed by an explicit "carryover or delete" decision — the same shape as a diff applied as a sync (compute the diff, then choose whether removals propagate). You've seen this in file-sync tools where "mirror" mode deletes destination files missing from the source and "additive" mode does not. You've seen it in database replication where deletes can either replicate or be filtered out. The family is "diff-then-apply with a configurable handling of right-only items." The matching is shared; the apply step is where the domain rules live. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `scanNutritionForEntry` matches `** food N kcal` lines in `entries.text` to existing `nutrition` rows, preserving row identity across edits.
 - **Why here:** the user can edit either the name or the kcal value on a line in-place. Both `(name, kcal)` exact match (Pass 1) and line-index fallback (Pass 2) are needed.
@@ -306,3 +314,6 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've used an email inbox where starred messages sit on top and everything else stays in time order underneath. You've used a chat app where pinned conversations float above the rolling list of recent threads. The user model is the same in both: pinning is a sticky modifier, recency is the default order, and the two compose without fighting each other. A list that doesn't separate "what's important" from "what's recent" forces the user to do one of those jobs in their head every time they scan it.
+
+This is sort with priority partition — a two-key lexicographic comparator where the first key is a boolean (pinned vs not), the second key is a timestamp. It's the same shape as a priority queue with timestamps as the tiebreak, the same shape SQL expresses as `ORDER BY pinned DESC, created_at DESC`, the same shape every "favourite folders first" file manager uses. The family is "stable lexicographic sort" — the comparator returns on the first key that differs, ties fall through to the next key, and equal-on-all-keys rows preserve their input order thanks to stability. The pinned flag is just a 0-or-1 column dressed up as a feature. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** sort todos so pinned rows appear above unpinned, with newest-first ordering inside each group.
 - **Why here:** the active sort on `/todos` and the dashboard. Pinned acts as a sticky modifier on top of recency.
@@ -252,3 +260,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses position-based sort, not pinned-first.
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

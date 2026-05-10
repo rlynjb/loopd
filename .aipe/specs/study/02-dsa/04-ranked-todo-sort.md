@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Most "sort by X, then Y, then Z" code in real apps is written as three passes — sort by Z, then stable-sort by Y, then stable-sort by X — because the author didn't realise a single comparator can express the whole rule at once. One comparator that returns a non-zero result on the first key that differs is both faster and easier to read than three chained sorts, and it composes: adding a new tiebreak is one extra line, not another whole pass over the array.
+
+This is the multi-key comparator pattern, and it's the same shape as SQL's `ORDER BY a DESC, b ASC, c DESC`, the same shape as a Python `sorted(items, key=lambda x: (x.a, x.b, x.c))` tuple-key, the same shape every spreadsheet uses for its "sort by primary column, then secondary" dialog. The family is "lexicographic ordering" — compare on the most significant key, only break the tie when it's actually a tie. The trick that makes it correct is that the final sort must be stable (rows that compare equal keep their relative order from the input), so any pre-existing structure in the input shows through where the comparator is silent. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** flatten todos across all entries, drop completed-too-long-ago, sort by (done, source priority, createdAt).
 - **Why studied:** the file is still in the repo (`src/services/todos/rank.ts`), and the concept of "compose-into-one-comparator" is broadly applicable.
@@ -271,3 +279,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

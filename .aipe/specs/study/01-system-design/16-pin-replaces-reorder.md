@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You once shipped a drag-to-reorder feature, watched users actually use it for a week, and then looked at the data: most people pinned one item to the top and let the rest fall wherever. The whole apparatus — drag handles, position integers, the bug where two items got the same rank — existed to support a flexibility nobody used. The right move is not to optimize the feature; it's to delete it and ship the simpler thing that captures the same intent.
+
+Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** as of 2026-05-05, `/todos` and the dashboard sort by `pinned` first (boolean), then `createdAt DESC`. The previous manual-reorder UI (drag handles, `position INT NOT NULL`) is gone.
 - **Why here:** in practice users pinned a handful of items and ignored the rest of the order. A single bool captures the same intent without the UI complexity.
@@ -188,3 +196,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses legacy position-based sort.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

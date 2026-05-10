@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+For a long time, routing was a config file: a giant lookup table that mapped URL patterns to handlers, lived in one place, and was the first thing to get out of sync with reality. Then a few frameworks noticed that the directory tree on disk already encodes the same hierarchy, and that you could just let the filesystem be the router. Adding a screen becomes "create a file." Removing one becomes "delete a file." The config file evaporates.
+
+File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** expo-router 55 file-based routing. The `app/` directory tree IS the route tree.
 - **Why here:** matches expo-router's convention so URLs and back-stack work without manual route configuration.
@@ -174,3 +182,6 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added `/vlogs` route (`app/vlogs.tsx`, 109 lines) + bottom-nav tab. Route count grew by one.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

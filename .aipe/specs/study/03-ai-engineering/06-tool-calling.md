@@ -1,11 +1,19 @@
 # Tool calling — not used in loopd
 
-**Industry name:** Tool calling, function calling
+**Industry name(s):** Tool calling, function calling
 **Type:** Industry standard
 
 > The codebase deliberately does not implement tool calling, agents, or any loop where the LLM asks the app to do something and read the result back.
 
 **See also:** → [01-what-an-llm-is](./01-what-an-llm-is.md) · → [12-why-no-agents](./12-why-no-agents.md)
+
+---
+
+## Why care
+
+The model can't actually do anything. It can't read a file, hit an API, query a database, or look up today's weather — it can only produce text. So how do AI products that "search the web" or "run code" or "book a flight" work? They work by having the model output a structured request — "please call the search tool with these arguments" — which the surrounding app code parses, executes, and pastes back into the next call. The model is the brain; your code is the hands.
+
+Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -168,3 +176,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Tool calling is intentionally absent — anchored on the closest single-call sites.
 Updated: 2026-05-10 — chain count bumped from 4 to 5 (interpret added; still no tool calling).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

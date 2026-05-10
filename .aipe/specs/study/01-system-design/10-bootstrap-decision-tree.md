@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+A user installs your app on a new phone. There might be a year of their data sitting in the cloud, or nothing. There might also be data on the device from a previous use, or nothing. Four combinations, and each one demands a different first move: pull from cloud, push to cloud, do nothing, or stop and ask. Pick wrong on first launch and you either lose their existing work or replace it with a stale snapshot. What's the right move? That's the question this decision tree answers.
+
+A first-run decision tree is a one-shot classifier that runs at cold start, inspects the state of both stores, and routes to exactly one initialization path before normal incremental sync takes over. It belongs to the family of "boot-time reconciliation" patterns, alongside container init scripts, package manager first-install hooks, and the way a fresh Git clone decides whether to pull from origin or set itself up empty. The two-by-two of "local has data" times "remote has data" is the same matrix every backup tool, every dotfile manager, and every multi-device sync product has had to navigate. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** at boot, if cloud is configured and the bootstrap flag is unset, classify (localHasData, cloudHasData) and run initial-push, first-pull, or no-op accordingly.
 - **Why here:** "fresh device recovery" (install → first-pull) and "first cloud connect on existing app" (push existing local → cloud) are different operations. Bootstrap picks correctly.
@@ -184,3 +192,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

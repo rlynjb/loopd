@@ -1,11 +1,19 @@
 # What an LLM actually is (in one diagram)
 
-**Industry name:** Large language model (LLM), token-prediction model, autoregressive transformer
+**Industry name(s):** Large language model (LLM), token-prediction model, autoregressive transformer
 **Type:** Industry standard
 
 > A function. Tokens in → tokens out. No memory, no I/O, no tools.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [06-tool-calling](./06-tool-calling.md)
+
+---
+
+## Why care
+
+You've asked an AI chatbot a question, gotten a great answer, asked a follow-up, and watched it forget what it said two minutes ago — that's not a bug, that's the architecture. The thing you're talking to has no memory between requests, no senses, no clock, no ability to do anything on its own. Everything that looks like memory, reasoning, or "knowing you" was assembled by code on the outside and pasted into the prompt before the call.
+
+The pattern here is the mental model itself: treat a language model as a pure function from one block of text to another. It belongs to the family of "stateless service" abstractions — the same shape as HTTP handlers, pure functions, and serverless workers, where every call stands alone and any persistence lives somewhere else. You've already seen this whenever you've worked with OpenAI's chat completions endpoint, with a LangChain LLM wrapper, or with any hosted Claude or GPT API: you send tokens, you get tokens, and the server forgot you the instant it replied. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -165,3 +173,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (Interpret added). See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); added 4-variant key list (clean/smoother/reflective/punchy) + `summary_json.variantsTheme` persistence note.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

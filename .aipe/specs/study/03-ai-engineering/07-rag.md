@@ -1,11 +1,19 @@
 # RAG — not used in loopd, but the seed exists
 
-**Industry name:** Retrieval-augmented generation (RAG)
+**Industry name(s):** Retrieval-augmented generation (RAG)
 **Type:** Industry standard
 
 > Retrieval Augmented Generation: embed user data, vector-search, stuff results into the prompt. Loopd uses hand-picked retrieval instead.
 
 **See also:** → [03-context-window](./03-context-window.md) · → [06-tool-calling](./06-tool-calling.md)
+
+---
+
+## Why care
+
+A model was trained on the public internet two years ago. You want it to answer questions about your company's internal docs, your customer's order history, or yesterday's Slack thread — none of which it has ever seen. Fine-tuning is slow and expensive; stuffing all your data into the prompt doesn't fit. So what's left? Retrieve only the few chunks that are actually relevant to the question, paste them into the prompt, and let the model answer from the documents in front of it instead of from memory.
+
+Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -179,3 +187,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Vector RAG is intentionally absent — anchored on hand-picked retrieval sites.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`); updated Level 2 hint and codebase anchor accordingly.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

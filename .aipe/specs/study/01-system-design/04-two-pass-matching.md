@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You have a list of items the user wrote yesterday and a fresh list they wrote today. Some are the same, some moved around, some had a typo fixed in place. Which row in today's list is "really" which row from yesterday? If you get it wrong, every piece of metadata you've attached — created-at, tags, AI classifications — points at the wrong line. That's the question this pattern answers.
+
+Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** Pass 1 matches by exact text (catches reorderings). Pass 2 matches by line index (catches "I edited the words on this line").
 - **Why here:** preserves the row's id, createdAt, classifier output, and expansion across edits without requiring the user to declare identity explicitly.
@@ -207,3 +215,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

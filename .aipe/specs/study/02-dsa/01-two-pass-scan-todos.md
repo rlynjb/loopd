@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've renamed a file in your editor and watched git track it as a rename instead of a delete-plus-add — the same words landed in a different place and the tool figured out it was the same file. That's the question this operation answers for a list of items inside prose: when the user retypes a line with one word changed, is that the same row with an edit, or a brand-new row that replaced the old one? The naive answer loses identity every time the text shifts; the right answer survives reorderings and in-place edits without asking the user to declare which is which.
+
+This is the two-pass match — a stripped-down cousin of Myers diff, which is what git diff, every IDE's "rename detection," and React's keyed-list reconciliation all use under the hood. The family is "match items across two snapshots by strongest-evidence-first, fall back to weaker evidence for the remainder." You've seen the same shape in source-control merge tools (exact-line match before fuzzy hunk match), in spreadsheet diffs (cell value before cell position), and in any system that has to decide whether two records from different points in time refer to the same thing. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `scanTodosFromText` matches `[]` lines to existing TodoItems, preserving id/createdAt/classifier output across edits.
 - **Why here:** identity must survive prose edits. Pass 1 catches reorderings; Pass 2 catches "same line, different words."
@@ -284,3 +292,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

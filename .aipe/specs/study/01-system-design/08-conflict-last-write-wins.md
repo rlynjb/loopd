@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Two devices have been offline for an hour and they both edit the same row. They reconnect at the same moment and start pushing their changes at the server. What's there afterwards? That's the question any replicated system has to answer before it ships, because "the latest write" is not actually well-defined when "latest" depends on whose clock you trust.
+
+Last-write-wins is the simplest possible answer: attach a timestamp to every row, and on a conflict, keep the row with the bigger timestamp. It belongs to the family of "conflict resolution policies," sitting at the cheap end of a spectrum that runs through vector clocks all the way up to CRDTs and operational transforms. You've seen this in DynamoDB's default reconciliation, in Cassandra, in cookie-based session stores, and in any cache that uses TTL plus a "newer-wins" overwrite rule. It's the right call when concurrent edits are rare and "we kept the most recent one" is an acceptable answer. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** `chooseWinner(local, cloud)` returns `'local' | 'cloud'`. The result drives whether a pulled row overwrites the local copy.
 - **Why here:** solo Phase A. Two devices = the user. The honest cases (same person edits on phone, then on tablet) all resolve cleanly with this rule.
@@ -166,3 +174,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

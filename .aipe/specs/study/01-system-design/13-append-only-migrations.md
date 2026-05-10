@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've edited a migration that already ran on production, deployed the change, and watched the next environment go up cleanly while the previous one stayed silently broken — because the migration runner thought the work was done and never re-ran the patched file. The pain isn't the bug; it's that there's no way to detect it without diffing schemas across environments. The root cause is treating a migration as code you can revise, instead of as a transaction log entry that's already been committed.
+
+Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** `supabase/migrations/000N_*.sql` files are immutable once committed. Schema changes ship as new files. The runner (`scripts/db-migrate.mjs`) applies any not-yet-applied file in order.
 - **Why here:** an applied migration is permanent. Editing `0001` after it ran on cloud would drift the schema between dev and prod.
@@ -169,3 +177,6 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — migration count grew from 5 to 8. Added 0006 (study), 0007 (reflect), 0008 (drop bug/question/decision/content + remap to 'todo'). Three migrations instead of one because they shipped on separate days — append-only discipline held even when the net effect was a taxonomy narrowing.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+If your classifier costs money or milliseconds per call, the cheapest way to make it faster on average is to not call it at all when a regex can answer. Most inputs to most classifiers are easy — they sit in a small handful of obvious patterns — and the expensive model exists only for the hard cases. Routing the easy ones through a cheap gate first and letting the gate abstain (return "I don't know") on anything ambiguous is the single biggest cost lever in any pipeline that mixes deterministic code with a paid model.
+
+This is the cascading-classifier pattern, sometimes called early-exit or cheap-first / expensive-second. It's the same shape spam filters use (rule-based score before the ML model), the same shape OCR pipelines use (whitespace detection before character recognition), the same shape every CDN uses (cache check before origin fetch). The family is "build a hierarchy of classifiers ordered by cost, terminate on the first one confident enough to commit." The asymmetry that makes it work is precision-over-recall on the cheap stage: a false positive there is a silent wrong answer, a false negative is just a deferral to the more expensive stage. Bias toward abstention. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** ordered regex checks. Speculative + question first (return `null`), then modal + deadline + imperative (return `'todo'`), else `null`.
 - **Why here:** every new todo runs this on insert. The LLM classifier only fires when this returns `null`. The heuristic catches ~60-70% of cases for free.
@@ -252,3 +260,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

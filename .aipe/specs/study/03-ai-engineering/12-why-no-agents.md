@@ -1,11 +1,19 @@
 # Why no agents, no chains-of-chains
 
-**Industry name:** — (architecture decision: chains over agent loops)
+**Industry name(s):** — (architecture decision: chains over agent loops)
 **Type:** Project-specific
 
 > The codebase deliberately stops at single chains. Every pattern surrounding the LLM (heuristic-first, async classify, validation gate, user-override lock) lives *outside* the model — in app code that calls one function and consumes its output.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [06-tool-calling](./06-tool-calling.md) · → [01-what-an-llm-is](./01-what-an-llm-is.md)
+
+---
+
+## Why care
+
+"Agent" is the most loaded word in AI engineering. It promises a model that plans, takes actions, observes the result, and adapts — autonomous, capable, intelligent. In practice, an agent is a `while` loop that re-prompts the same model with growing context until it emits a stop token or runs out of budget. Most of the time, for most jobs, that loop adds nothing a single well-designed prompt couldn't do — but it costs five to twenty times as much and fails in ways that are very hard to debug.
+
+The "no agents" decision is an architectural stance: do the smallest amount of LLM work that solves the problem, and keep the control flow in normal code where it can be read, tested, and instrumented. It belongs to the family of "prefer the boring solution" patterns — choose the deterministic state machine over the autonomous loop, the cron job over the self-scheduling worker, the explicit pipeline over the magic. You've already seen the alternative everywhere: LangChain agents, AutoGPT, BabyAGI, OpenAI's Assistants API, multi-step "researcher" demos. They are dazzling in benchmarks and treacherous in production. Many serious teams quietly rewrite their agents back into chains once the bill arrives. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -184,3 +192,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Agents are intentionally absent — anchored on the closest single-chain sites.
 Updated: 2026-05-10 — bumped chain count from 4 to 5 (interpret added; still no agents).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

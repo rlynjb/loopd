@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Every system has a line drawn on the inside of it where "we trust this request" turns into "we don't, and we need to prove who's asking." Most bugs that leak one user's data to another are caused by drawing that line in the wrong place, or by drawing it on paper and forgetting to enforce it in code. The interesting question is never "do we have auth" — it's "where does the trusted zone end, and what stops a request from crossing it without identity."
+
+A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** every Supabase write/read goes through a single hardcoded `PHASE_A_USER_ID` UUID. RLS policies exist as a migration but are not enabled.
 - **Why here:** solo product, single user; building features over the auth wire-up.
@@ -170,3 +178,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

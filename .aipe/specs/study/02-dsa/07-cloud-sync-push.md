@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've watched a long-running upload fail at 80% and had to start the whole thing over from zero. The annoyance isn't the failure — networks fail — it's that the unit of failure was the whole job instead of the chunk you were on. The fix is to slice the job into batches small enough that a retry is cheap, write idempotent operations so re-sending a chunk is safe, and track progress at the chunk level so a successful chunk never gets re-sent. Lose one batch, retry one batch.
+
+This is the batched-upsert pattern with checkpoint-per-batch progress — the same shape as bulk-load utilities in every database (`COPY` with commit intervals, `INSERT ... ON CONFLICT`), the same shape as resumable file uploads (S3 multipart, tus protocol), the same shape as message-queue consumers committing offsets per batch. The family is "amortise per-call overhead by batching, but keep batches small enough that a failure isn't catastrophic." Idempotency on the receiver (upsert-on-conflict, not insert) is what makes retry safe; the sender doesn't need to track which rows it already sent — it just resends whatever still looks unsynced. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** select `WHERE updated_at > synced_at`, upsert in batches of 50 with `onConflict: 'user_id,id'`. Stamp `synced_at` per successful batch.
 - **Why here:** big payloads risk timeouts; per-row pushes risk hundreds of round-trips. 50 is the empirical sweet spot.
@@ -251,3 +259,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

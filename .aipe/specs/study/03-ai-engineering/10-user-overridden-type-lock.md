@@ -1,11 +1,19 @@
 # user_overridden_type — the manual lock
 
-**Industry name:** — (project-specific override flag pattern: user_overridden_type)
+**Industry name(s):** — (project-specific override flag pattern: user_overridden_type)
 **Type:** Project-specific
 
 > A single boolean column on `todo_meta`. When the user manually picks a type from the picker, the column flips to `true`. From then on, every AI-driven path MUST read this flag and refuse to overwrite.
 
 **See also:** → [09-async-classification](./09-async-classification.md) · → [11-failure-modes](./11-failure-modes.md)
+
+---
+
+## Why care
+
+You corrected the AI's guess yesterday — flipped a category from "task" to "note" because the model got it wrong. Today you open the app and it's back to "task." The next batch run silently undid your correction, the model is wrong in the same way again, and you have to fix it a second time. Multiply by a month and the user concludes the AI doesn't listen. The right behaviour is for a human edit to outrank any future automated edit, forever, until the user explicitly clears it.
+
+This is the "sticky override" pattern — a flag that marks a field as "manually set, hands off." It belongs to the family of "human-in-the-loop" and "authoritative source" patterns, alongside the way email clients respect a manual "not spam" forever, the way version control respects a manual merge resolution over automatic re-merges, and the way recommender systems mark a "don't recommend this" flag as permanent. You've already seen it any time a product gave you the option to "always trust this sender" or "lock this value." Every AI feature that writes back to a field a user can also write to needs some version of this rule. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -169,3 +177,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

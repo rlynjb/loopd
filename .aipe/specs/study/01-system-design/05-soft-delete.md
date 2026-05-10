@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've deleted a row on one device and watched it come back, like a vampire, the next time the app synced from a backup. A hard `DELETE` removes the row, but it doesn't leave any trace that says "this thing used to exist and the user got rid of it." So any replica that still has the row treats it as new and dutifully restores it. That's how a delete becomes an un-delete.
+
+A tombstone is a row that's marked as gone instead of physically removed, with a timestamp recording when it died. It belongs to the family of "logical deletion" patterns and is how every replicated system avoids the resurrection problem: Cassandra writes tombstones, Dynamo writes tombstones, distributed file systems do the same. You've also seen this in any "trash" folder UI — the file isn't gone, it's flagged, so undo is cheap and the system has a paper trail. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** soft-delete via `deleted_at` timestamp. Every read filters `WHERE deleted_at IS NULL`. Every write that "deletes" stamps the column and bumps `updated_at`.
 - **Why here:** the cloud sync layer must learn about deletions; a hard `DELETE FROM` would just make the row vanish locally and cloud would re-pull it as if still alive.
@@ -163,3 +171,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Most data integrity bugs are not about a write going wrong — they're about the same fact being writable in two places, and the two places drifting. Edit a customer's email in the CRM, edit it again in the billing system, and within a week you've got two different emails and no honest answer to "which is real." The cheap fix is to pick one surface as canonical and treat every other copy as a cache you can throw away.
+
+Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** prose is canonical. Markers like `[]`, `** food N kcal`, and `#tag` in `entries.text` are the source. All derived rows are rebuilt by scanners at commit time.
 - **Why here:** keeps a single editable place. Two surfaces would mean drift; this way "delete the line in your journal, the todo is gone" works without divergent code paths.
@@ -177,3 +185,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

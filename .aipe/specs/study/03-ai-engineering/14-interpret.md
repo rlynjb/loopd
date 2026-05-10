@@ -1,11 +1,19 @@
 # Interpret — long-form markdown chain
 
-**Industry name:** Inline summarization, interpret chain
+**Industry name(s):** Inline summarization, interpret chain
 **Type:** Project-specific
 
 > A user-triggered AI chain that reads a journal entry and writes back a multi-section markdown reflection. Different shape from the other 4 chains — markdown out, no JSON, no schema validation, ephemeral.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [08-validation-gate](./08-validation-gate.md) · → [13-ai-features-in-this-app](./13-ai-features-in-this-app.md) · → [11-failure-modes](./11-failure-modes.md)
+
+---
+
+## Why care
+
+Most AI features in a product are invisible to the user — the model output is parsed, validated, written to a database, and rendered later as if it had been there all along. But some AI features are different: the model's output *is* the artifact the user reads. There's no database row, no derived state, no downstream consumer — just text that appears on screen because a human asked for it. That second category needs a completely different posture toward validation, persistence, and trust.
+
+The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -223,3 +231,4 @@ Then open the file and verify.
 
 ---
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

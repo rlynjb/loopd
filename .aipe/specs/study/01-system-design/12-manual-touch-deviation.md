@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Every clean architectural rule has exactly one or two cases that don't fit, and pretending otherwise is how codebases become liars. The honest move is to keep the rule, name the exception, and write it down in the same place the rule lives — so the next reader sees both and doesn't think they've found a bug. The alternative is to weaken the rule until it accommodates everything, which is the same as having no rule.
+
+A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** dashboard tap on a thread cell in the daily-schedule grid writes a special `thread_mentions` row with `(entry_id=NULL, todo_id=NULL)`.
 - **Why here:** the daily-schedule grid lets the user mark a thread "done today" with no prose. The staleness math (`computeStaleness`, `getThreadCards`) consumes `thread_mentions` uniformly — so writing an entry-less mention row is the cleanest signal.
@@ -165,3 +173,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected "11-principle list" → "12-principle list".
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

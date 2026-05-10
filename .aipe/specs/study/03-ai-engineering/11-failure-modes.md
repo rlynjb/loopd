@@ -1,11 +1,19 @@
 # Failure modes the codebase explicitly handles
 
-**Industry name:** Failure modes, FMEA-lite for AI features
+**Industry name(s):** Failure modes, FMEA-lite for AI features
 **Type:** Language-agnostic
 
 > AI is best-effort. Every callsite makes sure that an AI failure leaves the canonical data (the prose, the todo, the entry) untouched. The worst outcome of any AI bug is "no AI annotation this time," never "lost data."
 
 **See also:** → [08-validation-gate](./08-validation-gate.md) · → [10-user-overridden-type-lock](./10-user-overridden-type-lock.md)
+
+---
+
+## Why care
+
+AI calls fail. They fail because the network dropped, because the provider is down, because the model returned malformed JSON, because rate limits hit, because the model refused the prompt, because the user's API key expired. Every one of those failures is going to happen, repeatedly, in production. The question is not "how do I prevent them" — you can't — but "what does the user lose when one of them happens at the wrong moment." If the answer is "their data," the architecture is wrong.
+
+The principle here is graceful degradation: the AI layer is best-effort, and a failure in that layer must never damage the canonical data underneath it. It belongs to the family of "fail-soft" and "isolation" patterns — the same shape as circuit breakers around flaky services, write-ahead logs that survive crashes mid-transaction, and CDN fallbacks that serve stale content when the origin dies. You've already seen it in Stripe SDKs that retry idempotently on network errors, in OpenAI clients that surface a typed error instead of a half-parsed response, and in any production LLM stack that wraps every call in "if this throws, the user's record is unchanged." The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -185,3 +193,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added 4 new interpret-specific failure modes (too-short / over-cap / malformed-markdown / clinical-drift); bumped service count from 4 to 5. See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

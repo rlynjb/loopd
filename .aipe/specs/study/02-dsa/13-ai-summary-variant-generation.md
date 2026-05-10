@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+When you need a model to produce several related outputs about the same thing — four headline variants, three captions, five summary styles — the obvious approach is to call the model four times in parallel and pick the best one. The non-obvious approach, and the right one when the outputs must agree on facts, is to ask for all of them in a single call with a structured output schema. Four parallel calls produce four independent stories about the same day; one call producing four variants produces four voices of the same story. Same facts, same nouns, four tones.
+
+This is multi-output structured prompting — a specific application of the broader "ask for all the related stuff at once and validate the whole shape or reject it" discipline. The family is "constrained generation with all-or-nothing validation," and it's the same shape OpenAI's function-calling, JSON schema modes, and tool-use APIs all encourage. Adjacent patterns: chain-of-thought wrapped in a structured envelope, multi-question quiz generation, code-with-tests emitted together. The trade-off is bimodal — one good output or no output at all, no partial credit — and that's a feature, not a bug, when consistency between the parts is what makes the whole useful. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `generateCaption(input)` calls Claude Sonnet 4.6 (or GPT-4o) with one prompt that emits all four variants in a single JSON object, then validates the shape and persists into the existing `ai_summaries` row.
 - **Why here:** the four variants describe the *same* day in different voices — a single call keeps them consistent (same facts, same nouns) and costs one round-trip instead of four.
@@ -312,3 +320,6 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

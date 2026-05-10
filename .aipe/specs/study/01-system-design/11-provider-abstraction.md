@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've shipped an integration with a third-party service and then watched the vendor change their pricing, deprecate an endpoint, or just go down for a day. If the call to that vendor was sprinkled across thirty files, you got to spend a week chasing it down. If it was behind one well-defined seam, you swapped vendors in an afternoon. The difference is not how good either vendor was — it's how prepared the codebase was for the day one of them stopped being the right answer.
+
+The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** five AI services (summarize, caption, classify, expand, interpret). Each branches on `'claude' | 'openai'`. Same provider contract, different output contracts (JSON for 4, markdown for interpret).
 - **Why here:** the app sells AI features but doesn't lock the user into one provider. SecureStore keys can be either; the user picks. Default is Claude.
@@ -192,3 +200,6 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added). 4 callsites × 2 providers became 5 × 2 = 10 code paths.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + restored missing `## Quick summary` heading + disambiguated `expand.ts` path to `src/services/todos/expand.ts`.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+The instinct on a new feature called "first-time setup" is to write a second code path: a dedicated bulk-loader that knows it's the first run, with its own pagination, its own error handling, its own everything. That code path is then untested in production until someone gets a new device — i.e., months later, with no observability. The better move is to notice that "first run" is just the degenerate case of "incremental run" with the cursor pinned to the beginning of time. Reset the watermark to null, call the regular sync, done. One code path. One set of bugs.
+
+This is the "special case is a parameter, not a fork" principle — the same instinct behind null-object pattern, behind "epoch zero" timestamps that make `WHERE updated_at > 0` cover all rows, behind sentinel rows in databases that make "first" and "subsequent" use the same INSERT. The family is "reduce the surface area by making the rare path a configuration of the common path." Initial replication in CDC systems works this way. Cold-cache fills in CDNs work this way. The cost is one extra pass at install time that re-pages through everything; the benefit is that the install-time code path was exercised on every normal sync for months before it ever ran in anger. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `firstPullAll()` walks the 10-table synced list, resets each `sync_meta.last_pull_at` to NULL via UPSERT, then delegates to `pullAll()`. The regular pull's `cursor = last_pull_at ?? '1970-01-01...'` does the rest.
 - **Why here:** a fresh device install with non-empty cloud (typical: wiped phone) needs to fetch everything once. The bootstrap detector in `bootstrap.ts` decides when to call this instead of `pushAll`.
@@ -312,3 +320,6 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

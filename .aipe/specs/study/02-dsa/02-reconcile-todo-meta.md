@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've had two lists that were supposed to mirror each other and drifted out of sync — a folder versus an index, a database column versus a sidecar table, a UI state versus the backing store. One side gets a new item, the other doesn't notice. One side deletes, the other holds a ghost. The fix is always the same shape: walk both lists once, decide what's missing on each side, apply the minimum number of writes to make them match again.
+
+That shape is the reconciler pattern, and it shows up everywhere you can't lean on a foreign-key constraint to enforce the relationship for you. Kubernetes controllers reconcile desired state against actual state on every tick. React's virtual DOM reconciles the next tree against the current one. SQL anti-joins (`LEFT JOIN ... WHERE right.id IS NULL`) are the same operation expressed in set algebra. The trick that makes it cheap is the same trick that makes a hash join beat a nested loop: build a lookup structure once, then scan the other side in linear time, asking the structure "do you have this?" instead of re-scanning. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `reconcileTodoMetaForEntry` keeps `todo_meta` 1:1 with `entries.todos_json`. Inserts missing, deletes orphans, leaves matched rows alone.
 - **Why here:** SQLite can't FK to a JSON-array element, so the reconciler is the integrity gate.
@@ -255,3 +263,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

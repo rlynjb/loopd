@@ -1,11 +1,19 @@
 # Async background classification — fire and forget
 
-**Industry name:** Asynchronous task / background job pattern
+**Industry name(s):** Asynchronous task / background job pattern
 **Type:** Industry standard · Language-agnostic
 
 > The prose scan completes synchronously. Each new ambiguous todo fires an LLM call without awaiting it. The result lands later via DB write + event.
 
 **See also:** → [05-heuristic-before-llm](./05-heuristic-before-llm.md) · → [02-dsa/02-reconcile-todo-meta](../02-dsa/02-reconcile-todo-meta.md)
+
+---
+
+## Why care
+
+You hit "save" and the app freezes for four seconds while an LLM thinks about your input. The interaction was instant the day before AI was added, and now it's slow on every save. The fix isn't a faster model — the fix is to stop waiting. Commit a sensible placeholder synchronously, kick off the model call in the background, and update the row when the answer comes back. The user feels nothing.
+
+Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -193,3 +201,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

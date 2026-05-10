@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Not every relationship between two pieces of data can be expressed with a foreign key. The moment one side lives inside a JSON column, inside a document, or inside a remote system, the database engine can't help you keep them in sync — there's no constraint to violate at write time. The integrity guarantee has to move out of the schema and into your code, and most teams discover that the hard way after their first orphan row leaks into production.
+
+An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** `entries.todos_json` is a JSON array of TodoItems; `todo_meta` is a separate table keyed on `todoId`. After every prose scan, the reconciler inserts missing meta rows, deletes orphans, leaves matched rows alone.
 - **Why here:** SQLite can't enforce FKs to elements of a JSON column, so the app code is the integrity gate.
@@ -188,3 +196,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

@@ -1,11 +1,19 @@
 # Context window — how loopd packs it
 
-**Industry name:** Context window, attention budget, token budget
+**Industry name(s):** Context window, attention budget, token budget
 **Type:** Industry standard
 
 > The model only sees what's in the window for *this call*. Loopd hand-picks small, capped slices per feature.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [07-rag](./07-rag.md)
+
+---
+
+## Why care
+
+You hand a model 50 pages of company docs and ask it to answer a question. What does it actually "see" when it generates the answer? Not your filesystem, not your database, not your prior conversation — just whatever bytes you stuffed into a single fixed-size buffer before pressing send. Everything competes for that space: instructions, examples, retrieved documents, prior turns, the user's actual question. When the buffer fills up, something has to be cut, and the system that cuts well wins.
+
+The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -169,3 +177,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added interpret context shape (`truncateTail` to MAX_INPUT_CHARS = 2000, MIN_TEXT_LENGTH = 20). See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attributed `getRecentAISummaries(date, 5)` to `summarize.ts:buildCaptionInput()` L131 (was wrongly placed in `caption.ts:generateCaption()`).
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've watched a calendar grid flicker on every render because each cell did its own database lookup to figure out what colour it should be. The right shape is the inverse: gather the data your view needs once, hand the gathered structure down to the cell renderer, and let each cell compute its own state in pure code with zero I/O. The decision becomes a function of its inputs and nothing else — no awaits, no `useState`, no race conditions. The cell can re-render a thousand times per second and the cost stays flat.
+
+This is a pure decision function — sometimes called a finite-state classifier or a lookup table when the input space is small enough to enumerate. It's the same pattern as CSS rule resolution (compute the matched class from element state, do not query anything), the same pattern as React's `useMemo` selectors, the same pattern as Redux derived state. The family is "split the expensive side (gathering) from the cheap side (deciding) so the cheap side can run hot without dragging the expensive side along." The handoff is that the parent owns the gather, the child owns the decide, and the contract between them is a plain data structure. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `cellStateFor` (habits) and `cellStateForThread` (threads) compute one of 5 cell states for the weekly grid.
 - **Why here:** the grid re-renders on every habit toggle, week change, and live-now tick. If `cellStateFor` were impure (DB read, async), the grid would flash.
@@ -247,3 +255,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

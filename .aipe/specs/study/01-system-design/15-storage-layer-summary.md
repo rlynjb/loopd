@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+Most "the database is slow" problems are actually "we put the wrong thing in the database" problems. Stuffing a hundred-megabyte video into a row meant for kilobyte text, or putting an API key into a queryable column where any read can leak it, is a category error — the storage shape doesn't match the data's needs. A serious system has more than one place to put a byte, and a rule for which place each kind of byte goes.
+
+A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. The shape it takes in this codebase is in Quick summary below.
+
+---
+
 ## Quick summary
 - **What:** SQLite (canonical), filesystem (clips/exports), SecureStore (keys + flags), Supabase Postgres (mirror), external LLM APIs (stateless).
 - **Why here:** mixing them would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly, and you don't want secrets in a queryable table.
@@ -170,3 +178,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + added missing 5th chain `interpret` to External LLMs list.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

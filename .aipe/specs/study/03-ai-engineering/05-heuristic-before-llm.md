@@ -1,11 +1,19 @@
 # Heuristic before LLM (the cost gate)
 
-**Industry name:** Cascading classifier, cheap-first / expensive-second
+**Industry name(s):** Cascading classifier, cheap-first / expensive-second
 **Type:** Industry standard · Language-agnostic
 
 > Every new todo runs through `heuristicClassify` first (regex-only, no network). The LLM classifier is fired only when the heuristic returns `null`.
 
 **See also:** → [02-dsa/10-heuristic-first-classifier](../02-dsa/10-heuristic-first-classifier.md) · → [09-async-classification](./09-async-classification.md)
+
+---
+
+## Why care
+
+The cheapest LLM call still costs money, takes 300+ milliseconds, and can fail. If your product runs an AI on every keystroke or every new row, you'll burn through a budget that buys you nothing for inputs a regex could have answered. The fix is to ask "do I actually need a model for this?" before every call — and most of the time, on the easy inputs, the answer is no.
+
+The heuristic-first pattern is a two-stage classifier: a cheap deterministic check decides whether the input is easy enough to handle without the model, and only the residual uncertain cases pay for inference. It belongs to the family of "cascade" or "early-exit" classifiers — the same shape as spam filters that rule out obvious junk before the ML model, content moderation pipelines that block known-bad hashes before vision models, and CPU branch predictors that take the fast path when the prediction is confident. You've already seen this in production LLM stacks where a regex or BM25 layer sits in front of a vector DB, and in routing layers (LangChain routers, LiteLLM fallbacks) that send small inputs to small cheap models and only escalate when they have to. The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -181,3 +189,4 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block. No "7-class problem" string present in this file; classification-count drift (7→5 modes) lives in file 13 and is updated there. Heuristic returns `'todo' | null` so the heuristic-gate description is unaffected by the mode-count reduction.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).

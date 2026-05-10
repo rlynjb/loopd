@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've opened a list page that did one query to fetch the list and then one more query per row to fetch its details — fifty rows, fifty-one queries. The page was slow and you didn't know why until you checked the network panel. The fix is the move every backend engineer learns once and then never unlearns: pull the parent rows in one query, pull all the child rows for those parents in one more query keyed by parent id, then stitch the two together in memory. Two queries for any list length, not N+1.
+
+This is the N+1 query problem and its standard remedy — the dataloader / batched-fetch / bulk-then-join pattern. GraphQL's DataLoader exists for exactly this. ORM "eager loading" / `includes` / `select_related` exists for exactly this. The family is "trade per-item round-trips for bulk transfers when the per-item work is dominated by latency, not by transfer size." The in-memory join is cheap (linear scan with a hash map) compared to the cost of an extra TCP round-trip. The same shape shows up in any system where you can choose between many small remote calls and a few large ones — REST endpoint batching, RPC fan-in, cache warming. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** 4 small SQL queries pull per-thread aggregates; 2 in-memory joins (todos+meta, threads+activity) compose the final card list.
 - **Why here:** the dashboard needs all of this per thread, every load. A single mega-JOIN in SQL would work but reuses the dashboard's existing `getAllEntries` cache for free.
@@ -284,3 +292,6 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — flagged content drift: `getThreadCards()` is now dead code. Threads were dropped from the dashboard in commit 42ee8a6 (2026-05-08) and no UI surface calls the aggregate anymore.
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

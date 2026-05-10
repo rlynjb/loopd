@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+You've added two new lines at the top of a document and watched every line-number-anchored thing below shift down by exactly two — comments in a code review, bookmarks in an editor, breakpoints in a debugger. The intuition is obvious to a human: same comment, just lower. The naive algorithm sees a comment at line 47 and looks for line 47 in the new file; it's not there, so the comment dies. Tolerance for small shifts is the difference between annotations that survive editing and annotations that have to be redrawn from scratch every time.
+
+This is fuzzy match with a displacement window — strongest evidence first (exact position), weaker evidence second (same content within a small distance). Source-control "blame" tracks lines this way across commits. PDF annotation tools do it across reflowed pages. IDE breakpoints in many editors do a version of this when the underlying file changes outside the editor. The pattern is "anchor on identity, allow a bounded slip on position" — the window is small enough that wrong matches stay rare, large enough that ordinary edits don't burn identity. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** match parsed-tags-from-text to existing-mention-rows. Pass 1 = exact `(threadId, sourceLine)`. Pass 2 = `(threadId, tagText)` within ±3 lines.
 - **Why here:** users often add a few lines above existing tags. The row id should survive that small shift.
@@ -269,3 +277,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

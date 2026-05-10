@@ -9,6 +9,14 @@
 
 ---
 
+## Why care
+
+The obvious way to ignore part of a string while scanning the rest is to strip the ignored part out — but the moment you strip characters, every offset downstream is wrong. The line number a regex match reports no longer corresponds to a line number in the original text. The fix is the move you only see once you've been burned by it: don't delete the masked region, *overwrite* it with neutral characters of the same length. Same byte count, same newline positions, no false matches from inside the masked text. Offsets stay honest.
+
+This is lexical masking with offset preservation — what tokenizers do when they want to skip strings or comments without renumbering everything else, what `sed` does when you use `tr` instead of `s` for a fixed-width substitution, what markdown parsers do internally when they walk fenced regions. The family is "two-phase parsing where phase one neutralises the parts phase two must not see, while preserving the geometry phase two depends on." You've seen this in syntax highlighters (strings and comments are masked before keyword matching) and in linters that skip code blocks inside doc comments. Here's how this codebase applies that pattern.
+
+---
+
 ## Quick summary
 - **What:** `parseTags(text)` masks code regions to spaces (preserving newlines), then runs a per-line `#tag` regex with per-line dedup.
 - **Why here:** users journal in markdown-ish prose; backticked tokens like `` `git #branch` `` should not become thread mentions.
@@ -274,3 +282,6 @@ Then open the file and verify.
 Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
+
+---
+Updated: 2026-05-10 — added Why care block (template v1.18.0).

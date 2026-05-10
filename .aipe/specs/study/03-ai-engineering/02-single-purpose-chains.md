@@ -1,11 +1,19 @@
 # Single-purpose chains (loopd's only pattern)
 
-**Industry name:** Prompt chaining, single-purpose chain, decomposition pattern
+**Industry name(s):** Prompt chaining, single-purpose chain, decomposition pattern
 **Type:** Industry standard
 
 > Every AI feature is a single LLM call with one job. The model writes JSON. The app parses, validates, and persists. No chains-of-chains, no multi-step plans.
 
 **See also:** → [01-what-an-llm-is](./01-what-an-llm-is.md) · → [08-validation-gate](./08-validation-gate.md) · → [13-ai-features-in-this-app](./13-ai-features-in-this-app.md)
+
+---
+
+## Why care
+
+The instinct when you start building with an LLM is to chain prompts together — "first summarize, then critique the summary, then rewrite based on the critique, then format." That instinct produces systems where a single bad token three calls deep poisons everything downstream, costs five times as much as it needs to, and is impossible to debug because you can't tell which step actually failed. The fix is older than LLMs: give each call exactly one job, validate the output, move on.
+
+Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The shape it takes in this codebase is in Quick summary below.
 
 ---
 
@@ -212,3 +220,4 @@ Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
 Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
 Updated: 2026-05-10 — chain count grew from 4 to 5 (Interpret added, with markdown-out contract). Expand types reduced from 6 to 4. Classify modes reduced from 7 to 5. See `14-interpret.md`.
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 2 hint 4→5 chain files; corrected "expand.ts is six prompts" to 4 typed schemas (ExpandableType excludes 'todo'); updated Level 4 alternative count 6→4.
+Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
