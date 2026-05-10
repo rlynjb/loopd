@@ -148,9 +148,9 @@ function splitBold(input: string): { bold: boolean; text: string }[] {
 function Inline({ text, style, boldStyle }: { text: string; style: any; boldStyle?: any }) {
   const runs = splitBold(text);
   return (
-    <Text style={style}>
+    <Text style={style} selectable>
       {runs.map((r, i) => (
-        <Text key={i} style={r.bold ? [style, boldStyle ?? styles.bold] : style}>
+        <Text key={i} style={r.bold ? [style, boldStyle ?? styles.bold] : style} selectable>
           {r.text}
         </Text>
       ))}
@@ -188,7 +188,7 @@ export function InterpretMarkdown({ markdown }: { markdown: string }) {
               <View key={i} style={styles.list}>
                 {b.items.map((it, j) => (
                   <View key={j} style={styles.listItem}>
-                    <Text style={styles.bullet}>•</Text>
+                    <Text style={styles.bullet} selectable>•</Text>
                     <Inline text={it} style={styles.listText} />
                   </View>
                 ))}
@@ -199,7 +199,7 @@ export function InterpretMarkdown({ markdown }: { markdown: string }) {
               <View key={i} style={styles.list}>
                 {b.items.map((it, j) => (
                   <View key={j} style={styles.listItem}>
-                    <Text style={styles.bullet}>{j + 1}.</Text>
+                    <Text style={styles.bullet} selectable>{j + 1}.</Text>
                     <Inline text={it} style={styles.listText} />
                   </View>
                 ))}
