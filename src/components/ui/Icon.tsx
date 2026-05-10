@@ -11,7 +11,7 @@ import {
   Bold, Type, Italic,
   Save, Download, Upload, Camera, LayoutDashboard, Film,
   House,
-  Lightbulb, Bug, HelpCircle, GitBranch, GraduationCap,
+  Lightbulb, Bug, HelpCircle, GitBranch, GraduationCap, Eye,
   Pin, PinOff,
   Sparkles,
   type LucideIcon,
@@ -82,6 +82,7 @@ export const ICONS = {
   helpCircle: HelpCircle,
   gitBranch: GitBranch,
   graduationCap: GraduationCap,
+  eye: Eye,
   // Pin / unpin
   pin: Pin,
   pinOff: PinOff,

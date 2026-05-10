@@ -12,6 +12,7 @@ const PREAMBLES: Record<ExpandableType, string> = {
   knowledge: `Before crystallizing this knowledge, consider: What's the essential insight here, stripped of context? Where else could this apply beyond the current situation? What would someone need to know to use this effectively? What's the most minimal, reusable example?`,
   content: `Before shaping this for an audience, think about: Who would care about this and why? What's the one thing they should take away? What makes this more interesting than a generic take? What format would reach them best?`,
   study: `Before sketching this study plan, think about: What's the core thing to learn here, narrowed down? Why is now the right time? What does the writer likely already know vs. need to pick up first? What's the smallest concrete first session that builds momentum without overwhelming?`,
+  reflect: `Before opening this up for reflection, think about: What's actually worth sitting with here, separated from immediate reaction? What honest read can you offer without rushing to a conclusion? What questions would keep the writer thinking productively rather than spiralling? Stay grounded — never diagnose, never moralize.`,
 };
 
 // Output schema spec for each type. Goes verbatim into the system prompt so
@@ -60,6 +61,12 @@ const SCHEMAS: Record<ExpandableType, string> = {
   "resources":     ["string — a concrete starting point: book, paper, docs page, course, repo", "..."],
   "firstSession":  "string — what to do in a focused 30–60 minute first sitting"
 }`,
+  reflect: `{
+  "topic":         "string — what the writer is reflecting on, narrowed",
+  "prompt":        "string — the central reflective question to sit with",
+  "earlyInsight":  "string — an honest, hedged early read (use 'this may reflect…', 'a theme here is…' — never diagnose)",
+  "openQuestions": ["string — a follow-up question worth holding open", "..."]
+}`,
 };
 
 const TYPE_INTRO: Record<ExpandableType, string> = {
@@ -70,6 +77,7 @@ const TYPE_INTRO: Record<ExpandableType, string> = {
   knowledge: 'You crystallize observations into reusable knowledge.',
   content: 'You shape rough ideas into publishable content drafts.',
   study: 'You turn vague learning intentions into a tight, runnable study plan.',
+  reflect: 'You hold space for honest reflection — calm, observant, never diagnostic.',
 };
 
 export function getSystemPrompt(type: ExpandableType): string {

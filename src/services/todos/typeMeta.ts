@@ -22,6 +22,7 @@ export const TYPE_META: Record<TodoType, TodoTypeMeta> = {
   knowledge: { type: 'knowledge', label: 'Knowledge', icon: 'bookOpen',      color: colors.teal,    order: 5 },
   content:   { type: 'content',   label: 'Content',   icon: 'feather',       color: colors.accent2, order: 6 },
   study:     { type: 'study',     label: 'Study',     icon: 'graduationCap', color: colors.accent,  order: 7 },
+  reflect:   { type: 'reflect',   label: 'Reflect',   icon: 'eye',           color: colors.indigo,  order: 8 },
 };
 
 // Convenience: types in display order (excluding 'todo' if requested for

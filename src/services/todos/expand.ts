@@ -12,7 +12,7 @@ import { serializeExpansion } from './expandSerialize';
 import type {
   TodoMeta, TodoExpansion, ExpandableType, IdeaExpansion, BugExpansion,
   QuestionExpansion, DecisionExpansion, KnowledgeExpansion, ContentExpansion,
-  StudyExpansion,
+  StudyExpansion, ReflectExpansion,
 } from '../../types/todoMeta';
 import type { Entry, TodoItem } from '../../types/entry';
 
@@ -148,6 +148,16 @@ function validateExpansion(type: ExpandableType, data: unknown): TodoExpansion |
         firstSession: str('firstSession'),
       };
       if (!d.topic || !d.firstSession) return null;
+      return { type, data: d };
+    }
+    case 'reflect': {
+      const d: ReflectExpansion = {
+        topic: str('topic'),
+        prompt: str('prompt'),
+        earlyInsight: str('earlyInsight'),
+        openQuestions: arr('openQuestions'),
+      };
+      if (!d.topic || !d.prompt) return null;
       return { type, data: d };
     }
   }

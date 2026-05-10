@@ -72,6 +72,16 @@ export function serializeExpansion(expansion: TodoExpansion): string {
       parts.push(h('First Session'), p(d.firstSession));
       return parts.join('\n\n').trim();
     }
+    case 'reflect': {
+      const d = expansion.data;
+      const parts = [
+        h('Topic'), p(d.topic),
+        h('Prompt'), p(d.prompt),
+      ];
+      if (d.earlyInsight) parts.push(h('Early Insight'), p(d.earlyInsight));
+      if (d.openQuestions.length > 0) parts.push(h('Open Questions'), bullets(d.openQuestions));
+      return parts.join('\n\n').trim();
+    }
   }
 }
 

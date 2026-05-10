@@ -12,6 +12,7 @@ export const colors = {
   coral: '#e05555',
   amber: '#d4922a',
   blue: '#5b8fe8',
+  indigo: '#8a8ad6',
   text: '#f0ede8',
   textMuted: '#a09a90',
   textDim: '#706b68',

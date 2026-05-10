@@ -10,7 +10,8 @@ export type TodoType =
   | 'decision'
   | 'knowledge'
   | 'content'
-  | 'study';
+  | 'study'
+  | 'reflect';
 
 export type ClassifierConfidence = 'high' | 'medium' | 'low' | 'heuristic';
 
@@ -108,6 +109,18 @@ export type StudyExpansion = {
   firstSession: string;
 };
 
+// 'reflect' captures something the user wants to *sit with* — past-facing
+// introspection rather than future action. Distinct from 'knowledge' (an
+// already-absorbed insight) and 'study' (an intention to learn). The
+// expansion gives a structured pass: the topic, the central reflective
+// prompt, an early honest read, and 2–4 questions to keep exploring.
+export type ReflectExpansion = {
+  topic: string;
+  prompt: string;
+  earlyInsight: string;
+  openQuestions: string[];
+};
+
 // Discriminated union the orchestrator returns from a successful expansion
 // before it's serialized to markdown. The type tag keeps the serializer
 // switch type-safe.
@@ -118,6 +131,7 @@ export type TodoExpansion =
   | { type: 'decision';  data: DecisionExpansion }
   | { type: 'knowledge'; data: KnowledgeExpansion }
   | { type: 'content';   data: ContentExpansion }
-  | { type: 'study';     data: StudyExpansion };
+  | { type: 'study';     data: StudyExpansion }
+  | { type: 'reflect';   data: ReflectExpansion };
 
 export type ExpandableType = Exclude<TodoType, 'todo'>;

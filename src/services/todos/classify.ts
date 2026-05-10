@@ -9,7 +9,7 @@ const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 
 // Per spec §5.3 — context-free for speed and cost. Surrounding entry
 // context comes back in at expansion time (Phase C), not here.
-const SYSTEM_PROMPT = `You classify short developer thoughts into one of eight thinking modes.
+const SYSTEM_PROMPT = `You classify short developer thoughts into one of nine thinking modes.
 Read the thought. Pick the mode that matches the kind of thinking it needs.
 Output ONLY a JSON object — no preamble, no markdown.
 
@@ -22,6 +22,7 @@ Modes:
 - knowledge: an observation or insight worth remembering.
 - content: a thing the writer wants to publish, post, or share.
 - study: an intention to learn a topic — "study X", "want to learn Y", "read paper / book / docs on Z". Distinct from knowledge (already absorbed) and idea (unproven possibility).
+- reflect: something to *sit with* and re-examine — past-facing introspection. "reflect on X", "process that conversation", "think about why Y happened". Distinct from question (a specific answerable ask) and knowledge (an absorbed insight).
 
 Respond with: {"type":"<mode>","confidence":"high|medium|low"}`;
 
@@ -70,7 +71,7 @@ async function callOpenAI(apiKey: string, text: string): Promise<string> {
 }
 
 const VALID_TYPES = new Set<TodoType>([
-  'todo', 'idea', 'bug', 'question', 'decision', 'knowledge', 'content', 'study',
+  'todo', 'idea', 'bug', 'question', 'decision', 'knowledge', 'content', 'study', 'reflect',
 ]);
 const VALID_CONFIDENCES = new Set<string>(['high', 'medium', 'low']);
 
