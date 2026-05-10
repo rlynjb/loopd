@@ -11,7 +11,7 @@ import {
   Bold, Type, Italic,
   Save, Download, Upload, Camera, LayoutDashboard, Film,
   House,
-  Lightbulb, Bug, HelpCircle, GitBranch,
+  Lightbulb, Bug, HelpCircle, GitBranch, GraduationCap,
   Pin, PinOff,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -80,6 +80,7 @@ export const ICONS = {
   bug: Bug,
   helpCircle: HelpCircle,
   gitBranch: GitBranch,
+  graduationCap: GraduationCap,
   // Pin / unpin
   pin: Pin,
   pinOff: PinOff,

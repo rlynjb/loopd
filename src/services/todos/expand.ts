@@ -12,6 +12,7 @@ import { serializeExpansion } from './expandSerialize';
 import type {
   TodoMeta, TodoExpansion, ExpandableType, IdeaExpansion, BugExpansion,
   QuestionExpansion, DecisionExpansion, KnowledgeExpansion, ContentExpansion,
+  StudyExpansion,
 } from '../../types/todoMeta';
 import type { Entry, TodoItem } from '../../types/entry';
 
@@ -136,6 +137,17 @@ function validateExpansion(type: ExpandableType, data: unknown): TodoExpansion |
         draftOutline: str('draftOutline'),
       };
       if (!d.hook) return null;
+      return { type, data: d };
+    }
+    case 'study': {
+      const d: StudyExpansion = {
+        topic: str('topic'),
+        whyNow: str('whyNow'),
+        prerequisites: arr('prerequisites'),
+        resources: arr('resources'),
+        firstSession: str('firstSession'),
+      };
+      if (!d.topic || !d.firstSession) return null;
       return { type, data: d };
     }
   }

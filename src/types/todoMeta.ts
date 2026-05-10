@@ -9,7 +9,8 @@ export type TodoType =
   | 'question'
   | 'decision'
   | 'knowledge'
-  | 'content';
+  | 'content'
+  | 'study';
 
 export type ClassifierConfidence = 'high' | 'medium' | 'low' | 'heuristic';
 
@@ -95,6 +96,18 @@ export type ContentExpansion = {
   draftOutline: string;
 };
 
+// 'study' captures a learning *intention* — something the user wants to
+// learn, distinct from `knowledge` (an insight already absorbed) and
+// `idea` (an unproven possibility). The expansion gives the user a
+// minimal study plan: what + why + prereqs + resources + first session.
+export type StudyExpansion = {
+  topic: string;
+  whyNow: string;
+  prerequisites: string[];
+  resources: string[];
+  firstSession: string;
+};
+
 // Discriminated union the orchestrator returns from a successful expansion
 // before it's serialized to markdown. The type tag keeps the serializer
 // switch type-safe.
@@ -104,6 +117,7 @@ export type TodoExpansion =
   | { type: 'question';  data: QuestionExpansion }
   | { type: 'decision';  data: DecisionExpansion }
   | { type: 'knowledge'; data: KnowledgeExpansion }
-  | { type: 'content';   data: ContentExpansion };
+  | { type: 'content';   data: ContentExpansion }
+  | { type: 'study';     data: StudyExpansion };
 
 export type ExpandableType = Exclude<TodoType, 'todo'>;

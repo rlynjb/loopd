@@ -61,6 +61,17 @@ export function serializeExpansion(expansion: TodoExpansion): string {
       parts.push(h('Draft Outline'), p(d.draftOutline));
       return parts.join('\n\n').trim();
     }
+    case 'study': {
+      const d = expansion.data;
+      const parts = [
+        h('Topic'), p(d.topic),
+        h('Why Now'), p(d.whyNow),
+      ];
+      if (d.prerequisites.length > 0) parts.push(h('Prerequisites'), bullets(d.prerequisites));
+      if (d.resources.length > 0) parts.push(h('Resources'), bullets(d.resources));
+      parts.push(h('First Session'), p(d.firstSession));
+      return parts.join('\n\n').trim();
+    }
   }
 }
 

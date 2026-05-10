@@ -201,7 +201,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       position INTEGER,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content')),
+      CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content','study')),
       CHECK (stage IN ('todo','in_progress','backlog')),
       CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
     );
@@ -383,6 +383,59 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   await database.execAsync(`UPDATE ai_summaries SET updated_at = generated_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE vlogs SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE thread_mentions SET updated_at = created_at WHERE updated_at IS NULL`);
+
+  // CHECK-constraint widening on todo_meta.type — 'study' added 2026-05-09.
+  // SQLite can't ALTER a CHECK in place, so recreate the table when the
+  // existing schema lacks 'study'. Idempotent: noop on fresh installs (the
+  // CREATE TABLE above already includes 'study') and after the migration
+  // has run once. Placed after the sync-columns loop so synced_at/deleted_at
+  // are guaranteed present on the source row before INSERT SELECT.
+  try {
+    const todoMetaSchema = await database.getFirstAsync<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='todo_meta'"
+    );
+    if (todoMetaSchema?.sql && !todoMetaSchema.sql.includes("'study'")) {
+      await database.execAsync(`
+        CREATE TABLE todo_meta_new (
+          todo_id TEXT PRIMARY KEY,
+          entry_id TEXT NOT NULL,
+          entry_date TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'todo',
+          stage TEXT NOT NULL DEFAULT 'todo',
+          expanded_md TEXT,
+          expanded_at TEXT,
+          model TEXT,
+          classifier_confidence TEXT,
+          classifier_model TEXT,
+          user_overridden_type INTEGER NOT NULL DEFAULT 0,
+          position INTEGER,
+          pinned INTEGER NOT NULL DEFAULT 0,
+          synced_at TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (type IN ('todo','idea','bug','question','decision','knowledge','content','study')),
+          CHECK (stage IN ('todo','in_progress','backlog')),
+          CHECK (classifier_confidence IS NULL OR classifier_confidence IN ('high','medium','low','heuristic'))
+        );
+        INSERT INTO todo_meta_new SELECT
+          todo_id, entry_id, entry_date, type, stage, expanded_md, expanded_at,
+          model, classifier_confidence, classifier_model, user_overridden_type,
+          position, pinned, synced_at, deleted_at, created_at, updated_at
+        FROM todo_meta;
+        DROP TABLE todo_meta;
+        ALTER TABLE todo_meta_new RENAME TO todo_meta;
+        CREATE INDEX IF NOT EXISTS idx_todo_meta_entry ON todo_meta(entry_id);
+        CREATE INDEX IF NOT EXISTS idx_todo_meta_date ON todo_meta(entry_date);
+        CREATE INDEX IF NOT EXISTS idx_todo_meta_type ON todo_meta(type);
+        CREATE INDEX IF NOT EXISTS idx_todo_meta_updated ON todo_meta(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_todo_meta_created ON todo_meta(created_at);
+      `);
+      console.log('[loopd] Migrated todo_meta: widened type CHECK to include study');
+    }
+  } catch (e) {
+    console.warn('[loopd] todo_meta study-CHECK migration error:', e);
+  }
 
   // sync_meta — per-table sync-state ledger. NOT itself synced.
   // Eleven rows after first run (one per synced table; sync_deletions excluded).
