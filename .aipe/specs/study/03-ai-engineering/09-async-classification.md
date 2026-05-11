@@ -169,23 +169,17 @@ A secondary trigger: multi-user. At single-user phase A, the developer (me) is t
 
 Polling vs event-based UI updates wasn't a real choice. Polling would have meant the `/todos` screen re-fetching metas every N seconds — wasteful on mobile, drains battery, and the latency-to-update is whatever the polling interval is. Events fire exactly when there's news; the subscription cost is one `useEffect` per screen. Same outcome, lower cost.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk / Claude Haiku 4.5 ──────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk; Haiku 4.5 for classifyTodo  │
-│                   in src/services/todos/classify.ts              │
-│ Why it's here:    Haiku is the cheap, fast classifier for the    │
-│                   5-mode todo taxonomy — fired async per todo    │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
+
+### @anthropic-ai/sdk / Claude Haiku 4.5
+
+- **Codebase uses:** `@anthropic-ai/sdk`; Haiku 4.5 for `classifyTodo` in `src/services/todos/classify.ts`.
+- **Why it's here:** Haiku is the cheap, fast classifier for the 5-mode todo taxonomy — fired async per todo.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
 
 ---
 
@@ -374,3 +368,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

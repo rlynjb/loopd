@@ -158,50 +158,33 @@ Fine until the third provider lands. With 3 providers × 5 chains = 15 branch ar
 
 A "switch on provider name globally and use shared SDK adapters" path wasn't on the table. The SDK shapes are too different — `@anthropic-ai/sdk`'s `messages.create` has a different request shape than OpenAI's `/v1/chat/completions` raw fetch (which we use because the OpenAI Node SDK adds dependency weight we don't want on a mobile build). Any shared layer above the SDKs would itself be the abstraction we're discussing.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk ─────────────────────────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk (Claude Sonnet / Haiku)     │
-│ Why it's here:    the canonical path for all Claude calls;      │
-│                   the default branch in every AI service file   │
-│                                                                 │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
-│ Why it leads:     native SDK gives first-class access to prompt │
-│                   caching, JSON output, and tool calling that   │
-│                   wrappers sometimes flatten                    │
-│                                                                 │
-│ Runner-up:        Vercel AI SDK — innovation-leading multi-     │
-│                   provider streaming with typed message         │
-│                   structures and useChat hook                   │
-└─────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ Raw fetch to OpenAI (/v1/chat/completions) ────────────────────┐
-│ Codebase uses:    raw fetch — no OpenAI Node SDK                │
-│ Why it's here:    OpenAI is the maintained alternate; raw fetch  │
-│                   avoids Node SDK dependency weight on mobile   │
-│                                                                 │
-│ Leading today:    OpenAI Node SDK — adoption-leading, 2026      │
-│ Why it leads:     typed request/response shapes, built-in       │
-│                   retries, and official first-party support     │
-│                                                                 │
-│ Runner-up:        Vercel AI SDK — innovation-leading wrapper    │
-│                   unifying OpenAI + Anthropic + others behind   │
-│                   one streaming interface                       │
-└─────────────────────────────────────────────────────────────────┘
+### @anthropic-ai/sdk
 
-┌─ LangChain BaseChatModel ───────────────────────────────────────┐
-│ Codebase uses:    not used — named as the rejected alternative  │
-│ Why it's here:    the file frames the explicit-branch decision  │
-│                   against the LangChain unified-interface path  │
-│                                                                 │
-│ Leading today:    Vercel AI SDK — innovation-leading, 2026      │
-│ Why it leads:     typed message structures, streaming-first,    │
-│                   and framework-aware (Next.js / Remix / Nuxt); │
-│                   LangChain.js adoption lags its Python side    │
-│                                                                 │
-│ Runner-up:        LangChain.js — still has adoption in JS/TS   │
-│                   for agent orchestration and tool-use chains   │
-└─────────────────────────────────────────────────────────────────┘
+- **Codebase uses:** `@anthropic-ai/sdk` (Claude Sonnet / Haiku).
+- **Why it's here:** the canonical path for all Claude calls; the default branch in every AI service file.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
+
+### Raw fetch to OpenAI (`/v1/chat/completions`)
+
+- **Codebase uses:** raw `fetch` — no OpenAI Node SDK.
+- **Why it's here:** OpenAI is the maintained alternate; raw `fetch` avoids Node SDK dependency weight on mobile.
+- **Leading today:** OpenAI Node SDK — `adoption-leading`, 2026.
+- **Why it leads:** typed request/response shapes, built-in retries, and official first-party support.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` wrapper unifying OpenAI + Anthropic + others behind one streaming interface.
+
+### LangChain BaseChatModel
+
+- **Codebase uses:** not used — named as the rejected alternative.
+- **Why it's here:** the file frames the explicit-branch decision against the LangChain unified-interface path.
+- **Leading today:** Vercel AI SDK — `innovation-leading`, 2026.
+- **Why it leads:** typed message structures, streaming-first, and framework-aware (Next.js / Remix / Nuxt); LangChain.js adoption lags its Python side.
+- **Runner-up:** LangChain.js — still has adoption in JS/TS for agent orchestration and tool-use chains.
 
 ---
 
@@ -388,3 +371,6 @@ Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expande
 
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, Raw fetch to OpenAI, LangChain BaseChatModel.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

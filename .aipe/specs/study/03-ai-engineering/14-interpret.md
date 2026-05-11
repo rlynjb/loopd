@@ -201,40 +201,25 @@ A different breakpoint: long entries routinely exceeding 2000 chars. `MAX_INPUT_
 
 Markdown vs prose-formatted JSON (with `{ text: '...' }` as a single field) wasn't a real choice. Both would carry the same content; the difference is whether `cleanMarkdown` and the renderer treat the response as a string or a JSON wrapper. The wrapper adds parse failure modes for no benefit — same content, more failure surface. Markdown out is the natural shape.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk / Claude Sonnet 4.6 ─────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk; callClaude() in interpret.ts│
-│                   L63–L74 with temperature 0.7, max_tokens 1800  │
-│ Why it's here:    interpret uses Claude as the primary provider   │
-│                   for the 32-line opinionated mirror prompt       │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ Raw fetch to OpenAI /v1/chat/completions ──────────────────────┐
-│ Codebase uses:    raw fetch; callOpenAI() in interpret.ts        │
-│                   L76–L93 with gpt-4o as the fallback provider   │
-│ Why it's here:    OpenAI is the alternate provider branch for    │
-│                   the interpret chain — same markdown contract,  │
-│                   different API surface                          │
-│                                                                  │
-│ Leading today:    OpenAI Node SDK — adoption-leading, 2026       │
-│ Why it leads:     typed request/response shapes, built-in        │
-│                   retries, and the most-used OpenAI client in    │
-│                   production                                     │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading wrapper unifying OpenAI +   │
-│                   Anthropic + others under one interface         │
-└─────────────────────────────────────────────────────────────────┘
+### @anthropic-ai/sdk / Claude Sonnet 4.6
+
+- **Codebase uses:** `@anthropic-ai/sdk`; `callClaude()` in `interpret.ts` L63–L74 with temperature 0.7, `max_tokens` 1800.
+- **Why it's here:** interpret uses Claude as the primary provider for the 32-line opinionated mirror prompt.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
+
+### Raw fetch to OpenAI `/v1/chat/completions`
+
+- **Codebase uses:** raw `fetch`; `callOpenAI()` in `interpret.ts` L76–L93 with `gpt-4o` as the fallback provider.
+- **Why it's here:** OpenAI is the alternate provider branch for the interpret chain — same markdown contract, different API surface.
+- **Leading today:** OpenAI Node SDK — `adoption-leading`, 2026.
+- **Why it leads:** typed request/response shapes, built-in retries, and the most-used OpenAI client in production.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` wrapper unifying OpenAI + Anthropic + others under one interface.
 
 ---
 
@@ -445,3 +430,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; replaced existing markdown-table Tradeoffs with comparison ASCII table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, raw fetch to OpenAI.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

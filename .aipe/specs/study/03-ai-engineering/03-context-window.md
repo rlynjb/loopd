@@ -134,42 +134,25 @@ A concrete operational trigger: when a single chain's input exceeds ~8k tokens c
 
 Sending zero context on classify was never a quality-vs-cost tradeoff in any meaningful sense — the classifier is a 5-label problem on a single line of prose, and adding the surrounding entry didn't measurably move accuracy in any test we ran. Cost was the only axis; we picked the cheap option without losing anything we'd notice.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk ─────────────────────────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk (claude-sonnet-4-6,         │
-│                   claude-haiku-4-5) via callClaude helpers      │
-│ Why it's here:    the SDK used by every chain whose context      │
-│                   budget this file describes and manages         │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ Anthropic prompt caching ──────────────────────────────────────┐
-│ Codebase uses:    not yet — named in the breakpoint block as a  │
-│                   future cost lever (90% discount on cached      │
-│                   input tokens, 5 min TTL)                       │
-│ Why it's here:    the file calls it out as the mechanism that   │
-│                   would let "last 30 days" context become        │
-│                   effectively free at scale                      │
-│                                                                  │
-│ Leading today:    Anthropic cache_control — adoption-leading,   │
-│                   2026                                           │
-│ Why it leads:     first major provider to ship manual prompt     │
-│                   caching; lowest cost-per-cached-token and      │
-│                   explicit per-block cache control               │
-│                                                                  │
-│ Runner-up:        OpenAI prompt caching                          │
-│                   automatic (no manual control), narrower model  │
-│                   coverage                                       │
-└──────────────────────────────────────────────────────────────────┘
+### @anthropic-ai/sdk
+
+- **Codebase uses:** `@anthropic-ai/sdk` (`claude-sonnet-4-6`, `claude-haiku-4-5`) via `callClaude` helpers.
+- **Why it's here:** the SDK used by every chain whose context budget this file describes and manages.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
+
+### Anthropic prompt caching
+
+- **Codebase uses:** not yet — named in the breakpoint block as a future cost lever (90% discount on cached input tokens, 5 min TTL).
+- **Why it's here:** the file calls it out as the mechanism that would let "last 30 days" context become effectively free at scale.
+- **Leading today:** Anthropic `cache_control` — `adoption-leading`, 2026.
+- **Why it leads:** first major provider to ship manual prompt caching; lowest cost-per-cached-token and explicit per-block cache control.
+- **Runner-up:** OpenAI prompt caching — automatic (no manual control), narrower model coverage.
 
 ---
 
@@ -335,3 +318,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, Anthropic prompt caching.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

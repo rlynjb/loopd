@@ -176,24 +176,17 @@ A concrete trigger: the day we add a chain whose output is *only useful in conju
 
 Splitting `expand.ts` into 4 separate files (one per ExpandableType) was never going to be cleaner — the orchestration shape is identical, only the schema differs. Four duplicated control flows would have been worse than one file with one switch. The duplication-saved beats the abstraction-cost; this is "one chain family" in the budget, not a violation.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk ─────────────────────────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk (claude-sonnet-4-6 for      │
-│                   summarize/caption/expand/interpret,            │
-│                   claude-haiku-4-5 for classify)                │
-│ Why it's here:    the SDK powering each single-purpose chain —  │
-│                   one call, one job, one output contract         │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
+
+### @anthropic-ai/sdk
+
+- **Codebase uses:** `@anthropic-ai/sdk` (`claude-sonnet-4-6` for `summarize`/`caption`/`expand`/`interpret`, `claude-haiku-4-5` for `classify`).
+- **Why it's here:** the SDK powering each single-purpose chain — one call, one job, one output contract.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
 
 ---
 
@@ -368,3 +361,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

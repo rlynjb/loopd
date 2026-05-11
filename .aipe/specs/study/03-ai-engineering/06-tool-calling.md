@@ -140,45 +140,25 @@ A secondary trigger: if the corpus grows past what fits in a prompt. Today the u
 
 Function calling (the API mechanism) vs tool calling (the architectural pattern) wasn't a real choice. Both providers expose function-calling APIs, but using them in a single-shot way (one tool call, one tool response, one final answer) doesn't unlock anything the current single-chain pattern doesn't already give us. The interesting tradeoff is the *loop*, not the API.
 
-### Tech reference (industry pairing)
+---
 
-┌─ Anthropic tool use ────────────────────────────────────────────┐
-│ Codebase uses:    not implemented — named as the provider-      │
-│                   specific mechanism that would be used if tool  │
-│                   calling were added (tool-use blocks in the     │
-│                   Anthropic API)                                 │
-│ Why it's here:    the file frames loopd's deliberate no-tools   │
-│                   decision against Anthropic's tool-use API as  │
-│                   the concrete alternative                       │
-│                                                                  │
-│ Leading today:    Anthropic tool use — adoption-leading, 2026   │
-│ Why it leads:     parallel tool calls, streaming tool results,  │
-│                   multi-turn tool use with native SDK support;  │
-│                   reliable structured tool-call parsing          │
-│                                                                  │
-│ Runner-up:        OpenAI function calling                        │
-│                   older, broader ecosystem; less reliable for    │
-│                   parallel calls; both APIs now converge in      │
-│                   feature surface                                │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ OpenAI function calling ───────────────────────────────────────┐
-│ Codebase uses:    not implemented — named as the alternative     │
-│                   provider mechanism alongside Anthropic        │
-│                   tool-use blocks                               │
-│ Why it's here:    the file names both Anthropic tool-use and    │
-│                   OpenAI function calling as the APIs that would │
-│                   unlock the loop pattern loopd deliberately     │
-│                   avoids                                         │
-│                                                                  │
-│ Leading today:    Anthropic tool use — adoption-leading, 2026   │
-│ Why it leads:     see Anthropic tool use box above              │
-│                                                                  │
-│ Runner-up:        OpenAI function calling (this tech)           │
-│                   broad ecosystem adoption, well-documented,    │
-│                   JSON-schema-driven tool definitions; older     │
-│                   but widely used in production agent systems   │
-└──────────────────────────────────────────────────────────────────┘
+### Anthropic tool use
+
+- **Codebase uses:** not implemented — named as the provider-specific mechanism that would be used if tool calling were added (tool-use blocks in the Anthropic API).
+- **Why it's here:** the file frames loopd's deliberate no-tools decision against Anthropic's tool-use API as the concrete alternative.
+- **Leading today:** Anthropic tool use — `adoption-leading`, 2026.
+- **Why it leads:** parallel tool calls, streaming tool results, multi-turn tool use with native SDK support; reliable structured tool-call parsing.
+- **Runner-up:** OpenAI function calling — older, broader ecosystem; less reliable for parallel calls; both APIs now converge in feature surface.
+
+### OpenAI function calling
+
+- **Codebase uses:** not implemented — named as the alternative provider mechanism alongside Anthropic tool-use blocks.
+- **Why it's here:** the file names both Anthropic tool-use and OpenAI function calling as the APIs that would unlock the loop pattern loopd deliberately avoids.
+- **Leading today:** Anthropic tool use — `adoption-leading`, 2026.
+- **Why it leads:** see the Anthropic tool use subsection above.
+- **Runner-up:** OpenAI function calling (this tech) — broad ecosystem adoption, well-documented, JSON-schema-driven tool definitions; older but widely used in production agent systems.
 
 ---
 
@@ -365,3 +345,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for Anthropic tool use, OpenAI function calling.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

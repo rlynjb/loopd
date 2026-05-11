@@ -216,21 +216,17 @@ Fine until two writers exist (multi-device, future feature) or until a single us
 
 `onConflict: 'user_id,id'` with Last-Write-Wins isn't really a tradeoff against application-level CRDTs — at single-user-per-account scale the rows have one writer and LWW is the correct semantics, not a compromise. CRDTs would matter the moment two writers concurrently edited the same row, which the current product surface doesn't permit.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @supabase/supabase-js ─────────────────────────────────────────┐
-│ Codebase uses:    @supabase/supabase-js (upsert + onConflict)  │
-│ Why it's here:    batch upsert with conflict semantics drives   │
-│                   the idempotent per-batch retry mechanism      │
-│                                                                 │
-│ Leading today:    Supabase — adoption-leading, 2026            │
-│ Why it leads:     managed Postgres + auth + RLS + Storage in   │
-│                   one console; SDK mirrors PostgREST directly   │
-│                                                                 │
-│ Runner-up:        Neon + Drizzle                                │
-│                   innovation-leading typed SQL with             │
-│                   branch-per-PR workflow                        │
-└─────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
+
+### @supabase/supabase-js
+
+- **Codebase uses:** `@supabase/supabase-js` (upsert + `onConflict`).
+- **Why it's here:** batch upsert with conflict semantics drives the idempotent per-batch retry mechanism.
+- **Leading today:** Supabase — `adoption-leading`, 2026.
+- **Why it leads:** managed Postgres + auth + RLS + Storage in one console; SDK mirrors PostgREST directly.
+- **Runner-up:** Neon + Drizzle — `innovation-leading` typed SQL with branch-per-PR workflow.
 
 ---
 
@@ -403,3 +399,6 @@ Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expande
 
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

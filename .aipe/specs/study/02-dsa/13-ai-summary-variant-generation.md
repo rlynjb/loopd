@@ -287,38 +287,25 @@ Fine until variant count exceeds ~5-6 (max_tokens=768 caps the JSON size) or unt
 
 Folding `detectedTheme` into the same call isn't a tradeoff against client-side keyword matching — the LLM has the full rawLog context and can pick a theme that doesn't appear literally in any variant text. A keyword matcher would only see the chosen wording, not the day. We pay ~10 extra tokens for the theme key and get a meaningfully better signal.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk (Claude Sonnet 4.6) ─────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk — Claude Sonnet 4.6 via    │
-│                   callClaude() L123–L135 for variant generation │
-│ Why it's here:    primary path for structured JSON output of    │
-│                   four tonal variants + detectedTheme in one    │
-│                   shared-context call                           │
-│                                                                 │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026   │
-│ Why it leads:     native SDK gives first-class access to prompt │
-│                   caching, JSON output, and tool calling        │
-│                                                                 │
-│ Runner-up:        Vercel AI SDK                                 │
-│                   innovation-leading multi-provider streaming   │
-│                   with typed message structures                 │
-└─────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ OpenAI (callOpenAI / GPT-4o) ──────────────────────────────────┐
-│ Codebase uses:    callOpenAI() L137–L154 — raw fetch to         │
-│                   /v1/chat/completions as an alternative path   │
-│ Why it's here:    fallback provider path in generateCaption;    │
-│                   Summary names "Claude Sonnet 4.6 (or GPT-4o)"│
-│                                                                 │
-│ Leading today:    OpenAI Node SDK — adoption-leading, 2026     │
-│ Why it leads:     typed request/response shapes and built-in    │
-│                   retries over raw fetch to /v1/chat/completions│
-│                                                                 │
-│ Runner-up:        Vercel AI SDK                                 │
-│                   innovation-leading multi-provider wrapper     │
-│                   with typed message structures                 │
-└─────────────────────────────────────────────────────────────────┘
+### @anthropic-ai/sdk (Claude Sonnet 4.6)
+
+- **Codebase uses:** `@anthropic-ai/sdk` — Claude Sonnet 4.6 via `callClaude()` L123–L135 for variant generation.
+- **Why it's here:** primary path for structured JSON output of four tonal variants + `detectedTheme` in one shared-context call.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures.
+
+### OpenAI (callOpenAI / GPT-4o)
+
+- **Codebase uses:** `callOpenAI()` L137–L154 — raw `fetch` to `/v1/chat/completions` as an alternative path.
+- **Why it's here:** fallback provider path in `generateCaption`; Summary names "Claude Sonnet 4.6 (or GPT-4o)".
+- **Leading today:** OpenAI Node SDK — `adoption-leading`, 2026.
+- **Why it leads:** typed request/response shapes and built-in retries over raw `fetch` to `/v1/chat/completions`.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider wrapper with typed message structures.
 
 ---
 
@@ -488,3 +475,6 @@ Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expande
 
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, OpenAI (callOpenAI / GPT-4o).
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

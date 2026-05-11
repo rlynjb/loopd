@@ -161,48 +161,25 @@ The day RAG lands, it goes in a new service file (`src/services/ai/embed.ts`), a
 
 BM25 / keyword search vs vector embeddings was never a real choice today. The corpus is small enough that even FTS5 (SQLite's full-text search) isn't needed — `WHERE text LIKE '%project x%'` runs in milliseconds on 365 rows. Both BM25 and embeddings are answers to "the corpus is too big for prompt-stuffing", and our corpus isn't.
 
-### Tech reference (industry pairing)
+---
 
-┌─ RAG retrieval libraries (LangChain.js / LlamaIndex) ──────────┐
-│ Codebase uses:    none — no RAG implemented; hand-picked SQL    │
-│                   retrieval is used instead                     │
-│ Why it's here:    the file names LangChain and LlamaIndex as   │
-│                   the popularisers of the RAG pattern and the   │
-│                   tools the codebase would reach for first      │
-│                                                                  │
-│ Leading today:    LangChain.js / LlamaIndex — adoption-leading, │
-│                   2026                                          │
-│ Why it leads:     broadest retriever ecosystem (pgvector,       │
-│                   Pinecone, Qdrant, Weaviate, BM25 all behind   │
-│                   one interface); most RAG tutorials and         │
-│                   production references use one of these two    │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK + pgvector                      │
-│                   innovation-leading — typed end-to-end,        │
-│                   edge-native, direct pgvector integration       │
-│                   without a separate orchestration layer        │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ pgvector ──────────────────────────────────────────────────────┐
-│ Codebase uses:    not yet — named as the planned vector store   │
-│                   (Supabase pgvector extension) for when RAG    │
-│                   is added; entry_embeddings(entry_id, vector)  │
-│ Why it's here:    the file specifically calls out pgvector via  │
-│                   Supabase as the implementation path when the  │
-│                   embedding pipeline lands                      │
-│                                                                  │
-│ Leading today:    pgvector — adoption-leading for on-Postgres   │
-│                   vector search, 2026                           │
-│ Why it leads:     runs inside existing Postgres/Supabase        │
-│                   instances with no new infrastructure; ANN     │
-│                   index (HNSW) added in recent versions closes  │
-│                   the performance gap with dedicated stores     │
-│                                                                  │
-│ Runner-up:        Pinecone                                       │
-│                   managed, purpose-built vector DB; fastest     │
-│                   ANN at scale; costs more than pgvector for    │
-│                   small corpora                                  │
-└──────────────────────────────────────────────────────────────────┘
+### RAG retrieval libraries (LangChain.js / LlamaIndex)
+
+- **Codebase uses:** none — no RAG implemented; hand-picked SQL retrieval is used instead.
+- **Why it's here:** the file names LangChain and LlamaIndex as the popularisers of the RAG pattern and the tools the codebase would reach for first.
+- **Leading today:** LangChain.js / LlamaIndex — `adoption-leading`, 2026.
+- **Why it leads:** broadest retriever ecosystem (pgvector, Pinecone, Qdrant, Weaviate, BM25 all behind one interface); most RAG tutorials and production references use one of these two.
+- **Runner-up:** Vercel AI SDK + pgvector — `innovation-leading` typed end-to-end, edge-native, direct pgvector integration without a separate orchestration layer.
+
+### pgvector
+
+- **Codebase uses:** not yet — named as the planned vector store (Supabase pgvector extension) for when RAG is added; `entry_embeddings(entry_id, vector)`.
+- **Why it's here:** the file specifically calls out pgvector via Supabase as the implementation path when the embedding pipeline lands.
+- **Leading today:** `pgvector` — `adoption-leading` for on-Postgres vector search, 2026.
+- **Why it leads:** runs inside existing Postgres/Supabase instances with no new infrastructure; ANN index (HNSW) added in recent versions closes the performance gap with dedicated stores.
+- **Runner-up:** Pinecone — managed, purpose-built vector DB; fastest ANN at scale; costs more than `pgvector` for small corpora.
 
 ---
 
@@ -389,3 +366,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for LangChain.js / LlamaIndex (RAG retrieval libraries), pgvector.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

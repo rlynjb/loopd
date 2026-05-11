@@ -181,63 +181,33 @@ A secondary trigger is cross-cutting feature volume. If we ship streaming + retr
 
 Reading provider per call vs caching it at app start was never a real performance tradeoff. SecureStore reads are sub-5ms and every AI call has a 800ms+ network round-trip behind it. The "cache it" path would have bought ~0% speedup at the cost of a stale-config bug the day a user re-keys. We picked the obvious option.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk ─────────────────────────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk — client.messages.create    │
-│                   with claude-sonnet-4-6 / claude-haiku-4-5;    │
-│                   the canonical provider branch                 │
-│ Why it's here:    the Claude branch of every provider switch;   │
-│                   the SDK the codebase defaults to              │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ Raw fetch to OpenAI /v1/chat/completions ──────────────────────┐
-│ Codebase uses:    native fetch to https://api.openai.com/       │
-│                   v1/chat/completions with response_format:     │
-│                   json_object and model gpt-4o / gpt-4o-mini   │
-│ Why it's here:    the OpenAI branch of the provider switch;     │
-│                   used because response_format: json_object     │
-│                   doesn't exist on the Anthropic side           │
-│                                                                  │
-│ Leading today:    OpenAI Node SDK — adoption-leading, 2026      │
-│ Why it leads:     typed request/response shapes, built-in       │
-│                   retries, and full coverage of all OpenAI API  │
-│                   features including streaming and batch         │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading wrapper unifying OpenAI +  │
-│                   Anthropic + others behind one streaming        │
-│                   interface                                      │
-└──────────────────────────────────────────────────────────────────┘
+### @anthropic-ai/sdk
 
-┌─ LangChain BaseChatModel ───────────────────────────────────────┐
-│ Codebase uses:    not used — named as the tidy-but-dishonest    │
-│                   alternative to explicit per-provider branches  │
-│ Why it's here:    the file explicitly frames explicit branches  │
-│                   as the deliberate rejection of BaseChatModel;  │
-│                   understanding why it was skipped is the point  │
-│                                                                  │
-│ Leading today:    Vercel AI SDK — innovation-leading for JS/TS  │
-│                   multi-provider abstraction, 2026              │
-│ Why it leads:     typed message structures, streaming-first,    │
-│                   framework-aware (Next.js / Remix / Nuxt);     │
-│                   LangChain.js has adoption but Vercel AI SDK   │
-│                   is the faster-moving JS/TS choice             │
-│                                                                  │
-│ Runner-up:        LangChain.js                                   │
-│                   broad adoption and ecosystem; Python side is  │
-│                   even broader; BaseChatModel pattern originates │
-│                   here                                           │
-└──────────────────────────────────────────────────────────────────┘
+- **Codebase uses:** `@anthropic-ai/sdk` — `client.messages.create` with `claude-sonnet-4-6` / `claude-haiku-4-5`; the canonical provider branch.
+- **Why it's here:** the Claude branch of every provider switch; the SDK the codebase defaults to.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
+
+### Raw fetch to OpenAI `/v1/chat/completions`
+
+- **Codebase uses:** native `fetch` to `https://api.openai.com/v1/chat/completions` with `response_format: json_object` and model `gpt-4o` / `gpt-4o-mini`.
+- **Why it's here:** the OpenAI branch of the provider switch; used because `response_format: json_object` doesn't exist on the Anthropic side.
+- **Leading today:** OpenAI Node SDK — `adoption-leading`, 2026.
+- **Why it leads:** typed request/response shapes, built-in retries, and full coverage of all OpenAI API features including streaming and batch.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` wrapper unifying OpenAI + Anthropic + others behind one streaming interface.
+
+### LangChain BaseChatModel
+
+- **Codebase uses:** not used — named as the tidy-but-dishonest alternative to explicit per-provider branches.
+- **Why it's here:** the file explicitly frames explicit branches as the deliberate rejection of `BaseChatModel`; understanding why it was skipped is the point.
+- **Leading today:** Vercel AI SDK — `innovation-leading` for JS/TS multi-provider abstraction, 2026.
+- **Why it leads:** typed message structures, streaming-first, framework-aware (Next.js / Remix / Nuxt); LangChain.js has adoption but Vercel AI SDK is the faster-moving JS/TS choice.
+- **Runner-up:** LangChain.js — broad adoption and ecosystem; Python side is even broader; `BaseChatModel` pattern originates here.
 
 ---
 
@@ -409,3 +379,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, raw fetch to OpenAI /v1/chat/completions, LangChain BaseChatModel.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

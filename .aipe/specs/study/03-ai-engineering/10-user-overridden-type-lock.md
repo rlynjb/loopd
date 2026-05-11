@@ -142,25 +142,17 @@ A different breakpoint: multi-user shared content. If two users could edit the s
 
 Locking on every write vs locking on user-confirmed writes wasn't a real choice. The picker is the *only* path that flips the lock — there's no "save as draft" intermediate state. The boolean and the type write are atomic in the same `updateTodoMeta` call (see `database.ts` write path). Splitting them would have meant a race where the row could briefly have the new type but no lock, or the lock without the type. Same transaction, same write, no race.
 
-### Tech reference (industry pairing)
+---
 
-┌─ @anthropic-ai/sdk / Claude Haiku 4.5 ──────────────────────────┐
-│ Codebase uses:    @anthropic-ai/sdk; the lock pattern guards     │
-│                   every AI-driven write from scheduleClassify    │
-│                   and catch-up classifier paths                  │
-│ Why it's here:    the LLM output (type guess) is what the lock   │
-│                   is designed to override — user intent over     │
-│                   model intent                                   │
-│                                                                  │
-│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
-│ Why it leads:     native SDK gives first-class access to prompt  │
-│                   caching, JSON output, and tool calling that    │
-│                   wrappers sometimes flatten or delay            │
-│                                                                  │
-│ Runner-up:        Vercel AI SDK                                  │
-│                   innovation-leading multi-provider streaming    │
-│                   with typed message structures and useChat hook │
-└──────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
+
+### @anthropic-ai/sdk / Claude Haiku 4.5
+
+- **Codebase uses:** `@anthropic-ai/sdk`; the lock pattern guards every AI-driven write from `scheduleClassify` and catch-up classifier paths.
+- **Why it's here:** the LLM output (type guess) is what the lock is designed to override — user intent over model intent.
+- **Leading today:** `@anthropic-ai/sdk` — `adoption-leading`, 2026.
+- **Why it leads:** native SDK gives first-class access to prompt caching, JSON output, and tool calling that wrappers sometimes flatten or delay.
+- **Runner-up:** Vercel AI SDK — `innovation-leading` multi-provider streaming with typed message structures and `useChat` hook.
 
 ---
 
@@ -356,3 +348,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

@@ -150,24 +150,17 @@ Fine until the app moves off SQLite. On a real RDBMS with rich triggers (Postgre
 
 SQLite triggers with `json_each` weren't a real option. The reconciler needs to call `heuristicClassify` (regex against prose-shape patterns) and `scheduleClassify` (async LLM fire-and-forget) on insert. Triggers run inside the SQL engine — they can't reach into TypeScript to invoke an async network call. A trigger could enforce a *structural* 1:1 but couldn't run the type-classification logic that gives the meta row its value on insert. Without that logic the meta rows are empty placeholders, which defeats the point of having them.
 
-### Tech reference (industry pairing)
+---
 
-┌─ expo-sqlite ───────────────────────────────────────────────────────────────┐
-│ Codebase uses:    expo-sqlite (via database.ts) as the SQLite engine         │
-│ Why it's here:    the file frames the entire invariant design around          │
-│                   expo-sqlite's constraint: no FK to a JSON-array element,   │
-│                   and regexp extensions not enabled by default — both         │
-│                   SQLite-engine limitations that forced the app-layer         │
-│                   reconciler                                                 │
-│                                                                              │
-│ Leading today:    expo-sqlite — adoption-leading for RN local DB, 2026       │
-│ Why it leads:     ships with Expo SDK; battle-tested WAL mode mirrors        │
-│                   SQLite C API directly; zero bridge cost for Expo projects  │
-│                                                                              │
-│ Runner-up:        op-sqlite                                                   │
-│                   innovation-leading JSI-direct binding with no bridge cost; │
-│                   perf-tier alternative for bare-RN projects                 │
-└──────────────────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
+
+### expo-sqlite
+
+- **Codebase uses:** `expo-sqlite` (via `database.ts`) as the SQLite engine.
+- **Why it's here:** the file frames the entire invariant design around `expo-sqlite`'s constraint: no FK to a JSON-array element, and regexp extensions not enabled by default — both SQLite-engine limitations that forced the app-layer reconciler.
+- **Leading today:** `expo-sqlite` — `adoption-leading` for RN local DB, 2026.
+- **Why it leads:** ships with the Expo SDK; battle-tested WAL mode; mirrors the SQLite C API directly with zero bridge cost for Expo projects.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf-tier alternative for bare React Native projects.
 
 ---
 
@@ -351,3 +344,6 @@ Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expande
 
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-sqlite.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.

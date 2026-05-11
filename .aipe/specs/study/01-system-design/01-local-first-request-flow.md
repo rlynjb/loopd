@@ -159,38 +159,25 @@ If we had split `database.ts` into per-domain classes (`EntriesDB`, `TodosDB`, e
 
 Fine until a second device starts writing the same `user_id` rows concurrently. At that point the LWW resolver in `chooseWinner` silently drops one writer's edits per conflict, and "I typed this and it vanished" becomes a bug the user can reproduce. The fix isn't on the funnel — it's on the conflict layer, which would need per-field CRDTs (Automerge, Y.js) or operational transforms. The local-first shape survives; the conflict resolver gets replaced.
 
-### Tech reference (industry pairing)
+---
 
-┌─ expo-sqlite (WAL) ─────────────────────────────────────────────────────────┐
-│ Codebase uses:    expo-sqlite, WAL mode, single-process via loopd.db        │
-│ Why it's here:    the only file that opens loopd.db is database.ts —        │
-│                   expo-sqlite is the synchronous write layer that makes      │
-│                   "keystroke → ~1ms → UI re-render" possible                │
-│                                                                              │
-│ Leading today:    expo-sqlite — adoption-leading, 2026                       │
-│ Why it leads:     ships with Expo SDK; battle-tested WAL mode mirrors        │
-│                   SQLite C API directly; zero bridge cost for Expo projects  │
-│                                                                              │
-│ Runner-up:        op-sqlite                                                  │
-│                   innovation-leading JSI-direct binding with no bridge cost; │
-│                   perf-tier alternative for bare-RN projects                 │
-└──────────────────────────────────────────────────────────────────────────────┘
+## Tech reference (industry pairing)
 
-┌─ @supabase/supabase-js + Supabase Postgres ─────────────────────────────────┐
-│ Codebase uses:    Supabase Postgres as the cloud provider layer;             │
-│                   pushAll() upserts dirty rows via the Supabase client       │
-│ Why it's here:    the cloud mirror that receives every row the 5-second      │
-│                   debounce batches and sends via HTTPS upsert                │
-│                                                                              │
-│ Leading today:    Supabase — adoption-leading for Postgres-as-a-service,     │
-│                    2026                                                       │
-│ Why it leads:     managed Postgres + auth + RLS + Storage in one console;    │
-│                   SDK mirrors PostgREST so upsert with onConflict is         │
-│                   one call                                                    │
-│                                                                              │
-│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL with          │
-│                   branch-per-PR; Convex is the reactive-first alternative    │
-└──────────────────────────────────────────────────────────────────────────────┘
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` in WAL mode, single-process via `loopd.db`. The only file that opens `loopd.db` is `src/services/database.ts`.
+- **Why it's here:** the synchronous write layer that makes "keystroke → ~1ms write → UI re-render" possible. If it were async, the local-first shape collapses.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; battle-tested WAL mode; mirrors the SQLite C API directly with zero bridge cost for Expo projects.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf-tier alternative for bare React Native projects.
+
+### @supabase/supabase-js + Supabase Postgres
+
+- **Codebase uses:** `@supabase/supabase-js` v2 against managed Supabase Postgres as the cloud provider layer; `pushAll()` upserts dirty rows via the Supabase client.
+- **Why it's here:** the cloud mirror that receives every row the 5-second debounce batches and sends via HTTPS upsert.
+- **Leading today:** Supabase — `adoption-leading` for Postgres-as-a-service, 2026.
+- **Why it leads:** managed Postgres + auth + RLS + Storage in one console; SDK mirrors PostgREST, so an upsert with `onConflict` is one call.
+- **Runner-up:** Neon + Drizzle — `innovation-leading` typed SQL with branch-per-PR; Convex is the reactive-first alternative.
 
 ---
 
@@ -376,3 +363,6 @@ Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expande
 
 ---
 Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-sqlite, @supabase/supabase-js.
+
+---
+Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
