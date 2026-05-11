@@ -145,14 +145,73 @@ The "per-feature spec sheet" approach is borrowed from API design — each endpo
 
 ## Tradeoffs
 
-- **One chain per feature** — gives: clear contracts, independent failure. Costs: shared prompt logic must live in helpers.
-- **Per-type expand sub-chains** — gives: each type can have a specific schema. Costs: 4 system prompts to maintain (was 6 pre-2026-05-10; bug/question/decision/content dropped).
-- **No surrounding context for classify** — gives: cheap per-call. Costs: classify can't disambiguate based on context the user wrote in the same entry.
-- **Interpret is markdown-out, not JSON-out** — gives: long-form prose the user reads, no schema to maintain. Costs: no structural validator beyond `cleanMarkdown` (11 lines); model drift shows up as visibly worse output, not as rejected calls.
+We traded a unified AI service (one chain that does many jobs) for five purpose-built chains — each with its own prompt, model, and output contract, optimized for cost-and-value asymmetry per feature.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (5 single-purpose   │ Alternative (unified general-  │
+│                  │ chains)                        │ purpose chain)                 │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ Sonnet for 4 chains @ ~$0.04;  │ all on Sonnet = ~$0.04/call;   │
+│ ($/call)         │ Haiku for classify @ ~$0.0001  │ classify volume × $0.04 ≈      │
+│                  │ — 50× cheaper on the high-     │ $0.50/heavy-day vs $0.003;     │
+│                  │ volume chain                   │ ~150× higher classify $        │
+│ Latency          │ Haiku classify ~300ms;         │ Sonnet classify ~800ms-1.5s    │
+│                  │ Sonnet ~800ms-5s elsewhere     │ on every call; slower default  │
+│ Quality          │ each chain tuned for its job — │ generic prompt loses tonal     │
+│ (% correct)      │ caption is most opinionated    │ specificity (caption variants  │
+│                  │ (4 voices, no "I"); classify   │ feel generic); JSON contract   │
+│                  │ has 5-mode schema              │ less stable                    │
+│ Provider features│ structured outputs per chain;  │ shared interface forces lowest │
+│ used             │ caption uses 4-variant union;  │ common denominator across all  │
+│                  │ classify uses confidence union │ chains                         │
+│ Failure          │ each chain fails independently │ shared chain failure affects   │
+│ isolation        │ — caption fail doesn't kill    │ all features; one bug          │
+│                  │ structured summary             │ propagates across product       │
+│ Doc cost         │ 5 prompts to keep in sync with │ 1 prompt — but it's a giant    │
+│                  │ source; this catalogue rots    │ multi-purpose prompt that      │
+│                  │                                │ also rots, harder to update    │
+│ Cognitive load   │ "this feature → this chain →   │ "one chain → many features →   │
+│                  │ this prompt" — direct mapping  │ which prompt branch?" — extra  │
+│                  │                                │ indirection                    │
+│ New feature cost │ new feature = new chain        │ new feature = new branch in    │
+│                  │ (clear isolation)              │ shared chain (coupling risk)   │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up shared prompt logic and any economy of scale on prompt maintenance. Each chain has its own SYSTEM_PROMPT — caption is the most opinionated at 80+ lines (specifying 4 named voices and universal rules); interpret is the longest at 32 lines (structural template with emoji H2 headings); classify is the shortest at ~13 lines (5-mode taxonomy). When the writing style of one needs updating, it's a per-chain change. There's no shared "loopd voice" prompt fragment that propagates everywhere — each chain decides its own tone.
+
+We pay for 4 per-type expand sub-chains (idea / knowledge / study / reflect — `'todo'` is non-expandable). Each has its own SYSTEM_PROMPT and required-fields schema in `expandPrompts.ts`. When the taxonomy reduced from 6 to 4 types in 2026-05-10 (bug / question / decision / content dropped), each removed type also removed its prompt + schema. The maintenance cost scales linearly with type count, which is why the doc explicitly warns "the doc is a snapshot."
+
+The biggest cost is doc drift: this very catalogue is a snapshot, and when the SYSTEM_PROMPT constants in source change, this file silently rots. A snapshot test that hashes the prompt constants and fails CI on undocumented changes would catch this — but it's not built, and solo dev means I rely on remembering to revisit. That's a real fragility I'd rather name than pretend the doc is auto-true.
+
+### What the alternative would have cost
+
+A unified AI service (one chain with a giant prompt that branches by feature) would have looked tidier from the outside — fewer files, one entry point, one place to add cross-cutting features. The hidden cost is that the unified prompt is the union of all per-feature prompts, which means it's longer (worse context-window pressure), less specific (each feature loses its tuned voice), and more expensive to debug (when caption variants come out generic, is it the unified prompt or the feature-specific branch?).
+
+The deeper cost is forced lowest-common-denominator on model choice. Today caption / summarize / expand / interpret use Sonnet 4.6 for output quality, while classify uses Haiku 4.5 because the 5-mode label problem doesn't justify Sonnet's cost. A unified chain would have to pick one model — Sonnet (~50× more expensive on classify) or Haiku (~quality drop on caption / interpret). Either way, half the chains pay a tax for the other half. Today the 5-chain shape lets each one pick its model.
+
+Failure isolation also collapses. With 5 chains, a caption schema drift breaks captions but the structured summary still saves; a Sonnet upgrade that breaks summarize doesn't affect classify (different model anyway). With a unified chain, a bad upgrade or prompt edit can cascade across all features. The shared-utility benefit is real but bounded; the failure-blast cost is unbounded.
+
+### The breakpoint
+
+The pattern flips at ~10+ AI features. Today 5 chains are individually readable; at 10+, the per-chain prompt files and validators start to feel like duplication of structure (every chain has the same "branch on provider, call, parse, validate, persist" shape). At that point, a shared `runChain(featureSpec)` utility — where `featureSpec` carries the prompt + model + validator — would pay back, *without* unifying the prompts themselves. That's a different shape: shared *infrastructure* (the runner), not shared *prompt* (the content).
+
+A secondary trigger: when classify volume jumps 10×. Today classify is the highest-volume chain (~30 calls/heavy-day) and the cost asymmetry between Sonnet ($0.04) and Haiku ($0.0001) is what justifies the model split. At 300 classify calls/day, the cost gap matters even more — Haiku saves ~$10/year per user vs Sonnet. The breakpoint shifts up as Haiku gets cheaper relative to Sonnet.
+
+The doc-drift breakpoint is concrete: the day the SYSTEM_PROMPT in `caption.ts` changes and this catalogue isn't updated, a reader will trust the catalogue and be wrong. Snapshot tests would catch that; we don't have them. The day I have a teammate, that's the first thing I'd build.
+
+### What wasn't actually a tradeoff
+
+Per-feature vs per-domain organization wasn't a real choice. The five chains naturally cleave along functional lines (summarize a day, caption a day, classify a todo, expand a todo, interpret an entry) — not domain lines. Domains (entries / todos / vlogs) don't map 1:1 onto chains; summarize touches entries and clips, caption touches summaries and recent captions, expand touches todos and entries. Per-feature is the natural shape; per-domain would have meant cross-cutting prompts that nobody asked for.
 
 ---
 
-## Quick summary
+## Summary
 
 The per-feature pattern map is a system-inventory catalogue — one row per AI-touching feature with prompt shape, input, output contract, and model choice, organised like an OpenAPI spec rather than a tutorial. In this codebase five chains do five jobs: `summarize.ts` (day summarize, Sonnet/4o, structured JSON), `caption.ts` (4-variant caption, Sonnet/4o, the most opinionated prompt with `parseAndValidate`), `classify.ts` (5-mode classify, Haiku/4o-mini, heuristic-gated), `expand.ts` (per-type expand with 4 schemas, Sonnet/4o, `MAX_CONCURRENT = 3`), and `interpret.ts` (markdown reflection, Sonnet/4o, ephemeral). Four chains emit JSON for derived state; `interpret` emits markdown the user reads. The constraint that drove it is cost-and-value asymmetry: Sonnet for output quality where it earns its keep, Haiku for cheap labels, no surrounding context for classify because half the volume gets caught by the heuristic. The cost is doc drift — this catalogue is a snapshot, and when SYSTEM_PROMPTs change the file must be re-checked.
 
@@ -175,16 +234,103 @@ On the per-feature reference page, the interviewer is testing whether I can move
 [mid] Q: Walk me through `caption.ts`'s SYSTEM_PROMPT — what does it actually constrain?
       A: It's the most opinionated prompt in the codebase. It defines four named voices (clean / smoother / reflective / punchy) with example body lines for each, plus universal rules: no "I"/"you"/"we", no hashtags, no questions, no platitudes. It takes `{ date, rawLog[], recentCaptions?, mood?, themeHint? }` as input and demands `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }` — all four variants required; partial output is treated as malformed by `parseAndValidate`. The opinionation matters because caption output is the most user-visible AI artifact: bad voice consistency would be obvious every day. The 4-variant shape lets the user pick rather than locking them into one tone.
 
+```
+[caption.ts chain — most-opinionated prompt + most-user-visible output]
+
+  buildCaptionInput(date, summary)
+        │
+        ▼  { date, rawLog[], recentCaptions[5], mood?, themeHint? }
+  call Sonnet/4o with SYSTEM_PROMPT (80+ lines, 4 voices)
+        │   no "I"/"you"/"we"; no hashtags; no questions; no platitudes
+        ▼
+  parseAndValidate (caption.ts L169-L199)
+        │   all 4 variants required → reject partial as malformed
+        ▼  { variants: { clean, smoother, reflective, punchy }, detectedTheme }
+  summarize.ts L91-92 persists:
+    summary_json.variants       ← captionOut.variants (pass-through)
+    summary_json.variantsTheme  ← captionOut.detectedTheme (key RENAMED)
+```
+
 [senior] Q: Why Sonnet 4.6 for summarize/caption/expand but Haiku 4.5 for classify? Walk me through the model-choice reasoning.
          A: Cost and task complexity. Summarize, caption, and expand all produce ~1024-token structured JSON with real reasoning content — clip orderings, tonal voice variants, typed expansions with multiple required fields. Sonnet at ~$0.04/call earns its keep on output quality. Classify is a 7-class label problem with ~50 tokens out — Haiku 4.5 (or gpt-4o-mini on the OpenAI side) handles it cheaply. The cost asymmetry is roughly 50×: Sonnet calls are dollars per heavy day if I let them rip, Haiku calls are cents. The model choice mirrors the value asymmetry — caption quality matters per-day, classify accuracy matters per-todo and the heuristic already filters half.
 
+```
+                  Path taken (Sonnet for quality;       Alternative (Sonnet for all 5)
+                  Haiku for high-volume classify)
+                  ─────────────────────────────────     ─────────────────────────────────
+$ per call        Sonnet ~$0.04 × 4 chains              Sonnet ~$0.04 × 5 chains
+                  Haiku ~$0.0001 × classify             classify pays ~150× more for
+                                                        marginal quality gain
+$/heavy-day       ~$0.20 (4 Sonnet) + $0.003 (Haiku    ~$1.20+ (all 5 on Sonnet,
+                  × 30 classify) = ~$0.20                30 classify calls × $0.04)
+$/year per user   ~$0.50-$1                             ~$5-$10
+classify quality  Haiku handles 5-mode labels well     Sonnet would do marginally
+                  (~95% accuracy)                       better (~97%) — gain not worth
+                                                        50× cost
+caption quality   Sonnet earns its keep — 4 distinct   same — unchanged
+                  voices, tonal variety user notices
+output volume     ~50 tokens (classify) vs ~1024       ~1024 across all — wasted
+                  tokens (summarize/caption/expand)    capacity on classify
+asymmetry         model cost mirrors task complexity   uniform model, asymmetric cost
+                  AND output value                      vs value
+```
+
 [arch] Q: How would you redesign these five features if cost dropped 100× — say Sonnet at $0.0004/call?
        A: I'd merge less, not more. The current splits exist because of failure isolation (caption split out of summarize) and cost pressure (no surrounding context for classify). At 100× cheaper, I'd send classify the surrounding entry text — accuracy goes up at no real cost. I'd drop the heuristic gate because it stops paying back. I might add a new feature like "weekly synthesis" that today would be too expensive to run automatically. The single-chain shape stays — that's about debuggability and failure isolation, not cost — but the inputs grow.
+
+```
+At 100× cost drop (Sonnet at $0.0004/call):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — same 5 chains, same modal/badge │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Single-chain shape ────────────────────────┐
+  │ STAYS — debuggability + failure isolation   │
+  │ are independent of cost                     │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Inputs / context budget ──────────────────┐
+  │ classify gets surrounding entry text         │  ◀── GROWS FIRST
+  │ (accuracy ↑ at zero $ cost)                  │     (cost no longer
+  │ heuristic gate DROPPED — stops paying back   │      gates input size)
+  │ expand context grows from 3 days → 7 days   │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ New features unlocked ─────────────────────┐
+  │ "weekly synthesis" chain                     │
+  │ "compare today to last month" chain         │
+  │ — automatic runs become affordable           │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: Your "per-feature spec" reads like documentation — but documentation rots fast. How do you keep this in sync with the actual prompts in `caption.ts` and `expandPrompts.ts`?
 
 A: I don't, automatically. The doc warns the reader at the top: "this is a snapshot — when prompts change, this file should be re-checked", and the truth lives in source. The honest answer is that doc drift is real and I haven't built tooling to prevent it. The two mitigations are: one, the prompt-shape summaries here are deliberately *abstract* — I describe what the prompt enforces, not the exact wording, so small phrasing tweaks don't break the doc; two, I point readers to read `caption.ts:SYSTEM_PROMPT` and `expandPrompts.ts:getSystemPrompt` directly because those are concrete and authoritative. If I were running a team, I'd add a snapshot test that hashes the SYSTEM_PROMPT constants and fails CI when they change without a doc update — forcing the conversation. Solo dev, I rely on remembering to revisit. That's a real fragility and I'd rather name it than pretend the doc is auto-true.
+
+```
+                  Path taken (abstract prompts +        Suggested (snapshot test in CI)
+                  pointer to source)
+                  ─────────────────────────────────     ─────────────────────────────────
+doc accuracy      ~70% — prompt-shape summaries are    ~99% — hash mismatch fails CI
+                  stable across small phrasing edits   on every undocumented change
+new tooling       0 LOC                                snapshot test file +
+                                                       hash-of-SYSTEM_PROMPT constant
+                                                       check + CI hook
+team fit          works for solo — I remember to       essential for any team — no
+                  revisit on prompt edits              individual is the doc-keeper
+drift cost        real — silent until a reader        zero — drift is caught
+                  trusts the doc and is wrong          immediately
+false-positive    none                                 hash changes on whitespace tweak
+risk                                                   in the prompt; CI noise unless
+                                                       hash is whitespace-normalized
+phase-A fit       YAGNI is the right answer for       ship the day I have a teammate
+                  solo dev
+honest framing    real fragility I'd rather name      shipping it before need is
+                  than hide                            premature; shipping it after
+                                                       drift bites is too late
+```
 
 ### One-line anchors
 - "Five chains, five jobs — four JSON contracts plus one markdown contract."
@@ -250,3 +396,6 @@ Updated: 2026-05-10 — features grew from 4 to 5 (added Interpret); thinking-mo
 Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Level 1/Level 2/[arch] interview-Q wording 4→5 features; added caption persistence-key mapping (`detectedTheme` → `summary_json.variantsTheme` at summarize.ts:91–92; `variants` is pass-through to `summary_json.variants`) plus the buildCaptionInput input-assembly note.
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

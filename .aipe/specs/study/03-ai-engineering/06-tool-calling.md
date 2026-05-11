@@ -85,13 +85,64 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 
 ## Tradeoffs
 
-- **No tool calling** — gives: predictable cost, simple control flow. Costs: features needing navigation can't be expressed as a single chain.
-- **One-shot transformations** — gives: trivially debuggable, retriable. Costs: hits a ceiling on task complexity.
-- **App-fires-LLM, not LLM-fires-app** — gives: the app stays in control. Costs: the model can't ask for what it needs.
+We traded the capability ceiling of tool loops (model navigates, app responds) for predictable single-call cost and trivial debuggability — every chain is one prompt, one parse, one persist, and the app stays in control of every dollar spent.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (no tool calling)   │ Alternative (tool-loop agent)  │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ 1 call/chain at $0.0001-$0.04  │ N iterations × $0.04 each;     │
+│ ($/call)         │ predictable per-feature cost   │ runaway loop costs $1+/call    │
+│                  │                                │ without iteration cap          │
+│ Latency          │ 1 round-trip ~800ms-5s         │ N round-trips × ~1.5s = 5-30s  │
+│                  │ per chain; bounded             │ per query; unpredictable       │
+│ Failure mode     │ JSON parse fails → validator   │ tool-name hallucination,       │
+│                  │ rejects → soft skip            │ runaway loop, mid-loop network │
+│                  │                                │ drop, stuck "thinking" state   │
+│ Debuggability    │ one request, one response —   │ N requests + N tool responses; │
+│                  │ trace lives in one log line    │ replay requires full state log │
+│ Capability       │ ceiling: data must fit in     │ unbounded — model navigates    │
+│ ceiling          │ prompt at call time            │ corpus, calls APIs, iterates   │
+│ Provider features│ structured outputs (OpenAI),   │ tool-use blocks (Anthropic),   │
+│ used             │ prompt rules (Claude) — both   │ function calling (OpenAI) —    │
+│                  │ available to all 5 chains      │ would unlock both              │
+│ Cost ceiling     │ implicit: one call per fire,   │ explicit cap required — max   │
+│ control          │ no loop                        │ iterations + per-call timeout  │
+│                  │                                │ + total $ ceiling per request  │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up the capability ceiling of tool loops. The five chains can only solve problems where the model has everything it needs in the prompt at call time — `buildContext()` for expand fetches the last 3 days plus 5 siblings, `buildCaptionInput()` grabs the last 5 captions, and that's the whole world the model sees. The day a user asks "find me every day I wrote about Project X over three years" or "look up the weather on the day I felt worst this month," there is no single-call shape that answers it. We'd have to ship that as a new service file with iteration caps and timeouts — not by modifying the existing chains.
+
+We also gave up the architectural option of letting the model choose its own next step. Today the app decides: classify runs after every scan, summarize runs on user save, expand fires when the user taps "expand". A tool-loop agent would let the model decide "I need more context, let me search for similar entries first" — which is genuinely powerful for open-ended queries. We don't have any open-ended queries today.
+
+The implicit cost is that future features needing navigation are forced into a new architectural shape (agent loop in a separate file) rather than incrementally extending the existing chains. That's a feature, not a bug — we want agent loops to be deliberately isolated, not creeping into chains designed to be one-shot.
+
+### What the alternative would have cost
+
+A tool-loop agent on top of the existing chains would have added three categories of cost. First, runaway-loop risk: without explicit max-iteration caps and per-call timeouts, a misbehaving model can spin for 20 iterations and rack up $20 of LLM bills on a single user query. The mitigation (iteration caps + cost ceilings + timeouts) is straightforward code, but it's code we don't have to write today because we don't have the loop.
+
+Second, debugging cost. A single-call chain trace is "prompt + response + validation result" — three artifacts. An agent trace is "prompt + tool-call request + tool execution result + next-prompt + ... + final response" with N iterations of branching. Replaying a failed agent run requires the full intermediate state log. We've all seen LangChain Trace UIs; they exist because raw logs are unreadable.
+
+Third, the failure modes balloon. Tool-name hallucination (the model invents `search_entries_v2` when only `search_entries` exists) is a real production failure mode in agents. Tool argument hallucination, mid-loop network drop, partial JSON in a tool response — every one of these has to be handled. The current codebase has none of them because there are no tools.
+
+### The breakpoint
+
+The pattern flips the day a single feature genuinely requires navigation — concretely, the day a feature can't be answered with "the entry text + the last 3 days + 5 siblings". "Find every day I wrote about Project X over three years" is the trigger shape. The fix isn't to retrofit tools into expand or summarize; it's a new service file (`src/services/ai/agent.ts` or similar) with explicit max iterations, per-call timeout, per-request cost ceiling, and a sanitized tool schema. The five existing chains stay untouched.
+
+A secondary trigger: if the corpus grows past what fits in a prompt. Today the user is one person with sporadic use; the most context any chain assembles is ~3-5KB of text. The day a power user has hundreds of entries per day and "the last 3 days" no longer fits in a 200K-token context window, navigation becomes unavoidable — but that's also when [07-rag](./07-rag.md) becomes relevant, and RAG is the simpler answer than tool calling for "find relevant entries before answering."
+
+### What wasn't actually a tradeoff
+
+Function calling (the API mechanism) vs tool calling (the architectural pattern) wasn't a real choice. Both providers expose function-calling APIs, but using them in a single-shot way (one tool call, one tool response, one final answer) doesn't unlock anything the current single-chain pattern doesn't already give us. The interesting tradeoff is the *loop*, not the API.
 
 ---
 
-## Quick summary
+## Summary
 
 Tool calling is the pattern that wires a stateless text model to a stateful outside world: the model emits a structured request, the app runs it, the result is fed back as an observation, and the loop continues until the model returns a final answer. This codebase deliberately does not implement it — every chain in `src/services/ai/` returns on the first response, the closest cousin being `scheduleClassify` which is app code firing an LLM call, not the model asking the app to do work. The constraint that drove it is that every loopd feature is a one-shot transformation (text → JSON for four chains, text → markdown for `interpret`) where the data the model needs is already in hand at call time via `buildContext()`. The cost is that features genuinely needing navigation — "find me the day I was sickest last month" — can't be expressed as a single chain and would require a new service file with iteration caps and timeouts.
 
@@ -114,16 +165,93 @@ Key points to remember:
 [mid] Q: Concretely, what does "no tool calling" mean for the five chains in this codebase?
       A: It means every call returns on the first response. `summarize`, `caption`, `classify`, `expand`, and `interpret` all hand the model a prompt, get back a string (JSON for the first four, markdown for interpret), parse or clean it, and persist or render. Nowhere in the codebase does the model emit something like `{tool: "search_entries"}` and the app run a SQL query and feed the result back. The closest cousin is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work. The control flow is always: app decides → LLM responds → app persists or renders.
 
+```
+[every loopd chain — uniform shape]
+
+  app decides to call (commit / button tap / scan finishes null)
+        │
+        ▼  buildPrompt() / buildContext() / buildCaptionInput()
+  single LLM call (Sonnet/Haiku/4o/4o-mini)
+        │
+        ▼  one response — string or markdown
+  parseJson + validate  OR  cleanMarkdown
+        │
+        ├─ valid → persist to SQLite OR render in modal
+        └─ invalid → soft skip (or 1 retry for expand)
+
+  (no observation step, no tool dispatch, no loop)
+```
+
 [senior] Q: Is there a feature in loopd today where adding tool calling would be a clear win?
          A: Not today. Every feature is a one-shot transformation: "summarise this day", "caption this day", "classify this line", "expand this todo". The data the model needs is already in hand at call time, packed into the prompt by `buildContext()`. Tool calling pays off when the model needs to *navigate* — search a corpus, query a DB, hit an external API — and the cost of stuffing every possibility into the prompt is too high. Loopd's prompts are small and the corpus is one user's journal. Nothing to navigate.
 
+```
+                  Path taken (one-shot chains)         Alternative (tool loop available)
+                  ──────────────────────────           ────────────────────────────────
+data the model    everything in prompt at call time    model navigates — fetches what
+needs                                                  it needs as it works
+$ per query       $0.0001-$0.04 (one call)             $0.04 × N iterations; loops can
+                                                       run 5-20 turns unchecked
+latency           ~800ms-5s, bounded                   ~5-30s, unbounded without timeout
+failure modes     parse fail / validation fail /       all of those PLUS tool-name
+                  network — 3 categories               hallucination, runaway loop,
+                                                       mid-loop network drop — ~7 cats
+features served   summarize / caption / classify /     anything navigational: corpus
+today             expand / interpret — all one-shot    search, multi-day synthesis,
+                                                       external API lookups
+new file needed?  no — fits existing service shape     yes — agent.ts with caps + log
+```
+
 [arch] Q: Suppose I add a feature: "find me every day I wrote about Project X." Would that be the moment for tool calling?
        A: That's exactly the moment. The model would emit `{tool: "search_entries", input: {query: "Project X"}}`, the app would run an FTS5 or pgvector search, return the rows as an observation, and the model would synthesise. I'd build it as a new service file — not a modification to the four existing chains. It would need a max-iteration cap, a per-tool-call timeout, and a cost ceiling (otherwise a runaway loop costs real money). Tool calling is a major control-flow upgrade and I'd want it isolated.
+
+```
+At "find me every day I wrote about Project X" (corpus query):
+
+  ┌─ Existing chains (summarize/caption/classify/expand/interpret) ─┐
+  │ unchanged — all one-shot, all stay in src/services/{ai,todos}/  │
+  └────────────────────────────────────────────────────────────────┘
+              │ (no modifications)
+              ▼
+  ┌─ NEW service: src/services/ai/agent.ts ────────────────────────┐
+  │ tool registry: { search_entries, get_entry_text, ... }         │
+  │ max_iterations: 5    ◀── BREAKS FIRST if uncapped — $$ runaway │
+  │ per_call_timeout_ms: 8000                                       │
+  │ total_cost_ceiling: $0.50/request                               │
+  │ tool-name allowlist (reject hallucinated names)                 │
+  └────────────────────────────────────────────────────────────────┘
+              │
+              ▼
+  ┌─ Tool implementations ─────────────────────────────────────────┐
+  │ search_entries → FTS5/pgvector SQL                              │
+  │ get_entry_text → SELECT text FROM entries WHERE id=?            │
+  └────────────────────────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: Tool calling and agents are the standard way to build AI apps in 2026. Are you sure you're not just behind on the tooling?
 
 A: I'm not behind on the tooling — I read the Claude tool-use API and OpenAI's `tools` parameter and I deliberately didn't reach for them. Tool calling turns the LLM from a function into a loop, and a loop has runaway cost, harder debugging, and tool-name hallucination as failure modes. Adding it without a feature that needs it would burn budget for no quality gain. The five chains (four in `src/services/ai/` plus `src/services/todos/classify.ts`) work because the data they need fits in the prompt; the moment a feature genuinely needs to navigate (search across the archive, hit an external API, run code) I'd add tools — in a new service file, with iteration caps and timeouts. The decision isn't "tools are bad", it's "tools are the wrong tool for one-shot transformations". I'll grant the dodge though: if I'm wrong about a future feature, the day it ships will look like "we should have built the tool-loop sooner".
+
+```
+                  Path taken (no tools today)         Suggested (tool calling now)
+                  ──────────────────────────          ───────────────────────────
+features served   5 one-shot transformations           same 5 + nothing new today
+                  fit current data model               (no feature needs it)
+$ per chain       $0.0001-$0.04 fixed                  $0.04 × N — variable, capped
+debug surface     prompt + response + validator        full agent trace with N-step
+                  (3 artifacts)                        replay; needs Trace UI
+failure modes     3 categories                         7+ categories — tool-name
+                  caught by validator                  hallucination, runaway loop,
+                                                       mid-loop network drop, etc.
+when this flips   no feature needs navigation today    day a feature genuinely needs
+                                                       corpus search or external API
+isolation         no agent code → no agent failures    new service file with caps;
+                  in the codebase                      existing 5 chains untouched
+2026 industry     "behind the curve" criticism is      shipping LangGraph for problems
+fit               framing — capability without a       that don't have it is the more
+                  feature is liability                 expensive mistake
+```
 
 ### One-line anchors
 - "Tools turn an LLM from a function into a loop. Add them deliberately."
@@ -192,3 +320,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added App / Provider / Tool layer labels to the contrast diagram since it crosses boundaries.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

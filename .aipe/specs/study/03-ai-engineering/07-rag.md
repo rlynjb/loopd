@@ -104,13 +104,66 @@ RAG came out of dense-retrieval research (DPR, REALM) and was popularised in 202
 
 ## Tradeoffs
 
-- **Hand-picked retrieval** — gives: zero infrastructure, exact control. Costs: doesn't scale to "find anything semantically similar."
-- **No embeddings yet** — gives: simple data layer. Costs: features needing semantic search can't be built without adding embedding pipeline.
-- **Caps in code** — gives: predictable cost. Costs: if data shape changes, caps need updating.
+We traded the semantic-search capability of vector RAG for zero embedding infrastructure and exact, queryable control over what context each chain sees — at the cost of every "find anything semantically similar" feature staying unbuildable until the pipeline lands.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (hand-picked SQL)   │ Alternative (vector RAG)       │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Infrastructure   │ zero — SQL on existing tables  │ embed model + vector store     │
+│                  │                                │ (pgvector / Pinecone) +        │
+│                  │                                │ re-embed pipeline on edit      │
+│ Money            │ $0 retrieval — just SQL        │ ~$0.0001 per entry embed       │
+│ ($/retrieval)    │                                │ at OpenAI's pricing; cents/yr  │
+│                  │                                │ at single-user scale           │
+│ Latency          │ ~5-20ms SQLite query           │ ~50-200ms: embed query +       │
+│                  │                                │ ANN search + fetch originals   │
+│ Recall ceiling   │ "last 3 days" / "5 siblings"   │ "top-k most semantically       │
+│                  │ — date-bound, can't span time  │ similar across whole archive"  │
+│ Precision        │ exact: date filters, .slice()  │ approximate — embedding model  │
+│                  │ — caller controls every row    │ judges similarity; tunable but │
+│                  │                                │ never deterministic            │
+│ Cognitive load   │ "read SQL + .slice() cap" —    │ "embed model + chunking +      │
+│                  │ stays in one mental model      │ index + similarity threshold"  │
+│                  │                                │ — 4 new mental models          │
+│ Capability       │ ceiling: corpus < context      │ unbounded — corpus can be      │
+│ ceiling          │ window, time-local features    │ years of data, semantic recall │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up semantic recall over the archive. Today every chain's retrieval is structurally bound: caption sees the last 5 captions (date-filtered), expand sees the last 3 days plus 5 siblings (date + entry-id filtered). A user asking "find me the day I felt most like today" or "show me everything I wrote about Project X over three years" can't be served — those queries need semantic similarity over the whole journal, not "the last N by date". The cliff is hard: a feature like that requires a new embedding pipeline, a vector index, and a nearest-neighbour step before prompt assembly — none of which exist.
+
+We also accepted that the caps live in code (`.slice(0, 5)` for captions, `.slice(0, 3)` for entries, `MAX_INPUT_CHARS = 2000` for interpret). Each cap is a literal in the source; tuning means a code change and a redeploy. At one user with sporadic use, this is fine — but if usage patterns shift (very long entries, many siblings), the caps need updating. A vector-RAG path would replace this with a similarity threshold + top-k, which is more flexible but introduces its own tuning problem.
+
+The maintenance cost is genuinely low: `getRecentAISummaries(date, 5)` + the `.slice` caps are ~30 LOC of plumbing across all 5 chains. That's the win.
+
+### What the alternative would have cost
+
+A vector-RAG pipeline would have added four moving parts: (1) an embed-on-commit hook that runs whenever `entries.text` changes (debounced, like the 5s sync push) and writes vectors to a new table or pgvector extension; (2) a re-embed strategy when the embed model upgrades (do we re-embed everything? lazily on next access? we'd need to decide); (3) a chunking strategy because some entries are 3 lines and some are 3000 chars (whole-entry vs paragraph-level vs sentence-level — each has tradeoffs); (4) a similarity-threshold + top-k tuning loop that requires real user behaviour to calibrate.
+
+The dollar cost at single-user scale is trivial — ~$0.0001 per entry embed × ~365 entries/year = ~4 cents/year. The hidden cost is operational: choosing an embedding model commits you to its semantic space, and switching models means a full re-embed. We'd have to track which embed model produced which vectors, run re-embed migrations on upgrade, and accept that "similarity" means slightly different things across model versions.
+
+Cross-cutting infrastructure: a new column or table for vectors, a new Supabase migration, the `pgvector` extension on the cloud schema, and a sync-mapper update so vectors round-trip to Supabase. The current sync layer doesn't move vectors and would need extension. None of which pays back until a feature needs semantic search.
+
+### The breakpoint
+
+The pattern flips the day a feature is asked that can't be served by date filters. Concrete trigger shapes: "find every day I wrote about Project X over three years" (corpus-wide semantic recall), "find the day I felt most like today" (similarity search by mood), "show me all entries where I mentioned anyone named like a habit" (cross-reference by semantic field). The cliff is binary — none of these can be expressed as a SQL WHERE clause, and stuffing the whole archive into the prompt is impossible past ~50 entries even with a 200K-token context window.
+
+A secondary trigger: if entries grow past the truncation cap consistently. `MAX_INPUT_CHARS = 2000` on interpret means a 5000-char entry loses 3000 chars of context. If users routinely write essays, RAG-on-the-entry (chunk the entry, retrieve the relevant chunks) starts paying back — but that's a different shape of RAG (intra-entry, not cross-entry).
+
+The day RAG lands, it goes in a new service file (`src/services/ai/embed.ts`), a new table (`entry_embeddings(entry_id, vector)` or a pgvector column), a new migration, and a nearest-neighbour step before prompt assembly in *one* chain initially — probably expand, since it already has the most context plumbing.
+
+### What wasn't actually a tradeoff
+
+BM25 / keyword search vs vector embeddings was never a real choice today. The corpus is small enough that even FTS5 (SQLite's full-text search) isn't needed — `WHERE text LIKE '%project x%'` runs in milliseconds on 365 rows. Both BM25 and embeddings are answers to "the corpus is too big for prompt-stuffing", and our corpus isn't.
 
 ---
 
-## Quick summary
+## Summary
 
 Retrieval-augmented generation is the standard pattern for letting a generic LLM answer specific questions about data it wasn't trained on, by embedding a corpus, vector-searching at request time, and stuffing the nearest chunks into the prompt. This codebase doesn't do vector RAG — `summarize.ts:buildCaptionInput()` calls `getRecentAISummaries(date, 5)` at L131 for caption anti-repetition, and `expand.ts:buildContext()` at L147 pulls last 3 days plus ≤5 sibling todos via SQL with explicit `.slice(0, N)` caps. The constraint that drove it is that the corpus is tiny — one user with ~365 entries per year, and the most context any chain assembles is "last 3 days plus 5 siblings plus 5 captions", which fits in the budget without semantic search. The cost is that features needing "find anything semantically similar" can't be built without adding an embedding pipeline, a vector index, and a nearest-neighbour step — none of which exist today.
 
@@ -133,16 +186,94 @@ Key points to remember:
 [mid] Q: What hand-picked retrieval does this codebase actually do today?
       A: Two places. `src/services/ai/summarize.ts:buildCaptionInput()` (L111) calls `getRecentAISummaries(date, 5)` at L131 to grab the last 5 captions for anti-repetition, then hands the assembled input to `caption.ts:generateCaption()`. `expand.ts:147 buildContext()` pulls the last 3 days of entries plus their cached summaries plus ≤5 sibling todos. Both are SQL queries with explicit date filters and `slice(0, N)` caps. There's no embedding, no vector index, no pgvector — just structured retrieval over SQLite.
 
+```
+[hand-picked retrieval — current shape]
+
+  expand fires for todo X
+        │
+        ▼  buildContext(entry, meta)
+  SELECT ... WHERE date BETWEEN today-3 AND today  ← date filter
+        │   .slice(0, 3) days of entries
+        ▼
+  SELECT ... FROM ai_summaries WHERE date IN (...)  ← cached summaries
+        │
+        ▼  siblings: same entry's todos_json, .slice(0, 5)
+  pack into prompt → call Sonnet/4o
+```
+
 [senior] Q: Why not embed entries proactively, so RAG is ready when you need it?
          A: Because today's features don't need it and embedding has ongoing cost — every entry edit re-embeds, every model upgrade may need re-embedding. Adding the pipeline means an embed model choice, an embedding storage decision (SQLite blob? pgvector via Supabase?), a re-embedding strategy, and a chunking strategy. None of which pay back until I have a feature that needs semantic search. The seed of "what if RAG?" exists in the docs precisely so the day a feature lands, I know exactly what to add — `src/services/ai/embed.ts`, `entry_embeddings(entry_id, vector)`, nearest-neighbour step before prompt assembly. Until then, hand-picked retrieval is plenty.
 
+```
+                  Path taken (hand-picked, lazy)      Alternative (embed proactively)
+                  ──────────────────────────────      ───────────────────────────────
+infrastructure    0 — SQL on existing tables          embed model + vector store +
+                                                      re-embed-on-edit pipeline
+$ per entry       $0                                  ~$0.0001 embed cost; ~$0.04/yr
+                                                      total at single-user scale
+re-embed when     N/A                                 every entry edit; every model
+                                                      upgrade (full re-embed migration)
+chunking decision N/A                                 must pick: whole-entry vs
+                                                      paragraph vs sentence
+features unlocked none today                          semantic search, similarity
+                                                      ranking — but no consumer yet
+when this flips   never — RAG without consumer        the day a feature needs corpus-
+                  is YAGNI                            wide semantic recall
+maintenance       low — 30 LOC of SQL plumbing        ongoing — pipeline + index +
+                                                      tuning loop
+```
+
 [arch] Q: At what point does the corpus get too big for hand-picked retrieval?
        A: When the user asks a question whose answer requires "look across all entries" rather than "look at recent entries". A feature like "show me everything I wrote about Project X over three years" can't be served by date-range filters — it needs semantic search. That's the cliff. Or: when the user has so many entries per day that even one day blows the context window, hand-picked stops fitting. Today the user is one person with sporadic use; neither cliff is close.
+
+```
+At 3+ years of entries + corpus-wide queries needed:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — chains still call buildContext  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Hand-picked retrieval (SQL) ───────────────┐
+  │ "last 3 days" / "5 siblings" — date-bound   │  ◀── BREAKS FIRST
+  │ can't answer "every day about Project X     │     (corpus query needs
+  │ over 3 years"                                │      semantic recall;
+  │                                              │      SQL WHERE not enough)
+  └─────────────────────────────────────────────┘
+              │ needs replacement
+              ▼
+  ┌─ NEW: vector RAG layer ─────────────────────┐
+  │ src/services/ai/embed.ts (embed on commit)  │
+  │ entry_embeddings(entry_id, vector) +        │
+  │ pgvector extension on Supabase              │
+  │ nearest-neighbour step before prompt build  │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: What happens when the user has three years of entries and last-3-days context isn't enough?
 
 A: Partly that's a "I haven't built it yet" answer, and I'll own that. But also: at one user with at most three days of context per chain, the steps ARE knowable in advance — what to expand uses what's near the entry, what to caption uses what's recent, what to summarise uses today. None of those tasks change when the archive grows. The new feature that *would* change is something like "trace the evolution of Project X" or "find the day I felt closest to how I feel today" — those need semantic recall over the whole archive and that's where RAG goes in. The day I ship that feature, it looks like: `embed.ts` with a chosen embedding model, `entry_embeddings` table, a nearest-neighbour step in a new service file, and the existing chains stay unchanged. I'd add RAG the day the steps stop being knowable in advance — for example, the day the user asks the model to find something across the full archive.
+
+```
+                  Path taken (hand-picked today)       Suggested (build RAG now)
+                  ──────────────────────────────       ─────────────────────────
+features served   summarize / caption / classify /     same 5 + nothing new (no
+                  expand / interpret — all served      consumer for semantic search)
+$ infrastructure  $0                                   ~$0.04/yr embed + pgvector
+                                                       extension + sync migration
+new mental models 0                                    4: embed model + chunking +
+                                                       index + similarity threshold
+new failure modes 0                                    embed model upgrade requires
+                                                       full re-embed; similarity
+                                                       drift across model versions
+when this pays    never with current features          day a feature can't be
+back                                                   answered by date filters
+3-year archive    chains still work — they're          would benefit from RAG, but
+specifically      time-local by design                 only if the new feature needs
+                                                       cross-time semantic recall
+honest framing    YAGNI is the right answer            shipping it pre-need is the
+                  until the consumer exists            more expensive mistake
+```
 
 ### One-line anchors
 - "Use retrieval when the corpus exceeds the context budget. Mine doesn't."
@@ -210,3 +341,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added App / Provider / Storage layer labels to the contrast diagram since it crosses boundaries.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

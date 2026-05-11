@@ -77,13 +77,56 @@ Auto-regressive language models trace back to n-gram models from the 80s, recurr
 
 ## Tradeoffs
 
-- **Treat as pure function** — gives: trivially debuggable, retriable, testable. Costs: every relevant context must be in the prompt.
-- **No agent loop** — gives: predictable cost. Costs: no autonomous multi-step reasoning.
-- **Stateless** — gives: scales with HTTP. Costs: "remember last conversation" must be implemented in app code, not the model.
+We traded "the model remembers" for "every relevant context travels in the prompt" — and got debuggability, retriability, and a system whose state we can actually inspect.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (pure function)     │ Alternative (stateful assistant)│
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ pay for every input token      │ pay for growing context every  │
+│                  │ once per call; Haiku 4.5 ~     │ turn; conversation buffer      │
+│                  │ $1/1M in, Sonnet 4.6 ~$3/1M    │ doubles cost by turn 5         │
+│ Latency          │ predictable — single round-trip│ multi-turn loops add 500ms–2s  │
+│                  │ (~800ms classify, ~3s caption) │ per turn; UX worsens linearly  │
+│ Debugging        │ same prompt → same problem;    │ "what did the model see at    │
+│                  │ replay locally with a curl     │ turn 4?" needs replay of full │
+│                  │                                │ buffer history — usually lost │
+│ Testability      │ unit-testable: stub one call,  │ requires fixture for full      │
+│                  │ assert one parsed output       │ buffer + state machine         │
+│ Cognitive load   │ one shape across 5 chains      │ each feature gets its own      │
+│                  │ (prompt → call → parse → save) │ state shape — 5× the surface  │
+│ Provider lock-in │ swap Anthropic↔OpenAI by       │ buffer formats differ between │
+│                  │ swapping config; chains intact │ providers; migration is rewrite│
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+Every relevant context must be assembled in app code and pasted into the prompt — there is no "the model remembers last week." The anti-repetition memory for captions is literally `getRecentAISummaries(date, 5)` at `summarize.ts:buildCaptionInput()` L131, a SQLite query plus a string concat. Forget to fetch it, and the model happily reuses the same opening line every day. That cost is paid five times — once for each chain in `src/services/ai/`.
+
+We also gave up cheap multi-turn reasoning. If a future feature genuinely needs the model to refine its own draft based on a user reply, we'd have to introduce a conversation buffer as app-side state — a new table, a new prompt-assembly path, a new replay mechanism for debugging. Today loopd has zero of those features, which is exactly why every chain is single-call.
+
+### What the alternative would have cost
+
+If we'd modeled chains as multi-turn assistants from day one, the up-front complexity would have looked similar (one library call), but per-chain state would have grown. Caption generation across days would have wanted "the assistant from yesterday's caption" — and yesterday's buffer would either be persisted (new schema, new sync, ~200 LOC for the buffer table alone) or rebuilt from prose every time (defeating the point). The cost compounds with chain count: at 5 chains, 5 state machines, 5 replay paths.
+
+Worse, debugging would shift from "show me the prompt and the output" to "show me the buffer at turn N" — and buffers age out, get truncated, drift between providers. The "same prompt twice = same problem twice" property we use to fix bugs in `validate.ts` and the one-retry path in `expand.ts` would simply not exist.
+
+### The breakpoint
+
+The framing breaks the day we ship an interactive surface where the user replies to the model's draft and expects coherent multi-turn refinement — say, an "edit my caption" chat. At that point a conversation buffer becomes app-side state we cannot avoid. The breakpoint is feature-shaped, not cost-shaped: zero such features today, the function framing holds; one such feature tomorrow, we add a buffer to that one chain and leave the other four alone.
+
+A secondary breakpoint is provider-feature drift. If Anthropic's prompt caching (90% discount on cached input tokens) becomes load-bearing at higher volumes (~10× current solo usage), we'd push more context into a cacheable system prompt — which is still the function shape, just a longer prompt. That's a tuning move, not an architecture change.
+
+### What wasn't actually a tradeoff
+
+Treating the model as a function did not cost us "AI quality" in any measurable way — the model is what it is regardless of how the surrounding code frames it. The framing is purely about our debugging surface, not the model's behavior.
 
 ---
 
-## Quick summary
+## Summary
 
 An LLM is a stateless function from a token sequence to a probability distribution over the next token, sampled repeatedly to produce text — every call stands alone, with no memory, no I/O, and no tools. In this codebase that framing drives every chain in `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`): one prompt in, one string out, parse, validate, persist. The constraint that made this the right call here is debuggability — the same prompt fed to the same model with the same sampler reproduces the same problem, which is how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. The cost is that "memory" — like the anti-repetition context for captions — has to be assembled by app code (a SQLite query in `summarize.ts:buildCaptionInput()` plus a string concat), not by the model.
 
@@ -106,16 +149,78 @@ On "what is an LLM" the question almost never tests definitions — it tests whe
 [mid] Q: If the LLM is stateless, how does loopd give it any "memory" at all — for example, anti-repetition across captions?
       A: It's not memory; it's context I assemble in app code. `src/services/ai/summarize.ts:buildCaptionInput()` (L111) calls `getRecentAISummaries(date, 5)` at L131 and pastes those into the caption prompt input. The model sees the last 5 captions as input tokens; it doesn't remember them. If I forgot to fetch and paste, the model would happily re-use the same opening line every day. The "memory" is a SQLite query plus a string concat — assembled by `summarize.ts` before it hands the prompt input to `caption.ts:generateCaption()`. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }`; summarize.ts:91–92 then persists those as `summary_json.variants` and `summary_json.variantsTheme` (the theme key is renamed on write).
 
+```
+[caption "memory" flow — assembled, not remembered]
+
+  buildCaptionInput(date)
+        │
+        ▼  SQLite read
+  getRecentAISummaries(date, 5)  ◀── L131, app-side state
+        │
+        ▼  string concat
+  prompt = SYSTEM + recent + today
+        │
+        ▼  single call, stateless
+  caption.ts:generateCaption(prompt)
+        │
+        ▼  parse + persist
+  ai_summaries.summary_json.variants
+```
+
 [senior] Q: Why frame an LLM as a function instead of as an "AI assistant"? What does that buy you in this codebase?
          A: Framing it as a pure function makes every AI call independently retriable, independently testable, and independently debuggable. The same prompt fed to the same model with the same sampler gives the same distribution — that's how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. If I treated it as an assistant with state, I couldn't reason about "what did the model see at call time" — and that's the question I always need to answer when something looks wrong.
 
+```
+                  Path taken (pure function)          Alternative (stateful assistant)
+                  ───────────────────────────         ────────────────────────────────
+state             zero — app-side context only        conversation buffer per chain
+replay            same prompt → same output           need buffer + turn index to replay
+testability       stub 1 call, assert 1 output        fixture for N-turn history
+retry             one-shot, deterministic             retry destroys buffer coherence
+provider swap     swap config; chains unchanged       buffer format differs per vendor
+cost per call     paid once for input tokens          cost grows with turn count
+```
+
 [arch] Q: At what point does this "function" framing break down? When would you stop modeling LLM calls as pure transformations?
        A: The framing breaks the moment a feature genuinely needs multi-turn state — say, an interactive editor where the user replies to the model's draft. Then I'd need a conversation buffer, and the abstraction would shift from "function call" to "conversation step". I'd still keep each underlying API call stateless; I'd just acknowledge the buffer as app-side state. Loopd has zero of those features today, which is exactly why every chain in `src/services/ai/` is a single call.
+
+```
+At 10× current volume + 1 interactive chain:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ existing 5 chains unchanged                 │
+  │ new "edit my caption" chat surface          │  ◀── new feature
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Chains (single-call) ──────────────────────┐
+  │ 4 untouched (summarize/classify/expand/     │
+  │ interpret) — function framing holds         │
+  │ 1 new chain owns a conversation buffer      │  ◀── BREAKS FIRST
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ App-side state ────────────────────────────┐
+  │ new chat_buffer table; provider-neutral     │
+  │ shape (turns: [{role, content}])            │
+  │ replay = re-send buffer to current provider │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: If it's just a function, why does everyone — including you, sometimes — anthropomorphise it?
 
 A: Because the output looks like reasoning. It isn't. An LLM is a probability distribution sampled token by token; what comes out reads like thought because the training corpus was thought-shaped. The error class I see most often in the wild is treating the LLM like a database (asking it to recall) or a planner (asking it to commit). In this codebase the validation gate exists exactly because I don't trust the model to be more than a token-predictor — I parse, I check the schema, I reject. The classify chain is the cleanest example: I send 50 tokens of input, get 50 tokens of output, and treat the result as "the model's guess at one of 5 labels", not "the model's understanding of my todo". Once you internalise that, every architectural choice in `src/services/ai/` becomes obvious.
+
+```
+                  Path taken (token-predictor)        Suggested (AI-as-coworker)
+                  ───────────────────────────         ──────────────────────────
+trust model       no — parse, validate, reject        yes — "the model knows"
+schema check      validate.ts on every output         hope the JSON parses
+failure mode      loud (rejected by validator)        silent (bad data persists)
+recall            done by SQLite query in app         "ask the model to remember"
+classify output   "guess at 1 of 5 labels"            "the model's understanding"
+debug surface     prompt + output; replayable         narrative — "it decided to"
+$ per wrong call  cheap; one parse, one reject        compounding; bad data spreads
+```
 
 ### One-line anchors
 - "Tokens in, tokens out. Everything else is in app code."
@@ -182,3 +287,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attribu
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (purely conceptual LLM I/O box, no architectural boundaries to cross).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

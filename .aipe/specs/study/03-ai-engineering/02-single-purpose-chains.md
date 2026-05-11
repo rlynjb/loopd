@@ -122,15 +122,63 @@ Single-purpose tools are an old Unix value (do one thing, do it well). LangChain
 
 ## Tradeoffs
 
-- **Single-purpose chains** — gives: easy debugging, independent failure modes, cheap. Costs: no cross-chain reasoning.
-- **JSON output contract (4 chains)** — gives: parse + validate is mechanical. Costs: prompt must be very explicit; one model upgrade can break the shape.
-- **Markdown contract (interpret only)** — gives: long-form prose the user reads. Costs: no schema validation; tone drift only visible to the user, not catchable post-call.
-- **Caption split from summarize** — gives: caption errors don't lose the structured summary. Costs: two calls instead of one when both are needed.
-- **Interpret kept separate from summarize** — gives: failure independence + a different output contract per chain. Costs: prompts can drift apart over time; no shared "reflection" logic.
+We traded "one heroic mega-prompt" for "five small calls with independent failure modes" — pay a bit more in calls, save a lot in debugging time and quality drift.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (5 chains)          │ Alternative (1 mega-prompt)    │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ 5 calls when all run; ~$0.05   │ 1 call ~$0.04 (slightly cheaper│
+│                  │ per full day (Sonnet 4.6 +     │ on token reuse) — savings      │
+│                  │ Haiku 4.5 for classify)        │ vanish past 2k output tokens   │
+│ Latency          │ chains run in parallel where   │ one ~5-8s call; user waits for │
+│                  │ possible; classify ~800ms,     │ everything before anything     │
+│                  │ caption ~3s, interpret ~5s     │ renders                        │
+│ Failure blast    │ caption fails → summarize OK;  │ any sub-task fails → whole     │
+│                  │ classify fails → expand still  │ output is malformed; nothing   │
+│                  │ runs on heuristic              │ saves                          │
+│ Debugging        │ wrong output → 1 of 5 prompts; │ wrong output → which of N      │
+│                  │ replay 1 chain in isolation    │ sub-tasks broke? unrecoverable │
+│ Output contract  │ JSON for 4, markdown for       │ either monolithic JSON (rigid) │
+│                  │ interpret — each enforced      │ or freeform (no validation)    │
+│ Model upgrades   │ swap classify to a cheaper     │ one prompt is hostage to one   │
+│                  │ model independently            │ model's behavior               │
+│ Prompt drift     │ 5 prompts can drift apart      │ one prompt stays internally    │
+│                  │ over time — needs vigilance    │ consistent by construction     │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up cross-chain reasoning at the LLM layer. The model never sees "the summary AND the classifications together" in one prompt, so it can't notice that today's summary contradicts the classification of a todo on the same day. If we wanted that kind of synthesis, we'd have to assemble it in app code by reading both outputs from SQLite and feeding them to a sixth chain — and that sixth chain is exactly the kind of conjoined prompt this pattern exists to avoid.
+
+We also gave up some prompt cohesion. Five prompts means five places where tone, formatting rules, and vocabulary can drift apart. Caption uses four named voices (clean / smoother / reflective / punchy); interpret uses a 32-line markdown template; summarize speaks structured. Keeping them stylistically aligned is manual work — there's no shared "house style" the model enforces.
+
+We paid roughly 5 calls' worth of API cost per full-day generation instead of 1. At solo-dev volumes that's a few cents per day, well under the noise floor. At 10× volume (a thousand users) it's still small; at 10,000× it would push us toward consolidation.
+
+### What the alternative would have cost
+
+A single mega-prompt doing summarize + caption + classify-all-todos + expand-each + interpret would have looked attractive for two reasons: one round-trip, one place to edit the prompt. The hidden cost shows up the first time the prompt fails on edge cases — and it will, because a 2k-token system prompt with five output sections is unwieldy. When it fails, the entire day's AI output fails. The user sees nothing.
+
+We'd also have lost the ability to mix providers. Classify runs on Haiku 4.5 (cheap, fast, good enough for 5-label classification) while summarize and caption run on Sonnet 4.6 (better at structured-and-tonal output). With one chain, every sub-task runs on whichever model the chain targets — over-spending on classify or under-delivering on caption.
+
+The model-upgrade story would have been brutal. Each new Claude or GPT release subtly changes JSON formatting habits; a chain-per-job lets us re-tune one prompt at a time. A mega-prompt forces us to re-validate every sub-task on every model bump.
+
+### The breakpoint
+
+The pattern stops paying off when (a) a feature genuinely needs the model to reason across two outputs in one context — e.g., "draft a vlog plan, critique your own plan, refine it" — at which point a chain-of-chains makes sense, or (b) the API cost of N small calls exceeds the cost of one big call with caching. Provider prompt caching (Anthropic's 90% discount on cached input tokens, ~5min TTL) tilts the math: if we hit ~10× current usage with a stable system prompt, caching closes the cost gap and the single-chain shape stays cheap.
+
+A concrete trigger: the day we add a chain whose output is *only useful in conjunction with another chain's output* (e.g., a "summary critic" that has to see both the summary and the day's prose), we've crossed into multi-step territory. Today no such feature exists.
+
+### What wasn't actually a tradeoff
+
+Splitting `expand.ts` into 4 separate files (one per ExpandableType) was never going to be cleaner — the orchestration shape is identical, only the schema differs. Four duplicated control flows would have been worse than one file with one switch. The duplication-saved beats the abstraction-cost; this is "one chain family" in the budget, not a violation.
 
 ---
 
-## Quick summary
+## Summary
 
 Single-purpose chains is the family of "one LLM call, one job, one output contract" — each chain has a fixed system prompt, a per-call user prompt, and a contract on what it returns. In this codebase five chains do five jobs (`summarize`, `caption`, `classify`, `expand`, `interpret`), and four of them return JSON while `interpret` returns markdown. The constraint that drove it is debuggability and independent failure — caption was split out of summarize when conjoined chains started failing conjointly, and interpret was added separately because its markdown contract didn't fit the validate-and-persist shape. The cost is no cross-chain reasoning at the LLM layer — any "summarize then expand each summary item" orchestration lives in app code, not in a single chain.
 
@@ -153,16 +201,83 @@ Key points to remember:
 [mid] Q: Walk me through what happens when `expand.ts` is called for a todo of type 'bug'. Where exactly does the chain shape live?
       A: `expand.ts` reads the meta to get the type, then calls `getSystemPrompt('bug')` from `expandPrompts.ts` — that returns the bug-specific schema instruction. It builds a user prompt via `buildContext()`, fires one call (Sonnet or 4o depending on provider), then runs `validateExpansion` against the bug-required fields (`observed`, `expected`, `suspectedCause`, `reproSteps`). If validation fails it retries once with a stricter system prompt; if that fails it returns `{ ok: false, reason: 'malformed' }`. One file owns one job — the type just selects the template.
 
+```
+[expand chain flow — type selects template, one call shape]
+
+  expandTodo(todoId)
+        │
+        ▼  read todo_meta
+  meta.type = 'idea' | 'knowledge' | 'study' | 'reflect'
+        │
+        ▼  switch
+  getSystemPrompt(type) ──▶ one of 4 prompt templates
+        │
+        ▼  buildContext() — surrounding entry text
+  single LLM call (Sonnet 4.6 / gpt-4o)
+        │
+        ▼
+  validateExpansion(type, parsed)
+        │
+        ├─ ok    → persist expanded_md
+        └─ fail  → retry once, stricter prompt → if still bad: { ok: false, reason }
+```
+
 [senior] Q: Why didn't you keep summarize and caption as one chain? It would've been one call instead of two.
          A: They were one chain originally. The 4-variant caption prompt is the most opinionated in the codebase (`caption.ts:SYSTEM_PROMPT` defines four named voices with body-line examples and universal rules — no "I", no hashtags, no questions). When the caption prompt got long and started failing on edge cases, the structured summary was failing with it — one model wobble killed both outputs. Splitting them meant caption could fail and summarize would still save. The cost is one extra LLM call when both are needed; the benefit is independent failure modes. That's the defining tradeoff of single-purpose.
 
+```
+                  Path taken (split)                  Alternative (one mega-chain)
+                  ────────────────────                ────────────────────────────
+calls per day     2 (summarize + caption)             1 (mega-prompt)
+prompt size       small + medium, focused             large; 4 voices + structured shape
+caption fails →   summarize still saves               ENTIRE output rejected; nothing saves
+summarize fails → caption still attempts on cached    can't even attempt caption — chain dead
+cost/day          ~2× small-call cost                 ~1.2× — caching mostly closes the gap
+retry shape       retry only the broken chain         re-run everything; pay full cost again
+model bump test   2 chains × per-model = 2 fixes      1 prompt × N quirks = combinatorial test
+```
+
 [arch] Q: At what point would you collapse multiple chains back into one? Or fan out into a chain-of-chains?
        A: I'd collapse if I could get the same output quality with one prompt and the failure correlation stopped mattering — e.g., if the caption rules got short enough that summarize could absorb them without quality loss. I'd fan out if a feature genuinely needed multi-step reasoning where the output of step 1 had to be reviewed before step 2 — for instance, "draft a vlog plan, critique it, refine it". Today none of the five jobs need that. Each one is a one-shot transformation: text in, JSON or markdown out, done.
+
+```
+At 10× volume + 1 critique-style feature:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ existing 5 chains unchanged                 │
+  │ new "vlog plan reviewer" surface            │  ◀── triggers fan-out
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Chains (single-call) ──────────────────────┐
+  │ 5 untouched — function framing holds        │
+  │ new feature: draft → critique → refine      │  ◀── multi-step territory
+  │ each step is still single-purpose           │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Cost layer (prompt caching) ───────────────┐
+  │ Anthropic cache hit ≈ 90% discount on input │
+  │ tokens (5min TTL) — closes the cost gap     │
+  │ between single-chain and N-chain at scale   │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: You say "one job per chain", but `expand.ts` actually selects between 4 different system prompts based on type. Isn't that 4 chains masquerading as one?
 
 A: Fair — and yes, in a strict reading it's four chains in one file (one per `ExpandableType` — `idea / knowledge / study / reflect`; `'todo'` is excluded via `Exclude<TodoType, 'todo'>` so plain todos have no expansion shape). The reason I count it as one is that the *shape* is uniform: read meta, pick prompt, single call, validate, persist. The per-type schemas differ but the orchestration is identical. If I extracted four files I'd have four copies of the same control flow with one parameter swapped. The line I drew is "one chain = one call shape with one validation contract". The 'idea' validator and the 'reflect' validator differ in required fields, which is what `validateExpansion` switches on. So I'll grant the criticism: `expand.ts` is the closest thing in the codebase to a chain *family*, and if I added a fifth expandable type it would be a fair moment to ask whether the file should split. With four typed schemas and stable, the duplication-saved beats the abstraction-cost.
+
+```
+                  Path taken (1 file, 4 templates)    Suggested (4 separate files)
+                  ────────────────────────────────    ────────────────────────────
+files             expand.ts (~250 LOC)                expandIdea.ts + expandKnowledge.ts
+                                                      + expandStudy.ts + expandReflect.ts
+control flow      one switch on meta.type             4× copies of same shape
+schema validation validateExpansion(type) switches    4 separate validators, same shape
+adding 5th type   add prompt + validator branch       new file + duplicate control flow
+duplication cost  zero — one orchestration            ~150 LOC × 3 duplicate copies
+when this flips   5th type with truly novel shape     today: not yet; the line is "≥5 types"
+debugging         one stack trace, one breakpoint     4 places to set breakpoints
+```
 
 ### One-line anchors
 - "Caption was split out of summarize. That's the test of whether single-purpose pays."
@@ -229,3 +344,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; bumped Lev
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (list of 5 sibling chains within the same service layer — no architectural boundaries crossed).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

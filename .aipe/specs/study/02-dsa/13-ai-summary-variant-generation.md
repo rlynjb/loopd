@@ -232,13 +232,64 @@ Structured-output prompting with multi-key JSON is the standard pattern for any 
 
 ## Tradeoffs
 
-- **Single call, four outputs** — gives: noun consistency, one round-trip, one bill. Costs: any malformed variant invalidates the whole response.
-- **Strict validation (`parseAndValidate`)** — gives: never persists partial state. Costs: one bad JSON token means we silently drop all four variants and the editor falls back to `summary.summary`.
-- **Caption failure doesn't fail summarize** — gives: editor always has *some* text overlay. Costs: a permanent caption-failure mode (bad API key, model deprecated) is silent except for `console.warn`.
+We traded bimodal all-or-nothing output for cross-variant consistency that parallel calls cannot give us — same nouns, same mood, same day, four voices.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (single structured  │ Alternative (4 parallel calls, │
+│                  │ call, 4 variants)              │ one per tone)                  │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ LLM round-trips  │ 1 call for all variants +      │ 4 parallel calls + 1 theme    │
+│                  │ theme                          │ call = 5 calls                │
+│ Wall-clock       │ ~300ms (one Sonnet call)       │ ~300ms (parallel) but 4× the  │
+│                  │                                │ retries on flaky network      │
+│ Cost per summary │ ~$0.012 (1 system prompt)      │ ~$0.056 (4× system prompt +   │
+│                  │                                │ theme call)                   │
+│ Cost at 365      │ ~$4.4/year                     │ ~$20.4/year                   │
+│ summaries/year   │                                │                               │
+│ Output coherence │ shared context → same nouns    │ independent contexts → 4      │
+│                  │ across all 4 variants          │ different stories of same day │
+│ Validation shape │ all-or-nothing — any bad       │ per-variant pass/fail; can    │
+│                  │ variant drops the whole output │ render partial picker         │
+│ Failure mode     │ malformed JSON → editor falls  │ one variant down → picker     │
+│                  │ back to summary.summary        │ shows "unavailable" tile      │
+│ Code complexity  │ ~223 LOC caption.ts +          │ ~120 LOC per parallel-call   │
+│                  │ parseAndValidate strict-shape  │ + retry orchestration         │
+│ Token budget     │ 768 max_tokens for 4 variants  │ 256 per call × 4 = 1024 total │
+│                  │                                │ wasted on system-prompt       │
+│                  │                                │ duplication                   │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+Any one malformed variant invalidates the entire response. `parseAndValidate` runs `CAPTION_VARIANT_KEYS.some(k => !variants[k])` — if `reflective` is empty or non-string, all four variants are dropped, the editor falls back to `summary.summary`, and the user never sees the four-voice picker for that day. At single-user scale this fires rarely; on a permanent caption-failure mode (bad API key, model deprecated) it's silent except for `console.warn`. We accepted this because the alternative (rendering a partial picker with "unavailable" tiles) is a worse UX than no picker at all.
+
+The single call shares one `max_tokens=768` budget across four variants and one theme key. A day with a verbose log can hit the cap mid-`reflective`, producing a truncated JSON that fails parsing. The budget is empirical — measured against ~20 days of real journal data — but a 5th variant would push past it.
+
+The `caption` call is wrapped in its own try/catch in `summarize.ts` L87–L96 so the structured summary always persists even if captions fail. The cost is that a *permanent* failure (API key revoked, model retired) is silent — only a `console.warn` and the user wondering why they no longer see voice variants. We don't have instrumentation to flag "caption silently broken for 7 days running."
+
+### What the alternative would have cost
+
+Four parallel calls (one per tone) would match latency (~300ms via `Promise.all`) and let us render per-variant pass/fail in the UI. The dealbreakers are cost (~$0.056 vs ~$0.012 per summary; ~$20/year vs ~$4/year on Sonnet) and coherence: the system prompt for one voice doesn't see the other three, so the "morning workout" might become "the gym session" in another, and the user notices.
+
+A theme-detection-as-separate-call shape would simplify variant validation (no `detectedTheme` key in the JSON) but doubles cost again. The current shape folds theme detection into the same call, sharing the rawLog context — the LLM picks `shift` based on what it read, not on a keyword scan over the variant text.
+
+Partial-credit validation (`if reflective failed but the other three are fine, return what we got`) would have been one if-statement in `parseAndValidate`. We rejected it because the picker UX promises "four voices of today" — three voices is a different product surface, and a "unavailable" tile is friction the user has to navigate around.
+
+### The breakpoint
+
+Fine until variant count exceeds ~5-6 (max_tokens=768 caps the JSON size) or until a permanent caption-failure mode goes undetected for >7 days. The fix for variant count is to split into grouped calls (3+3) which gives up some cross-group coherence to bound token cost; the fix for silent failure is one debug-table counter on caption error rates per week.
+
+### What wasn't actually a tradeoff
+
+Folding `detectedTheme` into the same call isn't a tradeoff against client-side keyword matching — the LLM has the full rawLog context and can pick a theme that doesn't appear literally in any variant text. A keyword matcher would only see the chosen wording, not the day. We pay ~10 extra tokens for the theme key and get a meaningfully better signal.
 
 ---
 
-## Quick summary
+## Summary
 
 Multi-output structured prompting is the family of "ask the model for all the related outputs at once with a strict schema, validate the whole shape or reject it" — same discipline as OpenAI function-calling, JSON-mode generation, and tool-use APIs, applied here to caption variants. In this codebase `generateCaption` in `src/services/ai/caption.ts` calls Claude Sonnet 4.6 (or GPT-4o) with one system prompt that specifies four voices (`clean | smoother | reflective | punchy`) and a `detectedTheme` from a 6-way categorical; `parseAndValidate` then checks every variant key, normalises each to three lines, and validates the theme against `VALID_THEMES` — and `src/services/ai/summarize.ts` L87–L96 attaches `summary.variants` + `summary.variantsTheme` to the AISummary before `upsertAISummary` persists the row. The constraint is *output coherence*: the four variants must describe the *same* day with the same nouns, mood, and facts — only a single shared context guarantees that, parallel calls would produce four independent stories. The cost is bimodal: any one malformed variant invalidates the entire response (`parseAndValidate` returns `null` and the editor silently falls back to `summary.summary`), with no partial-credit recovery. At single-user scale a malformed response is rare; the single-call shape costs one Sonnet round-trip (~$0.012, ~300ms) versus five sequential calls (~$0.056, ~1.4s).
 
@@ -261,16 +312,81 @@ The probe is whether I understand that "four variants of the same day" is a *con
 [mid] Q: What happens if Claude returns only three of the four variants?
       A: `parseAndValidate` runs `CAPTION_VARIANT_KEYS.some(k => !variants[k])` — if any key is missing or `normalizeVariant` returns null for it (empty, non-string, no lines), the whole output is rejected. `generateCaption` returns `{ output: null, error: "Could not parse caption JSON" }`. In `summarize()` that means `output` is falsy at L90, so `summary.variants` and `summary.variantsTheme` stay undefined; the structured summary is still saved (caption is wrapped in its own try/catch at L87). The editor falls back to displaying `summary.summary` (the regular caption field).
 
+```
+[3-out-of-4 variants failure path]
+
+  LLM returns: {clean:"L1...", smoother:"L2...", reflective:"", punchy:"L4..."}
+        │
+        ▼  parseAndValidate
+  CAPTION_VARIANT_KEYS.some(k => !variants[k])
+        │   reflective normalizes to null → true
+        ▼
+  return null   ◀── strict-shape rejection
+        │
+        ▼  generateCaption catches null
+  { output: null, error: "Could not parse caption JSON" }
+        │
+        ▼  summarize.ts L87-L96 catches in its own try/catch
+  summary.variants stays undefined; structured summary still upserts
+        │
+        ▼
+  editor falls back to summary.summary text overlay
+```
+
 [senior] Q: Why one LLM call for all four variants instead of four parallel calls?
          A: Two reasons. First, consistency: the prompt spec says "all four variants describe the SAME day. Don't shift the topic between voices. Only the surface changes." A single shared context guarantees the four outputs use the same nouns (e.g., "the morning workout" in all four), the same mood, the same facts. Parallel calls would give you four independent interpretations of the rawLog. Second, cost — four parallel calls means four times the system-prompt tokens (the system prompt is ~600 tokens) for very similar work. One call costs one system prompt; four calls cost four. At Sonnet 4.6 pricing that's the difference between $0.012 and $0.056 per day-summary.
 
+```
+                  Path taken (single call, 4 outputs)  Alternative (4 parallel calls)
+                  ────────────────────────────────────  ──────────────────────────────────
+shared context    yes — 1 rawLog seen once             no — 4 independent reads
+noun consistency  "morning workout" in all 4 voices    each call may call it different
+                                                       names ("gym session", "exercise")
+latency           ~300ms                                ~300ms parallel (parity)
+cost              ~$0.012 (1× system prompt)            ~$0.056 (4× system prompt)
+365 days/yr cost  ~$4.4                                 ~$20.4
+failure shape     all-or-nothing                       per-variant pass/fail
+verdict           consistency is the win; parallel     parallel matches latency but not
+                  matches latency only                  coherence
+```
+
 [arch] Q: How do you handle the case where the variant generation succeeds for one tone but the model drifts on another?
        A: The validator is strict-shape, not per-variant tolerant. If `clean` and `smoother` are good but `reflective` came back as an empty string or markdown-wrapped, `normalizeVariant` returns null and the whole `parseAndValidate` returns null. I picked all-or-nothing over partial because the UX is "user picks a voice" — if only some voices are available, the picker is misleading. The alternative (return what parsed, mark missing variants as unavailable) is one extra column in the schema and one extra UI state I'd rather not introduce. At single-user scale, a malformed response is rare; the failure mode is "the four-variant feature didn't run today" which is exactly the message in the editor's fallback path.
+
+```
+[scale curve — what breaks first at 10× and 100× variant count or summary volume]
+
+  variants × days   tokens     calls/year   $/year      breaks?
+  ───────────────   ────────   ──────────   ────────    ──────────────────
+  4 × 365 (real)    768 max     365          ~$4.4       no
+  6 × 365           ~1100       365          ~$6        max_tokens=768
+                                                          cap reached   ◀── BREAKS FIRST
+  10 × 365          ~1800       365          ~$10        need to split into
+                                                          grouped calls (3+3+4)
+  4 × 10k users     768          3.6M         ~$44k       per-day call rate
+                                                          dominates; not the
+                                                          algorithm
+```
 
 ### The question candidates always dodge
 Q: You ship `variantsTheme` as part of the same call — but you could detect theme deterministically from the variants client-side. Why a 6-way categorical from the LLM?
 
 A: I could keyword-match the output to assign a theme (`clarity` if "understanding" appears, `growth` if "learning" appears, etc.) and skip the LLM's `detectedTheme` field. The reason I don't is that the LLM has the full rawLog context — it can see "morning workout, struggled to focus, finally clicked at noon" and pick `shift` even when the variants don't say the word "shift." Keyword-matching would only see the variant text. The cost of the extra theme key in the JSON is negligible (one short string, ~10 tokens). The benefit is the theme reflects the day, not the chosen wording. The honest version of the answer is also that I haven't measured whether the LLM's theme is better than keyword-matching on my actual journal data — it might be a wash. But shipping the LLM version costs nothing extra and the worst case is "fall back to default `'clarity'`" which is what `parseAndValidate` does at L193 anyway.
+
+```
+                  Path taken (LLM detectedTheme)       Suggested (client keyword-match)
+                  ────────────────────────────────────  ──────────────────────────────────
+input signal      full rawLog context                  variant text only
+worked example    rawLog says "struggled, clicked      no "shift" keyword in variants
+                  at noon" → theme = 'shift'           → would mis-classify as 'clarity'
+token cost        ~10 extra tokens in JSON             0 — purely client work
+correctness       qualitative — reflects the day      lossy — reflects the wording
+fallback          default 'clarity' if invalid        n/a — always picks something
+                  theme returned
+measured?         no — back-of-envelope better         could A/B in a debug build
+verdict           LLM signal is strictly richer at    keyword match is cheap but
+                  negligible cost                      strictly weaker signal
+```
 
 ### One-line anchors
 - "One context, four outputs — consistency is the win, not parallelism."
@@ -333,3 +449,6 @@ Then open the file and verify.
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

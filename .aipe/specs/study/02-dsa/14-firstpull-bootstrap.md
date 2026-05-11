@@ -232,13 +232,63 @@ When brute force is fine: only on a dev fixture where you know the total cloud r
 
 ## Tradeoffs
 
-- **Reuse `pullTable` via cursor reset** — gives: zero new sync logic, automatic pagination and resumability. Costs: bootstrap inherits pull's pagination quirks (200/page, strict-`>` cursor edge case at boundaries).
-- **Per-table independent reset** — gives: a partial bootstrap (e.g., 7/10 tables done) is resumable per-table. Costs: cross-table consistency isn't transactional — a fresh device could see `entries` with `todoIds` referencing `todo_meta` rows that haven't been pulled yet.
-- **SecureStore-gated bootstrap flag** — gives: bootstrap runs exactly once per install. Costs: a botched first-pull that completes "successfully but empty" sets the flag and locks out a retry — `devActions.wipeAndRestoreFromCloud` is the only hatch.
+We traded a dedicated bootstrap code path for a 10-line cursor reset that delegates to the regular pull pump — exercising the install-time code path on every normal sync for months before it ever runs in anger.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (cursor reset +     │ Alternative (dedicated bulk-   │
+│                  │ pullAll reuse)                 │ loader code path)              │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Code complexity  │ ~30 LOC firstPull.ts (cursor   │ ~200+ LOC dedicated full-table │
+│                  │ reset loop + pullAll call)     │ fetch + pagination + retry +   │
+│                  │                                │ progress reporting             │
+│ Round-trips      │ ⌈N/200⌉ across all tables       │ T huge SELECTs (one per table) │
+│ At 1,500 rows    │ ~8 paged calls                  │ 10 huge SELECTs                │
+│ At 100k rows     │ ~500 paged calls per table     │ blocked by Supabase 413         │
+│                  │                                 │ request-size limit             │
+│ Resumability     │ per-table cursor stamps         │ none — partial progress lost   │
+│                  │ progress, network drop          │ on any timeout                 │
+│                  │ resumable                       │                                │
+│ Code exercised   │ pullTable runs on every normal  │ runs only on fresh device      │
+│                  │ sync — battle-tested            │ attach — untested in prod      │
+│ Failure mode     │ partial bootstrap → flag still  │ partial pull → bug discovered │
+│                  │ set is a real bug; user needs  │ months after ship              │
+│                  │ wipeAndRestoreFromCloud         │                                │
+│ Memory peak      │ O(200) per page                 │ O(N) — full table in heap     │
+│ Cross-table      │ not transactional — entries may │ same — bulk loader doesn't fix │
+│ consistency      │ briefly reference unpulled meta │ this either                    │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+Bootstrap inherits the regular pull's quirks. The strict `>` cursor edge case (two rows sharing `updated_at` at a page boundary) applies to first-pull just like incremental pull. The 200-row page size is fixed across all tables, which is empirical for incremental but slightly silly for first-pull (we could fetch larger pages since there's no urgency). We accepted both because the alternative is duplicating the cursor logic and shipping a second code path with a second set of bugs.
+
+Cross-table consistency isn't transactional. A user opening the app mid-firstPull might see `entries.todos_json` referencing `todo_meta` rows that haven't been pulled yet. The defensive `if !meta || !todo` skip in downstream readers (`getThreadCards`, etc.) absorbs this; the workaround is gating UI on `isBootstrapDone()` until the flag flips. The bootstrap is mostly imperceptible (a few seconds) so the user rarely sees this surface.
+
+The SecureStore-gated bootstrap flag has a subtle bug: a partial first-pull that returns without error but with empty data (because the network was already dropped before any row applied) sets the flag and locks out automatic retry. The only hatch is `devActions.wipeAndRestoreFromCloud()`. We've known about this since 2026-05 and haven't fixed it because the failure rate in single-user testing is effectively zero.
+
+The desync between SecureStore (keychain) and SQLite (app sandbox) is a real bug class. On iOS/Android, app data and keychain can be wiped independently. A user who manually clears app data without uninstalling would land with `bootstrapDone=true` but empty SQLite — `isBootstrapDone()` returns true and the function early-exits at L64, leaving them stuck.
+
+### What the alternative would have cost
+
+A dedicated bulk-loader would be ~200+ LOC: full-table SELECTs with custom pagination, retry, progress reporting, and its own cursor scheme. The dealbreaker isn't LOC — it's *test surface*. The dedicated bulk-loader runs only on fresh-device attach, which is rare in production, so bugs in it live in the codebase for months before anyone runs them in anger. The reuse-pull-via-cursor-reset path runs the same code that every normal sync exercises, so bootstrap-relevant bugs are found by ordinary users in the first week of use.
+
+At 100k rows the dedicated bulk version would hit Supabase's REST request-size limit (413 Request Entity Too Large) before it ever reached its retry logic. The paginated reuse handles 100k rows in ~500 paged calls per table — slow (~100s per table on 4G) but correct. The dedicated path requires its own pagination eventually, which is exactly what `pullTable` already implements.
+
+### The breakpoint
+
+Fine until per-table row counts exceed ~50,000, at which point the firstPull becomes a multi-minute operation that needs a UI progress indicator (currently absent). The fix is a callback per page completion + a "restoring 2,400 of 50,000" UI surface — ~30 LOC. We haven't built it because at single-user scale row counts stay in the low thousands.
+
+### What wasn't actually a tradeoff
+
+Choosing NULL over the magic epoch literal `'1970-01-01...'` in `sync_meta.last_pull_at` isn't really a tradeoff — NULL is the explicit "never pulled" sentinel at the schema level, and the `??` defaulting in `pullTable` is the one place the epoch string lives. Writing the literal into `sync_meta` directly would duplicate magic across two files; NULL keeps the semantics in one place.
 
 ---
 
-## Quick summary
+## Summary
 
 Initial replication as "incremental sync with the cursor pinned to epoch" is the family of "special case is a parameter, not a fork" — same instinct as null-object pattern, sentinel timestamps, and CDC backfill in Postgres logical replication, Kafka Connect, and Debezium where snapshot is just the cursor-from-epoch case of the stream. In this codebase `firstPullAll` in `src/services/sync/firstPull.ts` (L20–L30) walks the 10-table `SYNCED_TABLES` list, UPSERTs each `sync_meta.last_pull_at` to NULL, then delegates to `pullAll()` — and `pullTable`'s `cursor = last_pull_at ?? '1970-01-01...'` line is what makes "NULL = pull from epoch" work without a code branch. The constraint is that bootstrap must reuse the incremental machinery so the install-time code path has been exercised on every normal sync for months before it ever runs in anger. The cost is that bootstrap inherits the regular pull's quirks: 200-row pagination means a 10k-row attach takes ~50 paged round-trips per table, and cross-table consistency isn't transactional so `entries` may temporarily reference `todo_meta` rows not yet pulled. The brute-force "one huge SELECT per table" alternative isn't even shipped — it 413s past Supabase's request-size limits and has no resumability.
 
@@ -261,16 +311,82 @@ The probe is whether I see this as a separate algorithm or as "incremental pull 
 [mid] Q: Walk me through what happens during firstPullAll if the network drops after 5 of the 10 tables have synced.
       A: The reset phase wrote NULL to all 10 `sync_meta` rows up-front, so all 10 are still flagged for full pull. `pullAll` walks them in REGISTRY order; let's say tables 1-5 succeeded and stamped `last_pull_at = serverTime`. Tables 6-10 either haven't started or are in mid-page. The network drops. `pullAll` returns a results array where tables 1-5 show `applied: N`, tables 6-10 show `error: <network>`. The bootstrap flag is set only on the orchestrator's success — actually, looking at the code path in `bootstrap.ts:82–86`, the flag is set unconditionally after `firstPullAll()` returns even with errors. That's a real bug: a partial first-pull marks bootstrap done, and the user needs to `wipeAndRestoreFromCloud` to retry. I'd fix it by inspecting the returned results array for any error and bailing on `markBootstrapDone` if so.
 
+```
+[partial firstPull network-drop flow]
+
+  reset phase: 10 sync_meta rows set to NULL
+        │
+        ▼  pullAll walks REGISTRY
+  tables 1-5 succeed → last_pull_at = serverTime each
+        │
+        ▼  network drops mid-table-6 page
+  table 6 returns {error: <network>}
+        │
+        ▼  pullAll returns results array; tables 7-10 not attempted
+  bootstrap.ts:82-86 → markBootstrapDone() runs unconditionally
+        │
+        ▼
+  user stuck: flag set, but tables 6-10 empty   ◀── real bug
+  recovery: devActions.wipeAndRestoreFromCloud()
+```
+
 [senior] Q: Why reset `last_pull_at` to NULL and rely on `?? '1970-01-01...'`, instead of just writing `'1970-01-01...'` directly into `sync_meta`?
          A: Two reasons. First, the NULL sentinel makes "this table has never been pulled" explicit at the schema level — any future consumer reading `sync_meta` directly sees the unmistakable NULL, not a magic epoch string. Second, the `??` defaulting lives in `pullTable` already (it's how a freshly-installed device handles the first incremental pull too), so the firstPull code stays minimal: just "set NULL, run pullAll." Writing the epoch literal would duplicate magic across two files. NULL = unwritten; the ?? handles the semantics in one place.
 
+```
+                  Path taken (NULL + ?? defaulting)    Alternative (literal epoch in sync_meta)
+                  ────────────────────────────────────  ──────────────────────────────────
+sentinel          NULL — explicit "never pulled"       '1970-01-01...' — magic string
+schema reader     any consumer sees NULL — unambiguous reader must know the epoch convention
+where lives       ?? defaulting in pullTable only      epoch literal in both pullTable
+                  (one place)                          and firstPull.ts
+firstPull LOC     ~10 (reset NULL + pullAll)           ~10 (write literal + pullAll) but
+                                                       magic duplicated
+adding a 3rd      no change — same sentinel works      must remember to write the literal
+caller                                                  in every caller
+verdict           NULL is the schema-native shape      epoch literal duplicates semantics
+```
+
 [arch] Q: A user has 100,000 rows in entries. firstPullAll runs. What's the user experience?
        A: 100k rows / 200 per page = 500 pages = 500 sequential HTTPS round-trips on the entries table alone. At 200ms latency that's 100 seconds of pulling just for entries, plus the other 9 tables. The UI should show a "restoring from cloud" indicator with progress (currently it doesn't — that's a gap). The pagination is what makes it survivable: each page is a discrete success, and the cursor stamps progress as it goes. If the user kills the app at row 60,000, the next `firstPullAll` call resumes from the last stamped cursor. The alternative (single huge query) would 413 at request size and lose everything.
+
+```
+[scale curve — what breaks first at 10× and 100× cloud row count]
+
+  cloud rows    pages/table   wall time @200ms   user-visible             breaks?
+  ──────────    ───────────   ────────────────   ─────────────────────    ──────────────────
+  1,500 (real)  ~1 each       ~2-4s              spinner barely flickers  no
+  15,000        ~8 each       ~25s               needs progress indicator no
+  100,000       ~500 each      ~100s/table        UI gap real;             progress UI
+                                                  resumable via cursor      missing   ◀── BREAKS FIRST
+  1M+           ~5k each       ~17 min            unusable w/o progress    needs callback
+                                                  + retry on timeout       per-page + UI
+```
 
 ### The question candidates always dodge
 Q: The bootstrap flag is in SecureStore, but the rest of the sync state is in SQLite. What if the user's app data gets wiped but SecureStore persists (or vice-versa)?
 
 A: It's a real desync surface. On iOS / Android, SecureStore lives in the OS keychain while SQLite lives in the app's sandbox — they can be wiped independently. If SQLite gets wiped but SecureStore keeps the bootstrap flag, the next launch sees `local empty + flag set` and treats it as "incremental sync from never," which means the pull cursor reads `last_pull_at = NULL` (because SQLite is empty) and effectively re-runs firstPull... except the bootstrap decision tree never gets there because `isBootstrapDone()` returns true and the function early-exits at L64. The user is stuck with no data and no automatic recovery. The fix is to either move the flag *into* SQLite (lose the "survive app reinstall" property) or to check local emptiness inside `isBootstrapDone` (more complexity). The reason I haven't fixed it is that the wipe-without-reinstall case is genuinely rare on mobile — Android typically wipes both together. But it's the kind of bug a fresh-eyed reviewer would flag in five minutes and they'd be right.
+
+```
+                  Path taken (flag in SecureStore)     Suggested (flag in SQLite OR local-empty
+                                                       check inside isBootstrapDone)
+                  ────────────────────────────────────  ──────────────────────────────────
+survives          yes — SecureStore is keychain         no — wiped with app data
+reinstall                                               (loses the "auto-restore on
+                                                       reinstall" property)
+desync surface    SecureStore vs SQLite can be wiped   no — flag follows the data
+                  independently
+"app data         user stuck: flag set but DB empty;   user gets fresh bootstrap on
+ cleared, app     needs wipeAndRestoreFromCloud         next launch automatically
+ still installed"
+LOC               unchanged                             +5 in isBootstrapDone, or migrate
+                                                       flag into sync_meta
+observed bug      yes — known since 2026-05            n/a
+verdict           rare-but-real bug class; fix when    "check local emptiness in
+                  it surfaces in support tickets       isBootstrapDone" is the cheap fix
+                                                       that preserves reinstall survival
+```
 
 ### One-line anchors
 - "Bootstrap is not a different sync engine — it's the incremental engine pointed at epoch."
@@ -333,3 +449,6 @@ Then open the file and verify.
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -166,13 +166,59 @@ Batched upsert is the standard pattern for any sync engine — Salesforce Bulk A
 
 ## Tradeoffs
 
-- **BATCH_SIZE = 50** — gives: small enough to retry, big enough to amortize. Costs: arbitrary; can be tuned by table.
-- **Stamp synced_at on success** — gives: idempotent retries on failure. Costs: a partial-batch failure can't be expressed (all-or-nothing per batch).
-- **`onConflict: 'user_id,id'`** — gives: commutative, idempotent upserts. Costs: every synced table needs the composite PK shape.
+We traded transactional sender-side bookkeeping for an idempotent receiver-side upsert plus a SQLite column that doubles as the retry queue.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (batch 50 + LWW     │ Alternative (per-row + retry   │
+│                  │ upsert)                        │ table)                         │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Round-trips      │ ⌈n/50⌉ per push                │ n per push                     │
+│ Time at 137 rows │ ~600ms total (3 batches × ~200 │ ~27s total (137 × ~200ms)      │
+│                  │ ms latency)                    │                                │
+│ Time at 10× N    │ ~4s at 1,370 rows              │ ~270s at 1,370 rows — sync     │
+│                  │                                │ window blown                   │
+│ Code complexity  │ ~67 LOC pushTable + 10 table   │ ~40 LOC per-row but + retry    │
+│                  │ glue files                     │ table + drainer + backoff      │
+│ Memory churn     │ ~50-row JS array per batch     │ 1 row at a time, but per-row   │
+│                  │                                │ Promise allocation × n         │
+│ Retry mechanism  │ `synced_at` predicate IS the   │ explicit retry table with row  │
+│                  │ retry queue                    │ id + attempt count + next-try  │
+│ Failure mode     │ batch all-or-nothing — partial │ per-row tracking, but retry    │
+│                  │ failure expressed as 50 still- │ table is a second source of    │
+│                  │ dirty rows                     │ truth that can drift           │
+│ Idempotency      │ `onConflict + LWW` makes       │ retry table must track "in     │
+│                  │ double-apply a no-op           │ flight" vs "queued" states     │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+Batches are all-or-nothing — a partial-batch failure can't be expressed. If batch 2 fails on row 73 inside the upsert, the other 49 rows in the batch don't get `synced_at` either; the next push re-sends all 50. We accept ~5% wasted bandwidth on retry vs the cost of tracking row-level success inside an opaque upsert response.
+
+The 10 tables in `orchestrator.ts:pushAll` (L38–L60) push sequentially with no cross-table transaction. A second device pulling between table pushes can briefly see entries that reference `todo_meta` rows the cloud doesn't yet have. The defensive `if !meta` skip in `getThreadCards` absorbs the gap at single-writer scale; the moment a second writer exists, this becomes observable.
+
+`BATCH_SIZE = 50` is empirical, not theoretical. We measured: 100+ flakes on slow connections when `entries` carries text blobs (payload >100KB); 25 wastes round-trips (4 trips for 100 rows instead of 1). 50 is the floor at which doubling the batch saves one round-trip and halving costs two. A retuneable per-table constant would be more correct; we picked one global value to keep the table glue uniform.
+
+### What the alternative would have cost
+
+A per-row upsert loop (~40 LOC) would be simpler to read, but at 137 dirty rows on a 200ms-latency mobile connection it's 27 seconds of pushing — blowing the next sync window and exhausting the device's HTTP pool. At 10,000 rows it's 33 minutes, unusable.
+
+An explicit retry table (row id + attempt count + next-try-at + last-error) is the textbook outbox shape. It costs ~150 LOC of plumbing (drainer, backoff schedule, lock against the live writer, conflict resolution if the user re-edits a queued row) and introduces a second source of truth for "what needs to be sent" that can drift from `WHERE updated_at > synced_at`. The codebase's choice to make the `synced_at` column itself the queue eliminates the drift class entirely — the predicate is durable, monotonic, and self-resyncing.
+
+### The breakpoint
+
+Fine until two writers exist (multi-device, future feature) or until a single user's dirty backlog exceeds ~5,000 rows in one push window. At 5,000 rows × 200ms latency / 50 batch = ~20s per push — still tolerable but eats the next sync window. The fix at that scale is parallel-batch dispatch (send 4 batches concurrently) which doesn't change the algorithm shape, just the dispatcher.
+
+### What wasn't actually a tradeoff
+
+`onConflict: 'user_id,id'` with Last-Write-Wins isn't really a tradeoff against application-level CRDTs — at single-user-per-account scale the rows have one writer and LWW is the correct semantics, not a compromise. CRDTs would matter the moment two writers concurrently edited the same row, which the current product surface doesn't permit.
 
 ---
 
-## Quick summary
+## Summary
 
 The batched-upsert pattern with checkpoint-per-batch progress is the family of "amortise per-call overhead by batching, but keep batches small enough that a failure isn't catastrophic" — the same shape as resumable file uploads, bulk-load utilities (`COPY` with commit intervals), and message-queue consumers committing offsets per batch. In this codebase `pushTable` in `src/services/sync/push.ts` selects `WHERE updated_at > synced_at`, upserts to Supabase in batches of 50 with `onConflict: 'user_id,id'`, then stamps `synced_at` per successful batch so the row stops being "dirty"; on failure it leaves `synced_at` alone so the next push retries the same batch. The constraint that made this the right call was that idempotency on the receiver (upsert-on-conflict with LWW) means the sender doesn't need a separate retry table — the SQLite `synced_at` column IS the durable retry queue. The cost is that batches are all-or-nothing (a partial-batch failure can't be expressed), and the 10 tables in the orchestrator are pushed sequentially with no cross-table transaction, so a second device pulling between table pushes can briefly see entries that reference meta the cloud doesn't yet know about. 50 is empirical, not theoretical: 100+ flakes on slow connections with `entries` text blobs, 25 wastes round-trips.
 
@@ -195,16 +241,80 @@ The probe is whether I know what idempotent retry actually means in practice. `p
 [mid] Q: Walk me through what happens to row 73 in your trace if batch 2 fails. Why does the next push pick it up?
       A: Row 73 is in batch 2, which errored, so the loop hit `continue` before reaching `localMarkSynced`. Its `synced_at` stays at its previous value (or NULL if it's never been synced). When the next `pushAll` runs, `localQueryDirty()` does `SELECT * WHERE updated_at > synced_at` — and since row 73's `updated_at` is newer than its stale `synced_at`, it shows up in the dirty set and gets retried. The DB column IS the retry mechanism; there's no separate queue or backoff structure.
 
+```
+[row 73 across two push cycles]
+
+  push #1 batch 2 (rows 50-99)
+        │
+        ▼  upsert HTTPS → 502
+  err caught, continue   ◀── no localMarkSynced called
+        │                    synced_at unchanged on row 73
+        ▼
+  push #1 returns: failed=50
+
+  next push fires (debounced 5s later or next commit)
+        │
+        ▼
+  localQueryDirty: SELECT WHERE updated_at > synced_at
+        │   row 73 still dirty → re-included
+        ▼
+  push #2 batch including row 73 → retried (idempotent)
+```
+
 [senior] Q: Why 50 specifically? What did you measure?
          A: Empirical, not theoretical. At 100+ rows per batch the supabase-js client started getting flaky on slower connections — payload sizes for `entries` (with `text` blobs) were tipping over 100KB. At 25 the round-trip overhead was eating the gains; 4 round-trips for 100 rows instead of 1. 50 hit the floor where doubling the batch saved one round-trip and halving cost two. It's also small enough that a fail-and-retry cycle is bounded — at most 50 rows have to re-traverse the wire on the next push.
 
+```
+                  Path taken (BATCH=50)                Alternative (BATCH=25 or 100)
+                  ────────────────────────             ──────────────────────────────────
+round-trips/100   2 round-trips                        25→4 RTs (wastes); 100→1 RT (flaky)
+payload per RT    ~50KB on entries with text          25→~25KB (safe); 100→~100KB (tips)
+flake rate        baseline on mobile networks         25→same; 100→observable timeouts
+                                                       on slow Android connections
+worst-case retry  ≤50 rows re-sent                     25→25 rows; 100→100 rows wasted
+                                                       per failed batch
+amortization      doubling halves RTs                   25 doesn't amortize enough
+sweet spot        50 — floor where doubling saves     25 too small, 100 too risky
+                  1 RT and halving costs 2
+```
+
 [arch] Q: What about network partitions — what if the device pushes a batch, the server applies it, but the response is dropped?
        A: That's the partition case where the device thinks the batch failed but the server has actually applied it. On the next push, `localQueryDirty` re-selects those 50 rows because their local `synced_at` is still stale. The retry hits the server, which sees them as `onConflict` matches and runs the upsert again. Because every column is overwritten with the same `(user_id, id, ...same data)`, the second upsert is a no-op semantically. Last-Write-Wins resolves any race where the user kept editing locally — server's older copy of the row gets overwritten by the device's newer `updated_at`. The double-apply is invisible because upserts are idempotent under `onConflict + LWW`.
+
+```
+[scale curve — what breaks first at 10× and 100× dirty backlog]
+
+  dirty rows   batches   wall time @200ms/RT   sync window   breaks?
+  ──────────   ───────   ──────────────────   ───────────   ──────────────────
+  137 (real)   3         ~600ms                next: 5s OK    no
+  1,370 (10×)  28        ~5.6s                 next: 5s !    push overruns next debounce
+  13,700 (100×) 274      ~55s                  way over       HTTP pool exhaustion   ◀── BREAKS FIRST
+  100,000+     2000+     ~7min                 ◀◀ unusable    need parallel batches,
+                                                              not a different algorithm
+```
 
 ### The question candidates always dodge
 Q: You said batches are "all-or-nothing per batch." What about transactional consistency *across* tables? If `entries` pushes successfully but `todo_meta` fails, you have rows referencing meta that the cloud doesn't know about.
 
 A: Yes, and that's a real gap. `pushAll` walks 10 tables in sequence; each `pushTable` is independent; there's no cross-table transaction. So I can absolutely have `entries.todos_json` referencing `t-B` while cloud `todo_meta` doesn't yet have a row for `t-B`. The user-visible consequence is that the dashboard, when the user is on a *second device* that pulls before the next push, sees the entry but renders it with `meta` missing — which is exactly why I have the defensive `if !meta || !todo: continue` in `getThreadCards`. The cloud is *eventually consistent across tables*, not transactionally consistent. The principled fix would be a server-side stored procedure that accepted the multi-table batch and committed in one transaction; that's a 3-table or 4-table push API per logical write. I haven't built it because the user-visible cost (a brief render gap on a second device) is invisible at single-user scale, and the implementation cost (a custom RPC for every multi-table write) is high. It's the right call now; it stops being the right call the moment a second device joins.
+
+```
+                  Path taken (10 tables sequential)    Suggested (server-side multi-table RPC)
+                  ────────────────────────────────────  ──────────────────────────────────
+push shape        10 independent pushTable calls       1 RPC per logical write (entry+meta+
+                                                       mentions in one BEGIN/COMMIT)
+cross-table       inconsistent window between          atomic — server commits all-or-none
+consistency       table pushes
+2nd device pulls  may see entry without meta;          sees fully-formed entry or nothing
+                  defensive skip in getThreadCards
+                  hides it
+implementation    ~67 LOC pushTable, reused 10× via    custom RPC per write shape (~150
+                  table glue                           LOC server + matching client)
+                                                       per logical write
+race observed     never at single-user scale           race gone formally
+verdict           right call now; flip when 2nd        the moment 2nd device joins, this
+                  device joins                         becomes the correct shape
+```
 
 ### One-line anchors
 - "The `synced_at` column IS the retry queue — no separate failure log."
@@ -271,3 +381,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

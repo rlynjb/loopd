@@ -81,13 +81,62 @@ The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the wi
 
 ## Tradeoffs
 
-- **Hand-picked, capped context** — gives: predictable cost, no surprises. Costs: must remember to update caps when adding new features.
-- **No cross-day memory by default** — gives: easy to reason about. Costs: features that need history must explicitly fetch and add it.
-- **Per-feature context shape** — gives: each prompt is just-right. Costs: 4 different `buildContext`-ish helpers; no shared one-size-fits-all.
+We traded "the model sees everything" for "the model sees a hand-picked slice with explicit caps" — and got cost that's bounded by the cap, not by how heavy the user's day is.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (capped slices)     │ Alternative (uncapped / RAG)   │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ classify ~$0.0001/call (Haiku  │ uncapped classify could grow   │
+│                  │ 4.5, 50 in / 50 out); expand   │ 10× tokens on heavy day = 10× │
+│                  │ bounded by 3 days + 5 todos    │ cost; RAG adds embedding +     │
+│                  │                                │ vector store ongoing cost      │
+│ Latency          │ predictable: ~50-token prompts │ unbounded → seconds added to   │
+│                  │ stay sub-second; expand stays  │ tail latency on heavy users    │
+│                  │ ~3s even with full context     │                                │
+│ Quality          │ "last 3 days" is the right     │ more context = more noise; in │
+│                  │ amount for journal continuity  │ 1M-token windows recall dips   │
+│                  │                                │ in the middle of the context   │
+│ Cognitive load   │ each chain owns its shape;     │ shared builder needs flags for │
+│                  │ grep `.slice(0, N)` to find    │ every variation — config-bloat │
+│                  │ every cap                      │                                │
+│ Adding a feature │ write a new buildContext-ish   │ "add new context source" needs │
+│                  │ helper for that chain          │ retrieval logic + chunking     │
+│                  │                                │ + ranking                      │
+│ Failure mode     │ loud — bad cap → visibly wrong │ silent — irrelevant retrieved  │
+│                  │ output, fix the slice          │ chunk subtly poisons output    │
+│ Capacity         │ cost flat per user; horizontal │ cost grows with user history; │
+│                  │ scale is trivial               │ per-user vector index needed   │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up cross-day memory by default. The model never sees "yesterday's todos" unless a chain explicitly fetches them — and only `expand.ts` does (via `.slice(0, 3)` on recent dates). Caption gets the last 5 captions for anti-repetition; classify gets nothing; interpret gets only the current entry's tail. If a feature wants more, the feature author writes the fetch and the cap themselves. No shared `buildContext()` helper. That's per-feature plumbing — four context-builders for four shapes, plus interpret's `truncateTail`.
+
+We also gave up the ability to surprise-discover patterns across the journal. A semantic search over all entries would let the model say "you wrote about this same anxiety in February" — we can't do that without a real retrieval layer. The slice caps are blind: most-recent-N, not most-relevant-N.
+
+### What the alternative would have cost
+
+A retrieval-augmented context (per [07-rag](./07-rag.md)) would have given us "most-relevant-N" instead of "most-recent-N," but at the cost of an embedding pipeline (every entry on commit → embedding API call), a vector store (likely sqlite-vec on-device or a hosted store off-device), and a per-call retrieval step. The embedding API has its own price-per-1k-tokens; the vector store needs indexing; the retrieval step adds latency. At solo-dev volumes that infrastructure cost dwarfs the actual LLM cost.
+
+A unified `buildContext(feature, options)` helper would have consolidated four small functions into one bigger one — looks like a win until you count the flags. `includeRecentDays`, `includeRecentCaptions`, `includeSiblings`, `truncateTail`, `maxDays`, `maxSiblings`, `maxCaptions`... the call site becomes a config object and the helper becomes a switch statement. Each chain owning its `buildContext` keeps the shape close to where it's used.
+
+### The breakpoint
+
+The pattern flips when (a) a feature genuinely needs "find similar moments across all journal history" — the most-relevant-N retrieval that recency-based slicing cannot do — or (b) we ship a model with a 1M+ token context and start packing whole-month context for free. (a) is feature-shaped: the day we add a "show me past entries about X" surface, RAG becomes mandatory. (b) is provider-shaped: Anthropic's prompt caching at 1M context (when generally available) would let us cache whole-month context at a 90% discount, making "last 30 days" effectively free.
+
+A concrete operational trigger: when a single chain's input exceeds ~8k tokens consistently, we're either paying too much or the cap is letting noise in. That's when the cap gets retuned, not when RAG gets added.
+
+### What wasn't actually a tradeoff
+
+Sending zero context on classify was never a quality-vs-cost tradeoff in any meaningful sense — the classifier is a 5-label problem on a single line of prose, and adding the surrounding entry didn't measurably move accuracy in any test we ran. Cost was the only axis; we picked the cheap option without losing anything we'd notice.
 
 ---
 
-## Quick summary
+## Summary
 
 The context window is a fixed-size buffer that holds everything the model sees for one call, and packing it well is the central engineering discipline of any LLM-powered product. In this codebase every chain hand-picks a small, explicitly-capped context: `expand.ts:buildContext()` pulls last 3 days plus ≤5 sibling todos, `summarize.ts:buildCaptionInput()` pulls the 5 most-recent captions via `getRecentAISummaries(date, 5)` at L131, `classify.ts` sends no surrounding context at all, and `interpret.ts` runs `truncateTail` to a 2000-char cap on the single entry. The constraint that drove it is predictable cost on the highest-volume chains and being able to use small fast models — every `.slice(0, N)` and `truncateTail` is a knob that bounds spend regardless of how heavy the user's day is. The cost is that the model never sees anything you didn't explicitly hand it, and any feature needing richer history has to add its own fetch.
 
@@ -110,16 +159,74 @@ Key points to remember:
 [mid] Q: Why does `classify.ts` send no surrounding context at all? Wouldn't more context help disambiguate?
       A: Yes, more context would help, and yes I deliberately don't send it. Classify runs on every new ambiguous todo line — a heavy journaling day produces 30+ todos, and at $0.0001 per call on Haiku/4o-mini the cost is already trivial only because the prompt is ~50 tokens in, ~50 out. Adding the surrounding entry text would multiply input tokens by 10× for marginal accuracy gain on a 7-class problem where the heuristic already caught the obvious ones. I traded accuracy for cost predictability and it's the right trade for this app.
 
+```
+[classify input shape — context-free by design]
+
+  one todo line ("[] book flight to Tokyo")
+        │
+        ▼  ~50 tokens in
+  classify SYSTEM_PROMPT + user line
+        │
+        ▼  Haiku 4.5 / gpt-4o-mini
+  ~50 tokens out: { type: 'todo', confidence }
+        │
+        ▼  cost ≈ $0.0001/call
+  30 calls on heavy day ≈ $0.003
+```
+
 [senior] Q: Why per-feature `buildContext` instead of one shared context-builder?
          A: Because the five chains need different shapes. `expand.ts:147 buildContext()` pulls last 3 days of entries plus their cached summaries plus ≤5 sibling todos. `summarize.ts:buildCaptionInput()` L111 pulls 5 recent captions via `getRecentAISummaries(date, 5)` at L131 for anti-repetition plus mood — and hands the result to `caption.ts:generateCaption()`. `summarize.ts:summarize()` itself packs the whole day. `classify.ts` pulls nothing. `interpret.ts` pulls one entry's text and `truncateTail`s it to 2000 chars — no recent-summary dependency, no sibling context, just the entry's most-recent words. A unified builder would either send too much (every chain pays for context it doesn't need) or expose so many flags that the call site looks like a config object. Each chain owns its context shape, with explicit `.slice(0, N)` or `truncateTail` caps that you can grep for and reason about.
 
+```
+                  Path taken (per-chain builders)     Alternative (unified buildContext)
+                  ──────────────────────────────      ──────────────────────────────────
+shape per chain   purpose-built; what it needs        config object: includeRecentDays,
+                                                      includeSiblings, includeCaptions, ...
+finding the cap   grep .slice(0,N) — 4 hits           one file with 7 flags + a switch
+adding a feature  write the helper next to the chain  add another flag, another branch
+cost per chain    pays for exactly what it sends      risk of sending unused fields
+testability       stub the 1 fetch the chain needs    stub the unified builder + mock 5 ins
+when this flips   ≥3 chains share identical shape     today: zero overlap; flag would lie
+```
+
 [arch] Q: At a million-token context window, do these caps still matter?
        A: They matter less for *fitting* and more for *cost and quality*. A 1M-token prompt costs roughly 1M-tokens-worth, and the model's recall in the middle of a giant context is documented to dip. The caps in `expand.ts` aren't there because I'm scared of the context limit; they're there because last-3-days is the right amount for the task and the rest is noise. If I moved to a 1M-token model I'd keep the caps.
+
+```
+At 10× users + 1M-token model + provider prompt caching:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — chains call the same way        │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Cost layer ────────────────────────────────┐
+  │ caching: 90% off cached input tokens        │
+  │ → static SYSTEM_PROMPT cached cheaply       │
+  │ → per-call dynamic context still pays full  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Caps layer (slice / truncateTail) ─────────┐
+  │ STILL THE BOTTLENECK — cap defines what's   │  ◀── caps still load-bearing
+  │ "right context for the task," not what fits │     even at 1M-token window
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: You hand-pick "last 3 days, 5 siblings, 5 captions" — those are magic numbers. How do you know they're right?
 
 A: I don't, exactly. I picked them by feel — last 3 days is enough to see continuity in a journaling app where days connect; 5 siblings is enough to give the model nearby todos without dominating the prompt; 5 captions is enough to detect repetition without anchoring the model to old voice. There's no A/B test behind any of these numbers. The defence isn't that they're optimal — it's that they're capped. A bad cap is still bounded; an uncapped prompt grows with the user's data and one heavy journaling day blows past budget. If I started seeing quality regressions I'd treat the cap as a tuning knob, not a constant. Today the user-facing quality is fine, so the numbers stay.
+
+```
+                  Path taken (capped, by-feel)        Suggested (A/B tuned per cap)
+                  ────────────────────────────        ─────────────────────────────
+cap discovery     by-feel; "last 3 days = continuity" controlled experiments per knob
+cost ceiling      known; bounded by cap × users       known after experiment runs
+infrastructure    zero — slice in code                test harness, fixture data, metrics
+quality signal    user-facing — drop a star, retune   per-experiment offline metric
+when this flips   user complaints + quality dip       team large enough to staff tuning
+worst-case cap    bounded — still cheap and visible   unbounded during experiment phase
+solo-dev fit      ship-it, watch the output           wrong shape for a 1-person team
+```
 
 ### One-line anchors
 - "Caps decouple cost from data size."
@@ -186,3 +293,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; re-attribu
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Diagram layer-labels skipped (token-budget bar visualization, conceptual — no architectural boundaries crossed).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

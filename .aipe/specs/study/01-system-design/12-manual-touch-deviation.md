@@ -74,13 +74,64 @@ Documented exceptions are common in codebases that hold otherwise-strict invaria
 
 ## Tradeoffs
 
-- **Allow entry-less mentions** — gives: a uniform consumer interface for staleness math. Costs: the schema permits a row that isn't tied to any prose, which a careless query can return unexpectedly.
-- **One documented exception** — gives: the principle stays strict in 99% of cases. Costs: every reader of `thread_mentions` must know the exception exists.
-- **Soft-delete the touch row to "untouch"** — gives: consistent with all other deletes. Costs: an undo-touch leaves a tombstone the database has to carry.
+We traded principle-purity for honest user UX: the "mentions are derived from prose" invariant gets one documented carve-out so the dashboard can ship a "tap to mark touched" gesture without injecting synthetic prose the user didn't type.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (1 documented     │ Alternative (synthetic prose │
+│                  │  exception)                  │  line on touch)              │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Principle stays  │ literally false in 1 path,   │ literally true everywhere    │
+│ strict?          │ documented in spec §11        │ (but user reads "fake" prose)│
+│ User UX impact   │ touch gesture leaves no      │ touch gesture appends a `[]` │
+│                  │ trace in prose                │ or "touched #tag" line       │
+│ Consumer audit   │ every reader of              │ no special-case at consumer; │
+│ surface          │ thread_mentions must know    │ all rows are prose-derived   │
+│                  │ entry_id can be NULL         │                              │
+│ Code surface     │ +1 file (touch.ts, 54 LOC) + │ +scanner pattern handles all │
+│                  │ +1 special query in          │ rows; no new file but        │
+│                  │ getThreadCards.ts             │ scanThreads grows complexity │
+│ Schema impact    │ entry_id/todo_id must be     │ no schema change             │
+│                  │ NULL-able (already were)      │                              │
+│ Reversibility    │ soft-delete the touch row    │ delete the synthetic line —  │
+│                  │                              │ disturbs user's prose flow   │
+│ Pollutes journal │ no                            │ yes — visible in export      │
+│ on read-back?    │                               │ + the user's own re-reading  │
+│ Onboarding cost  │ "manual-touch is the one      │ "scanner produces all rows,  │
+│                  │ documented deviation" — read  │ even the touch ones" — but   │
+│                  │ spec §11 (~5 min)             │ then journal is misleading   │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+`thread_mentions` is no longer "all rows derive from prose." Any consumer that queries it has to know about the entry-less shape — `getThreadCards.ts` L17–L131 explicitly checks `WHERE entry_id IS NULL AND todo_id IS NULL` to read these rows for the 14-day strip. A new consumer that filters `WHERE entry_id IS NOT NULL` would silently exclude manual-touch rows from its results, breaking staleness or activity views without any error.
+
+The cleanup-on-delete story has a hole. Standard mentions get auto-soft-deleted when an entry is deleted (because `reconcileMentions` produces no match for an absent entry). Manual-touch rows have no `entry_id`, so they survive forever until the user untouches them explicitly. A future "delete all entries from date X" sweep would expect to clean up touch rows from that date and miss them — we'd need a `WHERE entry_date = ?` cleanup path that doesn't exist yet.
+
+The exception's existence raises the onboarding cost for every contributor reading the threads code. The spec's Principle 11 paragraph is the only place this is fully explained; missing it costs ~30 minutes of code-reading to figure out what the entry-less rows are doing.
+
+### What the alternative would have cost
+
+If the touch gesture inserted a synthetic `[]` line (or `touched #tag` line) into the user's prose, the schema invariant would stay literally true — every mention derived from prose, scanner produces all rows. But the user would open their journal and see lines they didn't type, which is the worst kind of UX violation: the app contaminates the user's own writing with metadata it owns.
+
+That hidden cost compounds at export. Journal exports include the prose verbatim — synthetic lines would appear in markdown exports, in any future sharing flow, in any backup. Removing them at export means a special-case filter in every export path, which is just relocating the deviation.
+
+The codebase impact would have been ~30 LOC more in `scanThreads.ts` to recognize and pass through synthetic lines without creating duplicate mentions, plus a synthetic-line writer in `touch.ts` that mutates `entries.text`. The "no new file" saving is nominal because we've added complexity inside `scanThreads` and a permanent UX violation in the prose layer.
+
+### The breakpoint
+
+Fine until a second deviation becomes necessary. If a feature ships that needs another from-the-air `thread_mentions` shape — say, "promote a todo to a thread" without a prose mention — that's deviation #2, and the rule "mentions are derived from prose" is no longer strict. At that point the principle needs rewriting (probably to "mentions have a source: prose|gesture|promotion") rather than accumulating more exceptions. The discipline is one exception is the budget.
+
+### What wasn't actually a tradeoff
+
+Tracking touch state in a separate table (`thread_touches`) wasn't a real alternative. The staleness math (`computeStaleness`, the 14-day activity strip) consumes `thread_mentions` uniformly — it doesn't care about the row's source, only that it exists for the date. Splitting into two tables means every consumer becomes a UNION, every query a join, and the uniform consumer interface that made this deviation tolerable disappears. The deviation works precisely because the shape is preserved.
 
 ---
 
-## Quick summary
+## Summary
 
 A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself rather than absorbed into a weaker rule. In this codebase the daily-schedule grid in `src/components/home/DailyScheduleGrid.tsx` taps into `toggleThreadTouchToday()` in `src/services/threads/touch.ts`, which writes a `thread_mentions` row with `(entry_id=NULL, todo_id=NULL, source_line=0, tag_text='')` — the only place in the app that produces that shape. The constraint was that the dashboard needs a "I touched this thread today" signal with no prose attribution, and the cleanest way to compose with the existing staleness math (`computeStaleness`, `getThreadCards`) was to keep `thread_mentions` as the uniform feed and carve out one exception. The cost is that every reader of `thread_mentions` must know the exception exists — Principle 11's "mentions are derived from prose" is no longer literally true, and a careless `WHERE entry_id IS NOT NULL` query would silently exclude these rows. The alternative (inserting a synthetic `[]` line into the user's prose) was rejected because the journal is the user's writing and the app does not write into it.
 
@@ -104,18 +155,102 @@ The interviewer is checking whether you can name your own architectural exceptio
 
 A: A `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`, `source_line = 0`, `tag_text = ''`, and `entry_date = today`. Standard `created_at`, `updated_at`, `deleted_at`. The shape is a normal mention row except for the two NULLs that no other code path can produce. The 14-day activity strip detects this shape with `WHERE entry_id IS NULL AND todo_id IS NULL`; the staleness math doesn't care about the shape and consumes it as just another mention.
 
+```
+[manual-touch row shape]
+
+  thread_mentions row written by toggleThreadTouchToday():
+
+  ┌────────────────────────┬─────────────────────────────────┐
+  │ field                  │ value                           │
+  ├────────────────────────┼─────────────────────────────────┤
+  │ thread_id              │ <the tapped thread>             │
+  │ entry_id               │ NULL  ← deviation marker        │
+  │ todo_id                │ NULL  ← deviation marker        │
+  │ source_line            │ 0                               │
+  │ tag_text               │ ""                              │
+  │ entry_date             │ today                           │
+  │ created_at, updated_at │ now                             │
+  │ deleted_at             │ NULL (or stamped on un-touch)   │
+  └────────────────────────┴─────────────────────────────────┘
+```
+
 [senior] Q: Why didn't you make the touch gesture insert a synthetic `[]` line in the user's prose? That would keep "mentions are derived from prose" intact.
 
 A: I considered it for about an afternoon and rejected it. Inserting a synthetic prose line means the user opens their journal and sees a `[]` line they didn't type — that's a UX violation that's worse than an architectural violation. The journal is the user's writing; the app doesn't write into it. The deviation is the cleaner choice: the schema permits the entry-less mention shape, the staleness math is uniform, and the rule "the journal is the user's" stays absolute. The cost is that any new consumer of `thread_mentions` has to know the deviation exists, which I documented in the spec under Principle 11.
+
+```
+                  Path taken (entry-less mention row)   Suggested (synthetic prose line)
+                  ──────────────────────────────        ──────────────────────────────────
+"prose is canon"  literally false here, documented      literally true; but prose contains
+ invariant                                                lines the user didn't type
+user UX           clean — journal is untouched          user reads "[]" or "touched #tag"
+                                                          they never wrote → confusing
+journal export    clean — exports = user's writing      exports include synthetic lines
+new consumer cost must read spec §11 to learn about     none at consumer; all rows shaped
+                  NULL entry_id rows                    the same
+scanThreads cost  unchanged                             +30 LOC to recognize synthetic
+                                                          lines without duplicating mentions
+where the lie     in the schema (entry_id NULLable)    in the user's own prose
+ lives
+which lie scales? schema readers can be educated       prose violations compound at every
+                                                          export, every share, every backup
+right call?       yes — schema lie is honest, prose    no — prose contamination is permanent
+                  lie would have been UX-fatal
+```
 
 [arch] Q: What happens to manual-touch rows when an entry is deleted, and is that consistent with your other cascades?
 
 A: Manual-touch rows are unaffected by entry deletion because they have no `entry_id` to cascade from. Standard mentions with `entry_id = e123` get soft-deleted when the entry is deleted (because `reconcileMentions` re-runs against an absent entry and finds no matching mentions). Manual-touch rows persist until the user explicitly untouches them via the same dashboard tap. That's the right behavior — the user's "I touched this thread today" intent isn't tied to a journal entry, so it shouldn't disappear when one does. The risk is that a future "delete all entries from a date" sweep would expect to clean up manual-touch rows for that date and miss them; I'd add a `WHERE entry_date = ?` cleanup path if that feature ever ships.
 
+```
+At "delete all entries from date X" bulk sweep (future feature):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ user selects "delete all on 2026-05-07"      │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Service layer (entries delete) ────────────┐
+  │ for each entry e on date X: delete(e.id)    │
+  │ reconcileMentions runs per entry → cascades │
+  │ standard mentions soft-delete fine          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ thread_mentions cleanup ───────────────────┐
+  │ manual-touch rows on date X SURVIVE         │  ◀── BREAKS FIRST
+  │ (no entry_id to cascade from; reconciler   │     (need new path:
+  │ never sees them)                            │      WHERE entry_id IS NULL
+  │                                             │           AND entry_date = X)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ User-observed result ──────────────────────┐
+  │ "I deleted everything from May 7 but the    │
+  │ thread strip still shows green dots there"  │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: You allow one documented exception. What stops the codebase from accumulating five more "small" exceptions over time?
 
 A: Discipline, mostly — and a docs surface that calls out the exception by name. The spec lists 12 principles and explicitly enumerates the deviations. When I considered shipping a second deviation (a "promote a todo to a thread" gesture that would also need a from-the-air mention), I rejected it precisely because adding a second exception erodes the strictness of the rule. The discipline I hold myself to is: if a feature needs a second deviation, the principle is wrong and needs rewriting, not patching with another exception. So far the only deviation is manual-touch, and the principle hasn't required a rewrite. The honest answer is the budget could erode if I stopped paying attention; the docs are the tripwire that makes erosion visible. The day a code review proposes deviation #2, I either fix it or I refactor the principle.
+
+```
+                  Path taken (1 exception budget)       Drift case (accept exceptions ad hoc)
+                  ──────────────────────────────        ──────────────────────────────────
+exception count   1, named, documented in spec §11      grows unbounded as features ship
+discipline        "second one → rewrite principle"      "small exception, just this one"
+                                                          repeated N times
+principle 11      "mentions derived from prose, with    "mentions usually derived from
+ wording          one named exception" — strong          prose" — vague, no force
+docs surface      catalog of deviations, visible at     no central list; deviations live
+                  one place                             in their own files, easy to miss
+detectability     PR adds a deviation #2 → spec also    PR adds a deviation #2 → no signal,
+                  needs editing → reviewer notices      ships without anyone noticing
+when violated     refactor principle, not schema        accumulate workarounds in scattered
+                                                          files
+typical 6-month   exceptions: 1, principle intact       exceptions: 5+, principle a fiction
+ trajectory
+honest cost       discipline (which fades)              correctness (which erodes silently)
+```
 
 ### One-line anchors
 - "One documented exception beats two undocumented ones, and beats a poorly-fit invariant."
@@ -185,3 +320,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

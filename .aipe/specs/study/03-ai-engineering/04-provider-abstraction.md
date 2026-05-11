@@ -130,13 +130,60 @@ LangChain's `BaseChatModel` is the unified-interface alternative. It works for t
 
 ## Tradeoffs
 
-- **Explicit branches** — gives: each provider can use its optimal API. Costs: every caller has to know about both.
-- **Read provider per call** — gives: live switching works without restart. Costs: every call hits SecureStore (fast but not free).
-- **No shared interface** — gives: honest about differences. Costs: cross-cutting features harder to add.
+We traded a tidy `BaseChatModel` interface for 10 explicit branch arms that honestly reflect what each SDK can do — and got the freedom to use provider-specific features (OpenAI's `response_format: json_object`, Anthropic's prompt caching) without papering over differences.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (explicit branches) │ Alternative (BaseChatModel)    │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Provider-features│ OpenAI: response_format=json   │ lowest common denominator —    │
+│ used             │ Anthropic: SDK + prompt rules  │ no json_object, no caching     │
+│                  │ Both: each uses its strengths  │ knob, no provider-specific tool│
+│ Vendor lock-in   │ low — swap models by changing  │ low at API level, but features │
+│                  │ branch; live-switch in settings│ tied to interface shape        │
+│ Cross-cutting    │ token counting / streaming /   │ one place to add a feature; 5  │
+│ features         │ retries land in 10 places      │ chains pick it up for free     │
+│ Cognitive load   │ grep `provider === 'claude'`   │ one interface, two impls — but │
+│                  │ — uniform 20-line pair per     │ readers must remember the      │
+│                  │ chain                          │ provider quirks anyway         │
+│ Adding 3rd       │ 15 branch arms, 5 dup-pairs    │ one new implementor — abstract │
+│ provider         │ → abstraction starts to win    │ pays back at N=3               │
+│ Failure mode     │ loud — wrong branch → wrong    │ silent — abstraction lies, JSON│
+│                  │ SDK call, stack trace clear    │ parsing fails downstream       │
+│ Live switching   │ SecureStore read per call;     │ same — interface still reads   │
+│                  │ next call sees new provider    │ config per call               │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up a single place to add cross-cutting features. If we want token counting, request retries, streaming, or per-provider rate-limit handling, those have to land in 10 branch arms (5 chains × 2 providers). Today none of those features exist in this codebase, which is why the cost is theoretical. The day we add streaming for caption output (a real product question — users would see the variants type out), we'll write the streaming logic twice — once for Anthropic's `client.messages.stream`, once for OpenAI's SSE response parsing. Two implementations, one feature.
+
+We also pay a SecureStore read per AI call to resolve provider + key. SecureStore is fast (Android Keystore-backed) but not free — probably ~1-5ms each. On a network call that already costs 800ms-5s, this is below the noise floor. The benefit is that the user can switch providers in `app/settings/ai.tsx` and the next call picks it up live — no restart, no app-state reset.
+
+### What the alternative would have cost
+
+A `BaseChatModel` interface looks like the right move from the outside — one method, two implementations, callers stay simple. The hidden cost is what the interface *can't* express. OpenAI's `response_format: { type: 'json_object' }` enforces JSON server-side; Anthropic doesn't have an equivalent (we ask in the prompt and strip ``` ```json ``` fences defensively). A unified `chat(system, user, options)` interface either ignores `response_format` (and the OpenAI JSON chains lose their server-side guarantee) or accepts a provider-specific options bag (in which case the interface is leaky — callers still know which provider they're talking to).
+
+The deeper cost is that the abstraction lies. Readers see `model.chat(...)` and think "one call, one shape." They forget that Anthropic charges per-token differently, has different rate limits, supports prompt caching with a 90% discount on cached input tokens (5min TTL), and returns content shaped as `{ content: [{ text }] }` while OpenAI returns `{ choices: [{ message: { content } }] }`. An honest abstraction surfaces these; a tidy one buries them.
+
+Cross-cutting features would have been cheaper under the abstraction — but we have zero cross-cutting features today. Paying the abstraction cost up-front for features that don't exist is the YAGNI antipattern.
+
+### The breakpoint
+
+The pattern flips at three providers. With 2, the 10 branch arms have a uniform shape and `grep "provider === 'claude'"` finds every callsite in seconds. At 3, you have 15 arms and 5 pairs of near-identical code — the duplication starts to hurt, and the next cross-cutting feature lands in 15 places instead of one abstraction. The day we add Gemini, Mistral, or a local model, we extract a real `BaseChatModel` with a tagged-union return type (so OpenAI's `response_format` doesn't have to be papered over — it becomes a provider-specific option that the interface acknowledges).
+
+A secondary trigger is cross-cutting feature volume. If we ship streaming + retries + token counting + rate-limit handling all in one sprint, the abstraction starts to pay back even at 2 providers — because 4 features × 10 arms = 40 places to update, vs 4 features × 1 abstraction = 4 places. Today: zero such features in the backlog.
+
+### What wasn't actually a tradeoff
+
+Reading provider per call vs caching it at app start was never a real performance tradeoff. SecureStore reads are sub-5ms and every AI call has a 800ms+ network round-trip behind it. The "cache it" path would have bought ~0% speedup at the cost of a stale-config bug the day a user re-keys. We picked the obvious option.
 
 ---
 
-## Quick summary
+## Summary
 
 Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface, and the call-site-branch shape is the deliberately-honest variant of it. In this codebase every AI service reads `getProvider()` from `src/services/ai/config.ts` at call time and branches into either the Anthropic SDK (`client.messages.create`) or a raw fetch to OpenAI's `/v1/chat/completions` — 5 chains × 2 providers = 10 explicit branch arms across `summarize`, `caption`, `classify`, `expand`, and `interpret`. The constraint that drove it is honesty about real differences between the two SDKs — OpenAI's `response_format: json_object` exists, Claude's doesn't, and a unified `BaseChatModel` would either lie about that or force the lowest common denominator. The cost is duplicated code per caller and cross-cutting features (token counting, streaming, retries) landing in every branch arm. With a third provider added the unified-interface alternative starts winning.
 
@@ -159,16 +206,80 @@ Key points to remember:
 [mid] Q: Walk me through what happens in `summarize.ts` when the user has set provider=openai. Where does the branch live?
       A: `summarize.ts` calls `getProvider()` from `ai/config.ts` which reads SecureStore — synchronous-ish. It then calls `getOpenAIKey()`. If the key is missing it returns `{ error: 'no API key' }`. Otherwise it hits the OpenAI branch: a raw `fetch` to `/v1/chat/completions` with `response_format: { type: 'json_object' }`, `model: 'gpt-4o'`, system + user messages. The response comes back as `r.choices[0].message.content`, gets passed to `parseJson`, then to `validateSummary`. If provider had been `claude` the same function would have used `client.messages.create` from `@anthropic-ai/sdk` and read `r.content[0].text`. Same prompts, same validators, different SDK call.
 
+```
+[summarize provider branch — provider=openai path]
+
+  summarize(date)
+        │
+        ▼  config.ts:getProvider() — SecureStore read
+  provider === 'openai'
+        │
+        ├─ getOpenAIKey() missing → { error: 'no API key' }
+        │
+        ▼  callOpenAI(...)
+  fetch /v1/chat/completions
+    model: gpt-4o, response_format: json_object
+        │
+        ▼  r.choices[0].message.content
+  parseJson() → validateSummary() → SQLite ai_summaries
+```
+
 [senior] Q: Why read provider on every call instead of once at app start?
          A: Two reasons. One: it lets the user switch providers in `app/settings/ai.tsx` without restarting the app — the next call picks up the new provider mid-session. Two: SecureStore reads are cheap, and there's no hot path where the cost matters (every call is followed by a network round-trip orders of magnitude slower). The cost of reading per-call is roughly zero; the cost of caching it would be a stale-config bug the day a user re-keys.
 
+```
+                  Path taken (read per call)          Alternative (cache at app start)
+                  ─────────────────────────           ───────────────────────────────
+SecureStore read  ~1-5ms per AI call                  one read at boot
+network behind it 800ms-5s (dwarfs the read)          same — network unchanged
+live switching    works mid-session                   user must restart app
+stale-config bug  impossible                          re-key in settings → next call uses
+                                                      stale key → 401 → loud failure
+hot-path cost     0 (read << network)                 0 (read is one-time)
+cognitive load    every call self-contained           must remember the cache exists
+when this flips   reads cost more than network        never on this stack
+```
+
 [arch] Q: At what point does the `BaseChatModel`-style abstraction start winning? What's your threshold?
        A: Around three providers. With two, the 10 branch arms (5 chains × 2 providers) duplicate ~20 lines per pair and stay readable. At three, you'd have 15 arms and the duplication starts to hurt. At five, every cross-cutting concern (token counting, streaming, retry-with-backoff) lands in five places and the abstraction pays back. I'd extract a real interface the day I add the third provider. Today the call shape is uniform enough that "branch on provider" reads cleanly, and `response_format: json_object` only exists on OpenAI — a unified interface would either lie about that or force Claude to pretend it has the knob.
+
+```
+At 3+ providers OR 4+ cross-cutting features:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — chains call the same function   │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Chains (5) ────────────────────────────────┐
+  │ branch arms grow N=2→3 → 10→15 arms         │  ◀── duplication painful at N=3
+  │ 5 pairs of near-identical pairs duplicated  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Cross-cutting features ────────────────────┐
+  │ streaming / retries / token counting        │  ◀── 4 features × 15 arms = 60 edits
+  │ each lands in N×M places without abstraction│
+  │ extract BaseChatModel with tagged-union out │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: You have 10 `if (provider === 'claude')` branches across five files. You call this an "abstraction". How is it an abstraction?
 
 A: Correct — it's a switch, not an abstraction. I called it abstraction in the docs because the call sites have a uniform shape and converge on the same parser/validator, but the implementations are duplicated. If I added Gemini tomorrow I'd have 15 branch arms, five pairs of near-identical code, and five places to update for every cross-cutting feature. The honest framing is: this is "duplicated implementation, uniform contract", and it's a deliberate stop short of a `BaseChatModel`. The day I add a third provider I'll extract a real interface — probably with a tagged-union return type so the OpenAI-only `response_format: json_object` doesn't have to be papered over. With two providers, an abstraction layer would have one consumer and five call sites and not pay back. I'd rather grep for `'claude'` than read three layers of indirection.
+
+```
+                  Path taken (uniform switch)         Suggested (BaseChatModel today)
+                  ──────────────────────────          ───────────────────────────────
+honesty           "switch on provider"; quirks visible "one interface"; quirks hidden
+provider features OpenAI json_object usable           interface ignores it OR leaky opts
+adding provider   write 5 new branch arms             write 1 new implementor
+adding feature    edit 10 places                      edit 1 interface
+quirks readers    visible at call site                must know per-provider gotchas
+                                                      anyway
+N where pays back N >= 3 providers                    paid up-front at N=2 for no return
+solo-dev fit      grep and read; ~20 LOC per pair     ~3 layers of indirection to trace
+honesty score     high — the differences are real     low — interface flattens what's not
+```
 
 ### One-line anchors
 - "It's a switch, not an abstraction. Honest duplication beats dishonest abstraction."
@@ -235,3 +346,6 @@ Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block; corrected 
 Updated: 2026-05-10 — added Why care block + normalized subtitle to plural `**Industry name(s):**` (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Added architectural-layer labels (Service → Config → Provider/network → Service) since the flow crosses callsite, config-store, SDK/network, and parse/validate boundaries.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

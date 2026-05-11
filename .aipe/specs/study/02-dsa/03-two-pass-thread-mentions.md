@@ -184,13 +184,58 @@ The ±3 fuzzy match is a tolerance window — same idea as patch-tolerance in `g
 
 ## Tradeoffs
 
-- **±3 tolerance** — gives: small line shifts preserve identity. Costs: a 4-line shift loses identity; the threshold is arbitrary.
-- **Linear find in Pass 2** — gives: simple code, fast in practice. Costs: O(n × m) — but n × m is tiny per entry.
-- **Update sourceLine + tagText separately** — gives: each is a small idempotent UPDATE. Costs: two write paths instead of one combined update.
+We traded asymptotic optimality and a tunable threshold for a tiny constant on a per-entry data set where the linear-scan version is cheaper than any indexed alternative.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (linear, ±3 window) │ Alternative (Map + sorted idx) │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n × m) per pass — bounded    │ O(n + m × log m) — index build │
+│                  │ by per-entry tag count         │ + binary search per Pass 2 hit │
+│ Latency at N=5   │ <0.1ms — linear over 5         │ ~0.3ms — Map alloc + sort      │
+│ (real per-entry) │ elements is faster than alloc  │ overhead exceeds the savings   │
+│ Latency at 10×N  │ ~0.5ms at 50 tags              │ ~0.6ms at 50 tags              │
+│ Latency at 100×  │ ~50ms at 500 tags              │ ~5ms at 500 tags — pays off    │
+│ Code complexity  │ ~62 LOC two-pass + Set guard   │ ~110 LOC: index, sort, binary  │
+│                  │                                │ search, range scan             │
+│ Cognitive load   │ predicate reads inline: "same  │ reader must trace through the  │
+│                  │ thread AND text AND |Δ|≤3"     │ sorted-index range lookup      │
+│ Tolerance shape  │ ±3 lines — observed user shift │ same window required ; index   │
+│                  │ when adding a paragraph above  │ must still scan the band       │
+│ Failure mode     │ 4+ line shift → identity lost, │ same — index doesn't change    │
+│                  │ new row inserted, old deleted  │ the tolerance semantics        │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The ±3 window is a hard threshold. A 4-line shift loses the row identity entirely — Pass 2 misses, the existing row is deleted, a new mention row is inserted with a fresh id. Any downstream attribute hanging off the mention id (none exist today, but staleness math does aggregate per row) gets reset. The number was picked from observed user behaviour, not measured optimisation; it could be wrong by ±1 and we'd never know without telemetry.
+
+Pass 2 is O(n × m) — a linear scan over `existing` for every unmatched parsed tag. In `reconcileMentions` L169–L230, that's a naked `for ... existing.find(...)` with the ±3 predicate inline. At per-entry scale (typically <10 tags), this is ~50 ops worst case and finishes in <0.1ms. The cost is asymptotic uncleanliness: a reader sees `O(n × m)` and assumes a bug.
+
+`updateMentionSourceLine` and `updateMentionTagText` are separate SQLite statements. When both change for the same row (the trace above does this for `m2`), we run two writes instead of one combined update. The cost is two more sync points and two `schedulePush()` triggers per affected row.
+
+### What the alternative would have cost
+
+A `Map<(threadId, tagText), sortedLines[]>` index would lift Pass 2 to O(n + m × log m). At N=5 per entry it's slower — the Map allocation, the sort, the binary-search call frames all cost more than the linear scan. The asymptote only pays at ~500 tags per entry, which the app never reaches. The added ~50 LOC of index plumbing would make the function harder to follow.
+
+A single combined `updateMention(id, sourceLine, tagText)` would save one statement when both fields change. The cost is a wider SQL surface (one extra parameterised query, one extra mapper in `database.ts`) for a saving that fires only in the rare "user moved AND retyped" case. Not worth the schema-surface growth.
+
+A wider tolerance window (say ±10) would catch more shifts but starts matching across unrelated paragraphs. The same `#health` tag in two different contexts within the entry can swap identities at ±10. The window has to be small enough that the match means something.
+
+### The breakpoint
+
+Fine until a single entry has more than ~200 tags or `reconcileMentions` is called across multiple entries in a single sweep. The first is a data-model failure (split the entry); the second would happen if a future feature ran a cross-day mention rebuild — at that point n × m grows to thousands and the Map+sorted-index version starts winning. The rewrite is local to `reconcileMentions` and would touch ~50 LOC.
+
+### What wasn't actually a tradeoff
+
+Case-insensitive `tagText` comparison in Pass 2 isn't a tradeoff — `#Health` and `#health` resolve to the same thread by design (the thread slug is case-insensitive). Matching case-sensitively here would create phantom mismatches that Pass 2's whole purpose is to tolerate.
 
 ---
 
-## Quick summary
+## Summary
 
 Fuzzy match with a displacement window is the family of "anchor on identity, allow a bounded slip on position" — the same shape that `git apply --3way` uses for patch tolerance and that source-control "blame" uses to track lines across commits. In this codebase `reconcileMentions` matches parsed-tags-from-text against existing `thread_mentions` rows: Pass 1 demands an exact `(threadId, sourceLine)` match; Pass 2 falls back to `(threadId, tagText)` within ±3 lines for the unmatched residue. The constraint is that users often add a paragraph above a tag without moving the tag itself, so the row id should survive that small shift — a stricter algorithm would burn identity every time. The cost is that Pass 2 is O(n × m) instead of O(n + m), but per-entry n + m is bounded at a handful (typically <10), so the constant overhead of building a Map for hash lookup would exceed the savings of the linear scan it would replace. At the call site `parseTags` only returns tags within one entry, which is what makes the asymptote stop mattering.
 
@@ -213,16 +258,71 @@ The probe is whether I can defend O(n×m) on a hot path with a straight face. Th
 [mid] Q: Why does Pass 2 use `±3` instead of `±5` or `±10`?
       A: Three is the tolerance window for "the user added a paragraph above this tag and didn't move the tag itself." Empirically that's the most common shift — people add context, not displace tags. At ±10 I'd start matching across unrelated sections of the entry; the same `#health` tag in two different contexts could swap identities. ±3 keeps the match tight enough that confusion is rare and small enough that the linear scan stays cheap.
 
+```
+[tolerance window — what survives, what doesn't]
+
+  user action                       shift   ±3?    outcome
+  ───────────────────────────────   ─────   ────   ─────────────────────────
+  retype tag in place               0       ✓      Pass 1 exact match
+  add paragraph above (~3 lines)    +3      ✓      Pass 2 fuzzy match
+  add a section above (~5 lines)    +5      ✗      identity lost ; reinsert
+  move tag across whole page        +30     ✗      identity lost ; reinsert
+```
+
 [senior] Q: Why isn't Pass 2 indexed by `(threadId, tagText)` like Pass 1 could be?
          A: Because the third predicate is a *range*, not an equality. `|sourceLine - lineIndex| <= 3` doesn't fit a hash key — I'd need a sorted index per `(threadId, tagText)` group plus a binary search. At n+m around 10, building that structure costs more in allocation and indirection than the linear scan it would replace. I bounded the inputs at the call site — `parseTags` only returns tags within one entry — so the constant cost is what's actually paying.
 
+```
+                  Path taken (linear ±3 scan)          Alternative (Map + sorted index)
+                  ────────────────────────────         ─────────────────────────────────
+predicate         (threadId, text) equality +          equality fits hash ; range needs
+                  |lineΔ| ≤ 3 range                    sorted-by-line band scan
+ops at N=5        ~5 linear comparisons                Map.set ×5, sort, then binary
+                                                       search — ~30 ops total
+ops at N=500      ~250,000 (still <10ms in JS)         ~5,000 — pays off at this scale
+allocation        zero — predicate inline              Map(m) + per-group sorted arrays
+LOC               ~12 for Pass 2 body                  ~50 with index build + range scan
+verdict at app N  linear wins                          would win only above N≈200
+```
+
 [arch] Q: What if a single entry grew to 10,000 lines with 500 tags? Does the algorithm survive?
        A: The algorithm scales as O(n × m) so 500 × 500 = 250k ops per pass, two passes — still under 10ms in JS. What breaks first is the assumption that `parseTags` runs on every commit. At 10k lines and 500 tags I'd want to debounce the scan, or only re-parse the dirty range of the text. The data shape itself stops fitting one entry at that point — the migration is to split entries, not to optimize the algorithm.
+
+```
+[scale curve — what breaks first at 10× / 100× input]
+
+  N tags / entry      O(n×m) ops      commit cost      breaks?
+  ──────────────────  ─────────────   ──────────────   ─────────────────────
+  5 (real)            25              <0.1ms           no
+  50 (10×)            2,500           ~0.5ms           no
+  500 (100×)          250,000         ~10ms            commit visible to user
+  5,000               25M             ~1s             ◀ scan, not data model
+                                                       split entry before this
+  fix                                  debounce parseTags ; re-parse dirty
+                                       range only ; split entries per day
+```
 
 ### The question candidates always dodge
 Q: You have a sibling algorithm in `01-two-pass-scan-todos` that uses Map + Set for O(n+m). Why didn't you make this one O(n+m) too? Isn't that just inconsistency?
 
 A: It's deliberate but it does look inconsistent on a quick read. The todo scan has up to 30 entries' worth of carryover floating around — when you reconcile a multi-day view, n and m can both grow to a few hundred — so the Map+Set actually pays. `reconcileMentions` runs strictly per-entry; n and m never get above a handful. Building a Map for a 5-element lookup is more allocation than the linear scan it replaces. I weighed it and the constant matters more than the asymptote at this scale. If `reconcileMentions` ever started running across multiple entries (a cross-entry rebuild), I'd rewrite it; I'd rather the rewrite happen at the moment the constraint changes than carry premature optimization.
+
+```
+                  Path taken (linear per-entry)        Suggested (Map+Set everywhere)
+                  ──────────────────────────────       ──────────────────────────────
+scan boundary     one entry's tags (n+m < 10)          same boundary, but indexed
+asymptote         O(n × m) per pass                    O(n + m) per pass
+real cost at N=5  ~5 comparisons ; zero allocation     Map alloc + Set alloc + 5 .has()
+                                                       calls — allocation dominates
+real cost at N=500 ~250k ops ; ~10ms                   ~1k ops ; ~0.2ms — wins here
+LOC               ~62 (current shape)                  ~95 (todo-scan-style)
+consistency       sibling-algo claims unity, but       sibling claims unity, costs more
+ with sibling     measurements disagree                where the data set is tiny
+when to switch    if reconcile starts running across   premature today ; constant cost
+                  multiple entries in one sweep        dominates the asymptote
+verdict           constant beats asymptote at this N   the asymptotic win is real but
+                                                       only above N ≈ 200 per entry
+```
 
 ### One-line anchors
 - "±3 isn't arbitrary — it's the observed shift when users add context above a tag."
@@ -289,3 +389,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

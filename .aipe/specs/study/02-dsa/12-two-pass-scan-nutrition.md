@@ -226,13 +226,63 @@ Same lineage as `scanTodosFromText` — a project-specific two-phase matching pa
 
 ## Tradeoffs
 
-- **Map + Set guard** — gives: O(n+m) and correctness against double-claim. Costs: extra structures vs the brute version.
-- **Delete unmatched** — gives: prose line removal cleans up the DB row. Costs: a temporary "save and undo" round-trip loses the row id.
-- **Per-line `await`s in the apply loop** — gives: simple async-await flow. Costs: serial DB writes vs a single bulk transaction. Acceptable at a handful of rows per entry.
+We traded carryover for a stricter "prose is canonical" contract — delete the line, delete the row, no escape hatch.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (two-pass + delete  │ Alternative (two-pass + carry  │
+│                  │ unmatched)                     │ over, like todos)              │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n + m) — two linear passes   │ O(n + m) — same matching pass  │
+│                  │ + O(m) delete sweep            │ + O(m) carryover append        │
+│ Latency at 5     │ <1ms                            │ <1ms — both invisible at        │
+│ foods/entry      │                                 │ this scale                     │
+│ Latency at 10×N  │ <1ms at 50 foods                │ <1ms at 50 foods                │
+│ Cleanup policy   │ unmatched row → DELETE         │ unmatched row → carryover       │
+│                  │                                 │ with cleared sourceLine        │
+│ User error       │ accidental line delete → row   │ accidental line delete → row    │
+│  recovery        │ is gone (re-type to re-create) │ persists, looks "orphaned"     │
+│ Code complexity  │ ~95 LOC scanner + delete sweep │ ~120 LOC + carryover bookkeep   │
+│                  │                                 │ + UI affordance to clean up    │
+│ Cognitive load   │ reader sees "delete unmatched" │ reader sees carryover, has to   │
+│                  │ once, understands rule         │ understand why some rows have   │
+│                  │                                 │ no sourceLine                  │
+│ Schema           │ no soft-delete needed —        │ soft-delete column required to  │
+│                  │ derived state                   │ track carried-over rows        │
+│ Failure mode     │ user typo → loses row id       │ user typo → row sticks around   │
+│                  │ permanently                    │ as orphan in DB                │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The delete-unmatched semantics mean a user who deletes a nutrition line by accident permanently loses the row id and `createdAt`. The mitigation is grim — re-type the line as a fresh insert with a new id, same kcal. Nothing user-visible is lost, but the loss is irreversible by design. We accepted this because "prose is canonical" is the larger contract; every derived table follows the same shape.
+
+The Set guard (`usedIds`) is correctness, not optimization. At 5 food lines per entry the brute O(n × m) version is essentially free; we still ship the guard because two identical `** apple 95 kcal` lines would otherwise both claim the same existing row. A contributor reading the loop has to be told (or comment-marked) that the Set is correctness work, not perf — adding the explanation is a per-feature onboarding cost.
+
+The apply loop runs `await` per row instead of wrapping the inserts/updates/deletes in a single transaction. Each statement is a separate SQLite commit and a separate `schedulePush()` trigger. At ~5 rows per scan this is fine; at 50 rows per scan it's measurable. The fix would be a batched-write API in `database.ts`, which we haven't built because the typical case never exceeds 10 rows.
+
+### What the alternative would have cost
+
+If we matched the todo scanner's carryover semantics, an accidentally-deleted nutrition line would survive in the DB with its `sourceLine` cleared. The user would see the row in their nutrition history without a corresponding journal line — which is exactly the friction the prose-canonical rule exists to prevent. To make that shape work, we'd also need a UI affordance for "this row has no source line, mark it dead?" which is a feature in its own right.
+
+The hidden cost is sync: with carryover, the row stays in `nutrition` indefinitely, taking sync bandwidth and showing up in cross-day aggregates. The delete-unmatched shape keeps the table size bounded to what the prose currently expresses — every reader downstream gets the simpler invariant "every row corresponds to a live prose line."
+
+A bulk-transaction apply path would have shaved a few ms at 50-row scans but added ~50 LOC for the transaction boundary plus retry logic. We picked the per-row simplicity because nutrition scans rarely exceed 10 rows.
+
+### The breakpoint
+
+Fine until a user genuinely needs an "undo last delete" affordance for nutrition lines — at which point soft-delete with a 5-minute reversal window is the principled fix. That's a single new column (`deleted_at`) plus a cleanup job, ~30 LOC. We haven't shipped it because nobody has hit the foot-gun yet.
+
+### What wasn't actually a tradeoff
+
+Choosing two passes over one pass with a combined predicate isn't really a tradeoff — the precedence "exact (name, kcal) beats line-index" needs ordered evaluation. A combined predicate with a tiebreak would handle reorderings worse: a line that just moved would race against another line whose value happens to match the moved row's old position. The two-pass shape encodes evidence quality correctly; one pass is the wrong primitive.
 
 ---
 
-## Quick summary
+## Summary
 
 Two-phase matching with a configurable "delete unmatched" tail is the family of "diff-then-apply where the matching is shared but the handling of right-only items is the domain rule" — same shape as file-sync tools in mirror vs additive mode, same shape as DB replication that either propagates or filters deletes. In this codebase `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts` runs after every entry text edit (called from `useEntries.ts:20`): Pass 1 matches scanned `** food N kcal` lines against existing rows by exact `(name, kcal)`, Pass 2 falls back to line-index for the unmatched residue, then the apply step inserts new lines and updates changed ones — and the delete sweep removes every existing row whose id is not in the `usedIds` Set. The constraint that makes nutrition diverge from its todo-scanner sibling is "prose is canonical": a nutrition row has no identity outside its source line, so if the line is gone the row is gone. The cost is no carryover — an accidental line deletion permanently loses the row id, mitigated only by re-typing the line as a fresh insert. At a handful of food lines per entry both brute O(n × m) and optimal O(n + m) run sub-millisecond; the Set guard is correctness, not optimization, because two identical `** apple 95 kcal` lines would otherwise double-claim the same row.
 
@@ -255,16 +305,81 @@ The probe is whether I see this as a copy of the todo scanner or a deliberate si
 [mid] Q: Why is `(name, kcal)` the Pass-1 key instead of just `name`?
       A: Because users edit kcal in place. If `oatmeal` matched by name only, a kcal-only edit would still claim the existing row — fine. But two `oatmeal` lines with different kcal values would race to claim the same row. The `(name, kcal)` composite key lets two oatmeal entries coexist if they're genuinely different foods (e.g., "oatmeal 320 kcal" and "oatmeal with berries 380 kcal" if the masker only saw "oatmeal" both times).
 
+```
+[Pass 1 composite key flow]
+
+  scanned: [{oatmeal, 320}, {oatmeal, 180}]
+  existing: [{oatmeal, 320}, {oatmeal, 180}]
+        │
+        ▼  Pass 1 with key=name only
+  both scanned items match first existing → double-claim   ◀── bug
+        │
+        ▼  Pass 1 with key=(name, kcal) composite
+  scanned[0] (oatmeal,320) → existing[0] (oatmeal,320)
+  scanned[1] (oatmeal,180) → existing[1] (oatmeal,180)
+        │
+        ▼
+  no collision — composite key disambiguates
+```
+
 [senior] Q: Unlike `scanTodosFromText`, this function deletes unmatched existing rows instead of carrying them over. Why?
          A: Because nutrition has no identity outside its prose line. A todo can be "carried over" because it might come back next commit; a nutrition row is a parse result over the current text. If the line is gone, the row is gone. The carryover semantics in scanTodos exist because deleted-then-re-added todos retain meaning across commits (the user's intent persists); nutrition rows are derived state and don't.
 
+```
+                  Path taken (delete unmatched)        Alternative (carryover like todos)
+                  ────────────────────────────────────  ──────────────────────────────────
+identity source   the prose line is the row's only id  user intent persists across commits
+deleted line      row gone — re-type to recreate       row stuck around with cleared
+                                                       sourceLine
+schema cost       no soft-delete needed                soft-delete column required
+table size        bounded to current prose             grows monotonically with edits
+cross-day reads   every row maps to a live line       readers must filter "rows with no
+                                                       sourceLine"
+sync bandwidth    only live rows on wire               carried-over rows take bandwidth
+                                                       indefinitely
+verdict           strict shape matches "prose is        carryover doesn't fit nutrition's
+                  canonical" rule                       data model
+```
+
 [arch] Q: Could you merge this with `scanTodosFromText` into one parameterised function?
        A: Yes, and the temptation is real — the two-pass shape is identical. But the contract diverges in the tail: todos have carryover, nutrition deletes. Merging would mean a flag parameter (`carryover: boolean`) that branches the post-pass behavior, and at that point the two functions are clearer as siblings than as one polymorphic function with a flag. I picked duplication over premature abstraction; if I add a third scanner with a third tail, I'd merge.
+
+```
+[scale curve — what breaks first at 10× and 100× food count]
+
+  foods/entry   scan ops       apply latency     breaks?
+  ───────────   ─────────      ──────────────    ──────────────────
+  5 (real)      ~25 ops         <1ms              no
+  50 (10×)      ~250 ops        ~5ms              no — per-row awaits visible but fine
+  500 (100×)    ~2,500 ops      ~50ms+            per-row await loop becomes
+                                                  visible UI delay     ◀── BREAKS FIRST
+  5,000+        ~25k ops        seconds           data model is wrong — nutrition is
+                                                  a daily journaling feature, not
+                                                  a bulk-import target
+```
 
 ### The question candidates always dodge
 Q: Your `delete unmatched` semantics mean a user who removes a line by accident loses the row permanently. Is that the right default?
 
 A: It's the right default *given* loopd's larger contract that prose is canonical. Every other table (todos, threads, mentions) follows the same shape — if the prose says it's gone, it's gone. The mitigation is the journaling app's undo-via-edit: the user re-types `** banana 95 kcal` and a new row gets inserted with a new id, same value. The lost row is just the id and createdAt; nothing user-visible. The principled fix would be a soft-delete with a 5-minute reversal window — that's a real product feature and I haven't built it because nobody has hit the foot-gun yet. The day someone does, soft-delete is one column away.
+
+```
+                  Path taken (hard delete on unmatch)  Suggested (soft-delete + 5-min undo)
+                  ────────────────────────────────────  ──────────────────────────────────
+deleted line      row gone immediately                 row gets deleted_at stamp;
+                                                       background cleanup after 5m
+recover by re-type  yes — fresh id, same kcal            yes — undo within 5m restores
+                                                       original id + createdAt
+schema cost       no new column                         +1 column (deleted_at)
+cleanup job       n/a                                   background sweep over deleted_at
+                                                       column once per day
+user trust        "I deleted, it's gone"               "I can undo for a few minutes"
+foot-gun rate     observed: zero                        n/a
+LOC               unchanged                             +30 (column + sweep job)
+verdict           strict default fits "prose is        the right shape the day someone
+                  canonical"; one column away if        complains
+                  demand arises
+```
 
 ### One-line anchors
 - "Same two-pass shape as todos; different tail because nutrition has no carryover."
@@ -327,3 +442,6 @@ Then open the file and verify.
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

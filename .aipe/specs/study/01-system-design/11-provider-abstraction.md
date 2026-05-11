@@ -106,13 +106,61 @@ Multi-provider AI abstraction was popularised by LangChain's `BaseChatModel` int
 
 ## Tradeoffs
 
-- **Explicit branches** — gives: each provider can use its optimal API. Costs: every caller has to know about both.
-- **Read provider per call** — gives: live switching works without restart. Costs: every call hits SecureStore (fast but not free).
-- **Default Claude, OpenAI optional** — gives: Anthropic SDK gets the canonical path; OpenAI is a maintained alternate. Costs: when the SDKs diverge, Claude features land first.
+We traded one shared interface for ten honest branches: each provider gets its native API, and every caller pays a small duplication tax to keep provider quirks visible at the call site instead of hidden behind a lie.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (explicit branch) │ Alternative (BaseChatModel)  │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Code paths       │ 5 chains × 2 providers = 10  │ 5 chains × 1 interface = 5;  │
+│                  │ branch arms                  │ +1 file per provider impl    │
+│ Provider quirks  │ visible at branch — e.g.,    │ hidden; interface picks LCD  │
+│                  │ response_format: json_object │ or papers over the gap       │
+│                  │ on OpenAI only               │ (silent failure on Claude)   │
+│ Cross-cutting    │ token counting / retry /     │ lands in one place           │
+│ features         │ streaming lands in N×M places│                              │
+│ Live switching   │ SecureStore read per call    │ same — interface picks impl  │
+│                  │ (~ms) → next call switches   │ at call time                 │
+│ Adding 3rd       │ +5 branch arms (15 total)    │ +1 implementor file          │
+│ provider         │                              │                              │
+│ Code surface     │ ~50 LOC duplicated per pair  │ +1 interface file + 1 impl   │
+│                  │                              │ per provider                 │
+│ Onboarding       │ "switch on provider" obvious │ "what does the interface     │
+│                  │ in 5 seconds                 │ guarantee?" — needs reading  │
+│ Honesty score    │ high — differences visible   │ low — interface flattens     │
+│                  │                              │ what's not actually flat     │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+Every chain carries the `provider == 'openai' ? callOpenAI : callClaude` branch explicitly. With 5 chains (summarize, caption, classify, expand, interpret) and 2 providers that's 10 branch arms — ~50 LOC of near-identical code per pair. A new cross-cutting feature like token counting would land in 10 places; retry-with-backoff in 10 places. We've shipped neither because the cost is visible — and the moment we want one, the duplication tax becomes the work.
+
+The default is Claude (Anthropic SDK), and OpenAI is the maintained alternate via raw `fetch`. When the SDKs diverge — Anthropic ships a new feature, OpenAI ships its own — Claude's lands first because that's the canonical path. The OpenAI branch tends to lag by a feature, which is fine when "OpenAI is the alternate" is honest but would be wrong if both branches were meant to be equally maintained.
+
+Every AI call hits SecureStore for the provider read. SecureStore is fast (a few ms on Android Keystore-backed reads), but it's not free, and the cost is paid on every call. We've never observed this in profiling — the LLM call is 800ms+ — but at very high call rates it would show up.
+
+### What the alternative would have cost
+
+A `BaseChatModel`-style interface would mean one new file (`src/services/ai/provider.ts` with an `AIProvider` interface), one implementor per provider (today: Anthropic + OpenAI), and a factory call replacing each branch. Net code reduction: ~50 LOC × N pairs. At 2 providers and 5 chains that's a real saving once.
+
+The hidden cost: every provider-specific feature has to either fit the interface or be lost. OpenAI's `response_format: json_object` (a parameter we depend on for JSON chains) has no Claude equivalent — the interface would either lie ("supports JSON mode" with silent failure on Claude) or constrain to the lowest common denominator (no JSON mode, weaker reliability everywhere). System-prompt placement, streaming, caching, tool-use shape — all of these diverge in shape and an interface either flattens them or leaks them through option bags that defeat the unification.
+
+Onboarding cost rises. A new contributor reading the codebase sees a factory call and has to track down which implementor runs, then read that implementor to find the provider quirks. With the explicit branch they grep for `'claude'` and see exactly what runs.
+
+### The breakpoint
+
+Fine until the third provider lands. With 3 providers × 5 chains = 15 branch arms and three pairs of near-identical code, the duplication starts costing more than the leaky-abstraction tax. The day a third provider is real (Gemini becoming a top-tier option, or the user demanding a local Ollama path) is the day we extract a `BaseChatModel`-style interface with a tagged-union return type — the tagged union is what lets provider-specific features still surface without being papered over.
+
+### What wasn't actually a tradeoff
+
+A "switch on provider name globally and use shared SDK adapters" path wasn't on the table. The SDK shapes are too different — `@anthropic-ai/sdk`'s `messages.create` has a different request shape than OpenAI's `/v1/chat/completions` raw fetch (which we use because the OpenAI Node SDK adds dependency weight we don't want on a mobile build). Any shared layer above the SDKs would itself be the abstraction we're discussing.
 
 ---
 
-## Quick summary
+## Summary
 
 The strategy pattern keeps the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. In this codebase `getProvider()` in `src/services/ai/config.ts` returns `'claude' | 'openai'` from SecureStore, and every AI service file (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`) carries an explicit two-arm branch — Claude via `@anthropic-ai/sdk`, OpenAI via raw `fetch` to `/v1/chat/completions` — before converging on a shared parse/validate/persist step. The constraint was that the app sells AI features without locking the user into one provider, and unified `BaseChatModel`-style interfaces either lie about provider-specific knobs (OpenAI's `response_format: json_object`) or constrain to a lowest common denominator. The cost is that every caller carries the branch: 5 chains × 2 providers = 10 explicit code paths, with no shared layer to hold cross-cutting features like token counting or retries. At three or more providers the duplication would start to feel redundant and a `BaseChatModel`-style interface would be the better call.
 
@@ -136,18 +184,89 @@ Key points to remember:
 
 A: They tap the provider toggle in `app/settings/ai.tsx`, which writes the new provider name to SecureStore. The next AI call (e.g. typing a new entry that triggers `summarize`) reads `getProvider()` from `ai/config.ts` — which hits SecureStore live, not a cached value. The branch then takes the OpenAI path: raw `fetch` to `/v1/chat/completions` with the OpenAI key. No restart, no cache invalidation, no warm-up. The cost is one SecureStore read per AI call, but SecureStore is fast on Android (a few ms) and the LLM call itself is the dominant latency.
 
+```
+[mid-session provider toggle]
+
+  app/settings/ai.tsx → SecureStore.setItemAsync('ai_provider', 'openai')
+        │
+        ▼ next AI call fires (e.g. summarize)
+  getProvider() reads SecureStore       ← fresh read, no cache
+        │
+        ▼ returns 'openai'
+  branch: provider == 'openai' ? callOpenAI : callClaude
+        │
+        ▼ callOpenAI: raw fetch /v1/chat/completions
+  parse + validate + persist (shared path)
+```
+
 [senior] Q: Why didn't you build a `BaseChatModel`-style interface like LangChain does? You'd cut the duplicated code in half.
 
 A: I'd also lose the OpenAI `response_format: json_object` parameter — Claude doesn't have that knob, and a unified interface would have to either skip it (lower JSON compliance from OpenAI) or pretend to support it on Claude (and fail silently when the model returns prose). Same problem with system-prompt placement, with caching, with streaming. The unified interface either lies about provider differences or constrains to the lowest common denominator. With two providers, the duplication cost is one branch per call site — four branches total. With five providers I'd reconsider; the abstraction starts paying back when the duplicated code outweighs the cost of leaky abstraction.
+
+```
+                  Path taken (explicit branches)        Alternative (BaseChatModel interface)
+                  ──────────────────────────────        ──────────────────────────────────
+JSON mode (OpenAI) used directly at branch              interface ignores OR fakes — silent
+                                                          failure on Claude
+quirks visible    at every callsite                     hidden behind interface
+duplication today 10 branch arms (~50 LOC × 5 pairs)    0 (one interface, two implementors)
+adding feature    edit 10 places                        edit 1 interface
+where it pays back 3+ providers                          2 providers — already there if
+                                                          features were uniform (they're not)
+honesty           differences are real, visible         flattens what isn't flat
+debugging         grep for 'claude' — see exact path    follow factory → impl → quirks
+ship correctness  high — quirks land at callsite        risk — interface drift over time
+right call when   features diverge per-provider         features genuinely converge
+```
 
 [arch] Q: What changes if you wanted to add a third provider — Gemini, say?
 
 A: Three things break. First, `getProvider()` returns a string union of two values; that becomes three. Second, every AI service file (summarize, caption, classify, expand) has a two-way branch; each becomes three-way. Third, the `ai/config.ts` key getter needs a `getGoogleKey()`. The code stays parallel — same shape four times — but at three providers the duplicated branch starts feeling redundant. That's where I'd extract a small interface: `interface AIProvider { complete(system, user): Promise<string> }` with three implementations. The branch becomes a factory call. I haven't done it yet because two providers don't need it.
 
+```
+At N=3 providers (e.g. + Gemini):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ +1 toggle option in settings/ai.tsx          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ config layer ──────────────────────────────┐
+  │ getProvider(): 'claude'|'openai'|'google'   │
+  │ getGoogleKey() — new key getter              │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Chain layer (5 chains) ────────────────────┐
+  │ branch arms 10 → 15                          │  ◀── BREAKS FIRST
+  │ duplication starts costing more than         │     (extract AIProvider interface
+  │ leaky-abstraction tax                        │      with tagged-union return, 3 impls)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Provider implementations ──────────────────┐
+  │ +1 file: src/services/ai/providers/google.ts │
+  │ existing 5 chains refactor to factory call   │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: You have eight code paths (four call sites × two providers). You call this an abstraction in your docs, but it's clearly just a switch. Defend the naming.
 
 A: It's a fair callout — "abstraction" is the wrong word in the strict sense. What I have is a switch with parallel implementations. The reason I called it an abstraction in the docs is that the *call sites* have a uniform shape: get provider, get key, branch, parse, validate, persist. From the perspective of `app/` code calling into `services/ai/`, the provider is hidden — `summarize(date)` returns the same shape regardless of who answered. From the perspective of `services/ai/summarize.ts` itself, the duplication is real and visible. If I were renaming the docs today, I'd call it "provider switching" with a note that the abstraction line is at the call site, not the implementation. The honest version of the doc is "I made a deliberate choice to not extract a provider interface; here's why." When I add a third provider, the renaming becomes "provider interface" because the extraction will have happened.
+
+```
+                  Path taken (named "abstraction")      Suggested (truly extract interface)
+                  ──────────────────────────────        ──────────────────────────────────
+abstraction line  at call site (app/ sees uniform)      at implementation (services/ai/ sees
+                                                          uniform too)
+naming honesty    misnamed — it's a switch              accurate — interface + implementors
+implementation    duplicated per provider               unified per provider via interface
+features kept     full provider features at branch      LCD or leaky options-bag
+LOC impact        +0 (current state)                    -50 LOC duplication, +1 interface
+                                                          file, +2 implementor files
+right naming today "provider switching" + rationale     n/a — no abstraction extracted yet
+right naming      "provider interface" — extraction      "provider interface" — extraction
+post-3rd-provider has happened                          has happened
+mitigation today  rewrite doc to honest framing         (deferred until 3rd provider)
+```
 
 ### One-line anchors
 - "I have provider switching, not provider abstraction — the call sites are uniform, the implementations are not."
@@ -218,3 +337,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

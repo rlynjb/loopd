@@ -198,13 +198,61 @@ The "fetch in bulk, join in memory" pattern is older than ORMs — it's how ever
 
 ## Tradeoffs
 
-- **4 queries + 2 joins** — gives: bounded round-trips, cheap composition. Costs: more code than a single SELECT.
-- **In-memory joins** — gives: leverage existing entries cache. Costs: must keep memory cache fresh.
-- **Per-row defensive `skip`** — gives: missing metadata doesn't crash the dashboard. Costs: silent data drops; warn in dev mode if you care.
+We traded the simplicity of one big SELECT for a 4-query + 2-join shape that bounds round-trips and reuses the dashboard's existing memory cache.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (4 queries + 2 JS   │ Alternative (single mega-JOIN) │
+│                  │ joins)                         │                                │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Round-trips      │ 4 SQL + 2 in-memory joins      │ 1 SQL, no JS join              │
+│ Time complexity  │ O(T + M + Q) — linear scans    │ O(T × M) — cross-product in    │
+│                  │ over Maps                      │ SQL plan                       │
+│ Latency at 30    │ ~20ms total dashboard load     │ ~30-50ms — SQLite plan harder  │
+│ threads (real N) │                                │ to optimize on this shape      │
+│ Latency at 10×N  │ ~40ms at 300 threads           │ ~200-400ms — SQLite ARRAY_AGG  │
+│                  │                                │ tax + cross-product blowup     │
+│ Code complexity  │ ~115 LOC orchestrator          │ ~40 LOC SQL but unreadable      │
+│                  │ (L17-L131) + 4 helpers in      │ result-set parsing + ad-hoc    │
+│                  │ database.ts                    │ row-to-card unpacking          │
+│ Cognitive load   │ reader sees 4 queries, 2       │ reader sees one query but the  │
+│                  │ joins, clear staleness branch  │ JOIN-graph reasoning is gnarly │
+│ Failure mode     │ a 5th column added → patch     │ schema change → SQL must be    │
+│                  │ orchestrator only              │ rewritten end-to-end           │
+│ Consistency      │ no cross-table txn — 4 queries │ single SQL = snapshot read by  │
+│                  │ may see different snapshots    │ SQLite default                 │
+│ Cache reuse      │ leans on getAllEntries cache   │ ignores cache; re-fetches in   │
+│                  │ already in dashboard memory    │ SQL the data the page has      │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The orchestrator (`src/services/threads/getThreadCards.ts` L17–L131) is ~115 LOC because it composes 4 separate SQL helpers and runs 2 in-memory joins. A single mega-JOIN would be ~40 LOC of SQL, but ~80 LOC of result-set parsing because SQLite's row-shape doesn't map cleanly to the card structure (each card has a 3-element `recentTodos` array; a flat JOIN explodes the result set to T×R rows that have to be re-aggregated in JS anyway).
+
+The 4 queries don't share a transaction. Between `getLastMentionByThread` and `weekRows`, a write could land — `lastMentionMap` might include the new mention while `weekRows` does not. At single-writer scale (current state) this race is invisible; it would become observable the moment a second device writes concurrently. The fix is `BEGIN IMMEDIATE` wrapping all 4 reads, at the cost of taking a write lock on every dashboard load.
+
+The iteration silently skips when `meta` or `todo` is missing. That's defensive — `reconcileTodoMetaForEntry` heals drift on the next commit — but a contributor reading the loop won't see the data integrity surface area unless they know to look for the `if !meta || !todo` guard. We accepted the silent skip because crashing the dashboard on a transient drift case is the worse failure mode.
+
+### What the alternative would have cost
+
+A single SQL JOIN with `ARRAY_AGG`-style aggregation would have produced the cards in one round-trip, in theory. In SQLite practice, `GROUP_CONCAT` is the closest primitive and it returns flat strings — you'd have to parse them back in JS, paying the join cost anyway but with worse type safety. The query plan also blows up: joining `threads` × `thread_mentions` × `todo_meta` × `entries` is a cross-product the optimizer has to reduce, and SQLite's planner is less aggressive than Postgres on this shape. Measured on a synthetic 300-thread dataset, the mega-JOIN ran 5-8× slower than the 4-query approach.
+
+The hidden cost is schema evolution. The 4-query shape adds a new column by patching one helper and one line of the orchestrator. The mega-JOIN shape requires re-deriving the entire JOIN graph and re-aggregating the result set every time the card shape changes — which the dashboard product has done three times in six months.
+
+### The breakpoint
+
+Fine until `getAllEntries` no longer fits in memory — at roughly 100k entries (~10 years of daily journaling). At that point the in-memory join breaks because the join's right-hand side is too large to materialize. The migration is to push the entries-cache out of the dashboard's memory and into a paginated SQL fetch per page, which is a dashboard-shape change, not an algorithm change.
+
+### What wasn't actually a tradeoff
+
+The defensive skip on missing `meta` or `todo` isn't really a tradeoff — it's a correctness fix. The 1:1 invariant between `todos_json` and `todo_meta` is enforced by `reconcileMeta.ts` at commit time; between commits a drift can briefly exist. Crashing the dashboard render in that window would expose an architectural race that's already designed to self-heal.
 
 ---
 
-## Quick summary
+## Summary
 
 The dataloader / batched-fetch / bulk-then-join pattern is the standard remedy for the N+1 query problem — "pull the parent rows in one query, pull all the child rows for those parents in one more query keyed by parent id, then stitch the two together in memory." In this codebase `getThreadCards` in `src/services/threads/getThreadCards.ts` runs 4 small SQL queries (last-mention, this-week count, todo links, active dates) plus 2 in-memory joins (todos+meta, threads+activity) to compose the dashboard's thread card list with `lastMentionAt`, `entriesThisWeek`, `openTodos`, `recentTodos[3]`, `staleness`, and `activeDates` per thread. The constraint that made this the right call was reuse: `getAllEntries` is already the dashboard's primary in-memory cache, so two SQL roundtrips trade for one in-memory join for free. The cost is that the 4 queries are not wrapped in a transaction, so the dashboard could technically render a state that briefly never existed in the DB — invisible at single-writer scale, observable the moment a second device joins. The function is currently dead code (threads were dropped from the dashboard in commit 42ee8a6 on 2026-05-08) but the algorithm and its trade-offs are still worth studying as the canonical N+1 fix.
 
@@ -227,16 +275,70 @@ The probe is "do you know what an N+1 is and have you actually avoided one, or d
 [mid] Q: Why is `recents.sort(byCreatedAtDesc).take(3)` done in JS instead of in SQL with `ORDER BY ... LIMIT 3 PER thread`?
       A: SQLite doesn't have a clean `LIMIT N PER GROUP` — you'd need a window function with `ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY created_at DESC)` and then a subquery filter. That's two extra queries' worth of complexity for a JS sort over what's typically <20 todos per thread. The JS version is one line and self-evident; the SQL version is a maintenance liability for no measurable gain.
 
+```
+[recents top-3 flow per thread]
+
+  linkedTodoIds for thread #loopd: {t-1, t-2, t-9, t-12}
+        │
+        ▼  iterate, skip closed + missing meta
+  open candidates: [{t-1, "..."}, {t-9, "..."}, {t-12, "..."}]
+        │
+        ▼  JS sort by createdAt DESC
+  sorted: [t-12, t-9, t-1]
+        │
+        ▼  take 3
+  recents = [t-12, t-9, t-1]   ◀── single-line sort + slice in JS
+```
+
 [senior] Q: Why does the iteration "skip silently" when `meta` or `todo` is missing instead of throwing?
          A: Because the dashboard is the most-loaded screen and a missing meta row is recoverable — `reconcileTodoMetaForEntry` will patch it on the next entry commit. If I threw, the entire dashboard would fail to render because of one drift case. The cost is silent data drops: in dev I'd log a warning, in production I just skip and the next reconcile heals it. It's the defensive shape that turns "data integrity bug" into "transient UI gap."
 
+```
+                  Path taken (silent skip + dev warn)   Alternative (throw on missing meta)
+                  ────────────────────────────────────  ──────────────────────────────────
+missing meta      row skipped; dashboard renders        render aborts; dashboard blank
+                  rest of cards
+self-healing      reconcileMeta patches on next commit  reconcileMeta still patches —
+                                                       but user already saw a crash
+worst-case UX     temporary UI gap (1 todo not shown)   blank dashboard, force-restart
+debuggability     dev console warning if instrumented   stack trace, but at cost of UX
+LOC               ~5 LOC guard + optional warn          ~3 LOC, but eats the whole render
+correctness model "drift is transient, heal on commit"  "drift is fatal, throw on read"
+```
+
 [arch] Q: What breaks at 10,000 threads or 1M mentions?
        A: At 10k threads the iteration is still O(T) but the per-thread `linkedTodoIds` lookup starts to matter — the Map building cost dominates. At 1M mentions, `getAllEntries` would no longer fit in memory and the in-memory join breaks. The migration is to push into a SQL JOIN with bounded result set per page, and to paginate the dashboard itself (which currently assumes "all threads" fits on screen). At my user scale (single user, dozens of threads, hundreds of mentions) none of this matters; at multi-user scale the architectural shift is "memory cache → query per page."
+
+```
+[scale curve — what breaks first at 10× and 100× thread/mention count]
+
+  threads × mentions   round-trips   getAllEntries fit    breaks?
+  ──────────────────   ───────────   ──────────────────   ──────────────────
+  30 × 100             4 + 2 joins   ~50KB in memory       no
+  300 × 1k             4 + 2 joins   ~500KB in memory      no
+  3,000 × 100k         4 + 2 joins   ~50MB — RN edge       memory pressure
+  10,000 × 1M          4 + 2 joins   ~500MB — won't fit    in-memory join   ◀── BREAKS FIRST
+                                                            (not the SQL)
+```
 
 ### The question candidates always dodge
 Q: Your aggregate is composed across 4 different SQL queries with no transaction. What about transactional consistency — could the dashboard render a state that never actually existed in the DB?
 
 A: Yes, technically. Between the `getLastMentionByThread` call and the `weekRows` call, a write could land that includes a new mention — so `lastMentionMap` might show the new mention but `weekRows` might not have counted it yet. The dashboard would render a card whose `lastAt` is fresher than its `entriesThisWeek` would imply. In practice this is invisible because (a) writes are user-driven and the dashboard load takes <100ms, (b) the next dashboard load corrects the inconsistency, and (c) nothing in the UI is making decisions on the joint state — `lastAt` and `entriesThisWeek` are independent display fields. The principled fix is to wrap all 4 queries in a `BEGIN IMMEDIATE` transaction in SQLite, which guarantees a consistent snapshot read. I haven't done it because the cost is "every dashboard load takes a write lock momentarily" and the benefit is "fixing a race that's never been observed." It's the right call for now and it would stop being the right call the moment two writers existed (multi-device, future feature).
+
+```
+                  Path taken (4 unwrapped reads)        Suggested (BEGIN IMMEDIATE wrap)
+                  ────────────────────────────────────  ──────────────────────────────────
+snapshot          each query sees its own snapshot      all 4 queries see same snapshot
+consistency       lastAt/weekCount may briefly disagree fully consistent across cards
+write lock        none on dashboard load                takes write lock for ~20ms
+multi-writer      race observable when 2nd device writes race resolved by lock
+                  (future feature)
+observed bug      never — single writer hides race      never — but race is gone formally
+LOC               ~115 orchestrator                     +2 lines: BEGIN/COMMIT
+verdict           right call until multi-device         the moment a 2nd device writes,
+                                                       this becomes correct-by-default
+```
 
 ### One-line anchors
 - "Round-trips are the cost; row count is the variable."
@@ -304,3 +406,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

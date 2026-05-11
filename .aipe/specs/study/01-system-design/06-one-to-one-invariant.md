@@ -97,13 +97,62 @@ JSON-in-relational hybrids are common in modern apps. Postgres has rich JSON ope
 
 ## Tradeoffs
 
-- **No FK** — gives: JSON column flexibility (array order is meaningful, no second table for ordering). Costs: integrity is on the app.
-- **Self-healing reconciler** — gives: a missed run isn't catastrophic. Costs: between runs there can be silent inconsistency (an orphan meta row briefly).
-- **Per-entry reconcile** — gives: each call is small (handful of todos). Costs: adding a new entry-level invariant means a new reconciler.
+We traded a schema-level guarantee for application-layer flexibility: SQLite would refuse to enforce 1:1 across the JSON/table boundary anyway, so the integrity work moved into TypeScript where it can also run the heuristic-then-LLM logic the schema never could.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (app reconciler)  │ Alternative (FK + cascade or │
+│                  │                              │  embedded JSON meta)         │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Schema guarantee │ none — TypeScript enforces   │ FK + cascade enforced by DB  │
+│                  │ via reconcileTodoMetaForEntry│ (but impossible — can't FK   │
+│                  │ on every prose commit        │ to JSON-array element)       │
+│ Read cost        │ entries.text small;          │ entries.* bloated by         │
+│                  │ todo_meta queried separately │ embedded expanded_md (often  │
+│                  │ when needed                  │ 100s of lines per todo)      │
+│ Cross-entry      │ SQL on todo_meta: pinned=1,  │ JSON gymnastics — every      │
+│ queries          │ type='bug' — first-class     │ aggregate query walks all    │
+│                  │                              │ entries' JSON                │
+│ Cloud-sync       │ per-table batches; clean     │ entries push carries full    │
+│ shape            │                              │ todo_meta payload every time │
+│ Failure recovery │ next commit re-runs and      │ FK constraint violation =    │
+│                  │ heals (self-healing)         │ hard failure at write time   │
+│ Complexity cost  │ ~150 LOC in reconcileMeta.ts │ would need triggers + regexp │
+│                  │ + heuristic + scheduleClassify│extension + migration glue    │
+│ Brief drift      │ allowed mid-reconcile        │ atomic — but only because    │
+│ window           │ (heals next commit)          │ the alternative is impossible│
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+The 1:1 guarantee is no longer a schema fact — it's a TypeScript fact. `reconcileTodoMetaForEntry` (`src/services/todos/reconcileMeta.ts` L48–L92, ~45 LOC) plus `scheduleClassify` (L13–L46, ~33 LOC) is the only thing standing between drift and correctness. Any write path that scans prose but forgets to call the reconciler will leak orphans silently. We pay for this in two ways: in code review, every new write path has to be audited for "did you call the reconciler?", and in onboarding, a new contributor reads `reconcileMeta.ts` and asks "wait, why isn't this a foreign key?" — the answer takes the spec's Principle 11 paragraph to explain.
+
+Between reconciler runs the data is briefly inconsistent. If a `[]` line is deleted at 10:00:00.000 and the screen blurs at 10:00:00.250, there's a 250ms window where the prose has 4 todos and the meta has 5. No UI surface reads during that window — but a synchronous crash dump would show the drift. We accept this because the next commit closes it.
+
+A new entry-level invariant means a new reconciler. Today we have one (todos↔meta); adding "thread mentions must have a matching prose tag" would mean a parallel `reconcileMentions` (and we do have it, in `scanThreads.ts` L169–L230). Each new invariant adds a maintenance line item: someone must remember the reconciler exists when adding a new write path.
+
+### What the alternative would have cost
+
+The "obvious" alternative — FK with `ON DELETE CASCADE` — isn't actually available. SQLite has no syntax to FK from a side table to an element of a JSON column. So the alternative being weighed is *embedding* `todo_meta` as another JSON column on `entries`, eliminating the side table.
+
+That path would have made every `SELECT * FROM entries` carry the full `expanded_md` payload for every todo on that entry. `expanded_md` can be 100+ lines of markdown per ambiguous todo; on a day with 8 todos the entry row would inflate from ~2 KB to 50+ KB. The dashboard's `getEntriesForDate` and the journal's autosave round-trip would both pay that cost on every read. Cross-entry queries like "show me all `pinned=1` todos" or "show me all `type='bug'` todos across the week" would become JSON traversals instead of indexed SQL — a 50× slowdown at the 100-entry scale.
+
+Cloud sync would also suffer. The mirror pushes per-table rows; embedded meta would mean every entries-row push carries the entire meta payload, every time, even when only the prose changed. With per-table batches the meta delta is small; with embedded meta the smallest delta is "the whole row."
+
+### The breakpoint
+
+Fine until the app moves off SQLite. On a real RDBMS with rich triggers (Postgres `BEFORE INSERT`/`AFTER DELETE` plus generated columns) the reconciler could be inlined as triggers, with `regexp_matches` doing the heuristic in-database. At that point the application reconciler becomes redundant — the cost shifts from "TypeScript code we audit" to "trigger code that runs in the migration path." On SQLite it's not even close; on Postgres it would be a real choice.
+
+### What wasn't actually a tradeoff
+
+SQLite triggers with `json_each` weren't a real option. The reconciler needs to call `heuristicClassify` (regex against prose-shape patterns) and `scheduleClassify` (async LLM fire-and-forget) on insert. Triggers run inside the SQL engine — they can't reach into TypeScript to invoke an async network call. A trigger could enforce a *structural* 1:1 but couldn't run the type-classification logic that gives the meta row its value on insert. Without that logic the meta rows are empty placeholders, which defeats the point of having them.
 
 ---
 
-## Quick summary
+## Summary
 
 An application-enforced invariant is a rule the database can't check, kept honest by a reconciler that walks both sides and patches the diff — pick one side as authoritative, accept brief drift, and make the patch step idempotent. In this codebase `entries.todos_json` is a JSON array of TodoItems and `todo_meta` is a separate table keyed on `todoId`; after every `scanTodos`, `reconcileTodoMetaForEntry` in `src/services/todos/reconcileMeta.ts` loads existing meta, inserts what's missing (consulting `heuristicClassify` and firing `scheduleClassify` async on ambiguity), and deletes orphans whose `todoId` is no longer in prose. The constraint was that SQLite can't FK to an element of a JSON column, so the app code is the only integrity gate, and `todo_meta.expanded_md` is too large to embed in the entry's JSON without bloating every entry read. The cost is that integrity now lives in TypeScript instead of the schema, and a partial reconcile leaves orphans or missing meta rows briefly — acceptable because the next commit re-runs reconcile and heals the gap. A SQLite-trigger alternative was considered and rejected because triggers can't easily run the heuristic-then-LLM conditional logic the reconciler needs.
 
@@ -127,18 +176,85 @@ Storing a JSON array on a row alongside a side table that should be 1:1 with the
 
 A: The prose commit fires `scanTodosFromText`, which produces a new `TodoItem` in the entry's `todos_json`. Then `reconcileTodoMetaForEntry` runs: it loads existing `todo_meta` for the entry, builds a Set of current `todoId`s from the new `todos_json`, and inserts a `todo_meta` row for each TodoItem id that doesn't have one yet. The initial `type` comes from `heuristicClassify`; if the heuristic returns null, `scheduleClassify` fires the LLM async. The user sees the `[]` immediately; the type lands a moment later when classification returns.
 
+```
+[new "[]" line lifecycle]
+
+  user types "[] call mom"
+        │
+        ▼  commit boundary
+  scanTodosFromText → new TodoItem{id:t-X, text:"call mom"} in todos_json
+        │
+        ▼
+  reconcileTodoMetaForEntry
+        │   existingByTodoId has t-X?  no
+        ├── insertTodoMeta(t-X, type from heuristicClassify("call mom"))
+        │      heuristic returns "todo" → row written with type="todo"
+        │      (or returns null → row written, then scheduleClassify fires LLM async)
+        ▼
+  UI shows the [] immediately; type appears the moment classify returns
+```
+
 [senior] Q: Why not store `todo_meta` as another JSON column on `entries` and avoid the reconciler entirely?
 
 A: Three reasons. First, `todo_meta.expanded_md` can be hundreds of lines of markdown — embedding it in the entry's JSON would bloat every read of the entry by a multiple. Second, the cloud sync layer pushes per-table; per-row JSON inflation makes batches awkward. Third, the meta table queries support filters like "all todos with `pinned = 1` across all entries" or "all todos of `type = 'bug'`" — those are SQL queries on a normal table; they'd be JSON gymnastics on an embedded column. The reconciler is the cost of separating identity (in JSON) from metadata (in a table); I think it's the right tradeoff.
+
+```
+                  Path taken (side table + reconciler)   Alternative (embedded JSON meta)
+                  ──────────────────────────────────     ──────────────────────────────
+entries row size  ~2 KB (prose only)                     ~50 KB (prose + expanded_md ×N)
+SELECT * FROM     reads only what UI needs                always carries 100s lines/todo
+ entries          (prose lazily joined to meta)          even when meta isn't displayed
+pinned=1 query    SQL: WHERE pinned=1 — indexed          JSON walk across every entry
+                                                          for every aggregate query
+cloud-sync push   per-table delta — small                row-level — pushes full JSON
+                                                          even when only prose changed
+integrity glue    reconciler (~150 LOC)                  none, but performance bleeds
+where the cost is one-time reading reconcileMeta.ts      every read of every entry
+```
 
 [arch] Q: How does the design handle a partial reconcile — say the app crashes mid-loop?
 
 A: Self-healing on the next commit. If the reconciler inserts the meta row for todo A but crashes before todo B, the entry has a missing meta for B. On the next prose commit (which fires every focus blur, screen leave, save), `reconcileTodoMetaForEntry` runs again, loads existing meta, sees B is still missing, inserts it. The orphan-direction works the same way — if a `[]` line is deleted but the meta deletion didn't fire, the next commit notices the gap and soft-deletes. The design assumes commits are frequent and the system is allowed to be temporarily inconsistent.
 
+```
+At commit frequency dropping (e.g., long-form prose, no blur events):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — prose autosaves every keystroke │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Commit triggers (focus blur / leave / save)┐
+  │ assumes 10s+ frequency under normal use     │  ◀── BREAKS FIRST
+  │ if user types for 30+ min without leaving   │     (drift window grows linearly;
+  │ the screen, drift window grows              │     no self-heal until commit fires)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Reconciler (self-healing) ─────────────────┐
+  │ idempotent — runs as many times as needed   │
+  │ each run closes any gap the last one left   │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: SQLite supports JSON1 functions. You could use `json_each` + a trigger to enforce 1:1. Why didn't you?
 
 A: I considered it. The block was that triggers in SQLite are not portable — they don't survive a schema migration cleanly, and they don't run the kind of conditional logic the reconciler needs (heuristic classify, scheduleClassify-on-ambiguous, soft-delete instead of hard-delete). A trigger would also have to run the heuristic regex inside SQLite, which means reaching for `regexp` extensions that aren't enabled by default in `expo-sqlite`. The application reconciler is more code, but it's TypeScript code with the same imports as the rest of the service layer; it's debuggable, testable, and changes ship via the normal code path, not a schema migration. If I were running on Postgres with rich trigger support, the answer might be different — but at this scale, the reconciler is the simpler tool.
+
+```
+                  Path taken (TS reconciler)             Suggested (SQLite trigger + json_each)
+                  ──────────────────────────────         ──────────────────────────────────
+heuristic gate    heuristicClassify(text) in TS          would need regexp extension enabled
+                  imports + reads the same patterns      in expo-sqlite (not on by default)
+LLM async fire    scheduleClassify → Haiku/4o-mini       cannot — trigger runs in SQL engine,
+                                                          no fetch / no async
+soft-delete       deleteTodoMeta stamps deleted_at       trigger could ON DELETE … but the
+                                                          row needs deleted_at = now, not gone
+migration story   ships with normal TypeScript changes   every change is a new migration
+debugging         set a breakpoint, log to console       open sqlite3 CLI, EXPLAIN, hope
+code surface      ~150 LOC                               ~50 LOC trigger + extension setup +
+                                                          migration handler
+where it pays back on Postgres with rich trigger lang.   today, on expo-sqlite, never
+```
 
 ### One-line anchors
 - "SQLite can't FK to a JSON-array element — that's the constraint, the reconciler is the response."
@@ -210,3 +326,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a schema-shape illustration (JSON column vs side table) entirely within the storage layer, not a cross-layer composition.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

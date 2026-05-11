@@ -97,13 +97,64 @@ The shift from "user manages an order" to "user marks priority" is older than so
 
 ## Tradeoffs
 
-- **Boolean replaces int** — gives: trivial mental model, one less drag UI to maintain. Costs: can't express "A before B before C."
-- **Deprecated columns kept** — gives: no destructive schema change. Costs: schema noise; future readers must know which columns are live.
-- **Recency tiebreak** — gives: new captures bubble naturally. Costs: an old pinned item is below a newer pinned item — no way to override.
+We traded multi-degree manual ordering for a single boolean — observed usage was "pin a few, ignore the rest," and the data model now matches what users actually do instead of what a drag-handle UI invited them to imagine.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (pinned bool +    │ Alternative (keep position-  │
+│                  │  recency tiebreak)           │  based manual reorder)       │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Expressiveness   │ pin/not — 2 tiers            │ N tiers (A < B < C < ...)    │
+│ User UX          │ tap pin icon                  │ drag handles, long-press,    │
+│                  │                              │ ordered list with grip       │
+│ Sort algorithm   │ 2-key: pinned, createdAt DESC│ 3-tier with position INT     │
+│                  │                              │ NULL handling                │
+│ Sort bugs        │ none — boolean is total      │ "two items got same rank"    │
+│ possible         │                              │ "drag race condition"        │
+│ Code surface     │ inline comparator at         │ rankTodos function (still in │
+│                  │ app/todos.tsx L187–L194      │ tree as recovery path)       │
+│ Schema cost      │ +pinned col (1 byte)         │ position INT NULL stays      │
+│                  │ position INT NULL stays      │ (legacy)                     │
+│                  │ (deprecated)                 │                              │
+│ Override "old    │ impossible — newer pinned    │ user drags old item to top   │
+│  pinned to top"  │ items always displace        │                              │
+│ Reversibility    │ rankTodos still in tree;     │ already shipped              │
+│                  │ pin-only is reversible if    │                              │
+│                  │ analysis wrong               │                              │
+│ Observed usage   │ matches: "a few sticky items"│ doesn't match — users         │
+│ fit              │                              │ abandoned drag-reorder       │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+Multi-item ordering. A user who genuinely wanted "A first, then B, then C, then everything else by recency" can't express that — the second tier of granularity is gone. For the actual usage pattern (one or two sticky items, rest by recency) this is invisible; for a power user it's a removed feature.
+
+The legacy `position` and `stage` columns stay on the schema because dropping them would mean a destructive cloud migration. We pay in schema noise: every cloud-sync mapper round-trips two dead fields, every contributor reading `todo_meta` must know the `@deprecated` comment in `src/types/todoMeta.ts` is the source of truth on what's live. The "deprecation in code, not in schema" path is cheaper than coordinating a destructive migration across user app versions, but it does mean the schema is permanently a bit dishonest.
+
+Recency is the tiebreak among pinned items. An old item the user pinned three weeks ago sits below a newly-pinned item from today. There's no "priority among pinned" tier; pin is binary. If we wanted that, we'd have to either re-introduce `position` for pinned rows only (a special case in the sort), or add a `pinnedAt` timestamp tier. Today neither exists.
+
+`SmartTodoList.tsx` L41–L67 hasn't migrated to the pinned-first comparator. The dashboard still uses the legacy position-based sort, which means the dashboard and the `/todos` page show two different orderings for the same data. This is a known content drift; the fix is a one-comparator swap that hasn't shipped because I noticed it after shipping pin and the dashboard didn't break in a visible way.
+
+### What the alternative would have cost
+
+Keeping drag-reorder would have meant maintaining the `position` column as live data, the drag-handle UI, the long-press gesture, the position-update on every reorder, the race when two items race for the same rank, and the user mental model of "I have to manage this." All of that to support a usage pattern that the data showed wasn't happening.
+
+The code-surface saving from pin-only is small (~30 LOC removed in the sort comparator + ~50 LOC removed in the drag UI) but the cognitive saving is large: pin is one bit, the user can flip it without thinking, and the sort is trivially correct. Drag-reorder kept implicit invariants ("no two rows have the same position") that the schema didn't enforce.
+
+### The breakpoint
+
+Fine until a credible "I want manual order back" signal arrives. The recovery path is `services/todos/rank.ts:rankTodos` — the legacy 3-tier comparator still in tree as a dormant function. Adding a user-level setting that re-routes the sort through `rankTodos` is ~50 LOC and a UI toggle; the dormant code stays callable. The breakpoint isn't "feature analytics says X% drag-reorder usage" (we don't have analytics) — it's "a user with a meaningful workflow complains, and the cost of adding the opt-in is less than the cost of saying no."
+
+### What wasn't actually a tradeoff
+
+Dropping `position` and `stage` from the schema wasn't on the table at ship time. The cost is a destructive Postgres migration that would break older app versions still trying to write the columns; rolling that across user devices means coordinating an app-version cutoff that we don't have machinery for. The "schema squash" path (consolidate migrations 0001-0005 into a new baseline and drop the dead columns at the same time) is the right cleanup window, deferred until the migration log gets long enough to need squashing.
 
 ---
 
-## Quick summary
+## Summary
 
 Replacing manual ordering with a single boolean flag is a specific case of downgrading the data model to match observed usage — a subtractive design move where the win comes from removing an affordance instead of adding one. In this codebase, as of 2026-05-05 the `/todos` page sorts by `meta.pinned` first then `createdAt DESC` via an inline comparator at `app/todos.tsx` L187–L194; migration `0005_todo_meta_pinned.sql` added the `pinned` column; and the pin toggle is `updateTodoMeta(row.id, { pinned: !row.meta.pinned })` in `src/services/database.ts`. The constraint was that in practice users pinned a handful of items and ignored the rest of the order, so a single bit captures the actual intent and the drag-reorder UI was deleted along with the three-stage filter. The cost is that a user who genuinely wants "A before B before C" can't express that anymore — and the legacy `position` and `stage` columns stay on the schema (deprecated) because dropping them would require a destructive cloud migration. `SmartTodoList.tsx` L41–L67 still uses the legacy position-based sort and is a known content drift waiting on a one-comparator swap.
 
@@ -127,18 +178,99 @@ Replacing a feature is harder than building one. The interviewer wants to know w
 
 A: Inserts and updates from the app set `position = NULL` (or omit it; the column is nullable). The cloud-sync mappers in `sync/tables/todoMeta.ts` round-trip the column verbatim — if a legacy row in cloud still has a position integer, it pulls back into SQLite intact. No code reads `position` for sort or filter; it's effectively a dead column on the schema. The reason it's still there is that dropping it would require a destructive Postgres migration and a coordinated client-side schema bump, which would block users on older app versions from syncing. Append-only migration discipline says: leave it.
 
+```
+[write path with deprecated position column]
+
+  user toggles pin on row.id
+        │
+        ▼
+  updateTodoMeta(row.id, { pinned: true })
+        │
+        ▼ database.ts UPDATE statement
+  UPDATE todo_meta SET pinned=1, updated_at=now WHERE id=row.id
+        │   (position not in SET clause → unchanged; stays NULL or
+        │    whatever legacy value it had)
+        ▼
+  schedulePush() → next push includes position verbatim
+        │
+        ▼ Supabase upsert
+  cloud row preserves position (no UI reads it; it's noise)
+```
+
 [senior] Q: You shipped pin + swipe-to-delete and removed drag-reorder + three-stage filter in one commit. Why bundled?
 
 A: Because they were the same idea: replace a maintenance-heavy multi-degree UI with a single-bit gesture. Drag-reorder + three-stage filter were both expressions of "user manages this dimension manually." Pin + swipe-to-delete are both "user marks a single attribute on a row." Shipping them together meant the user got a coherent new model in one go instead of two confusing intermediate states. The cost is a bigger diff to review; the win is that no version of the app shipped with "pin exists but drag-reorder is also still here" — which would have been a UX mess.
+
+```
+                  Path taken (one bundled commit)       Alternative (incremental commits)
+                  ──────────────────────────────        ──────────────────────────────
+shipped together  pin + swipe-delete + remove drag      pin first, then remove drag,
+                  + remove 3-stage filter               then add swipe, then remove filter
+intermediate UX   none — clean cut                       "pin exists AND drag exists AND
+                                                          stage filter exists" → confusion
+review effort     one big diff (harder for reviewer)    smaller diffs (easier review)
+rollback unit     one revert — clean                    multiple reverts to undo full change
+user mental model gets new model in one update         lives in 2-3 confusing intermediate
+                                                          versions before settling
+when bundled wins ideas are conceptually the same       changes are independent
+                  ("user marks one attribute")
+when bundled lose changes are unrelated                  changes are unrelated (not this case)
+right call here   yes — drag-remove + pin-add + filter- no — would have shipped UX mess
+                  remove + swipe-add are one idea       between intermediate steps
+```
 
 [arch] Q: What happens if your usage analysis was wrong and a user actually relied on multi-item ordering?
 
 A: They lose expressiveness. The existing `rankTodos` function in `services/todos/rank.ts` still exists (it's the legacy comparator), so the recovery path is "add a manual-ordering setting that re-routes the sort through `rankTodos` for users who opt in." The cost would be conditional sort logic in two places (`/todos` and `SmartTodoList`). I haven't shipped that because the analysis was strong — I'm the only user; I never used multi-item ordering. For a multi-user app I'd watch the data first and ship pin-only, then add the manual-order opt-in if a meaningful fraction of users complained. Removing affordance is reversible if the legacy code stays in tree, which is why `rankTodos` wasn't deleted.
 
+```
+If user feedback shows multi-item ordering is needed:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ new setting: "Enable manual ordering"        │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Sort layer (currently inline) ─────────────┐
+  │ /todos: pinned-first comparator              │  ◀── BREAKS FIRST
+  │ SmartTodoList: position-based (legacy)       │     (two sort sites need
+  │ ↓ conditional re-route                       │      conditional logic; pin
+  │ users with setting → rankTodos               │      vs manual must coexist)
+  │ users without → pinned + createdAt DESC      │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Data layer ────────────────────────────────┐
+  │ position INT NULL revives — was deprecated,  │
+  │ now writable again via drag-reorder gesture  │
+  │ rankTodos in services/todos/rank.ts wakes up │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: You're keeping `position` and `stage` columns on the schema even though no UI reads them. Isn't that just digital debt?
 
 A: Yes, it is. They're dead columns kept on the schema because the cost of dropping them (destructive cloud migration that would break users on older app versions) is higher than the cost of carrying them (a few bytes per row, two extra fields in the cloud-sync mapper). The honest version is: I made the call that schema noise is preferable to a coordinated migration, and I documented both columns as deprecated in `src/types/todoMeta.ts`. The cleanup happens when I do my next "schema squash" — at the time I squash migrations `0001-0005` into a consolidated baseline, I'd drop both columns at the same time. Until then, they sit there. The risk is that a future reader sees `position` and assumes it's live, which is why the type definition has the deprecation comment and why this study guide says it explicitly. That's the cost of keeping legacy schema in tree; I think it's lower than the alternative.
+
+```
+                  Path taken (deprecate in types,       Suggested (drop columns now via
+                  keep in schema)                       destructive migration)
+                  ──────────────────────────────        ──────────────────────────────
+schema cost       2 dead columns (position + stage)     0 — clean schema
+                  ~5 bytes/row × N rows = trivial
+runtime cost      cloud-sync mapper round-trips         saved 2 fields per push
+                  them verbatim
+migration cost    none today                            destructive ALTER TABLE on cloud +
+                                                          coordinated client schema bump
+older-app-version users on old version still write      can't sync — old app's schema has
+ compat           position; cloud accepts it             columns the cloud no longer accepts
+detection of      type definition comment in            git history of schema migrations
+ dead status      src/types/todoMeta.ts marked          shows the column was dropped
+                  @deprecated 2026-05-05
+cleanup window    schema squash (deferred until ~50    same — squash is when destructive
+                  migration files)                      changes are coordinated anyway
+honest cost       digital debt — visible, documented    breaks every user on old version
+                                                          who hasn't updated yet
+right call?       yes — debt < destructive migration   no — too expensive for the gain
+```
 
 ### One-line anchors
 - "Drag-reorder was an affordance the user never used; pin captures the actual intent in one bit."
@@ -208,3 +340,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

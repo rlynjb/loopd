@@ -164,13 +164,61 @@ When brute force is fine: at the journaling scale of a few hundred todos, both a
 
 ## Tradeoffs
 
-- **Boolean pin** — gives: trivial mental model, instant toggle. Costs: no ordering within the pinned group beyond recency.
-- **createdAt DESC tiebreak** — gives: new captures bubble up automatically. Costs: an old-pinned item gets pushed down by any newer pinned item.
-- **Two-key comparator** — gives: O(n log n) one-pass sort. Costs: nothing meaningful.
+We traded a third tier of user-controlled ordering for a comparator so simple a boolean toggle is the entire write path.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (pinned + createdAt │ Alternative (`position` integer │
+│                  │ comparator)                    │ rank with drag-to-reorder)     │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n log n) TimSort, one pass   │ O(n log n) sort + O(n) rewrite │
+│                  │                                │ on every reorder               │
+│ Write cost       │ toggle a boolean column        │ rebalance integers across all  │
+│                  │ (1 SQL UPDATE)                 │ affected rows                  │
+│ User control     │ pin or not — recency does the  │ full manual ordering within   │
+│                  │ rest                           │ any tier                       │
+│ Mental model     │ "starred + newest first" —     │ "I have to drag things into   │
+│                  │ matches inbox, chat, etc.      │ the right spot" — friction     │
+│ Code complexity  │ ~8 LOC comparator + 1 line     │ ~50 LOC for position rebalance │
+│                  │ write path                     │ + drag handler + reconcile    │
+│ Failure mode     │ old-pin pushed down by newer   │ floats / integer collisions on │
+│                  │ pin — no escape hatch          │ rebalance, drift over time    │
+│ Migration cost   │ already shipped to /todos      │ legacy `position` column kept │
+│                  │                                │ "for the day demand returns"   │
+│ Drift surface    │ SmartTodoList.tsx still legacy │ would need to migrate every   │
+│                  │ — 1-line comparator swap       │ consumer at once               │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The pinned partition is unordered beyond `createdAt DESC` — there's no way for a user to say "this old pinned item belongs at the top of pinned." The workaround is grim: unpin every newer pinned item. We accepted this because in journaling practice the pinned group is rarely more than 5-10 rows and the recency tiebreak is intuitive — but the third tier is the first feature request that would actually require shipping.
+
+The `position` column on `todo_meta` is dead-but-kept (it was the legacy rank source). Every contributor who reads the schema sees a column the app no longer writes to and asks why. The answer is "for the day demand for in-group ordering returns" — defensive retention with a real maintenance footprint.
+
+`SmartTodoList.tsx` L41–L67 still uses the legacy position-based comparator. The dashboard and `/todos` render the same data with different orders today. That's a content-drift bug we've flagged since 2026-05-07; the fix is a one-line comparator swap that we haven't shipped because no UI surface currently exercises both in the same screen.
+
+### What the alternative would have cost
+
+A `position` integer with drag-to-reorder would have given the user full manual control. The write path becomes ~50 LOC of rebalance logic — when the user drops an item between two others, compute a new integer that fits the gap, periodically rebalance to avoid integer drift. Plus a `Swipeable`-style drag handler per row. The classic shape every "manual ordering" UI carries.
+
+The hidden cost is sync. Every reorder touches up to N rows (worst case: rebalance the whole tier), which means every reorder is a sync push of N rows — vs the current "toggle a boolean = sync one row." At single-user single-device that's tolerable; on a multi-device account, two users reordering concurrently produce a merge conflict the LWW resolver can't sensibly handle.
+
+The pin-boolean shape is the cheapest correct shape for "what's important is sticky, what's recent floats up." The legacy `position` column is the lever for the day demand requires a richer model.
+
+### The breakpoint
+
+Fine until a user genuinely needs ordering inside the pinned group (e.g., 20+ recurring pins where "what to look at first" matters). At that point either reintroduce `position` within the pinned tier (legacy comparator with new policy) or add a third "stuck to top" toggle (boolean within boolean). Both are about a day of work; neither is shipped because the demand doesn't exist.
+
+### What wasn't actually a tradeoff
+
+Picking TimSort (via `Array.prototype.sort`) over a hand-rolled sort isn't a tradeoff — the runtime already has it, it's stable, and it's near-linear on partially-sorted inputs (which our list usually is, since pinning toggles one row at a time). The comparator is the only code we own.
 
 ---
 
-## Quick summary
+## Summary
 
 Stable lexicographic sort with a priority partition is the family of "two-key comparator where the first key is a boolean importance flag and the second key is a timestamp" — the same shape SQL expresses as `ORDER BY pinned DESC, created_at DESC`, the same shape email inboxes use for starred-then-recent, the same shape chat apps use for pinned-then-recent threads. In this codebase the comparator is inlined in `out.sort((a, b) => …)` at `app/todos.tsx` L187–L194 on the `/todos` screen: it compares `pinned` first (true before false), then `createdAt DESC` so newer rows surface within each group. The constraint is that pinning is a sticky modifier on top of recency, not a replacement for it — capturing actual product intent in the cheapest comparator. The cost is no expression for "pin this specific old item to the very top of the pinned group" — within the pinned partition, a newer pinned item always wins, and there's no third tier. The dashboard component `src/components/home/SmartTodoList.tsx` L41–L67 still runs the legacy position-based sort — a known content drift waiting on a one-comparator swap.
 
@@ -194,18 +242,78 @@ Sorting is the textbook DSA topic that interviewers reach for when they're check
 
 A: `aPin = 0`, `bPin = 1`. The first check is `if (aPin !== bPin) return bPin - aPin`, which evaluates to `1 - 0 = 1`. A positive return from a comparator means "a should come after b" in JavaScript's sort, so `t-2` ends up before `t-1` — pinned wins regardless of recency. If both rows had `pinned: true`, we'd skip the first branch and fall to `bTime - aTime`, which puts the newer one first.
 
+```
+[comparator decision flow for (t-1 unpinned 09:00, t-2 pinned 10:00)]
+
+  compare(t-1, t-2)
+        │
+        ▼  aPin = 0 ; bPin = 1
+  aPin !== bPin → return bPin - aPin = 1
+        │
+        ▼  positive → a comes after b
+  result: t-2 before t-1   ◀── stops here, time never read
+
+  if both pinned (aPin=bPin=1):
+        │
+        ▼  fall through to time
+  return bTime - aTime → newer first
+```
+
 [senior] Q: Why a two-key comparator with a boolean and a timestamp instead of a single numeric rank?
 
 A: A single rank (e.g., `pinned ? 1e15 - createdAt : -createdAt`) would work and be slightly faster, but it's harder to read and trivially easy to break with a sign flip. The two-key version is explicit about what the policy *is*: pin first, then recency. If product asked tomorrow "make pin a three-tier priority instead of a boolean," I change `aPin = a.meta.pinned ? 1 : 0` to `aPin = a.meta.priority` and the rest of the comparator is untouched. The single-rank version would need a coordinate redesign. Comparator clarity beats one fewer comparison at this scale (n in the hundreds).
+
+```
+                  Path taken (two-key comparator)      Alternative (single composite rank)
+                  ────────────────────────────────────  ──────────────────────────────────
+expression        explicit: pin first, then time       implicit: pin?1e15-t:-t
+LOC               ~8                                    ~3
+readability       reader sees policy                    reader has to decode arithmetic
+extensibility     pin → priority is a one-line edit    full coordinate redesign
+sign-flip risk    low — each branch is its own         high — one sign error rebalances
+                  return                                everything
+speed             one extra compare per call             one fewer compare per call
+                  (negligible)                          (negligible at n in hundreds)
+verdict           clarity wins at this scale           speed wins only at n in millions
+```
 
 [arch] Q: What changes if a user has 100,000 todos?
 
 A: TimSort is still O(n log n), so the sort itself is fine — about 1.7M comparisons at 100k. The comparator is two cheap reads (a boolean and a millisecond conversion), so the per-call cost is constant. Where it actually breaks is the rendering: 100k rows in a `FlatList` requires virtualization to be set up correctly, and the `Swipeable` wrapper per row has overhead I haven't measured at that scale. The sort is the cheapest part of the page render at 100k. That said, no journaling user is going to hit 100k — at one todo per day it's 270 years.
 
+```
+[scale curve — what breaks first at 10× and 100× todo count]
+
+  todos   sort cost      render cost            breaks?
+  ──────  ─────────      ───────────────────    ──────────────────
+  300     ~2,400 cmps    <50ms FlatList         no
+  3,000   ~35k cmps      ~100ms FlatList        no
+  30,000  ~450k cmps     stutter on scroll      virtualization config
+                                                tuning needed   ◀── BREAKS FIRST
+  100,000 ~1.7M cmps     unusable w/o          Swipeable per-row +
+                         virtualization        FlatList config issue;
+                                                sort still fine
+```
+
 ### The question candidates always dodge
 Q: Your design has no way to express "pinned and at the top of the pinned group." What's the workaround a user has if they pin something old and want it above newer pins?
 
 A: There isn't one. The user can't override the `createdAt DESC` tiebreak within the pinned group. The workaround that exists is "unpin the newer pinned items so the old one is alone at the top," which is obviously bad UX. The honest answer is I haven't built a third tier because the use case hasn't shown up — for a journal where pinned items are usually a handful of recurring concerns, the recency tiebreak inside pinned is fine. The day a user complains, the path is to either re-introduce a `priority` integer within pinned (which is the legacy `position` column repurposed) or add a "stick this to the very top" toggle that's a third boolean. Both are about a day of work; neither is shipped because the demand doesn't exist.
+
+```
+                  Path taken (boolean + createdAt)     Suggested (3-tier: stuck/pinned/normal)
+                  ────────────────────────────────────  ──────────────────────────────────
+intra-pin order   newest first, fixed                  user-controlled within "stuck" tier
+escape hatch      none — unpin neighbors                explicit "stick to top" toggle
+write path        toggle a boolean (1 row)             toggle one of two booleans (1 row)
+UX cost           old-pin gets buried                  three states harder to teach
+LOC               ~8 in comparator                      ~12 in comparator
+column drift      position kept as dead-but-not-used   stuck_to_top added; position still
+                                                       dead-but-not-used
+demand seen       never in real usage                   would justify on first
+verdict           cheapest correct shape until         complaint
+                  demand surfaces
+```
 
 ### One-line anchors
 - "The sort is two-key — pinned first, then `createdAt DESC` — because that captures the actual product intent in the cheapest comparator."
@@ -272,3 +380,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

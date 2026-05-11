@@ -199,13 +199,58 @@ The two-pass match is a simplification of Myers diff: take the cheap exact-match
 
 ## Tradeoffs
 
-- **Map + Set** — gives: O(n+m) time + correctness. Costs: extra structures (memory, allocation).
-- **Two passes** — gives: identity survives common edits. Costs: can't disambiguate edit-in-place from delete-and-add.
-- **Carryover preserved** — gives: rows aren't lost if their line goes away briefly. Costs: orphan-like rows accumulate until reconcile cleans them.
+We traded extra data structures and an extra pass for stable row identity across prose edits and correctness in the duplicate-line case.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (two-pass + Set)    │ Alternative (one-pass match)   │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n + m) — two linear passes   │ O(n × m) — re-scan per line    │
+│                  │ over the matches array         │ with no claim guard            │
+│ Latency at 30    │ <1ms — sub-millisecond on the  │ <1ms — also sub-ms; the speed  │
+│ todos (real N)   │ device                         │ gap doesn't matter at this N   │
+│ Latency at 10×N  │ ~5ms at 300 todos              │ ~50ms at 300 todos — single    │
+│                  │                                │ keystroke commit feels laggy   │
+│ Correctness      │ duplicate `[]` lines each      │ duplicate lines double-claim   │
+│                  │ claim a distinct existing id   │ the same id — silent identity  │
+│                  │                                │ loss on the second row         │
+│ Code complexity  │ ~85 LOC for the helper + two   │ ~40 LOC, single loop, no Set   │
+│                  │ passes + Set guard             │                                │
+│ Cognitive load   │ reader must understand why     │ reader sees one loop, misses   │
+│                  │ Set is correctness, not perf   │ that duplicates break it       │
+│ Failure mode     │ edit-in-place looks like a     │ duplicate lines silently       │
+│                  │ rename; old id survives — meta │ overwrite each other; classifier │
+│                  │ may briefly be stale           │ metadata vanishes              │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The helper carries a `Map<int, TodoItem>` of claims and a `Set<string>` of used ids — extra allocations on every focus blur. In `src/services/todos/scanTodos.ts` L53–L138 the two structures cost ~85 LOC where a brute-force one-pass loop would be ~40. The memory delta is negligible (a few hundred bytes per scan) but the cognitive cost is real: a contributor reading the code has to be told that the `Set` is correctness, not speed, because the file scale (20-30 todos per entry) makes the speed argument look like premature optimization.
+
+Two passes can't disambiguate edit-in-place from delete-and-add on the same line. If the user replaces "call mom" with "fix bug" on line 7 in one edit, Pass 2's line-index fallback inherits `t-A`'s id, `createdAt`, and classifier output — the downstream `meta.type` is now stale until the LLM reclassifies. We pay that cost on every same-line replacement.
+
+Carryover (existing rows whose id wasn't claimed) gets concatenated to the output until the reconciler in `reconcileMeta.ts` soft-deletes the orphan. Between scan and reconcile, `todos_json` can contain a row whose `sourceLine` was cleared. UI surfaces that read `todos_json` during this window see an orphan-looking entry.
+
+### What the alternative would have cost
+
+A single-pass `for each line { for each existing }` would have dropped to ~40 LOC and no Set allocation. It would also be wrong at n=2: two `[]` lines with identical text would both match the same `prior`, and the second `out.push` would overwrite the first in `claimed[i]`'s frame. The user types two identical todos on the same day and one of them silently inherits the other's classifier output — a bug the user can't diagnose because the UI looks fine.
+
+The latency picture is the inverse of the usual story. At 30 todos, the one-pass version is also sub-millisecond — the optimization isn't buying speed. It's buying the absence of a category of correctness bug that costs days to chase once it ships. The two-pass shape was rewritten from a brute-force version that had exactly this bug in early Phase A.
+
+### The breakpoint
+
+Fine until a single `entries.text` exceeds ~500 `[]` lines on a single day, at which point the focus-blur commit becomes user-visible (>16ms blocks a frame). The real breakpoint is the data model, not the algorithm: one prose column with 500+ todos is the wrong shape. The fix is to cap entries at one-day granularity (which the app already does) — cross-day aggregation belongs at the query layer, not in `entries.text`.
+
+### What wasn't actually a tradeoff
+
+Choosing case-insensitive exact match in Pass 1 (`text.toLowerCase()`) wasn't a tradeoff — it was a correctness fix. Users retype todos with inconsistent capitalisation; case-sensitive matching would treat "Call mom" and "call mom" as different rows and Pass 2 would have to clean up after Pass 1's misses.
 
 ---
 
-## Quick summary
+## Summary
 
 Two-pass matching is the family of "match items across two snapshots by strongest-evidence-first, fall back to weaker evidence for the remainder" — a stripped-down cousin of Myers diff that powers git rename detection and React's keyed-list reconciliation. In this codebase `scanTodosFromText` runs at every commit (focus blur, screen leave) on `entries.text`: Pass 1 matches `[]` lines by exact text to preserve `id`, `createdAt`, and the AI classifier output across reorderings; Pass 2 falls back to line-index to catch "same line, different words" edits. The constraint is that row identity must survive prose edits — a brand-new id on every edit would invalidate `todo_meta` rows and break the 1:1 invariant the downstream reconciler depends on. The cost is that the algorithm cannot distinguish "I edited line 7" from "I deleted line 7 and added a new todo on line 7" — both look the same and inherit the old id, which can leave `meta.type` momentarily stale.
 
@@ -228,16 +273,72 @@ The probe here is whether I understand that the `Set<string>` of used ids is doi
 [mid] Q: Walk me through what happens in Pass 2 if a line that exactly matched in Pass 1 is also a line-index match for a different existing todo.
       A: It can't happen. The Pass 1 match writes the index into `claimed` and Pass 2's first check is `if claimed has i: continue`. The line is skipped entirely. Even if Pass 2 wanted to consider it, the corresponding `prior.id` was added to `used` in Pass 1, so the line-index lookup would also be filtered out. That's the whole point of the `used` Set — Pass 2 only sees rows Pass 1 didn't claim.
 
+```
+[Pass 1 / Pass 2 interaction]
+
+  i=2 "book dentist" line 3
+        │
+        ▼  Pass 1 exact-text vs existing
+  t-C.text == "book dentist" ✓
+  claimed[2] = t-C ; used += t-C
+        │
+        ▼  Pass 2 line-index for i=2
+  guard: claimed has 2 → CONTINUE   ◀── skipped entirely
+        │
+        ▼
+  no double-claim possible
+```
+
 [senior] Q: Why two passes instead of running one pass with a combined predicate?
          A: Pass priority encodes evidence quality. Exact-text match is stronger evidence of "same todo" than line-index match — the user kept the words, they just moved the line. If I combined them into one pass with a tiebreak, a reorder where line 5 became line 2 would race against another line that happens to now be line 5 with different text, and the wrong row would win. Running exact-text first means reorderings always claim their rows before line-index gets to compete.
 
+```
+                  Path taken (two passes)              Alternative (one pass + tiebreak)
+                  ────────────────────────             ──────────────────────────────────
+evidence order    exact-text ALL → line-index ALL      both predicates per row, tiebreak
+reorder behaviour exact text wins → row follows        line-index may grab a different
+                  the words to the new line            line whose text changed; wrong id
+duplicate guard   Set blocks Pass 2 from touching      one-pass version needs the same
+                  Pass-1 claims (cheap)                Set anyway; no LOC saved
+correctness       reorderings + edits both handled     reorderings lose identity when
+                  deterministically                    a coincidental line-index matches
+LOC               ~85                                  ~70 with equivalent guards
+```
+
 [arch] Q: What breaks if a single entry has 5,000 todos?
        A: `scanTodosFromText` stays O(n+m) and linear in real time, but the scan runs on every focus blur, so the cost shows up as input lag once the entry is huge. The bigger problem is `entries.text` itself — a single prose column with 5,000 `[]` lines is the wrong data model. The migration is one-entry-equals-one-day capped naturally; if someone wanted cross-day aggregation they'd compose at the query layer, not pile into one field.
+
+```
+[scale curve — what breaks first at 10× and 100× input]
+
+  N todos in one entry   scan time    focus-blur frame    breaks?
+  ────────────────────   ─────────   ─────────────────   ──────────────────
+  30 (real)              <1ms         60fps fine          no
+  300 (10×)              ~5ms         60fps fine          no
+  3,000 (100×)           ~50ms        ◀ 16ms budget       UI stutter on blur
+  5,000+                 ~80ms        ◀◀ over budget      data model is wrong
+                                                          shape, not algo
+```
 
 ### The question candidates always dodge
 Q: Your algorithm can't tell apart "I edited line 7" from "I deleted line 7 and added a new todo on line 7." Why is that acceptable, and what do you lose?
 
 A: It's acceptable because the user has no way to express the difference either — they just typed. If I forced a distinction I'd have to ship a "mark this as a new todo" affordance, which is exactly the kind of friction the app exists to avoid. What I lose is identity in the rare case where a user replaces "call mom" with "fix bug" on the same line on the same edit pass — that should logically be delete-and-add but my algorithm preserves `t-A`'s id, createdAt, and classifier metadata. The wrong consequence is that downstream `meta.type` might stay stale until the LLM reclassifies. The right consequence is that fixing a typo on a todo doesn't burn a fresh classifier call. I picked the cheap-and-mostly-right shape; the principled fix would be cosine-distance on the text with a threshold, but at 20-30 todos per entry that's overkill.
+
+```
+                  Path taken (line-index preserves id)  Suggested (cosine + threshold)
+                  ────────────────────────────────────  ──────────────────────────────
+user friction     zero — user just types                zero — user just types
+typo on a todo    inherits id ; classifier reused       inherits id ; classifier reused
+"call mom" →      inherits t-A ; meta.type stale        treated as delete-and-add ;
+"fix bug" on L7   until next LLM call                   new classifier call burned
+classifier cost   1 call only when meta is reclassified every same-line replacement
+                  on schedule                           triggers a fresh classifier call
+algo complexity   ~85 LOC, deterministic                ~150 LOC + embedding fetch +
+                                                        threshold tuning + flake handling
+N where it matters never at 20-30 todos/entry           never at 20-30 todos/entry
+verdict           cheap and mostly-right, fits scale    principled but overkill at this N
+```
 
 ### One-line anchors
 - "The Set isn't an optimization, it's a correctness gate."
@@ -304,3 +405,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

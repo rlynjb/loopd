@@ -85,13 +85,59 @@ Append-only migrations are the canonical Rails pattern, copied by Django, Sequel
 
 ## Tradeoffs
 
-- **Append-only** — gives: replay determinism. Costs: log length grows; readers must walk the history to understand current state.
-- **`pg`-based runner** — gives: dev and CI both run the same script. Costs: needs `DATABASE_URL` in env; not Supabase Studio's preferred path.
-- **No `prisma migrate`-style snapshots** — gives: zero ORM coupling. Costs: schema drift is harder to detect; a tool like `pg_dump` becomes the reference.
+We traded a clean-looking schema for replay determinism: every fresh environment runs the same files in the same order, and the cost is a growing ledger of migrations that readers must walk to understand current state.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (append-only)     │ Alternative (edit-in-place)  │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Environment      │ guaranteed — same files,     │ silent drift between dev,    │
+│ convergence      │ same order, same schema      │ CI, prod once a file is      │
+│                  │                              │ edited post-deploy           │
+│ Bug detection    │ extra file is visible in diff│ schema drift undetectable    │
+│                  │ — readable audit trail       │ without pg_dump comparisons  │
+│ Code surface     │ ~150 LOC runner, 8 SQL files│ same runner; fewer files but │
+│                  │ today (was 5 pre-2026-05-09) │ "edit existing" undocumented │
+│ Schema readability  must replay or read ledger  │ open one file, see schema    │
+│                  │ to understand current state  │ snapshot                     │
+│ Replay cost      │ N migrations × ~50 ms each = │ trivial — single file        │
+│                  │ ~400 ms today; minutes at    │                              │
+│                  │ 500+ migrations              │                              │
+│ Squash difficulty handled at ~50 files via      │ already squashed; loses      │
+│                  │ consolidation migration       │ audit trail                  │
+│ Audit trail      │ git blame the migration —    │ git blame the file edit —    │
+│                  │ "when did pinned ship?"      │ doesn't say "when did this  │
+│                  │ → answer is "0005's mtime"    │ run on prod?"                │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+The schema is no longer a snapshot you can read in one file. Understanding "what columns does `todo_meta` have today?" means walking 0001 → 0005 (pinned column) → 0006 (type widen) → 0007 (type widen) → 0008 (type reduce). Eight files today; the cost grows linearly with feature work. Anyone joining the project has to either replay against a fresh DB or read the files in order — there's no consolidated `schema.sql` to grep.
+
+The 0006/0007/0008 sequence shows the discipline cost plainly. Three migrations narrowed the thinking-mode taxonomy from 7 modes to 5: 0006 added `study`, 0007 added `reflect`, 0008 dropped four. Each shipped on a separate day. None of them edits the prior files even though the net effect could have been one file with the final state. Three files, three audit entries, three replays per fresh DB. The cost is the file count; the win is that any dev who ran 0006 alone and stopped has a defined intermediate state.
+
+The runner is hand-written (`scripts/db-migrate.mjs`, 153 LOC, `pg` + `dotenv`). It does what Supabase CLI or Prisma migrate would do, minus the auto-diff features. We pay in onboarding (a new contributor doesn't recognize "`node scripts/db-migrate.mjs --all-pending`" as a standard command) and in lack of tooling (no auto-generated migrations from schema diffs).
+
+### What the alternative would have cost
+
+Edit-in-place migrations save the file-count cost but trade it for silent schema drift between environments. The day someone edits `0003_server_time_rpc.sql` to fix a bug, all environments that already ran the original have the buggy version; new environments replay the fix. Detecting the divergence requires `pg_dump` comparisons across environments or schema-introspection tooling — neither of which exists in this project. The bug surfaces as "works in CI, broken in prod" weeks later, and the root cause is the cleanest-looking decision in the project.
+
+Prisma or Supabase Studio with managed migrations would have added a toolchain and an ORM-shaped expectation. The codebase deliberately writes raw SQL on both ends (SQLite via `database.ts`, Postgres via append-only files); adding Prisma for migrations alone means carrying its schema-generation toolchain for one task. Net code surface goes up, not down.
+
+### The breakpoint
+
+Fine until ~50 migrations or until the replay cost crosses a minute. At 50 files the migration log becomes a navigational burden; readers can't hold the sequence in their head, fresh-environment setup slows down, and "squash" becomes a real operation: take current schema state, write `00XX_consolidated.sql`, archive the older files behind a minimum-compatible-version check. We have 8 files today; the squash plan ships the day we cross ~50.
+
+### What wasn't actually a tradeoff
+
+Manual hotfixes outside the migration ledger weren't a real option. The ledger is the only source of truth for "what has this environment run." A SQL change applied via Supabase Studio's UI that doesn't go through `scripts/db-migrate.mjs` produces exactly the drift the append-only discipline is meant to prevent. The runner's ledger query is the audit gate; bypassing it defeats the design.
 
 ---
 
-## Quick summary
+## Summary
 
 Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere it is frozen, and any correction ships as a new migration that fixes the previous one. In this codebase `supabase/migrations/000N_*.sql` files are immutable once committed, and `scripts/db-migrate.mjs` (153 lines of `pg` + `dotenv`) walks the directory, queries a `_migrations` ledger table, and runs any pending file in order. The constraint was that editing `0001` after it ran on cloud would silently drift the schema between dev and prod — there's no way to detect that without diffing schemas across environments. The cost is that the migration log gets long and readers must walk the history to understand current state, which is why the 0006/0007/0008 trio narrowed the thinking-mode taxonomy across three separate files instead of one even though the net effect was a single taxonomy change. Squashing is the answer once the log gets to fifty files; today there are eight and squashing hasn't been needed.
 
@@ -115,18 +161,98 @@ Append-only migrations is a discipline question, not a technical one. The interv
 
 A: I add `0006_fix_typo.sql` that runs an `ALTER TABLE ... RENAME COLUMN`. I do NOT edit `0001` even though it's tempting and would be cleaner-looking on disk. The reason: every environment that ran `0001` did so with the typo'd name; if I edited the file, fresh environments would replay with the fixed name and existing environments would still have the typo'd name. The two would silently diverge until someone notices. The audit trail is the file ordering, not the cleanliness of any individual file.
 
+```
+[typo-fix flow with append-only]
+
+  0001_initial_schema.sql      ← shipped, frozen, typo'd
+        │
+        │ environments already ran with typo
+        ▼
+  new file: 0006_fix_typo.sql
+    ALTER TABLE x RENAME COLUMN bad_name TO good_name;
+        │
+        ▼  node scripts/db-migrate.mjs --all-pending
+  every environment runs 0006 → all converge on good_name
+        │
+        ▼  fresh env from scratch:
+  runs 0001 (typo'd) → 0006 (rename) → same final state
+```
+
 [senior] Q: Why use `node scripts/db-migrate.mjs` with raw `pg` instead of Supabase's CLI or a Prisma-style runner?
 
 A: Two reasons. First, the project doesn't use an ORM — `database.ts` writes raw SQL to SQLite, and the cloud schema is hand-authored DDL. Adding Prisma just for migrations would mean carrying its schema-generation toolchain for one task. Second, the runner is twenty lines of code that I can read and reason about: connect with `pg`, query a `_migrations` ledger, run pending files in order, update the ledger. No magic. The cost is no auto-generated migrations from schema diffs (which Prisma offers); the win is no Prisma. For a five-migration project, the win pays back.
+
+```
+                  Path taken (raw pg runner)            Alternative (Prisma migrate)
+                  ──────────────────────────────        ──────────────────────────────
+ORM dependency    none                                  Prisma's schema-generation + client
+code surface      153 LOC db-migrate.mjs +              +Prisma toolchain (~30 MB),
+                  pg, dotenv                            prisma/schema.prisma + generated
+                                                        client code
+schema source     hand-authored SQL files               schema.prisma + auto-generated SQL
+auto-gen from     no (manual)                           yes — schema-diff produces migrations
+ model diff
+runs against      Postgres directly via DATABASE_URL    Prisma's connection layer
+ledger format     _migrations table (one row per file)  prisma_migrations table (richer)
+shadow DB needed  no                                    yes for migrate dev (extra setup)
+when pays back    8 files, one developer                large team + frequent schema work,
+                                                        50+ migrations
+```
 
 [arch] Q: What happens when this migration log gets to fifty files and you need to bootstrap a new environment?
 
 A: Replay-from-zero takes longer — every fresh DB runs all fifty files in order. At fifty migrations on a few thousand rows, that's seconds. At five hundred migrations or large data backfills, it becomes minutes and then hours. The standard answer is squashing: once a quarter, take the current schema state, write a new "consolidated" migration `00XX_squash.sql`, and archive the older files. The runner has to know which environments have run which subset, so squashing usually pairs with a "minimum compatible version" check. I haven't needed to squash because there are five files; the day there are fifty, the squash plan ships.
 
+```
+At 50+ migrations / large data backfills:
+
+  ┌─ Source tree ────────────────────────────────┐
+  │ supabase/migrations/                         │
+  │   0001..0050+ files                          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Runner (db-migrate.mjs) ───────────────────┐
+  │ replay-from-zero: 50 files × ~50ms each =   │  ◀── BREAKS FIRST
+  │ ~2.5s + larger if data backfills            │     (fresh-env setup slows;
+  │ at 500 files + GB-scale backfills: minutes  │      mental model loses sequence)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Squash operation (the fix) ────────────────┐
+  │ + 00XX_squashed.sql with current schema     │
+  │ + minimum-compatible-version check in       │
+  │   runner ("must have run 00YY before")      │
+  │ + archive 0001..00YY files                  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Audit trail loss ──────────────────────────┐
+  │ archive is in git history, not in repo HEAD │
+  │ "when did pinned ship?" requires git log    │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: You said "never edit `0001` even for a typo." Have you ever broken that rule, and if so why?
 
 A: Once, locally, before any environment but my dev box had run the migration. I edited `0001` to fix a constraint name during initial schema design, before cloud was even configured. I don't count that as breaking the rule because no environment had committed to the original — it was still being authored. The rule applies the moment a migration runs against any environment that I don't control or that I won't reset. The discipline I actually hold is: if I'm uncertain whether the migration has shipped, treat it as if it has and add a new file. The cost is sometimes a redundant migration; the alternative is a silent schema drift that costs me hours to debug. Cheap insurance.
+
+```
+                  Path taken (treat-as-shipped if      Suggested ("just edit if it hasn't
+                  uncertain)                            shipped yet")
+                  ──────────────────────────────        ──────────────────────────────
+default action    add new file when in doubt           edit existing file when "sure"
+                                                          it hasn't deployed
+audit signal      git history shows extra file —       silent edit; no signal that the
+                  obvious that a fix was applied       schema once differed
+cost when wrong   1 redundant migration (~50 ms        silent drift between environments
+ (false alarm)    replay cost forever)                 → debugging hours/days later
+detection speed   immediate at PR review               weeks later via "works in CI,
+                                                          broken in prod"
+mental load       "did this ship?" → "doesn't matter,  "did this ship?" → must verify
+                  add a new file"                       against every env state
+honest practice   discipline holds under pressure       discipline erodes the moment
+                                                          someone "knows" it hasn't shipped
+real risk profile bounded — extra file is cheap        unbounded — silent drift compounds
+```
 
 ### One-line anchors
 - "Append-only is event-sourcing for schema — current state is the sum of every applied migration, not a snapshot."
@@ -197,3 +323,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

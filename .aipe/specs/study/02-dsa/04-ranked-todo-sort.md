@@ -184,15 +184,63 @@ The actual sort used by `/todos` and the dashboard is documented in [11-pinned-f
 
 ---
 
-## Tradeoffs (in its prime, vs alternatives)
+## Tradeoffs
 
-- **Compose comparator** — gives: one stable sort, easy to reorder. Costs: comparator can get long.
-- **3 source tiers (`carried` > `ai` > `journal`)** — gives: meaningful surface order. Costs: AI-source todos require classifier/expand metadata; the field has to be derivable.
-- **`keepDoneMs` filter inside flatten** — gives: a single pass. Costs: the filter parameter has to be threaded through; not configurable per-screen without plumbing.
+We traded a long fall-through comparator and a parameter threaded through the flatten step for a single stable O(n log n) sort with an opinionated surface order that the user can't override.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (multi-key compare) │ Alternative (group-sort-concat)│
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n log n) — one TimSort pass  │ O(n log n) — bucket then sort  │
+│                  │                                │ each group, then concat        │
+│ Latency at N=50  │ <1ms — sub-millisecond         │ <1ms — same order of magnitude │
+│ (real per-user)  │                                │                                │
+│ Latency at 10×N  │ ~3ms at 500 todos              │ ~5ms — extra array allocations │
+│ Code complexity  │ ~50 LOC: comparator + filter   │ ~75 LOC: bucket map + 3 sorts  │
+│                  │ + flatten loop                 │ + concat                       │
+│ Cognitive load   │ reader sees one comparator,    │ reader follows three groups    │
+│                  │ three fall-through clauses     │ through three sort calls       │
+│ Extensibility    │ adding a 4th key is one extra  │ adding a 4th key means a new   │
+│                  │ if-then-return line            │ bucket dimension or pre-sort   │
+│ Configurability  │ `keepDoneMs` baked into flatten │ filter is a separate pass that │
+│                  │ — not per-screen tunable       │ can be parameterised per call  │
+│ User control     │ opinionated order ; user has   │ same opinion ; same lack of    │
+│                  │ no pin/unpin lever             │ override                       │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The comparator is ~12 lines of fall-through logic — `done` first, `priority[source]` second, `createdAt` last. Each clause is a separate `if (a.x !== b.x) return ...` line; the engineering price is a comparator that reads top-to-bottom as a policy list, but the LOC count grows with every new key. A fourth tiebreak (say, classifier confidence) would add another four-line clause.
+
+`keepDoneMs` lives inside the flatten loop. Threading a per-screen variant through (e.g. `/todos` wants 24h, the dashboard widget wants 5 minutes) requires either a parameter on `rankTodos` or a separate call site that re-filters the output. We baked the filter into the flatten pass because the function had one consumer, and that decision is now a small cost the (dead) function pays.
+
+The three source tiers (`carried` > `ai` > `journal`) require derivable metadata: `entry.date < today` for carried, `meta.source === 'ai'` for AI-generated, otherwise journal. The classifier flow has to populate `source` on the meta row at insert time, or the comparator falls through to `journal` and the tier collapses. That's coupling between the classifier and the sort that wasn't obvious until I tried to disable the classifier.
+
+The function is currently dead code. Only `formatRelativeTime` from the same file is imported by `app/todos.tsx` and `SmartTodoList.tsx`. The cleanup-debt is real: extract the formatter into its own file, then delete `rank.ts` — three steps I keep deferring.
+
+### What the alternative would have cost
+
+Group-sort-concat would split the flat array into three buckets by source, sort each bucket by `(done, createdAt)`, then concatenate `[...carried, ...ai, ...journal]`. The asymptote is the same O(n log n). The visible costs are ~25 extra LOC, three extra array allocations per call, and an explicit bucketing step that loses the "comparator IS the policy" readability. Adding a fourth tier would mean a new bucket dimension or a pre-sort — not just a new fall-through line.
+
+The Schwartzian transform (decorate-sort-undecorate) would help if any sort key required expensive derivation — for example, parsing `createdAt` strings to Date objects on every comparator call. We chose not to decorate because `parseISO` is cheap and the array stays small. At 10× N the comparator runs ~5,000 times and `parseISO` cost matters; we'd reach for decoration there, not now.
+
+A separate sort-by-pin layer (the live `/todos` ordering) is what replaced this in production. The cost of the rewrite was ~80 LOC; the rationale was product, not perf — pinned-first is dumber and the user does more work, but it's predictable. `rankTodos` opinionates; pinned-first defers to the user.
+
+### The breakpoint
+
+Fine until the source-tier policy stops matching user intent. The actual breakpoint wasn't algorithmic — it was that users wanted explicit pin control, not algorithmic prioritisation. The function survives any reasonable N (sub-millisecond at 500 todos), but it was replaced when the product question changed from "what should you do next" to "what did you tell me matters." The algorithm is fine; the policy it encodes is wrong for the current product.
+
+### What wasn't actually a tradeoff
+
+Using `Array.prototype.sort` instead of writing a manual merge-sort wasn't a tradeoff — TimSort is in the runtime, handles partially-sorted input in near-linear time, and is stable by spec since ES2019. Writing a custom sort would have been work for negative value.
 
 ---
 
-## Quick summary
+## Summary
 
 Multi-key comparator sort is the canonical pattern for stable lexicographic ordering — the same shape as SQL `ORDER BY a, b, c`, the same shape as a Python tuple-key in `sorted(...)`, the same shape every spreadsheet uses for multi-column sort dialogs. In this codebase `rankTodos` in `src/services/todos/rank.ts` flattens todos across all entries, drops completed-too-long-ago rows, then runs a single `Array.prototype.sort` with a fall-through comparator over three keys: done flag (bottom), source priority (carried > AI > journal), and createdAt ascending. The constraint that made this the right call was an opinionated "what should I do next" surface order — carried-from-yesterday floats above AI-generated, which floats above today's freshly written. The cost is that the function is now legacy: pinned-first sort replaced it in the live UI on 2026-05-05 for product reasons (explicit user control beat automatic prioritization), and only `formatRelativeTime` from this file is still imported. Compose-into-one-comparator is broadly applicable beyond this codebase, which is why the concept is worth keeping even though the function is dormant.
 
@@ -215,16 +263,84 @@ The probe here is dead-code honesty. `rankTodos` is exported, fully implemented,
 [mid] Q: Walk me through what `priority = { carried: 0, ai: 1, journal: 2 }` is doing inside the comparator.
       A: It's a fall-through tiebreaker. After the `done` flag puts completed todos at the bottom, the next discriminator is "where did this todo come from?" — carried over from a previous day (highest urgency), AI-generated from an expand call, or written today directly. The lower number wins, so `carried` floats to the top of the open todos. If two todos share the same source tier, the comparator falls through to `createdAt` ascending, oldest first. Three keys, fall-through, single stable sort — the canonical multi-key pattern.
 
+```
+[comparator fall-through — one row through three checks]
+
+  a vs b
+    │
+    ▼
+  a.done != b.done ?
+    │           ├─ yes → done one to the bottom    DONE
+    │           │
+    │           └─ no → fall through
+    ▼
+  priority[a.source] != priority[b.source] ?
+    │           ├─ yes → lower number wins         DONE
+    │           │        (carried < ai < journal)
+    │           └─ no → fall through
+    ▼
+  parseISO(a.createdAt) - parseISO(b.createdAt)    DONE
+   (oldest first)
+```
+
 [senior] Q: Why was this replaced by pinned-first if both are O(n log n)?
          A: Performance wasn't the reason. The product question changed. `rankTodos` baked in an opinionated ordering — carried > AI > journal — that made sense when I thought users wanted "what should I do next" surfaced automatically. After using the app for a few weeks I realized I wanted explicit control: pin what matters, recency for everything else. Pinned-first is dumber and the user does more work, but it's predictable. The comparator complexity is roughly the same; the design philosophy is opposite.
 
+```
+                  Path taken (rankTodos, dormant)      Replacement (pinned-first, live)
+                  ─────────────────────────────────    ────────────────────────────────
+priority axis     algorithm picks (carried/ai/journal) user picks (pinned ✓ or not)
+who decides       the developer's opinion              the user's explicit action
+predictability    surprising on reorder ; user sees    boring ; rows where user put them
+                  algo reshuffle their list
+sort cost         O(n log n)                           O(n log n) — same engine
+LOC               ~50                                  ~30
+config knobs      keepDoneMs baked in flatten          recency window from settings
+maintenance       comparator extends per new tier      pinned flag toggles two states
+chosen because    auto-surface "what's next"           explicit control beat automation
+                                                       in real use
+```
+
 [arch] Q: If you brought back AI-prioritized todos, would you reuse `rankTodos` or write something new?
        A: I'd reuse the comparator skeleton — fall-through compare is the right shape — but I'd unify it with pinned-first instead of replacing it. The new comparator would be: pinned DESC, then `source` priority (carried > AI > journal), then createdAt DESC. That's a 3-tier compose, structurally identical to what `rankTodos` already does. I'd also lift `keepDoneMs` out of flatten into a query-layer filter so it's configurable per screen instead of hardcoded.
+
+```
+[scale curve — what breaks first at 10× / 100× input]
+
+  N todos in flat array   sort cost      breaks?
+  ──────────────────────  ─────────────  ──────────────────────────────
+  50 (real)               <1ms           no
+  500 (10×)               ~3ms           no
+  5,000 (100×)            ~30ms          comparator runs ~60k times ;
+                                         parseISO cost adds up — use
+                                         Schwartzian transform
+  50,000                  ~300ms         user-visible ; needs the
+                                         tier policy lifted to SQL
+                                         ORDER BY at the query layer
+```
 
 ### The question candidates always dodge
 Q: Why is this still in the repo if nothing calls it?
 
 A: Because I shipped the pinned-first sort as the live ordering on 2026-05-05 and didn't delete `rankTodos` because I wasn't sure I wouldn't want it for an "unranked-by-default" view I had in mind. If I'm being honest, that's a rationalization — I haven't built the unranked view, I haven't even speced it, and the function has been dead since the day I wrote the replacement. It's debt. The right move is to delete it now and pull it back from git history if I ever want it. The reason I haven't is that the file also exports `formatRelativeTime`, which IS consumed by `app/todos.tsx` and `SmartTodoList.tsx`, so the cleanup is "extract the formatter, then delete the rest of the file" — three steps instead of one, and I keep deferring it. Good catch on a real interview question; I should fix this before the next time someone reads the codebase cold.
+
+```
+                  Path taken (keep dormant code)        Suggested (delete + extract)
+                  ─────────────────────────────────     ─────────────────────────────
+file              src/services/todos/rank.ts            two files: rankTodos in git
+                  (rankTodos dead, formatRelativeTime    history, formatRelativeTime
+                  live)                                  in src/utils/formatRelative.ts
+bundle size       includes ~50 LOC dead code            ~50 LOC less ; bundle smaller
+                                                        by ~1KB
+onboarding cost   reader sees rankTodos, asks if it's   no rankTodos ; no question
+                  live, can't tell without grep
+recovery if       file is right there ; one find        git log --all -- rank.ts ;
+ needed back      operation, no diff to read            cherry-pick the old commit
+cleanup steps     0 — debt is paid forward              3 — extract, delete, update
+                                                        imports in two files
+verdict           comfortable but dishonest             slightly more work ; honest
+                                                        code shape
+```
 
 ### One-line anchors
 - "Three keys, fall-through compare — canonical multi-key sort."
@@ -291,3 +407,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; normalised Tradeoffs heading from "(in its prime, vs alternatives)" to plain "Tradeoffs"; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

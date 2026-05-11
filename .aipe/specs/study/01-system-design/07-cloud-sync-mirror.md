@@ -120,13 +120,52 @@ This is the classic timestamp-cursor sync engine, descended from CouchDB and Dyn
 
 ## Tradeoffs
 
-- **Local canonical, cloud mirror** — gives: writes feel instant. Costs: cloud is always slightly stale; never trusted in the read path.
-- **Push + pull separate** — gives: each can be retried, scheduled, and tested independently. Costs: more files; you need a registry to keep them coordinated.
-- **`synced_at` local-only** — gives: cloud schema stays simple (only `updated_at` + `deleted_at`). Costs: a missed `synced_at` stamp = the row pushes forever; the per-batch stamp must be robust.
+We traded ever-fresh cloud reads for instant local writes: the cloud is allowed to lag by seconds because the device never asks it anything during a render. Every sync property — durability, cross-device transfer, recovery — is built on the assumption that the cloud catches up, not that it leads.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (local canonical) │ Alternative (cloud canonical)│
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Read latency     │ ~1 ms (SQLite, on-device)    │ 80–250 ms (Supabase rtt)     │
+│ Write latency    │ ~1 ms (SQLite) + 5 s debounce│ 80–250 ms per write          │
+│                  │ to cloud                     │                              │
+│ Offline behaviour│ full read/write              │ degraded → fully broken      │
+│ Cross-device     │ converges after next push    │ instant — server is canonical│
+│ freshness        │ + pull (~5–10 s)             │                              │
+│ Schema noise     │ +synced_at, +deleted_at on   │ none beyond what cloud needs │
+│                  │ every synced table; sync_meta│                              │
+│                  │ + sync_deletions tables      │                              │
+│ Files added      │ ~12 in src/services/sync/    │ 0 — direct supabase-js calls │
+│ Failure blast    │ cloud outage → app fully     │ cloud outage → app fully     │
+│ radius           │ functional, sync lags        │ broken                       │
+│ Bidirectional    │ LWW silently picks a winner  │ server arbitrates            │
+│ realtime         │ → CRDT needed at that scale  │                              │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+Cross-device freshness lags by ~5–10 seconds in the steady state. A user editing on phone A and immediately opening phone B sees the older state until the next push (debounced 5 s) plus next pull (manual or app-foreground triggered) lands. For solo journaling that's invisible; for collaborative editing it would be a bug.
+
+We pay for the local-canonical decision in schema noise. Every synced table carries two extra columns (`synced_at`, `deleted_at`) and the database has two extra local-only tables (`sync_meta`, `sync_deletions`). The `src/services/sync/` directory holds ~12 files (orchestrator, push, pull, conflict, firstPull, bootstrap, schedulePush, syncMeta, devActions, types, tables/*). A new synced entity isn't "add a Supabase table" — it's "add a Supabase migration + a registry entry + a per-table mapper file + insert/update calls that bump `updated_at` + a soft-delete code path + a `schedulePush()` call."
+
+LWW via `chooseWinner` is the resolution rule, and at single-writer scale it's correct. The day a second writer exists, the rule silently picks one and discards the other — no error, no log. That's the price of not running CRDTs.
+
+### What the alternative would have cost
+
+If we had treated the cloud as canonical and the device as a view, every read would be a network round-trip — typical Supabase rtt is 80–250 ms over LTE. The dashboard load (~30 SQL queries) would go from 30 ms total to 2.4–7.5 seconds, every time. Autosave on every keystroke would mean a network write on every keystroke — either we throttle and lose data on crash, or we send everything and pay the round-trip per character.
+
+The offline story would collapse. The user opens loopd on the subway, can't read yesterday's entry, can't write today's. Every "syncs across devices" SaaS app has solved this problem the same way we did — but a cloud-canonical version saves the ~12 files in `src/services/sync/`, the `synced_at` column, and the entire `sync_meta` ledger. It's a real codebase saving if the user could tolerate the latency. They can't.
+
+### The breakpoint
+
+Fine until the app becomes collaborative — two writers on the same row at the same time. LWW is correct exactly once per row per second; concurrent edits to the same field produce undefined ordering. The next architecture isn't "fix LWW" — it's CRDTs (Y.js / Automerge) on the prose layer so edits compose deterministically before scanners run. That replaces `chooseWinner` and rewrites the conflict path; the rest of push/pull/orchestrator survives.
 
 ---
 
-## Quick summary
+## Summary
 
 A replica-as-mirror flip makes the device authoritative and the cloud an asynchronously-updated copy that exists for durability and cross-device transfer — every read renders from the local store, no read path waits on the network. In this codebase `pushTable` in `src/services/sync/push.ts` selects local rows where `updated_at > synced_at`, batches them by 50, and upserts to Supabase with `onConflict: 'user_id,id'`; `pullTable` in `src/services/sync/pull.ts` selects cloud rows newer than `last_pull_at` in pages of 200 and runs `chooseWinner(local, cloud)` per row, with `pushAll` and `pullAll` in `orchestrator.ts` walking the 10-table `REGISTRY`, and `sync_meta` tracking `last_pull_at`, `last_push_at`, `pending_pushes`, and `last_error` per table. The constraint was instant writes — no network in the request path — and the 5-second push debounce trades a little staleness for vastly fewer round-trips during typing. The cost is schema noise (every synced row carries `synced_at` local-only and `deleted_at`), and a missed `synced_at` stamp means a row pushes forever. The pull cursor anchors to `serverTime` from a Postgres RPC instead of `Date.now()` because clock skew would otherwise drop rows in the cursor gap.
 
@@ -150,18 +189,89 @@ The interviewer is checking whether you built a sync engine or whether you're us
 
 A: `pushTable` queries `WHERE updated_at > COALESCE(synced_at, '1970-01-01')` against the local table — that's the dirty set. Every successful upsert batch stamps `synced_at = now()` on the rows in that batch, so the next push won't re-send them. `synced_at` is local-only — it never goes to the cloud, because the cloud doesn't need to know when this device last reported. The two timestamps separate "when the row last changed" (canonical, replicates) from "when this device last reported it" (bookkeeping, stays local).
 
+```
+[push: who's dirty?]
+
+  SELECT * FROM <table>
+  WHERE updated_at > COALESCE(synced_at, '1970-01-01')
+        │
+        ▼  batch of 50
+  supabase.upsert(rows, onConflict: 'user_id,id')
+        │
+        ├── ok  → stamp synced_at = now() on this batch's rows
+        │
+        └── err → leave synced_at alone (next push retries same batch)
+```
+
 [senior] Q: Why anchor the pull cursor to a Postgres RPC `get_server_time` instead of just `Date.now()`?
 
 A: Clock skew. The pull cursor is `last_pull_at`, and on the next pull I select cloud rows with `updated_at > last_pull_at`. If `last_pull_at` was stamped from the device's clock, and the device's clock is 30 seconds ahead of Supabase's, I'd miss every row whose cloud `updated_at` is in that 30-second gap. Stamping `last_pull_at` from `serverTime` (returned by the RPC) means the cursor is in the same time domain as the rows I'm filtering against. The cost is one extra round-trip per pull cycle; the win is that I never miss rows.
+
+```
+                  Path taken (serverTime cursor)        Alternative (Date.now() cursor)
+                  ──────────────────────────────        ──────────────────────────────
+cursor source     supabase.rpc('get_server_time')       device's local clock
+cost              +1 round-trip per pull (~100 ms)      0
+clock-skew risk   zero — cursor in same time domain    +30 s device ahead → 30 s gap;
+                  as cloud's updated_at                 rows in gap missed FOREVER
+                                                        (next pull's cursor skipped past)
+failure mode      slower pull                           silent data loss, undetected
+when it pays back every pull on every device           never — risk is unbounded
+```
 
 [arch] Q: What happens if the table grows to ten million rows? Where does the sync engine break?
 
 A: Several places. The push query `WHERE updated_at > synced_at` has no index on `updated_at` today — at ten million rows that's a full scan per push. The fix is `CREATE INDEX ON <table>(updated_at)` (or partial index on `updated_at WHERE deleted_at IS NULL`). The pull pagination is fine in shape (200/page, ordered by `updated_at`) but assumes a sane index on the cloud side. The `chooseWinner` step does a per-row local SELECT — that's already O(log n) with the PK index, so it scales. The hard ceiling is the push batch size: 50/batch is right for ~hundreds-of-rows-per-day usage; at sustained high write volume, batching by 500 with parallel batches per table would matter.
 
+```
+At 10M rows per synced table:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — reads SQLite local              │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Push query (WHERE updated_at > synced_at)  ┐
+  │ no index on updated_at today                │  ◀── BREAKS FIRST
+  │ full table scan per push (~seconds)         │     (fix: CREATE INDEX
+  │ batch size 50 = 200k batches to drain queue │      ON <table>(updated_at)
+  │                                             │      WHERE deleted_at IS NULL)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Pull pagination ───────────────────────────┐
+  │ 200/page, ordered by updated_at ASC         │
+  │ shape fine; needs same index on cloud side  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ chooseWinner per-row SELECT ───────────────┐
+  │ O(log n) with PK index — scales             │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Batch size 50 ─────────────────────────────┐
+  │ right for ~100s rows/day                    │
+  │ at sustained high write, raise to 500 +     │
+  │ parallel batches per table                  │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: Push and pull both run on `pushAll`/`pullAll` — what guarantees that a row I just pushed isn't immediately pulled back and overwritten?
 
 A: It's not strictly guaranteed; it's resolved by `chooseWinner`. After a successful push, my local row's `updated_at` is unchanged but `synced_at = now`. The cloud row now has the same `updated_at`. On the next pull, the cloud row's `updated_at` equals my local's, which the rule resolves as "tie → cloud" — and cloud upserts back to local. That's idempotent in practice (the data is identical), but it does mean the row briefly bounces. The honest case where this hurts is if the cloud server's timestamp is slightly different from what I stamped on push — that's possible because Supabase may rewrite `updated_at` server-side via a default. The mitigation is that my push doesn't set `updated_at` from the device clock; the cloud trigger or my mapper handles it. If I were paranoid I'd add a `(user_id, id, updated_at)` short-circuit in `chooseWinner` that says "if updated_at is byte-identical, skip" — that's a thirty-line change I haven't shipped because the pingpong has zero observable impact in practice.
+
+```
+                  Path taken (chooseWinner LWW)         Suggested (atomic push-then-block-pull)
+                  ──────────────────────────────        ──────────────────────────────────
+push-pull race    real — pulled row may overwrite       avoided — pull pauses while push runs
+                  just-pushed identical row
+data integrity    idempotent (identical bytes)          identical guarantee but no replay
+observed impact   zero — UI sees no change              zero
+extra complexity  none — LWW handles it                 push/pull cross-coordination,
+                                                          mutex per table, mid-write semantics
+debugging         "why did this row update twice in     "why is push waiting on pull?"
+                  the log?" — readable                  much harder to trace
+short-circuit fix +30 LOC in chooseWinner               not the simpler option here
+when it matters   never on solo single-writer           if observable bounce ships, revisit
+```
 
 ### One-line anchors
 - "Local canonical, cloud mirror — the read path never waits on the network."
@@ -233,3 +343,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

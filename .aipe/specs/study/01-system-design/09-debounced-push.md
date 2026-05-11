@@ -89,13 +89,57 @@ Debouncing originated in mechanical switches (literal bouncing) and got adopted 
 
 ## Tradeoffs
 
-- **5s debounce** — gives: ~1 push per typing burst. Costs: up-to-5s of "writes only in SQLite" risk on app kill.
-- **Re-queue if already pushing** — gives: in-flight push isn't disrupted; new writes still land. Costs: in extreme cases the queue can starve if `pushAll()` always runs longer than 5s.
-- **Boot-time `pushAll()`** — gives: catches up anything missed last session. Costs: the first few seconds of cold-start network are spent on push, not pull.
+We traded "every write hits the network" for "the network only sees the settled state of a burst." The cost is a 5-second window where a write is durable locally but not yet replicated to cloud — survivable because local SQLite is the canonical store, not the cloud.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (5s debounce)     │ Alternative (push per write) │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Network calls    │ ~1 push per typing burst     │ ~60 pushes per typing burst  │
+│ during typing    │ (~10–30 s of writes)         │ (one per keystroke autosave) │
+│ Push duration    │ batched 50/row upserts —     │ 60× ~100 ms rtt each =       │
+│                  │ ~200 ms total                │ 6 s of network activity      │
+│ Money (network)  │ trivial — Supabase free tier │ trivial in $, but ratelimits │
+│                  │ at journaling cadence        │ kick in on burst             │
+│ Battery cost     │ one radio wake per burst     │ radio held active per char   │
+│ App-kill risk    │ up to 5 s of cloud-lagged    │ ~ms of risk per keystroke    │
+│                  │ writes if OS kills mid-window│ — narrower window            │
+│ Code surface     │ +schedulePush.ts (~25 LOC) + │ no central scheduler — each  │
+│                  │ a call in every write fn     │ write does its own push      │
+│ Server load      │ tens of writes per minute    │ hundreds per minute mid-     │
+│                  │                              │ burst → wasted ratelimit     │
+│ Recovery on kill │ boot-time pushAll() catches  │ same boot-time path needed   │
+│                  │ what missed last session     │ anyway — but rarely fires    │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+There's a window between a write hitting SQLite and that write reaching Supabase. In the steady state it's ~5 seconds (the debounce); under app kill it can stretch until the next cold start fires the boot-time `pushAll()`. For solo journaling the canonical store is local SQLite, so "in SQLite but not in cloud" is the same as "saved" from the user's standpoint — but it does mean a freshly-killed device can be ahead of cloud for hours if the user doesn't relaunch.
+
+Sustained slow networks are tolerated by the `if (pushing) schedulePush()` re-arm guard, but the dirty set grows unboundedly if `pushAll()` consistently runs longer than 5 seconds. We've never observed this in journaling — typing bursts are short and `pushAll()` runs in ~200 ms — but at the limit the design produces an ever-growing tail of unsynced rows.
+
+The 5-second number is a configuration: shorter feels chattier, longer means more kill-window exposure. The empirical sweet spot for journaling cadence may not transfer to a different write pattern (rapid form filling, multi-line paste). Anyone forking this code for a non-journaling app would need to re-tune.
+
+### What the alternative would have cost
+
+If every keystroke pushed immediately, a 60-character typing burst would mean 60 Supabase upserts over ~6 seconds of network activity, holding the radio active and burning battery roughly 50× harder than the debounced version. Money-wise both options are free at journaling cadence; the cost is in latency and ratelimits — Supabase's free-tier ratelimit would kick in mid-burst, dropping writes silently. We'd then need a retry queue to re-send them, which is a worse version of the dirty-set query we already have.
+
+The code-surface saving from "no debouncer" is small — ~25 LOC of `schedulePush.ts` would disappear, but each write function in `database.ts` would gain an explicit push call (already a present "rule" in the codebase, just now with no batching). Net: no real code savings, plus 50× the round-trips.
+
+### The breakpoint
+
+Fine until the write pattern changes. If loopd starts shipping a feature that produces sustained writes for minutes (e.g., live transcription writing one row per token), the dirty set grows faster than the debounce can clear it, and the `if (pushing) schedulePush()` re-arm guard becomes a queue-grower rather than a tolerance mechanism. The fix is parallel per-table pushes (`Promise.all` over the registry) plus larger batch sizes (50 → 500), which is roughly a day of work — not done because journaling never gets there.
+
+### What wasn't actually a tradeoff
+
+A "push on screen blur" / "push on background" approach was not on the table. The OS doesn't guarantee a background hook on app kill — Android can kill the process without notice. Relying on a lifecycle event to push would mean ~100% of OS-kill scenarios end with cloud-lagged data, which is much worse than the 5-second worst case we have today. The boot-time `pushAll()` is the correct fallback because cold start is the only event the OS guarantees.
 
 ---
 
-## Quick summary
+## Summary
 
 Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window, decoupling the rate at which writes are produced from the rate at which they hit the network. In this codebase `schedulePush()` in `src/services/sync/schedulePush.ts` (re)arms a 5-second timer on every synced write in `src/services/database.ts`, and after 5s of write quiet `fire()` either kicks off `pushAll()` or re-arms if a push is already in flight. Typing fires hundreds of writes per minute via autosave-per-keystroke, so the constraint was "local sees the firehose, network sees the trickle" — pushing each write would melt the connection. The cost is up to 5 seconds of "in SQLite but not yet in cloud" exposure if the app is killed mid-window, which is acceptable because local SQLite is canonical and the boot-time `pushAll()` in `app/_layout.tsx` catches up on next launch.
 
@@ -119,18 +163,97 @@ A 5-second debounce is a number that begs the question "why 5?". The interviewer
 
 A: It depends on whether the screen-blur fires within 5 seconds. The keystroke fires `schedulePush()` which arms the 5s timer. If the user backs out within 5s, the timer hasn't fired yet — but `pushAll()` doesn't run on screen-blur, only on the timer. So the push is delayed by the remainder of the 5s window. The data is safe locally because the SQLite write was synchronous; only the cloud-mirror is delayed. If the app is backgrounded long enough that Android kills it, the push catches up on next app launch via the boot-time `pushAll()` in `app/_layout.tsx`.
 
+```
+[backs-out-within-5s timeline]
+
+  T+0  user types "[]"  → keystroke → SQLite write (sync)
+                       → schedulePush() arms timer @ T+5
+
+  T+1  user navigates away (screen-blur)
+                       → no push hook on blur
+                       → timer still pending
+
+  T+5  fire() → pushAll() runs → upsert to Supabase
+       (regardless of whether the user is still on screen)
+
+  if OS kills the app between T+1 and T+5:
+        SQLite write survives; cloud is behind by 1 burst
+        → next cold start runs boot-time pushAll() → catches up
+```
+
 [senior] Q: Why 5 seconds and not 1 second? You'd lose less on app kill.
 
 A: 1 second was the first thing I tried. The problem is journaling cadence: a user typing a thought pauses every couple of seconds to think, and a 1s debounce would fire mid-pause, then again at the end of the burst — two pushes per thought instead of one. 5 seconds is empirically the smallest interval that captures a typical sentence as one batch. The cost is up to 5 seconds of "in SQLite but not in cloud" exposure on app kill, but the local writes survive that — only the cloud-mirror lags. If I had a use case where the kill-window mattered (e.g., user starts a write on phone, expects it on tablet within seconds), I'd reduce to 2s and accept the doubled push count.
+
+```
+                  Path taken (5s debounce)              Alternative (1s debounce)
+                  ──────────────────────────────        ──────────────────────────────
+batches a sentence yes — typical pauses ~2s             no — fires inside the pause,
+                                                         then again at sentence end
+pushes per thought ~1                                    ~2
+kill-window risk  up to 5s of cloud-lagged writes       up to 1s of cloud-lagged writes
+cross-device fresh ~5–10 s after burst ends             ~1–6 s after burst ends
+network calls/min ~10–20 at peak typing                 ~30–60 at peak typing
+                                                         (still saved vs per-keystroke)
+right answer when journaling: long, paused              quick-form: rapid, no pauses
+                                                         (e.g., chat input, payments)
+trigger to retune cross-device sync becomes load-       form-style features ship in app
+                  bearing                               (different write cadence)
+```
 
 [arch] Q: What if the network is so slow that `pushAll()` takes longer than 5 seconds — what happens to writes that arrive during the push?
 
 A: `fire()` checks `if (pushing) schedulePush()` — it re-arms the timer instead of starting a second push. New writes during the in-flight push update local SQLite normally, bumping `updated_at` past `synced_at`. When the in-flight push completes, the next `schedulePush()` arms the timer again, and 5s after the next quiet write, `pushAll()` picks up the still-dirty rows via `WHERE updated_at > synced_at`. The design tolerates slow networks; it just means the catch-up takes another debounce cycle. The case where it actually fails is sustained writes faster than `pushAll()` can complete — the dirty set grows unboundedly. In practice, journaling never gets there; if it did, the fix is parallel per-table pushes or larger batch sizes.
 
+```
+At sustained writes faster than pushAll() can complete:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — autosave to SQLite is sync       │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ schedulePush() re-arm guard ───────────────┐
+  │ becomes a queue-grower not a tolerance gate │  ◀── BREAKS FIRST
+  │ each completed push triggers re-arm; new    │     (dirty set grows unboundedly
+  │ writes during push pile on next dirty set    │      because produce-rate > drain-rate)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ pushAll() sequential per-table loop ───────┐
+  │ Supabase rtt × N tables × ceil(dirty/50) =  │
+  │ throughput ceiling                           │
+  │ fix: Promise.all per table + batch size 500 │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Network / Supabase ratelimit ──────────────┐
+  │ free tier kicks in at sustained high rate    │
+  │ silently drops requests; needs explicit     │
+  │ retry-on-429                                 │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: Your debounce is 5 seconds and you've shipped this. What's the data-loss case you haven't tested?
 
 A: The case I haven't end-to-end tested is "user types in airplane mode for an hour, then the OS kills the app while it's still backgrounded." Locally, the data is fine — every keystroke went to SQLite synchronously. But on next launch, `app/_layout.tsx` runs the boot-time `pushAll()`, which only succeeds if the network has come back — if the user's still in airplane mode on next launch, the push silently fails and the next debounce cycle hits when network returns. I haven't reproduced this end-to-end with `adb` because the device is my actual phone and I don't want to risk my own journal data. The mitigation I've actually tested is the smaller version: 5-second window kill via the OS task switcher, where local data survived. The real test I owe this design is the multi-day-offline case, and it's on my list.
+
+```
+                  Path taken (boot-time catch-up)       Suggested (proactive flush on bg)
+                  ──────────────────────────────        ──────────────────────────────────
+when push fires   timer expiry OR cold-start            timer expiry OR backgrounded event
+                                                          OR cold-start
+OS-kill window    up to 5s (debounce) per session       theoretical 0s — BUT Android may
+                                                          kill before the bg handler runs
+guarantee level   cold start IS guaranteed by OS        bg hook is best-effort, not guaranteed
+network needed?   yes on next launch                    yes on bg — same problem moved earlier
+when local data   never — local writes synchronous      same — local is canonical regardless
+is at risk
+test coverage     covered by 5s-OS-kill test            requires multi-day-offline test
+                                                          (real risk, real device, owed)
+honest gap        boot-time push silently fails if      bg hook + boot-time both silently
+                  airplane mode persists on relaunch    fail when offline persists
+mitigation we add no automatic retry — depends on       same — no automatic retry either way
+                  user reopening app online
+```
 
 ### One-line anchors
 - "Debouncing decouples write rate from network rate — local sees the firehose, network sees the trickle."
@@ -200,3 +323,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -79,13 +79,63 @@ The "different storage for different data shapes" idea is older than the cloud �
 
 ## Tradeoffs
 
-- **5 layers** — gives: each one is small and well-suited. Costs: the app has to know which layer to ask.
-- **Clips device-local** — gives: zero upload cost, instant playback. Costs: reinstall = video loss.
-- **Cloud is mirror only** — gives: predictable read path (always SQLite). Costs: a power user expecting "log into cloud, pull state on a new device" gets metadata only, not videos.
+We traded one-bucket simplicity for five specialised layers: each one is small and well-suited to one data shape, and the cost is that the app has to know which layer to ask for what.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (5 layers)        │ Alternative (one big bucket: │
+│                  │                              │  everything in Postgres)     │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Read latency     │ SQLite ~1 ms; filesystem ~5 ms│ all reads network rtt        │
+│                  │ for clips; SecureStore ~3 ms │ (~80–250 ms)                 │
+│ Write latency    │ same — all sync local        │ network rtt per write        │
+│ Clip storage     │ filesystem — native player    │ Postgres BLOB or base64 in   │
+│                  │ reads files directly          │ TEXT — playback through API  │
+│ Secret storage   │ SecureStore (Keystore)        │ row in a config table —      │
+│                  │ encrypted at rest              │ leakable via SELECT *        │
+│ Cloud bytes used │ ~1 KB/day metadata only       │ ~30 MB/day video included   │
+│ Device disk      │ video files visible in        │ all on cloud — local nearly  │
+│                  │ filesystem (~30 MB/day)       │ empty                        │
+│ Offline read     │ works fully — SQLite local    │ degraded → fully broken      │
+│ Recovery story   │ metadata via cloud; videos    │ everything via cloud         │
+│                  │ device-local only             │                              │
+│ Code surface     │ ~5 services touching different│ 1 service, all calls to      │
+│                  │ APIs                          │ supabase-js                  │
+│ Failure blast    │ each layer fails independently│ single point of failure      │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+Clips are device-local. A phone loss is a video loss — `clips_json` metadata survives because it rides the synced `entries` row, but the .mp4 bytes are gone. For a single-user app I accept this; for a multi-user product it would be a known-bad recovery story.
+
+The codebase has to know which layer to ask. `database.ts` writes to SQLite, `fileManager.ts` writes to the filesystem, `ai/config.ts` reads from SecureStore, `sync/client.ts` pushes to Postgres. A new contributor must learn which is which before adding a feature that touches storage; there's no unified "save this" call. The mental model is "5 buckets, 1 rule each" rather than "1 bucket, learn its quirks."
+
+Cross-device sync of clips is impossible without a content-addressed scheme. The current `clip_uri` is an absolute device-local path; two devices on the same account see two different paths for what should be the same file. Migration to Supabase Storage with sha256 → URL paths is the unblock — the schema supports it because `clip_uri` is a string, not a foreign key — but I haven't shipped it.
+
+SecureStore has no multi-device sync. A user installing on a second device has to re-enter API keys, re-configure cloud, re-enter the Supabase URL. That's expected for keys-by-design but it does mean "log into cloud, pull state" doesn't restore the AI provider config.
+
+### What the alternative would have cost
+
+Putting everything in Postgres — videos as BLOBs or base64, secrets as rows, all reads going through `supabase-js` — would have meant ~80–250 ms latency on every read, an unusable offline experience, and a 30 MB/day cloud-bytes cost per user. Videos especially would have been a disaster: base64 bloats by 33%, the playback path would have to download bytes before the native player can render, and `supabase-js` was never designed to stream binary content.
+
+The codebase would shrink (~5 storage-touching files become 1), but every read would pay the network tax, and the app would refuse to work in the subway. For a journaling app where 80% of usage is offline-tolerant, this is a worse design at every dimension.
+
+Stuffing secrets into Postgres rows is its own category of failure. SecureStore is encrypted-at-rest by the OS; a Postgres row is queryable, visible in `pg_dump`, exposed by any future analytics path that does `SELECT *` on the config table. The Keystore vs row decision isn't about latency, it's about which surface can leak credentials and how loudly.
+
+### The breakpoint
+
+Fine until multi-device usage becomes a real flow. The day a user expects "log into cloud on a new device, get my videos back," the device-local clip layer is wrong and the migration to Supabase Storage with content-addressed URIs becomes a Phase B or C feature. The schema already supports it (clip_uri is a plain string column); the work is in `fileManager.ts` plus a sync path that uploads on save and downloads on first-pull.
+
+### What wasn't actually a tradeoff
+
+Replacing SQLite with WatermelonDB or another higher-level local store wasn't on the table. WatermelonDB layers on top of SQLite anyway; the gain is reactive query observation, which the codebase doesn't need (React state derives from query results synchronously). Adding the dependency would mean ~5 MB of code, a new query language to learn, and no improvement on the actual problem the storage layer solves.
 
 ---
 
-## Quick summary
+## Summary
 
 A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data — structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, mirrors on a cloud database, ephemeral calls to stateless services. In this codebase that's five layers: `src/services/database.ts` (1455 lines) opens `loopd.db` as the canonical SQLite store of 12 tables; `src/services/fileManager.ts` puts clips under `/document/loopd/clips/<date>/` and exports under `/document/loopd/exports/`; `src/services/ai/config.ts` reads SecureStore for API keys and run-once flags; `src/services/sync/client.ts` mirrors 10 tables to Supabase Postgres; and the AI services in `src/services/ai/` and `src/services/todos/` make stateless HTTP calls to Anthropic and OpenAI. The constraint was that mixing storage types would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly and you don't want secrets in a queryable table. The cost is that clips are device-local: reinstall the app and the videos are gone (cloud holds the metadata in `clips_json`, not the bytes), which is accepted for a solo product but would need Supabase Storage with content-addressed URIs for a durable multi-device product.
 
@@ -109,18 +159,106 @@ Five storage layers sounds like over-engineering. The interviewer is checking wh
 
 A: API keys live in SecureStore (Android Keystore-backed). They don't live in SQLite for two reasons: SQLite isn't encrypted at rest by default, and a future SQL query that accidentally `SELECT *`s a config table could leak them through logs or sync. SecureStore puts them behind the Keystore — even if the device's filesystem is read by another process, the keys aren't readable without OS-level auth. I read them via `getAnthropicKey()` / `getOpenAIKey()` in `ai/config.ts`, which is the only file in the codebase that touches SecureStore for AI keys.
 
+```
+[secret read path]
+
+  AI service call (e.g. summarize.ts)
+        │
+        ▼  getAnthropicKey()
+  src/services/ai/config.ts
+        │
+        ▼  SecureStore.getItemAsync('anthropic_api_key')
+  Android Keystore (encrypted at rest by OS)
+        │
+        ▼  returns key
+  service uses key in Authorization: Bearer header
+        │
+        └── never written to SQLite, never logged, never synced
+```
+
 [senior] Q: Why don't you push video clips to cloud? Most apps would back up user content.
 
 A: Cost and complexity. A loopd user generates ~30s of video per day; that's small for one user, but pushing it through `supabase-js` would mean either base64-encoding the bytes (wasteful) or moving to Supabase Storage (a separate API surface, separate auth, separate failure modes). The current design accepts that clips are device-local — a phone loss means video loss, but the metadata (clip trims, overlays, timestamps) is in `clips_json` on the synced `entries` row, so a new device can rebuild a journal without the visuals. For a Phase B that wants durability, Supabase Storage with a content-addressed `clip_uri` (sha256 → URL) is the migration path. I deliberately chose to defer that.
+
+```
+                  Path taken (device-local clips)       Alternative (Supabase Storage,
+                                                          content-addressed URIs)
+                  ──────────────────────────────        ──────────────────────────────
+clip bytes        filesystem only — local               cloud + local cache
+metadata          synced via clips_json on entries      synced same way
+recovery on phone metadata recovers, videos gone        full recovery, videos + metadata
+ loss
+upload cost       0                                     ~30 MB/day × N users
+cross-device sync impossible (paths are absolute,       works — sha256 → URL is portable
+ of clips         device-local)
+playback latency  ~ms — native player reads file        first play: download (~5–30 s
+                                                          on LTE); subsequent: local cache
+code surface      fileManager.ts handles paths          + storage client + sha256 hashing
+                                                          + upload-on-save + download-on-pull
+auth surface      none — local files                    Supabase Storage policies (RLS)
+right today?      yes — solo, Phase A                   yes for Phase B/C with multi-device
+ship trigger      multi-device usage becomes real OR    same
+                  a non-me user complains about         
+                  video loss
+```
 
 [arch] Q: At ten users with multi-device usage, where does this storage strategy break first?
 
 A: The clip layer. Single-device-per-user assumes the device is the canonical clip store; with two devices, you need either a central blob store (Supabase Storage) and a content-addressed scheme, or a peer-to-peer sync (impractical on Android). The metadata side scales — SQLite ↔ Postgres handles ten users easily because writes are bounded per user. The next bottleneck after that is SecureStore (no multi-device sync; user has to re-enter API keys per device). Then the LLM layer at scale becomes the cost ceiling, not the storage one.
 
+```
+At 10 users × multi-device:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged                                    │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Clip layer (filesystem, device-local) ─────┐
+  │ assumes single-device-per-user               │  ◀── BREAKS FIRST
+  │ paths are absolute device-local; impossible │     (need Supabase Storage +
+  │ to share across devices                      │      content-addressed URIs)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ SecureStore (per-device secrets) ──────────┐
+  │ no multi-device sync; user re-enters keys    │
+  │ on every new device                          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Metadata layer (SQLite ↔ Postgres) ────────┐
+  │ scales fine — writes bounded per user        │
+  │ 10 users × ~100 KB/day = 1 MB/day total      │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ LLM layer (cost ceiling) ──────────────────┐
+  │ ~$0.10/user/day at heavy use → $30/mo @10    │
+  │ becomes the cost line, not storage           │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: You said clips are device-local. What's the recovery story when a user drops their phone in a lake?
 
 A: There isn't one for clips. The metadata recovers — installing the app on a new device, logging in (when Phase B exists), and pulling from cloud restores all `entries`, `todos`, `threads`, `vlogs`, etc. The video files themselves are gone. The exported vlog `.mp4` files in `/document/loopd/exports/` are also gone. For Phase A this is acceptable because I'm the only user and my phone has cloud backups via Google. For a multi-user product the answer has to be Supabase Storage with content-addressed paths — clip URIs become hashes, hashes resolve to URLs, the cloud is the durable store. That's a Phase C feature; the architecture supports the migration (the `clip_uri` column is just a string, not a foreign key) but I haven't shipped the bytes-to-cloud path. The honest version is "loopd backs up your journal, not your videos."
+
+```
+                  Path taken (metadata-only backup)     Suggested (full backup with clips)
+                  ──────────────────────────────        ──────────────────────────────
+phone dropped     journal recovers via cloud pull       journal + videos recover
+ in lake          videos PERMANENTLY LOST                everything restorable
+recovery shape    user sees text + empty clip slots     user sees full vlogs
+upload cost       0                                     ~30 MB/day per user
+storage cost      0                                     Supabase Storage tier ($/GB)
+implementation    fileManager.ts unchanged              +Supabase Storage client +
+                                                          sha256 content-addressing +
+                                                          upload-on-save + download-on-pull
+schema impact     none — clip_uri stays a string        none — clip_uri becomes a hash URL
+honest framing    "loopd backs up your journal,        "loopd backs up everything"
+                  not your videos"
+phase-A user fit  fine — I have Google phone backup     ceremony for use case I don't have
+phase-B user fit  insufficient — non-me users expect    correct shape
+                  videos to survive phone loss
+build effort      0 (already shipped)                   ~1 week (Storage + content-addr)
+```
 
 ### One-line anchors
 - "Five storage layers because each is bad at something the others are good at."
@@ -190,3 +328,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped adding outer layer labels because the diagram is itself a storage-layer enumeration — adding a wrapper would be redundant.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -113,15 +113,55 @@ If the device is offline, the writes pile up locally with `updated_at > synced_a
 
 ## Tradeoffs
 
-| Choice | Cost | Alternative | When you'd pick the alternative |
-|---|---|---|---|
-| Local commit synchronous | UI doesn't see remote-only edits live | Realtime subscriptions | Multi-device active editing |
-| Push debounced 5s | Recent writes can be lost on app kill (still in SQLite though) | Push per-write | Tiny payloads, abundant network |
-| Single `database.ts` | Everything funnels through one file | Per-domain DB classes | Larger team, parallel modules |
+We traded cloud freshness and per-module modularity for a synchronous-write UX and a single enforcement point — the user never waits on the network, and the two cloud-sync invariants (`updated_at` bump + `schedulePush()`) live one helper away in one file.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (local-first +      │ Alternative (cloud-first +     │
+│                  │ single database.ts funnel)     │ per-domain DB classes)         │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Perceived UX     │ keystroke → SQLite ~1ms; UI    │ keystroke → HTTPS round-trip   │
+│  latency         │ never observes network         │ 80–400ms; visible cursor lag   │
+│                  │                                │ on subway / kitchen / bed      │
+│ Cloud freshness  │ second device sees writes      │ second device sees writes      │
+│                  │ ~5s after typing stops         │ ~200ms after each keystroke    │
+│ Complexity       │ 1455-line database.ts +        │ 4 per-domain DB classes +      │
+│                  │ 1 schedulePush.ts + 1          │ shared base class for         │
+│                  │ orchestrator.ts                │ invariants + network retry per │
+│                  │                                │ write site                     │
+│ Failure blast    │ network down → writes pile up  │ network down → write fails or  │
+│  radius          │ locally, push on next session  │ blocks UI; needs explicit      │
+│                  │                                │ offline queue anyway           │
+│ Failure mode at  │ LWW silently drops one writer  │ realtime conflicts surface     │
+│  2 writers       │ — needs CRDT to fix            │ live but require subscriptions │
+│ Hire-ability     │ one long file — easy to grep,  │ conventional layered design —  │
+│                  │ surprising in 2026             │ familiar from any web app      │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The cloud lags by 5 seconds after the last write. If the user dies, kills the app, or hard-reboots the device in that 5s window, the row is still in SQLite but Supabase doesn't have it until the next session opens and `pushAll()` walks the registry. The cost is real for a second device — open the dashboard on a tablet right after typing on the phone, and the tablet sees yesterday's state. For solo single-device use, the cost is invisible.
+
+The single `database.ts` is 1455 lines. New contributors open it expecting per-domain files and ask why mutators for habits, threads, todos, entries, and projects all share one source. The answer (the two invariants `updated_at` + `schedulePush()` need exactly one enforcement point, and a base class only adds another layer to the explanation) takes a paragraph in the spec. That's onboarding cost we'd pay every hire.
+
+We gave up reactive multi-device feel. Two devices editing the same row do not see each other live — they exchange via the 5s push + the next-pull cycle. For collaborative editing that's a non-starter; the codebase isn't there because the user isn't there.
+
+### What the alternative would have cost
+
+If we had gone cloud-first with optimistic UI, every keystroke fires HTTPS to Supabase and the UI shows the optimistic state until ack. On a fast connection that's ~80ms; on the train it's 400ms or timeouts. We'd need an offline queue anyway (the user opens the app underground), which is `pushAll()` by another name — so we'd carry both the local-first plumbing AND the optimistic-render plumbing. The 5s debounce is what we got back for not paying that double cost.
+
+If we had split `database.ts` into per-domain classes (`EntriesDB`, `TodosDB`, etc.), the invariants would still need one enforcement point — a base class with an `applyMutation` template method, plus discipline that every subclass goes through it. The same code, but four files and one inheritance hop further from the call site. The 1455 lines don't disappear; they get harder to grep.
+
+### The breakpoint
+
+Fine until a second device starts writing the same `user_id` rows concurrently. At that point the LWW resolver in `chooseWinner` silently drops one writer's edits per conflict, and "I typed this and it vanished" becomes a bug the user can reproduce. The fix isn't on the funnel — it's on the conflict layer, which would need per-field CRDTs (Automerge, Y.js) or operational transforms. The local-first shape survives; the conflict resolver gets replaced.
 
 ---
 
-## Quick summary
+## Summary
 
 Local-first architecture commits every user write to an on-device store synchronously and lets a background process race to mirror it somewhere durable later, decoupling availability from durability. In this codebase the chain is UI hook to service to `database.ts` to SQLite, with the only file that opens `loopd.db` being `database.ts`, and `schedulePush()` carrying the row to Supabase 5 seconds after the last write. The constraint was an Android journaling app opened on the train, in the kitchen, in bed — the user expects every keystroke to land instantly regardless of network, and Phase A has a single solo writer. The cost is that other devices won't see edits until ~5s after typing stops, and the 5-second debounce means a write is still local-only if the device dies before the push fires. The day a second device starts writing, last-write-wins becomes the load-bearing failure mode that needs CRDTs.
 
@@ -145,18 +185,87 @@ Local-first looks like a fashion choice in 2026 — everyone is doing it. The in
 
 A: The tap fires a hook method (e.g. `useEntries.editEntry`), which calls a service in `src/services/<domain>/`, which calls `database.ts`. That's the only file that holds the SQLite handle. `database.ts` writes the row, stamps `updated_at = now`, then calls `schedulePush()` — a 5-second debounced timer. The UI re-renders from local SQLite on the next tick. Five seconds after the last write, `pushAll()` walks the SyncableTable registry and upserts dirty rows (`updated_at > synced_at`) to Supabase. The user never waits on Postgres for anything visible.
 
+```
+[tap → row-in-Postgres flow]
+
+  React screen / hook
+        │  imperative call
+        ▼
+  Service (src/services/<domain>/)
+        │
+        ▼
+  database.ts   (write + updated_at + schedulePush)
+        │
+        ▼  ~1ms (UI re-renders from SQLite next tick)
+  loopd.db
+        │  5s after last write
+        ▼
+  pushAll() → Supabase Postgres
+```
+
 [senior] Q: Why funnel every write through a single `database.ts` instead of per-domain DB classes?
 
 A: Two invariants need to hold on every synced write: bump `updated_at`, and call `schedulePush()`. With one file, those are one helper away. With per-domain classes, they're four files away from being forgotten. I'm a solo developer; the funnel is what makes "DB is canonical" a rule the compiler-ish helps me keep, not a discipline I have to remember. The cost is a long file. If a teammate joined and we had parallel work in the same module, I'd extract per-domain classes — but the invariants would still need to be enforced somewhere, probably a base class.
+
+```
+                  Path taken (single database.ts)     Alternative (per-domain DB classes)
+                  ──────────────────────────────      ──────────────────────────────────
+files             1 (1455 LOC)                        4 + 1 base class
+invariant         1 helper away                       1 base class + discipline that
+ enforcement                                          subclasses go through it
+forget-to-push    impossible — every mutator          easy — a new EntriesDB method
+ risk             touches the same helper             written without super() forgets
+contributor       "why is this file so long?"         "why a base class for two lines?"
+ confusion        — 1 paragraph answer                — same paragraph + inheritance
+file count        1                                   5
+```
 
 [arch] Q: How does this design break when you go multi-device or multi-user?
 
 A: It doesn't break catastrophically — it gets fuzzy. Two devices editing the same entry at the same time will fight via last-write-wins (`updated_at` resolves it), and the loser's changes silently disappear. That's fine for solo journaling where "two devices at once" is rare, but unacceptable for collaborative editing. The fix is per-field CRDTs or operational transforms, neither of which is cheap to retrofit. For multi-user (post-Phase A), the schema is already keyed on `(user_id, id)` and RLS is scaffolded, so the auth boundary moves but the local-first part stays.
 
+```
+At 2 devices writing the same user_id row concurrently:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — each device renders own SQLite  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Service / database.ts ─────────────────────┐
+  │ unchanged — local write still synchronous   │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Conflict layer (chooseWinner / LWW) ───────┐
+  │ picks winner by updated_at, drops loser     │  ◀── BREAKS FIRST
+  │ silently — "I typed this and it vanished"   │     (needs per-field CRDT
+  │ becomes a reproducible bug                  │     or operational transform)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Cloud (Supabase Postgres) ─────────────────┐
+  │ unchanged — composite (user_id, id) PK      │
+  │ already isolates per-user                   │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: Five seconds is a long debounce. What happens if I kill the app at 4.9 seconds — is my data lost?
 
 A: It's lost from the cloud, not from the device. The write hit SQLite synchronously the moment I typed it, so on next launch the row is there with `updated_at > synced_at` and `pushAll()` picks it up. Where it actually hurts is the multi-device case: if my phone dies before the push fires and I open the app on another device, the second device pulls a stale snapshot. For solo use on a single Android, this is acceptable — I haven't seen a single instance of post-mortem data loss. If I had two-device usage, I'd reduce to 1s or move to per-write push and accept the network chatter. The 5s number isn't sacred; it's the smallest interval that visibly batches typing without making the cloud feel out of date when I open the dashboard.
+
+```
+                  Path taken (5s debounce)            Suggested (per-write push)
+                  ──────────────────────────────      ──────────────────────────────────
+device durability local SQLite — never lost on        local SQLite — never lost on
+                  device                              device
+cloud durability  lags up to 5s after last write      ~80–400ms after each keystroke
+network volume    1 push per typing burst             1 push per keystroke (10–50× more)
+battery / data    debounced — cheap                   per-write — expensive on cellular
+multi-device      tablet sees stale snapshot if       tablet sees writes ~200ms later
+ freshness        phone dies in 5s window
+real loss seen    zero in 6 months of solo use        n/a — never built
+fix when 2nd      drop to 1s or per-write             already there
+ device joins
+```
 
 ### One-line anchors
 - "Local-first matched my reality: solo dev, single Android, sporadic use — the cloud is a nice-to-have, not a load-bearing layer."
@@ -228,3 +337,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

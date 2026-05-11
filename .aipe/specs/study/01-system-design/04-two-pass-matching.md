@@ -116,13 +116,56 @@ This is a simplified diff algorithm — Myers' diff and its descendants do exact
 
 ## Tradeoffs
 
-- **Two passes** — gives: identity survives the common edits. Costs: O(n×m) brute path; the actual codebase uses Map+Set for O(n+m).
-- **Text-first, line-second** — gives: reorders always win. Costs: hard to tell apart "edit-in-place" from "delete-and-add-on-same-line."
-- **Carryover preserved** — gives: a row with no current prose line stays in the DB until explicitly deleted. Costs: orphan-like rows accumulate; the soft-delete + reconciler combo cleans them up over time.
+We traded a clean diff with explicit row IDs for a heuristic that works against prose the user actually types — identity survives in the common cases at the cost of one ambiguity the algorithm can't tell apart.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (two-pass match     │ Alternative (hidden UUID per   │
+│                  │ on prose itself)               │ prose line, injected on write) │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Performance      │ O(n+m) with Map+Set in         │ O(n) lookup by UUID            │
+│                  │ scanTodosFromText (n = matches │                                │
+│                  │ in prose, m = existing rows);  │                                │
+│                  │ typically 1–20 each, sub-ms    │                                │
+│ Paste / dictate  │ works — pasted prose flows     │ breaks — pasted text has no    │
+│  workflows       │ through Pass 1 (text match) or │ UUIDs, falls into "all new"    │
+│                  │ Pass 2 (line index)            │ branch every time              │
+│ Edge case        │ "edit in place" vs "delete +   │ unambiguous — every line has   │
+│  ambiguity       │ retype on same line" produce   │ an explicit identifier         │
+│                  │ identical inputs to matcher    │                                │
+│ Complexity       │ ~90 LOC in scanTodos +         │ ~30 LOC matcher + every write  │
+│                  │ ~60 LOC in reconcileMentions   │ path has to inject/strip UUID  │
+│                  │ (Pass 2 ±3-line window)        │ tokens from prose (hard)       │
+│ User-visible     │ none — prose looks normal       │ tokens leak on copy-paste out  │
+│  artifact        │                                │ of the app                     │
+│ Failure at 2     │ silent — LWW picks one writer  │ silent — same problem at the   │
+│  writers         │                                │ prose layer                    │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The algorithm cannot distinguish "I edited line 7 in place" from "I deleted line 7 and typed a new todo on the same line." Both produce the same inputs to Pass 1 (no exact text match) and Pass 2 (line index match wins). The row's identity flows to the new content either way. In practice this is the right answer for journaling — users rarely delete-and-retype on the same line — but in an interview defense it has to be acknowledged.
+
+Bulk reorder combined with bulk text edit degrades the algorithm to "everything looks new." Both passes miss: Pass 1 misses because text changed, Pass 2 misses because lines shifted. Every existing row falls into carryover (its `sourceLine` cleared, the row preserved with `deleted_at` left intact) and every new line becomes a new todo. The user's classifier output, expansion, and pin state survive on the carryover rows but no longer line up with what's on screen. This is rare for a single-user journal; it would be catastrophic for a tool that ingests other people's text.
+
+Carryover rows accumulate. A todo whose prose line was deleted stays in `todo_meta` with `sourceLine` cleared until the soft-delete path or reconciler eventually removes it. We accepted this — the soft-delete window is forgiving, and `reconcileTodoMetaForEntry` (`src/services/todos/reconcileMeta.ts` L48–L92) keeps the 1:1 invariant — but a contributor reading the matcher in isolation can wonder why we keep ghost rows around.
+
+### What the alternative would have cost
+
+If we had injected hidden UUID tokens into the prose (e.g., a `^uuid` suffix per `[]` line), every paste workflow would lose identity. The user pastes a todo list from a note app, the tokens aren't there, the matcher treats them as all new. Dictation has the same problem. We'd need a "rehydrate token" mode that ran heuristic matching anyway — exactly two-pass match — so we'd carry both systems.
+
+We'd also have to strip tokens from every export, every share, every clipboard copy. That's at least 4 surfaces (`docs/spec.md` lists journal export, vlog caption, AI summary, clipboard) and 4 places to forget. The token-leak bug is shipping inevitable.
+
+### The breakpoint
+
+Fine until the app needs to round-trip prose between writers — collaborative editing, bulk import from a third-party source, OCR pipelines that produce todo-like lines. At that point "the user's prose IS the identifier" stops holding because identity has to survive crossing trust boundaries. The fix is either CRDT-prose (which carries identity at the character level, see [08-conflict-last-write-wins](./08-conflict-last-write-wins.md)) or a versioned snapshot system where the matcher runs against the prior snapshot, not the current row state.
 
 ---
 
-## Quick summary
+## Summary
 
 Exact-then-fallback matching is a layered reconciliation strategy: try the strict cheap identifier first, then fall back to a fuzzier positional one for the leftovers, so identity survives both reorderings and same-line edits. In this codebase `scanTodosFromText` runs Pass 1 (exact case-insensitive text match, which catches reorderings) and Pass 2 (line-index match against the existing row's `sourceLine`, which catches "I edited the words on this line"); the same shape lives in `reconcileMentions` for `#tag` threads, with Pass 2 widened to a ±3 line shift window. The constraint was using the prose itself as the identifier — a hidden UUID would break paste, dictate, and natural-edit workflows the user actually relies on. The cost is that "I edited line 7" looks the same as "I deleted line 7 and added a new todo" to the algorithm, and bulk reorders combined with bulk text edits degrade because neither pass fires. The two-pass algorithm assumes single-writer; two devices editing the same prose breaks it silently, not loudly.
 
@@ -146,18 +189,89 @@ Key points to remember:
 
 A: Pass 1 is exact-text match; Pass 2 is line-index fallback. If Pass 2 ran first, "I moved my todos around" would match by line position — the wrong todo gets matched to the wrong line, and identity gets shuffled. By running text-match first, a reorder always wins: "call mom" finds its prior row regardless of where the user moved it. Pass 2 only fills in what Pass 1 couldn't — the case where the user edited the words on a line that didn't move.
 
+```
+[order matters]
+
+  Pass 1: exact text     ─── strongest evidence ───
+        │                                          │
+        ▼  reorders win                            │
+  Pass 2: line index     ─── weaker, fills gaps ───┘
+        │
+        ▼
+  leftovers → new todos
+  unclaimed existing → carryover
+```
+
 [senior] Q: Why two passes and not just give every prose line a hidden UUID?
 
 A: A hidden UUID means the user can't paste prose between days, can't copy-paste a list of todos from a note app, can't dictate prose to the OS keyboard — every "import" path would either lose identity or have to invent ids. Two-pass matching uses the prose itself as the identifier, which is what the user types and edits naturally. The cost is that the algorithm gets confused by simultaneous bulk edit + bulk reorder, but that's a workflow that doesn't actually exist for solo journaling. I picked the constraint that fits the user, not the constraint that fits the algorithm.
+
+```
+                  Path taken (two-pass on prose)       Alternative (hidden UUID per line)
+                  ──────────────────────────────       ──────────────────────────────────
+identifier        the prose itself                     ^uuid token suffix on every []
+paste-in works    yes — matcher rehydrates ids         no — pasted lines have no token,
+                                                       all new rows
+dictation works   yes — same path                      no — same problem
+token leak risk   none — no tokens to leak             every export / share / clipboard
+                                                       must strip
+ambiguous case    "edit in place" ≡ "delete+retype"    none
+contributor       "two passes? why?"                   "where does the uuid come from?"
+                  → one paragraph                      → tooling for inject + strip
+algorithm cost    O(n+m) with Map+Set                  O(n) lookup
+```
 
 [arch] Q: What happens to this design if the prose can be edited by two devices at the same time?
 
 A: It would break in the worst way — silently. Two devices both running `scanTodosFromText` against different versions of the prose would produce different `todos_json` arrays, both legitimate-looking, and the LWW conflict resolver in `chooseWinner` would pick one and discard the other's identity preservation work. The fix isn't on the matcher; it's on the prose itself. Either prose becomes a CRDT (Y.js / Automerge), or the app goes single-writer-at-a-time with explicit handoff. The two-pass match is a single-writer algorithm.
 
+```
+At 2 writers (multi-device) editing the same day's prose:
+
+  ┌─ UI / editor layer ─────────────────────────┐
+  │ unchanged — each device shows its own text  │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Scanner (scanTodosFromText) ───────────────┐
+  │ unchanged shape — single-writer algorithm   │  ◀── BREAKS FIRST
+  │ Device A & B each produce legit todos_json  │     (both legitimate,
+  │ from their own prose                        │     one silently dropped)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Conflict resolver (chooseWinner / LWW) ────┐
+  │ picks one writer, discards other's identity │
+  │ preservation work                           │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Canonical prose layer ─────────────────────┐
+  │ needs CRDT (Y.js / Automerge) to converge   │  ◀── needs replacement
+  │ deterministically before scanner runs       │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: What does your algorithm do when a user has two `[]` lines with the exact same text on the same day?
 
 A: Pass 1 sees the second match's text in the existing list, but the existing row has already been claimed by the earlier match — the `used` set blocks the double-claim. The second match falls through to Pass 2. Pass 2 looks for an existing row with the same line index and an unclaimed id; if the second occurrence is on a fresh line, it gets a new todo. If both occurrences are at the same line (impossible in normal prose, but defensively considered) the algorithm produces one match and one new row. The honest answer is that this case is rare in journaling — duplicate `[]` lines with identical text are usually a copy-paste accident, and the user notices and edits one of them. If duplicates were common, I'd add a `(text, lineIndex)` composite key to the matcher; with the actual data shape, the `used` set is enough.
+
+```
+                  Path taken (used-set blocks         Suggested ((text, lineIndex)
+                  double-claim, second falls          composite key from day 1)
+                  through to Pass 2)
+                  ──────────────────────────────      ──────────────────────────────────
+duplicate-prose   rare — copy-paste accident,         common — would be the right call
+ frequency        user notices and edits
+algorithm cost    O(n+m), small constants             O(n+m), larger map keys
+correctness       correct in the common case;         correct universally
+                  defensive in the rare case
+data hint         actual data shape says duplicates   would be the right call if data
+                  are accidents, not workflow         shape changes
+contributor       "why no composite key?" →           "why composite key for a rare
+ confusion        "duplicates are rare; used-set is   case?" → same paragraph but
+                  enough"                             flipped
+when worth        if duplicates show up in            now
+ flipping         analytics
+```
 
 ### One-line anchors
 - "Two-pass match is Myers diff applied to row identity — strongest evidence first, weakest fills the gaps."
@@ -229,3 +343,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a single-function algorithm trace (Pass 1 / Pass 2 decision logic), not a cross-layer composition.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

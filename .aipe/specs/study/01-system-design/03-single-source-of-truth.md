@@ -85,13 +85,58 @@ The "single source of truth" idea is older than databases — it's a normalisati
 
 ## Tradeoffs
 
-- **Prose canonical** — gives: edit-the-text deletes-the-row. Costs: every feature needs a scanner + reconciler.
-- **Scanners at commit only** — gives: keystroke path stays cheap. Costs: a few hundred ms of "stale" derived state during typing.
-- **No `scanHabits`** — gives: habits can have rich metadata (cadence, time-of-day) the user wouldn't write inline. Costs: habits are *not* declared in prose, so they don't show up in journal exports unless you mention them.
+We traded per-feature plumbing for a universal data-flow rule: every prose-derived feature pays for one scanner plus one reconciler, in exchange for "edit the line, the row updates" working without per-feature glue code.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (prose canonical)   │ Alternative (button writes JSON) │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Complexity       │ +1 scanner +1 reconciler per   │ +1 direct write path per       │
+│                  │ feature (~150 LOC each, 4 in   │ feature + sync logic between   │
+│                  │ tree: todos/threads/nutrition/ │ prose and structured surfaces  │
+│                  │ reconcileMeta)                 │                                │
+│ Latency          │ scanners deferred to commit    │ direct insert ~5ms; but        │
+│                  │ boundary (focus blur / leave); │ "delete line" path still needs │
+│                  │ keystroke autosave stays cheap │ a scan to clean up derived row │
+│ Cognitive load   │ "prose canonical, rest derived"│ contributor must remember to   │
+│                  │ — one rule across 4 features   │ write BOTH surfaces every time │
+│ Drift risk       │ zero — single writable surface │ real — surfaces drift the first│
+│                  │                                │ time someone forgets to mirror │
+│ Failure blast    │ scanner bug → derived state    │ surface-sync bug → derived     │
+│                  │ wrong, prose intact (recover by│ state diverges silently from   │
+│                  │ rerunning the scanner)         │ prose; no recovery path        │
+│ Hire-ability     │ pattern is novel — onboarding  │ pattern is conventional — but  │
+│                  │ adds half a day to learn       │ the drift bugs cost weeks     │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+Every prose-derived feature pays a fixed structural cost: a scanner that extracts the marker from `entries.text`, plus a reconciler that diffs the scanner's output against what's already in the DB. Today that's `scanTodos.ts` + `reconcileMeta.ts` (~190 LOC), `scanThreads.ts` + `reconcileMentions` (~230 LOC), and `nutrition/scan.ts` (~120 LOC). The fifth feature — habits — broke the rule on purpose because cadence metadata wouldn't fit inline; the cost of that exception is that habits don't appear in journal exports unless the user mentions them.
+
+The keystroke path stays cheap because scanners run only at commit boundaries (focus blur, screen leave) — but that means during typing the derived state is stale by up to a few hundred ms. We accepted this because no UI surface reads `todos_json` during keystroke entry; the user is in the prose, not in the derived view.
+
+The pattern is genuinely novel — a new contributor reads `reconcileMeta.ts` and asks "why isn't there a foreign key?" The answer (SQLite can't FK to a JSON-array element; the application reconciler is the enforcement mechanism) takes a paragraph in the spec to explain. That's onboarding cost we pay every hire.
+
+### What the alternative would have cost
+
+If we had given the dashboard a "+ todo" button that wrote directly to `todos_json`, the up-front complexity would have dropped by ~150 LOC (no scanner needed for the button path). But the moment two surfaces can write the same data, "delete the line in prose, the todo disappears" stops being a universal rule. We would have had to either (a) also append a `[]` line to prose on every button press (which is what the dashboard quick-add actually does — preserving the rule), or (b) accept that some todos exist only in `todos_json` with no prose representation. Option (b) is where drift bugs live: the user deletes the prose line and the todo persists, looking like a sync bug. We'd ship that bug at least once per quarter.
+
+The hidden cost is debugging. With prose canonical, every wrong derived row points back at a wrong scanner — one place to fix. With two surfaces, a wrong derived row could be a scanner bug, a button-handler bug, a sync-between-surfaces bug, or a race. Three new failure modes for the one feature we shaved 150 LOC off.
+
+### The breakpoint
+
+Fine until the app becomes multi-author or supports concurrent prose edits across devices. At that point "prose is canonical" assumes a single writer; two writers produce different `todos_json` arrays from different prose versions, and the LWW conflict resolver picks one and silently discards the other. The fix isn't on the scanners — it's on the prose itself, which would need CRDT semantics (Y.js, Automerge). The pattern survives that change; the canonical *layer* changes from "raw text" to "CRDT-text."
+
+### What wasn't actually a tradeoff
+
+Auto-deriving rows from text via an ORM-style schema mapper wasn't on the table. The canonical surface is free-form prose with sparse markers (`[]`, `** food N kcal`, `#tag`) — not a typed structured form an ORM can consume. The hand-written scanners do the work an ORM can't.
 
 ---
 
-## Quick summary
+## Summary
 
 Single source of truth is the discipline of designating exactly one writable origin for each fact, with every other representation derived from it deterministically — pick one surface as canonical, treat everything else as a cache you can throw away. In this codebase the prose in `entries.text` is canonical; markers like `[]`, `** food N kcal`, and `#tag` are the source, and `scanTodosFromText`, `parseTags` + `reconcileMentions`, and `src/services/nutrition/scan.ts` rebuild `todos_json`, `thread_mentions`, and nutrition rows at every commit boundary (focus blur, screen leave). The constraint was a single editable place — two writable surfaces would drift, and "delete the line, the row disappears" stops working the moment a button writes directly to `todos_json`. The cost is that every prose-derived feature needs its own scanner plus reconciler, and operations with no natural prose representation (the documented manual-touch deviation) become exceptions. Habits are first-class entities by design because cadence metadata won't fit inline; that's the principled exception, not a regression.
 
@@ -115,18 +160,87 @@ The interviewer wants to know whether you understand the cost of declaring a sin
 
 A: The keystroke autosaves prose to `entries.text` in SQLite. At the next commit boundary (focus blur, screen leave), `scanTodosFromText` runs — the deleted line produces no match, so the corresponding `TodoItem` is dropped from `todos_json`. Then `reconcileTodoMetaForEntry` diffs the new `todos_json` ids against the existing `todo_meta` rows and soft-deletes the orphan. There's no "delete todo" code path; the todo went away because the prose did.
 
+```
+[delete-the-line flow]
+
+  user deletes "[] call mom"
+        │
+        ▼  autosave on keystroke
+  entries.text in SQLite (canonical, "call mom" line gone)
+        │
+        ▼  at commit boundary (focus blur / screen leave)
+  scanTodosFromText reruns
+        │   "call mom" matches nothing → dropped from todos_json
+        ▼
+  reconcileTodoMetaForEntry diffs ids
+        │   row whose id isn't in todos_json → soft-delete
+        ▼
+  todo_meta row stamped deleted_at, removed from UI
+```
+
 [senior] Q: Why didn't you give the dashboard a "+ todo" button that writes directly to `todos_json`? It would be one less round-trip.
 
 A: Because the moment two surfaces can write the same data, they drift. If I add a todo via a button, I either have to also add a `[]` line to the prose (so the canonical surface stays correct), or I accept that "delete the line, todo disappears" stops being a universal rule. The dashboard's quick-add path takes the first option — it appends a `[]` line to the day's entry text, then re-runs the scanner. It's a few more lines of code, but it preserves the invariant that the prose is the only writable surface for drops.
+
+```
+                  Path taken (append-to-prose)        Alternative (direct todos_json write)
+                  ──────────────────────────────      ──────────────────────────────────
+write surfaces    1 (prose only)                      2 (prose + button)
+round-trips       1 (button → append text → scan)    1 (button → insert JSON)
+"delete the line  works universally                   breaks for button-created todos
+ deletes the row"
+drift             impossible — single source          eventual — surfaces disagree
+debugging         wrong row → wrong scanner           wrong row → could be 4 causes
+                  (one place to look)                 (scanner, button, race, sync)
+extra LOC         ~20 (append + invoke scanner)       ~5 (direct insert)
+```
 
 [arch] Q: How does this principle scale to a multi-author or collaborative version of the app?
 
 A: Badly without changes. "Prose is canonical" assumes one writer. With two writers, you get the same problem as collaborative document editing — concurrent edits to the same prose line can both produce or both destroy a derived row, and neither writer is wrong. The fix would be to keep prose canonical but apply CRDT semantics on the prose itself (Y.js, Automerge), letting the scanners run after every converged state. The scanner pattern stays; the canonical layer changes from "raw text" to "CRDT-text".
 
+```
+At 2 writers (multi-device) editing the same day's prose:
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — both devices show their state   │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Scanners (todos / threads / nutrition) ────┐
+  │ unchanged shape, but assume single-writer    │  ◀── BREAKS FIRST
+  │ Device A produces todos_json_A               │     (concurrent prose →
+  │ Device B produces todos_json_B               │     conflicting derived state →
+  │ LWW conflict resolver picks one, drops other │     silent identity loss)
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Canonical layer (raw entries.text) ────────┐
+  │ would need to become CRDT-text (Y.js /      │  ◀── needs replacement
+  │ Automerge) so concurrent edits converge     │
+  │ deterministically before scanners run        │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: The manual-touch deviation breaks your "prose is canonical" rule. Why is that one exception OK and not others?
 
 A: It's not really OK — it's the smallest exception I could justify, and I documented it loudly in the spec (Principle 11). The dashboard's "tap a thread to mark it touched today" gesture writes a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id` because there's no prose line to attach it to. I considered making the touch gesture insert a synthetic prose line, but that pollutes the journal with rows the user didn't type. The exception is permitted because the staleness math composes uniformly — the touch row counts the same as a prose-derived row when computing "did this thread happen today?". The rule the deviation respects is that the *derived shape* (a row in `thread_mentions`) is canonical-equivalent to a prose-derived row; only the source differs. If I needed a second exception, I'd revisit the architecture; one is the budget.
+
+```
+                  Path taken (one documented deviation)   Suggested (synthetic prose insert)
+                  ────────────────────────────────────    ────────────────────────────────────
+write source      gesture → thread_mentions row           gesture → append "touched #tag" line
+                  (NULL entry_id, NULL todo_id)           to prose, scanner derives the row
+journal export    touch rows excluded by design           journal pollutes with rows the user
+                                                          didn't type — confusing on read-back
+prose integrity   prose stays user-typed only             prose mixes user text + UI artifacts
+staleness math    uniform — touch counts the same         uniform — same outcome via prose
+exception budget  1 documented, capped                    0 — rule preserved nominally, but
+                                                          the rule is now "prose canonical
+                                                          OR app-generated prose" — a softer
+                                                          rule that invites more exceptions
+contributor       reads the deviation, asks why, learns   reads synthetic prose, can't tell
+ onboarding       the rule has one published exception    user from app — no rule visible
+```
 
 ### One-line anchors
 - "Prose is canonical — the cost is a scanner per feature, the win is that 'edit the line, the row updates' works without per-feature plumbing."
@@ -199,3 +313,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a pure data-flow within one logical canonical-to-derived plane, not a cross-layer composition.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

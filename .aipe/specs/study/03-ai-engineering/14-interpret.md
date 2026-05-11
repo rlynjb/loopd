@@ -137,17 +137,73 @@ The system prompt is the longest in the codebase — 32 lines — and prescribes
 
 ## Tradeoffs
 
-| Choice | Cost | Alternative | When you'd pick the alternative |
-|---|---|---|---|
-| Markdown output, not JSON | No structural validation possible | Force JSON with `{ themes: [...], finalThought: '...' }` | When the modal needs to filter/reorder sections programmatically |
-| Ephemeral (no persistence) | Re-tapping costs another LLM call | Cache last interpretation per entry | When users start re-reading old interpretations regularly |
-| `truncateTail`, not hand-picked context | Misses "this connects to yesterday" insights | Add `getRecentEntries(date, 3)` to the prompt | When users ask why interpretations don't notice cross-day patterns |
-| `MAX_INPUT_CHARS = 2000` cap | Long entries get the tail only, not the whole arc | Summarise long entries first, then interpret | When entries routinely exceed 2000 chars and the morning matters as much as the evening |
-| 32-line system prompt | Every model upgrade risks tone regression | Shorter, less prescriptive prompt | When voice consistency stops mattering or the model gets reliably good at "mirror" without instruction |
+We traded structural validation and persistence (the rules the other 4 chains live by) for a markdown-out, ephemeral, prompt-only-constrained chain — because the consumer is the user, not the app, and value-per-bit doesn't justify the schema/sync/storage weight.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (markdown ephemeral)│ Alternative (JSON persisted)   │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ re-tap costs another call      │ first call cost + cache hits   │
+│ ($/feature)      │ (~$0.02 Sonnet); user-paced    │ free; but cache invalidation   │
+│                  │                                │ on edit costs another call     │
+│ Schema cost      │ 0 — no table, no migration     │ new `interpretations` table OR │
+│                  │                                │ `last_interpretation` column + │
+│                  │                                │ Supabase mirror + sync mapper  │
+│ Validation       │ 11-line cleanMarkdown — fence  │ schema validator (themes[],    │
+│ rigor            │ strip + non-empty check        │ finalThought, ...) rejects     │
+│                  │                                │ malformed; loud on drift       │
+│ Model-drift      │ silent — user sees ugly        │ loud — validator rejects;      │
+│ detection        │ output, dismisses modal        │ developer sees error log       │
+│ Quality on       │ markdown prose user reads      │ structured renderer can        │
+│ user-facing      │ once; rich, free-form          │ reorder/filter sections; less  │
+│                  │                                │ writerly                       │
+│ Context recall   │ truncateTail keeps last 2000   │ hand-picked context blocks     │
+│                  │ chars; misses cross-day        │ (last 3 days like expand) —    │
+│                  │                                │ richer cross-day signal        │
+│ Cognitive load   │ "user reads it, then it's     │ "interpret is data too;        │
+│                  │ gone" — modal-state only       │ where does it live? how does   │
+│                  │                                │ it sync? when does it expire?" │
+│ Failure surface  │ user dismisses bad modal —     │ malformed JSON → soft error;   │
+│                  │ no data corruption possible    │ stale cache → wrong content    │
+│                  │                                │ shown later                    │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up hard validation. The 11-line `cleanMarkdown` strips an outer triple-backtick fence and rejects empty/short output; that's it. A model that drifts into clinical language ("this suggests avoidant attachment"), flattens the structural template (drops emoji H2 headings for plain `##`), or violates the "no questions" / "no platitudes" rules slips through entirely. The prompt asks for the structure; the validator doesn't enforce it. We accept this because the user is the integrity check — they see the modal, they read it, they dismiss it if it's wrong. With JSON-emitting chains, drift fails loudly via `validateSummary` or `parseAndValidate`; with interpret, drift fails as "the user said it felt off."
+
+We gave up persistence. Re-tapping "Interpret" on the same entry costs another LLM call (~$0.02 on Sonnet) because there's no caching layer. The result lives in the modal's React state until close; closing it discards everything. A user who copy-pastes the markdown elsewhere preserves it; otherwise it's gone. Adding persistence would mean a new `interpretations` table (or a column on `entries`), a sync mapper to Supabase, conflict resolution, soft-delete plumbing — every piece of weight the other tables carry. For a feature whose value-per-bit is low (a one-time read), that weight isn't justified.
+
+We gave up cross-day context. `truncateTail` keeps the most-recent 2000 chars of the entry; we never feed yesterday's entry or last week's themes. A user asking "why doesn't it notice the pattern I've been writing about all week?" would have a point. The expand chain has `buildContext()` pulling last 3 days; interpret doesn't, deliberately, because adding it would also mean designing what "context" means for reflection (which days? what's relevant?). Today the prompt sees one entry's tail.
+
+### What the alternative would have cost
+
+A JSON-out, persisted variant would have looked like: `{ themes: ['...'], finalThought: '...', healthySide: '...' }` etc., validated against a schema in `validate.ts`, persisted to a new `interpretations` table, cached on tap and invalidated on entry edit. The benefits are real — the modal could programmatically filter or reorder sections, the user could re-read without paying for re-generation, model drift would surface loudly via validator rejection. But each of those carries cost.
+
+Schema cost: every new column carries a Supabase migration, a sync mapper, a row mapper in `database.ts`, conflict resolution semantics. For a feature whose primary consumer is the user reading once, that's a lot of plumbing.
+
+Cache invalidation: when does an interpretation become stale? On any entry edit? Only on text changes (not on todo edits)? After a model upgrade? Each answer is a product decision masquerading as a cache-policy choice. With no persistence, the answer is trivial: every tap re-generates.
+
+The deeper cost is that JSON-out reduces the writerly quality. The interpret modal renders prose the user reads as prose; forcing it through structured fields would either (a) reconstitute prose from fields (extra step, same result), or (b) render the fields visually (less prose-like, more like a form). The current 32-line prompt explicitly says "skip any section that doesn't fit; do not pad" — a JSON schema can't express "skip optional sections" as elegantly as markdown can ("if it doesn't fit, leave it out").
+
+### The breakpoint
+
+The pattern flips the day users start re-reading old interpretations regularly. Today no data suggests they do — the feature ships, users tap, modal opens, modal closes. If the dashboard added a "past interpretations" surface or users started screenshotting modals to save them, persistence would become the answer. The lightweight version is caching the last interpretation per entry on the modal state with a "regenerate" button; the heavyweight version is a real `interpretations` table.
+
+A secondary trigger: model drift becomes consistently bad. Today the prompt is opinionated enough that Sonnet 4.6 follows it reliably; if Sonnet 5 ignored the structural template or started leaking clinical language, the "user is the integrity check" posture would stop being acceptable — we'd need post-call sanitisation or a structural validator. Today that's not happening.
+
+A different breakpoint: long entries routinely exceeding 2000 chars. `MAX_INPUT_CHARS = 2000` truncates to the tail (recent thoughts matter most for reflection); if users write 5000-char essays where the morning section matters as much as the evening section, we'd need a different chunking strategy or a pre-summarise step. Today's tail-truncation is fine because typical entries fit.
+
+### What wasn't actually a tradeoff
+
+Markdown vs prose-formatted JSON (with `{ text: '...' }` as a single field) wasn't a real choice. Both would carry the same content; the difference is whether `cleanMarkdown` and the renderer treat the response as a string or a JSON wrapper. The wrapper adds parse failure modes for no benefit — same content, more failure surface. Markdown out is the natural shape.
 
 ---
 
-## Quick summary
+## Summary
 
 Interpret is the user-facing generation chain — the pattern where the model's output is the final artifact the user reads, not an intermediate value the app stores and re-renders. In this codebase `interpretEntry()` at `src/services/ai/interpret.ts` L114–L149 calls Sonnet/4o with a 32-line opinionated SYSTEM_PROMPT, runs two input guards (`MIN_TEXT_LENGTH = 20`, `MAX_INPUT_CHARS = 2000` via `truncateTail`), validates output with the 11-line `cleanMarkdown`, and returns the markdown to `InterpretModal` for render — nothing is persisted to SQLite. The constraint that drove it is that the consumer is the user, not the app: the value-per-bit of a one-time read doesn't justify a new `interpretations` table, sync mapping, conflict resolution, and soft-delete columns. The cost is no hard validation gate — model drift shows up as visibly worse output rather than a rejected call, and re-tapping the same entry costs another LLM call.
 
@@ -171,18 +227,115 @@ Key points to remember:
 
 A: The modal opens and calls `interpretEntry(text)`. The first guard is `text.length < MIN_TEXT_LENGTH`, which is 20 chars — a 3-line entry probably exceeds that, so it passes. The second guard is the API key check. Then `truncateTail` runs (no-op at 3 lines). Provider branches: Claude path uses `@anthropic-ai/sdk`, OpenAI uses raw `fetch` with `temperature: 0.7, max_tokens: 1800`. The model returns markdown; `cleanMarkdown` strips an outer ``` fence if present and rejects empty output. The result is a discriminated union: `{ ok: true, interpretation: { markdown, sourceText, generatedAt, model } }` or one of four `ok: false` reasons. The modal renders the markdown via `InterpretMarkdown` (selectable text for copy/paste). Nothing is persisted — closing the modal discards the result.
 
+```
+[user-taps-Interpret flow on a 3-line entry]
+
+  InterpretModal opens → interpretEntry(entries[date].text)
+        │
+        ▼  guard: text.length < 20? → too-short
+  passes (3 lines > 20 chars)
+        │
+        ▼  guard: API key present? → no-ai if absent
+  passes
+        │
+        ▼  truncateTail(text, 2000) — no-op at 3 lines
+        ▼  provider branch: callClaude / callOpenAI
+  call Sonnet/4o, temp 0.7, max_tokens 1800
+        │
+        ▼  cleanMarkdown — strip ```fence, reject empty
+  { ok: true, interpretation: { markdown, sourceText, generatedAt, model } }
+        │
+        ▼  InterpretMarkdown renders markdown (selectable)
+  modal closes → state discarded; nothing in SQLite
+```
+
 [senior] Q: Why no persistence? Re-tapping costs the user another LLM call (~$0.02 on Sonnet). That feels wasteful.
 
 A: It's a deliberate trade. The other 4 chains produce derived state the app *needs* — a missing classifier output is a stuck `type='todo'` badge, a missing summary is a broken editor render. Interpret produces a piece of writing the user reads once and usually doesn't return to. Persisting it would mean a new `interpretations` table, a `last_interpretation` field on `entries`, sync-mapper plumbing, conflict resolution, soft-delete columns — all carrying weight for a feature whose value-per-bit is low. The user can copy-paste the markdown if it matters to them. If I started seeing users re-tapping the same entry repeatedly I'd cache the last result on the modal state with a "regenerate" button, but I haven't observed that pattern.
+
+```
+                  Path taken (ephemeral)                Alternative (persisted)
+                  ──────────────────────                ──────────────────────────
+storage           modal React state only                new `interpretations` table OR
+                                                        `last_interpretation` column
+                                                        on `entries`
+schema cost       0                                     +1 Supabase migration, sync
+                                                        mapper, conflict resolution,
+                                                        soft-delete plumbing
+$ per re-read     ~$0.02 (new Sonnet call)              ~$0 (cache hit)
+$ per first read  ~$0.02                                ~$0.02 (same)
+cache invalidate  N/A                                   when? on text edit? todo edit?
+                                                        model upgrade? each answer is
+                                                        a product decision
+value-per-bit     low — one-time read, no later         high if users re-read often;
+                  reference                             no data suggests they do
+user recovery     copy-paste markdown elsewhere         "regenerate" button on modal
+phase-A fit       0 plumbing for low-value feature      premature; ship the day
+                                                        re-reads become observable
+when this flips   day users start re-reading old        cache last result on modal
+                  interpretations regularly             state + regenerate button
+```
 
 [arch] Q: Your other chains have hard schema validators. Interpret's "validator" is 11 lines that strip code fences. How does this design degrade if you switch to a model that hallucinates differently — say, GPT-5 starts wrapping outputs in `<output>` XML tags?
 
 A: It degrades visibly in the user-facing output, not silently in the data layer. `cleanMarkdown` would return the raw string with the XML tags intact; the modal renders it; the user sees `<output>` in their interpretation and reports it. With JSON-emitting chains, a similar drift would mean `validateExpansion` rejects the response and the user sees "couldn't expand". The interpret design assumes user-visible degradation is the right error surface for a user-facing artifact. The migration if I did want to defend against this would be to add a list of "known wrapper patterns to strip" to `cleanMarkdown`, or push markdown rendering into a sanitiser that drops unrecognized tags. The deeper architectural lever is: the validator's complexity should match the consumer's tolerance for malformed output.
 
+```
+At model upgrade with new hallucination pattern (e.g. GPT-5 <output> tags):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — modal opens, calls interpretEntry│
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Provider call ─────────────────────────────┐
+  │ unchanged — Sonnet/GPT-5 returns markdown   │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ cleanMarkdown (11 lines) ──────────────────┐
+  │ strips ```fences ✓                           │  ◀── BREAKS FIRST
+  │ does NOT strip <output> tags                 │     (validator silently
+  │ does NOT detect clinical drift                │      passes through new
+  │ does NOT detect template flattening           │      wrapper patterns)
+  └─────────────────────────────────────────────┘
+              │ (degrades visibly)
+              ▼
+  ┌─ Modal renders raw markdown ────────────────┐
+  │ user sees <output>...</output> in text      │
+  │ user dismisses modal, reports to dev        │
+  │                                              │
+  │ recovery: add wrapper-pattern strip to       │
+  │ cleanMarkdown OR push to markdown sanitiser  │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: The system prompt is 32 lines and very opinionated. It even says "you are not a therapist." What's the failure mode you're protecting against, and why is that the *prompt's* job rather than a post-call filter?
 
 A: The failure mode is the model writing something that sounds like clinical advice — "this suggests an avoidant attachment pattern" or "you might be experiencing rumination" — which is harmful when the user is trying to journal honestly. I've watched generic LLM outputs slip into this register on emotional content, and the user response is bad: they either feel labeled or they take the advice seriously when it isn't qualified. Putting it in the prompt is the cheapest viable mitigation — every call carries the rule. The alternative would be a post-call filter that searches for clinical vocabulary and rejects, but that has two problems: (1) it's a deny-list which is always behind the failure cases, and (2) rejecting an interpretation forces the user to retry with no understanding of why. The honest answer is that prompt-level rules are a soft guarantee, not a hard one — a model that's been jailbroken or that picks up clinical framing from the user's input *will* leak it through. I treat this as a known-tolerable failure surface because the consumer is the user, the user can see the failure, and the cost of a wrong interpretation is "the user dismisses the modal", not "the journal data corrupts." If I were running this for many users with no way to see individual outputs, I'd add the filter.
+
+```
+                  Path taken (prompt-level rules)       Suggested (post-call filter)
+                  ──────────────────────────────        ─────────────────────────────
+where rule lives  32-line SYSTEM_PROMPT — every call    deny-list regex on output;
+                  carries the constraint                runs in cleanMarkdown
+guarantee shape   soft — model usually complies         hard — output containing
+                                                        listed terms rejected
+new code          0 LOC                                 ~50-100 LOC: deny-list + regex
+                                                        engine + retry/reject UX
+false-positive    none — model paraphrases around       real — "rumination" appears in
+risk              the rule                              user's own input → filter rejects
+                                                        their interpretation
+deny-list lag     N/A                                   always behind new failure cases
+                                                        — must be tuned as drift evolves
+recovery on       N/A — rule prevents most cases        force re-tap with no explanation
+clinical leak                                           why; bad UX
+single-user       user dismisses modal; reports to     same UX but more rejections;
+phase-A fit       dev; cost is one wasted call          marginal benefit, real cost
+when this flips   multi-user OR no way to see           ship the filter; sanitise
+                  individual outputs                    output server-side
+honest framing    soft guarantee, user is the          deny-list is brittle; prompt
+                  integrity check                       rule is the right level today
+```
 
 ### One-line anchors
 - "Some AI outputs are products, not data — that's why interpret breaks the JSON convention."
@@ -252,3 +405,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added UI / Service / Provider layer labels to the chain diagram since it crosses boundaries.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; replaced existing markdown-table Tradeoffs with comparison ASCII table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

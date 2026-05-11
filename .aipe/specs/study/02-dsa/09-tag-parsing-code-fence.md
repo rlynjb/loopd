@@ -178,13 +178,64 @@ The "mask then parse" pattern shows up wherever embedded languages need to be ig
 
 ## Tradeoffs
 
-- **Mask to spaces** — gives: line numbers stay stable. Costs: extra string allocation.
-- **Per-line dedup** — gives: same tag twice on a line counts once. Costs: in-memory `Set`; bounded by tag count per line.
-- **Regex-based** — gives: simple, fast, easy to read. Costs: doesn't handle weird edge cases (mismatched fences) gracefully.
+We traded a transient extra string allocation for offsets that stay honest, so the downstream join key (`lineIndex`) survives the masking pass intact.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (mask to spaces +   │ Alternative (post-filter false │
+│                  │ per-line scan)                 │ positives after regex)         │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(L) — two linear regex passes │ O(L²) worst — each match runs  │
+│                  │ + per-line scan                │ a 0..offset re-scan to decide  │
+│                  │                                │ "was this inside code?"        │
+│ Latency at 2KB   │ <1ms                           │ <1ms — both fine at this N     │
+│ entry (real N)   │                                │                                │
+│ Latency at 1MB   │ ~5ms                           │ ~1s+ — regex backtracking +    │
+│ paste            │                                │ post-filter dominates          │
+│ Memory churn     │ 2× extra string allocs (mask   │ no extra string, but re-slice  │
+│                  │ outputs) — peak ~3× input      │ per match for line counting    │
+│ Code complexity  │ ~40 LOC (maskCode + parseTags) │ ~30 LOC — one regex, one      │
+│                  │                                │ isInsideCode helper             │
+│ Cognitive load   │ "two-step parse: mask, then    │ "one regex, then post-filter" │
+│                  │ scan" — reader can follow      │ — reader misses why offsets    │
+│                  │                                │ drift                         │
+│ Correctness      │ lineIndex stable through mask  │ lineIndex computed per match;  │
+│                  │ — reconcile contract preserved │ stripping fences would shift   │
+│                  │                                │ indices and break reconcile    │
+│ Failure mode     │ pathological backtick input →  │ pathological input → quadratic │
+│                  │ lazy-regex slow but bounded    │ blowup; UI hang on paste       │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+`maskCode` allocates the input string twice — once for fenced-block replacement, once for inline-code replacement. At journal-entry size (a few KB) this is invisible; at 1MB paste it's 3MB peak allocation. We accepted it because the alternative (a streaming line-by-line lexer) is 80+ LOC of state-machine code we haven't needed.
+
+The lazy regex `[\s\S]*?` has worst-case quadratic backtracking on adversarial inputs (lots of unbalanced backticks). For user-typed journal prose this never fires; for a 5MB paste with malformed fences the parse could hang. The mitigation is the implicit cap on entry size — nobody pastes 5MB into a daily journal line.
+
+Per-line dedup uses a `Set<string>` keyed by `lineIdx + '::' + slug`. Memory is bounded by tag count per line, but it's a per-call allocation that contributors won't notice. The reason it exists is that without it, two identical `#loopd` tags on one line would create two `thread_mentions` rows competing for the same `(threadId, sourceLine)` key — silent identity collision in the reconciler.
+
+### What the alternative would have cost
+
+A post-filter shape (`regex matches all #tags, then isInsideCode checks each`) would have been ~30 LOC of code and looked simpler at first read. But each match's `isInsideCode` re-scans the prefix from offset 0 to count fence depth — O(L) per match, O(L²) total. At 1MB paste with 100 matches, that's 100M ops vs the masker's 2M.
+
+The deeper hidden cost: post-filter computes `lineIndex` by slicing `text.slice(0, offset).split('\n').length - 1` per match — another O(L) per match. The optimal version computes line index once via `lines.split('\n')` and uses the array index directly. The masker collapses two O(L²) loops into one O(L) walk.
+
+If we'd taken the "strip fences entirely" shortcut (`.replace(fence, '')`), `lineIndex` would shift by the height of every fenced block. `reconcileMentions` keys on `(threadId, sourceLine)`; every mention after a fence would lose its prior id on the next scan. That's not a tradeoff — that's a correctness regression we'd ship within a week.
+
+### The breakpoint
+
+Fine until input length crosses ~1MB or fence density gets pathological. At that point `maskCode`'s lazy-regex backtracking dominates and the parse can take seconds. The fix is a streaming line-by-line lexer with a fence-state flag — ~80 LOC of state-machine code that allocates once. We haven't built it because journal entries cap at a few KB by usage pattern; the cap is the data shape, not the algorithm.
+
+### What wasn't actually a tradeoff
+
+Choosing same-length space replacement over deletion isn't a tradeoff — deletion would shift line indices and break the reconciler contract. The "tradeoff" is between two correctness states, and only one of them is correct.
 
 ---
 
-## Quick summary
+## Summary
 
 Lexical masking with offset preservation is the family of "two-phase parsing where phase one neutralises the regions phase two must not see, while preserving the geometry phase two depends on" — overwrite the ignored regions with same-length neutral characters instead of deleting them, so downstream offsets stay honest. In this codebase `parseTags` in `src/services/threads/scanThreads.ts` masks fenced code blocks and inline backtick spans to runs of spaces (preserving newlines), then runs a per-line `#tag` regex with a per-line `seen` Set so duplicate tags on the same line collapse to one mention. The constraint is the contract with `reconcileMentions`, which keys on `(threadId, sourceLine)` — if `maskCode` shifted line numbers, every downstream join would be wrong. The cost is an extra string allocation for the mask plus a small lazy-regex backtracking risk on pathological multi-MB pastes. Both versions run sub-millisecond at journal-entry size; the space-preserving mask is the cheapest correct shape because deleting fence contents would actually break the line index.
 
@@ -207,16 +258,75 @@ The probe is whether I understand the *contract* between `parseTags` and `reconc
 [mid] Q: Why does the fenced-code regex use `[\s\S]*?` instead of `.*?`?
       A: Because `.` in JavaScript regex doesn't match newlines by default. A fenced code block spans multiple lines, so I need the character class `[\s\S]` to mean "any character including newline." The `*?` lazy quantifier ensures I match the shortest fence-to-fence span — without it, `\`\`\`a\`\`\` then \`\`\`b\`\`\`` would match as one giant block instead of two.
 
+```
+[fence-regex character class flow]
+
+  input: "```a```\nprose\n```b```"
+        │
+        ▼  /```.*?```/  uses '.' which excludes \n
+  match fails — '.' won't cross newline
+        │
+        ▼  /```[\s\S]*?```/  uses [\s\S] = "any char including \n"
+  match #1 = "```a```"   ◀── lazy quantifier stops at first close
+  match #2 = "```b```"   ◀── second pass finds the second fence
+        │
+        ▼
+  both fences masked correctly
+```
+
 [senior] Q: Why per-line dedup with a `seen` Set instead of letting the regex find every occurrence?
          A: Because the same tag written twice on one line is one mention, not two — `reconcileMentions` keys on `(threadId, sourceLine)` so two identical mentions on the same line would either collide and lose data or create two database rows that fight for the same identity. The Set-based dedup catches it before insert. I scope it per-line because the *same tag on a different line* is a legitimate second mention — that's a deliberate user signal.
 
+```
+                  Path taken (per-line Set dedup)     Alternative (no dedup, let regex run)
+                  ────────────────────────────────────  ──────────────────────────────────
+"hi #loop #loop"  → 1 mention at lineIdx=0             → 2 mentions at lineIdx=0
+                                                        both compete for (threadId, line)
+reconcile result  clean insert                          collision → silent identity loss
+                                                        or duplicate rows fighting
+cross-line dups   "#loop on L0" + "#loop on L3"        same — both kept legitimately
+  preserved?      → 2 mentions, different lineIdx       (different sourceLine)
+LOC               ~5 LOC for Set guard                  ~0 LOC
+correctness model "dedup within line, keep across      "let DB constraint catch it"
+                  lines"                                — wrong constraint exists
+verdict           cheap correctness gate before DB      DB will reject or silently drop;
+                  collision                             worse failure surface
+```
+
 [arch] Q: What if a user pastes a 5MB markdown document with hundreds of code fences?
        A: `maskCode` runs two regex passes over the full string, so peak memory is ~3× the input (original + first mask + second mask). At 5MB that's 15MB transient — uncomfortable on a low-end Android. The lazy regex `[\s\S]*?` is also worst-case quadratic on pathological inputs (lots of unbalanced backticks). The migration would be a streaming line-by-line scanner with a fence-state flag — single allocation, no regex backtracking. I haven't built it because journal entries cap out at a few KB; if someone pasted a real document I'd hit the limit and tell them to split it.
+
+```
+[scale curve — what breaks first at 10× and 100× input size]
+
+  input size   maskCode time   peak memory    backtracking risk    breaks?
+  ──────────   ─────────────   ────────────   ──────────────────   ──────────────────
+  2KB (real)   <1ms             ~6KB peak       safe                 no
+  20KB (10×)   ~5ms             ~60KB peak      safe                 no
+  200KB (100×) ~50ms            ~600KB peak     occasional backtrack UI may stutter on paste
+  1MB+         ~500ms+          ~3MB peak       quadratic worst      memory + UI thread   ◀── BREAKS FIRST
+  5MB          seconds          ~15MB peak      catastrophic         needs streaming lexer
+```
 
 ### The question candidates always dodge
 Q: What about nested code blocks? Markdown lets you indent a fence inside a list item — does your masker handle that?
 
 A: Not really. The lazy regex `\`\`\`[\s\S]*?\`\`\`` matches the *first* closing triple-backtick after an opener, so a nested fence inside a list-indented fence would match across both, leaving the second fence's contents exposed. In practice nobody nests fences in journaling — this isn't documentation prose, it's a daily log — so the bug doesn't fire. The deeper issue is that I'm using regex to parse a context-sensitive grammar, which is the wrong tool. A proper fix would be a small state machine that tracks fence depth and inline-code spans, basically a tiny markdown lexer; that's 80 lines of code I haven't written. The honest version of the answer: this works for the inputs I've seen, breaks on the inputs I haven't, and the inputs I haven't seen are not user inputs in this app. The day a user pastes nested fences with intent, I'll write the lexer.
+
+```
+                  Path taken (lazy regex)              Suggested (small markdown lexer)
+                  ────────────────────────────────────  ──────────────────────────────────
+nested fences     mis-paired — first close terminates  fence-depth counter handles nesting
+                  any open, exposes inner content      correctly
+inline + fenced   handled by sequential passes         single pass with state-machine
+edge cases        mismatched backticks → bad match     state machine rejects malformed
+                                                       gracefully
+LOC               ~40 (mask + parse)                   ~120 (lexer + parse)
+runtime           O(L) with backtracking risk          O(L) guaranteed, no backtracking
+input domain      journal prose — never nests          documentation pastes — may nest
+verdict           right call for journaling inputs;    the lexer is the right shape if
+                  bug invisible at this domain         input domain ever shifts to docs
+```
 
 ### One-line anchors
 - "Mask to spaces preserves line indices — the contract with `reconcileMentions`."
@@ -294,3 +404,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

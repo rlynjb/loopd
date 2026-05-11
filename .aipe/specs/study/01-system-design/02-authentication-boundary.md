@@ -91,13 +91,55 @@ RLS comes from Postgres' security model where the row itself decides who can rea
 
 ## Tradeoffs
 
-- **Hardcoded user_id (Phase A)** — gives: zero auth UI to build now. Costs: anon-key access reads everything. Mitigation: SecureStore + no public surface.
-- **Composite (user_id, id) PKs** — gives: schema-level isolation that works today and after RLS ships. Costs: every query needs the user_id; client code is verbose.
-- **RLS scaffolded but disabled** — gives: easy switch-on path. Costs: a Phase B upgrade that forgets to enable it would silently break the runtime gate.
+We traded a real authentication surface for time-to-data-layer — the schema gate is correct today, the runtime gate is staged for the day there's an actual second user.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (hardcoded UUID +   │ Alternative (Supabase auth +   │
+│                  │ RLS staged-but-off)            │ RLS enabled day-1)             │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Complexity       │ 1 line in client.ts +          │ login screen + session refresh │
+│                  │ migration 0002 file present    │ + token storage + RLS policies │
+│                  │ but not installed              │ enabled + bootstrap auth path  │
+│ Time-to-ship     │ days (auth deferred entirely)  │ 1–2 weeks (auth UI + supabase  │
+│  data layer      │                                │ flows + RLS testing per table) │
+│ Failure blast    │ leaked anon key = read all     │ leaked anon key = read nothing │
+│  radius (cloud)  │ rows; device-loss = read all   │ (token required); device-loss  │
+│                  │ local rows                     │ = read local rows only         │
+│ Device-loss      │ uncovered — no PIN, no         │ launch-screen lock + at-rest   │
+│  exposure        │ encryption beyond OS default   │ encryption ship with auth      │
+│ Migration cost   │ 1 client.ts line + enable      │ none — already there           │
+│  to Phase B      │ migration 0002 + one-time      │                                │
+│                  │ user_id backfill               │                                │
+│ Cognitive load   │ "Phase A is single-user, do    │ "auth is auth, just like every │
+│                  │ not enable RLS until auth      │ other app"                     │
+│                  │ ships" — one rule              │                                │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The Supabase anon key is functionally a password. Anyone holding it can read every row in every cloud table, because the runtime gate (RLS) isn't on. We mitigate by storing keys in Android Keystore via `expo-secure-store` and shipping no public API surface, but the mitigation is "the key is hard to steal," not "stealing the key is harmless."
+
+The device-loss case is uncovered. The app has no PIN, no biometric gate on launch, no encryption on `loopd.db` beyond what Android offers at the OS level. If a borrowed phone is unlocked, the journal is readable. That's the explicit cost of skipping the auth UI in Phase A; the threat model says "the target user is me, my phone has fingerprint lock" and stops there.
+
+Migration 0002 sitting in the repo with `policies not installed` is a footgun. A future contributor (or future-me) running migrations against a Phase B branch could enable RLS without also shipping the auth UI, and every read would return zero rows because `auth.uid()` is NULL. The mitigation is the migration filename + a comment, but the failure mode is real.
+
+### What the alternative would have cost
+
+If we had shipped Supabase auth on day 1, we'd have spent 1–2 weeks on login UI, session refresh, token storage in SecureStore, the bootstrap flow change in `_layout.tsx`, and per-table RLS policy testing before any of the journaling features could ship. The journaling app would not exist in a useable form yet. We'd have the strongest security posture (no anon-key read-all) but no users to protect because there's no app to use.
+
+The cognitive load also shifts. Every test, every migration script, every dev-action push from `scripts/db-migrate.mjs` would need a real bearer token, and the developer-experience overhead of "log in as devuser before you run anything" compounds on a solo timeline.
+
+### The breakpoint
+
+Fine until the first non-me user installs the APK. At that point the hardcoded UUID stops being a placeholder for "me on my device" and starts being a real cross-user collision — two installs share the same `user_id`, and every row from device A appears on device B's dashboard. The fix is Phase B exactly: ship auth UI, replace `PHASE_A_USER_ID` with `auth.uid()`, enable migration 0002, run a one-time `user_id` backfill on existing rows.
 
 ---
 
-## Quick summary
+## Summary
 
 A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces it on every crossing — defense in depth means the schema, the middleware, and the application code each independently refuse unauthorized access. In this codebase the schema gate is composite `(user_id, id)` primary keys declared in `supabase/migrations/0001_initial_schema.sql`, and the runtime gate is RLS staged in `supabase/migrations/0002_rls_policies.sql` but disabled; every Supabase write and read instead stamps a hardcoded `PHASE_A_USER_ID` UUID from `src/services/sync/client.ts`. The constraint was a solo product with a single user in Phase A — shipping the data layer and sync engine before the auth UI was the priority. The cost is that the Supabase anon key is functionally a password — anyone holding it can read everything, mitigated only by keys living in SecureStore and the app having no public surface. The day a real second user logs in, Phase B activates the runtime gate by replacing the hardcoded UUID with `auth.uid()` and enabling migration 0002.
 
@@ -121,18 +163,88 @@ Key points to remember:
 
 A: The schema gate is the composite `(user_id, id)` primary key on every synced Supabase table — if a row doesn't include the user's id, that row literally doesn't exist for them. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but not currently enabled. Phase A only has the schema gate; the runtime gate is staged for Phase B. Both exist because they catch different threats — bad code (schema) versus stolen credentials (RLS).
 
+```
+[two gates, one active in Phase A]
+
+  Client request
+       │
+       ▼
+  Schema gate: composite (user_id, id) PK
+       │   row doesn't exist for wrong user_id
+       │   ACTIVE in Phase A
+       ▼
+  Runtime gate: RLS (user_id = auth.uid())
+       │   query filtered to caller's rows
+       │   STAGED, DISABLED in Phase A
+       ▼
+  Postgres row returned (or not)
+```
+
 [senior] Q: Why ship without RLS at all? You wrote the policies — why not turn them on?
 
 A: Because turning on RLS means I also need real Supabase auth — there's no `auth.uid()` to evaluate without a logged-in user. Phase A is single-user-by-design; I hardcoded a UUID in `client.ts` so I could ship the data layer and the sync engine without solving auth UI first. The RLS migration is in tree precisely so Phase B can enable it without rewriting the sync layer. The cost I accepted is that the Supabase anon key is functionally a password — anyone holding it can read everything. Mitigation: the keys live in Android Keystore via `expo-secure-store`, and the app has no public API surface.
+
+```
+                  Path taken (hardcoded UUID, RLS off)  Alternative (Supabase auth day 1)
+                  ──────────────────────────────────    ──────────────────────────────────
+auth UI           none — deferred to Phase B            login + signup + session refresh
+RLS state         migration 0002 present, not          policies installed, enforced on
+                  installed                            every query
+anon-key risk     reads everything in cloud             reads nothing (token required)
+time-to-data      days                                  1–2 weeks
+                  layer
+Phase A user      "me, on my device, fingerprint       any installer of the APK
+                  lock"
+when worth        single solo writer                   multi-user from day 1
+                  flipping
+```
 
 [arch] Q: Walk me through the migration from Phase A to Phase B at scale. What stays, what changes?
 
 A: The schema doesn't change — composite PKs were always correct. The migration is: ship Supabase auth UI, replace `PHASE_A_USER_ID` reads with the authenticated user's UUID, run a one-time backfill that rewrites every existing row's `user_id` to that authenticated UUID, then enable migration `0002` to turn on RLS. The sync layer and every CRUD path stay identical. The risk is the backfill — if a user already has data on multiple devices each tagged with the same hardcoded UUID, deduplication is required first.
 
+```
+At Phase B (1 → N users, real auth):
+
+  ┌─ Auth UI layer ─────────────────────────────┐
+  │ NEW — Supabase login + signup + session     │  ◀── NEW SURFACE
+  │ Replaces hardcoded PHASE_A_USER_ID read     │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Sync / database.ts ────────────────────────┐
+  │ unchanged — already user_id-aware           │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Schema gate (composite PKs) ───────────────┐
+  │ unchanged — was correct in Phase A          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Runtime gate (RLS) ────────────────────────┐
+  │ FLIPPED ON — migration 0002 installed       │  ◀── BREAKS FIRST if backfill
+  │ Backfill rewrites old rows' user_id to       │     skipped (auth.uid() ≠
+  │ auth.uid() before policies activate          │     PHASE_A_USER_ID, queries
+  └─────────────────────────────────────────────┘     return zero rows)
+```
+
 ### The question candidates always dodge
 Q: You're shipping a journaling app with no end-user auth and you're calling that acceptable. What about a user who installs your APK on a borrowed phone, writes for a week, then loses the phone — everything they wrote is now on a stranger's device with no password. Defend that.
 
 A: Honestly, the device-loss case isn't covered. The app has no PIN, no biometric gate on launch, no encryption on `loopd.db` beyond what Android offers at the OS level. If the borrowed phone is unlocked, the journal is readable. I accepted that because Phase A's target user is me — solo developer using my own device — and adding a launch-screen lock would be three days of work that nobody is asking for yet. The honest mitigation is "it's on my phone, my phone has a fingerprint lock." The day I onboard a non-me user, the launch-screen lock and at-rest encryption are blockers; I won't pretend they're optional. The schema gate doesn't help here because the threat isn't cross-user reads — it's a stranger reading the only user's data.
+
+```
+                  Path taken (no launch lock,           Suggested (launch lock + at-rest
+                  no at-rest encryption)                encryption from day 1)
+                  ──────────────────────────────────    ──────────────────────────────────
+device-loss       fully exposed — unlocked phone        gated by PIN/biometric; loopd.db
+ exposure         reads journal verbatim                encrypted at rest
+build cost        0 (current)                           ~3 days (PIN UI + SQLCipher
+                                                        integration + key rotation)
+Phase A user      "me, fingerprint lock at OS level"    "any installer"
+ fit
+threat addressed  cross-user reads (schema gate)        device-loss / theft
+acknowledgement   documented as known gap; blocker      no gap
+                  for Phase B
+```
 
 ### One-line anchors
 - "Phase A is auth-deferred, not auth-forgotten — the migration is a single client.ts line and a migration toggle."
@@ -204,3 +316,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

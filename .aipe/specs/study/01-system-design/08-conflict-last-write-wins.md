@@ -75,13 +75,61 @@ LWW is the simplest conflict resolution rule in distributed systems. It's what C
 
 ## Tradeoffs
 
-- **LWW** — gives: simple, fast, debuggable. Costs: silent loss in true concurrent multi-writer cases.
-- **Tie → cloud** — gives: pull path doesn't bounce. Costs: a same-second cloud row beats a same-second local row (rare; usually unimportant).
-- **Pure function** — gives: trivially testable, no flaky state. Costs: can't use richer signals (e.g., field-level merge); the whole row is the unit.
+We traded conflict-aware merging for operational simplicity: every conflict is decided by one integer comparison, and the cost is that a true concurrent edit silently loses one writer's work.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────────────┐
+│ Cost dimension   │ Path taken (LWW)             │ Alternative (CRDT / vectors) │
+├──────────────────┼──────────────────────────────┼──────────────────────────────┤
+│ Code surface     │ 31 LOC (conflict.ts)         │ +version_vector JSON column  │
+│                  │                              │ on every synced table +      │
+│                  │                              │ per-table mergers (~5–10     │
+│                  │                              │ new files, ~500 LOC)         │
+│ Resolution speed │ one timestamp comparison/row │ vector domination check +    │
+│                  │ — microseconds               │ possibly call merger         │
+│ Multi-writer     │ silent loss — older write    │ both writes preserved /      │
+│ correctness      │ vanishes, no log/warning     │ merged per type semantics    │
+│ Testability      │ pure function, no I/O,       │ merger may need state,       │
+│                  │ trivial table tests          │ harder to unit test          │
+│ Migration cost   │ N/A (already shipped)        │ ~2 weeks: schema + backfill  │
+│                  │                              │ + bootstrap re-keying        │
+│ Debuggability    │ "newer timestamp won" —      │ "vectors A=[1,3], B=[2,2]    │
+│                  │ readable in 5 seconds        │ are concurrent" — needs a    │
+│                  │                              │ mental model and a tool      │
+│ Fits user model  │ solo user, sequential        │ multi-user or true concurrent│
+│                  │ devices                      │ devices                      │
+└──────────────────┴──────────────────────────────┴──────────────────────────────┘
+```
+
+### What we gave up
+
+The whole row is the unit of resolution; field-level merging is impossible. If a user edits entry text on phone A and adds a habit-check on phone B in the same window, LWW picks one row's entirety — both edits should logically coexist, but one is dropped. Solo journaling rarely produces this scenario, but it is the design's blind spot.
+
+Same-second ties always go to cloud. In practice this is a termination rule (prevents the pull path from oscillating), not a fairness rule — but it does mean that on rare clock-aligned writes, a cloud row equal-timestamp-but-different-bytes overwrites local. The window is millisecond-narrow and the rows are usually byte-identical (it's the same row I just pushed), so the user observes nothing.
+
+The function is pure — no side-effects, no DB reads. That makes it trivially testable but blocks using richer signals at resolution time: we can't consult `pinned`, can't consult per-field freshness, can't inspect `user_overridden_type`. Anything beyond "compare two timestamps" requires rewriting the function and threading more state through `pullTable`.
+
+### What the alternative would have cost
+
+A vector-clock or CRDT migration adds a `version_vector` JSON column to every synced table, populates it on every write, teaches `chooseWinner` a third `'merge'` path, and adds per-table mergers (likely one file per table with non-trivial fields — entries, todo_meta, ai_summaries are the big three). That's ~500 LOC of new code, ~5–10 new files, plus a Supabase migration that backfills vectors on every existing row.
+
+The hidden cost is bootstrap. The first pull's cursor would have to re-key from `updated_at` to a vector-aware shape, which means the firstPull code path (which is already the hairiest in the sync layer) gets a second special case. We'd also lose the ability to debug "which row won" by reading two timestamps — instead a contributor has to reason about vector domination, which needs a mental model that takes time to build.
+
+In return: real concurrent edits compose. Two writers on the same row produce a merge call instead of a silent loss. For a single-user app today, that's a feature with no consumer.
+
+### The breakpoint
+
+Fine until a second human edits a row, or until true concurrent device usage becomes common (e.g., the user routinely has phone and tablet open at the same time, editing the same entry within seconds of each other). LWW silently picks one — at that point silence is the bug, and migrating to vector clocks plus per-field merge becomes a real two-week project. RLS-enabled Phase B is the natural trigger: the moment "another user" is a real concept, this assumption needs to be re-examined.
+
+### What wasn't actually a tradeoff
+
+Per-row "merge whole rows by concatenation" wasn't on the table. The prose field is a string — concatenating two divergent versions produces nonsense. Any real merge needs field-level semantics (text uses CRDT, integers use add/max, booleans use OR), which is the CRDT migration above. There's no halfway version.
 
 ---
 
-## Quick summary
+## Summary
 
 Last-write-wins is the simplest conflict resolution rule: attach a timestamp to every row, and on a conflict keep the row with the bigger timestamp — it sits at the cheap end of a spectrum that runs through vector clocks up to CRDTs and operational transforms. In this codebase `chooseWinner<T extends Tombstoned>(local, cloud)` in `src/services/sync/conflict.ts` (L20–L31) is a pure function that compares `updated_at` and returns `'local' | 'cloud'`, with same-second ties going to cloud (to prevent pull-path ping-pong) and malformed timestamps defaulting to cloud (to heal locally-corrupt rows); `pullTable` invokes it per row to decide whether to upsert. The constraint was solo Phase A — two devices means the same user, sequential intent, where "we kept the most recent one" is an acceptable answer. The cost is silent loss in true concurrent multi-writer cases — LWW picks the newer `updated_at` and the older write is just gone, with no log, merge, or warning, and the pure-function design means field-level merging isn't possible (the whole row is the unit). The migration to vector clocks plus per-field merge would add a `version_vector` JSON column on every synced table and teach `chooseWinner` a third `'merge'` path — roughly two weeks of work, deferred until the conflict surface actually changes.
 
@@ -105,18 +153,88 @@ LWW is the boring answer to a much-too-interesting topic. The interviewer wants 
 
 A: It returns `'cloud'`. The same-millisecond tie biases toward cloud because the caller is the pull path — if cloud has a row at the same timestamp as local, that row arrived from cloud after this device's last pull, and pulling resolves the bounce. Letting local win on a tie would mean the next pull comes back, sees the same tie, and ping-pongs forever. The rule is documented in `conflict.ts` and is the reason the function returns a string instead of a boolean — to make the tie path explicit.
 
+```
+[chooseWinner decision]
+
+  inputs:  local.updated_at, cloud.updated_at
+        │
+        ▼
+  compare timestamps
+        │
+        ├── local > cloud  → return 'local'  (skip pull)
+        ├── cloud > local  → return 'cloud'  (apply pull)
+        ├── local == cloud → return 'cloud'  (tie; prevents ping-pong)
+        └── malformed      → return 'cloud'  (defensive heal)
+```
+
 [senior] Q: When does LWW silently destroy data, and have you accepted that?
 
 A: When two writers edit the same row in the same window with different values. LWW picks the newer `updated_at` and the older write is just gone — there's no log, no merge, no warning. I've accepted that for Phase A because the only multi-writer scenario is "the user on phone, then the user on tablet" — same person, sequential intent, the loss is "the older edit was already obsolete to me anyway." The day there's a second human or true concurrent device usage, LWW becomes wrong; the migration is to per-field merge or operational transforms on the prose field specifically (where the loss would actually hurt). Until then, LWW is the right complexity for the problem.
+
+```
+                  Path taken (LWW, Phase A solo)        Alternative (CRDT today)
+                  ──────────────────────────────        ──────────────────────────────
+conflict surface  one user, sequential devices          would also support 2 humans
+code surface      31 LOC pure function                  +500 LOC, 5–10 new files
+data loss when    truly concurrent edits to same row    none — both edits compose
+                  (rare in solo journaling)
+detectability     silent — no log, no warning           merge call is observable
+testability       trivial table tests                   need divergent-state fixtures
+migration cost    none — already shipped                ~2 weeks (schema + backfill +
+                                                          bootstrap re-keying)
+right today?      yes — fits real surface               no — premature, no real consumer
+right at Phase B? no — RLS + multi-user is the trigger  yes — the moment 2 humans exist
+```
 
 [arch] Q: How would you migrate this to vector clocks or CRDTs without rewriting the whole sync layer?
 
 A: I'd start by adding a `version_vector` JSON column on each synced table, populated alongside `updated_at` on every write. `chooseWinner` would learn a third path: if version vectors are concurrent (neither dominates), return `'merge'` and call a per-table merger; if one dominates, return that side. The push and pull cursors would still use `updated_at`; the conflict resolution would consult the vector. Per-table mergers handle the divergent fields. The migration risk is the backfill — every existing row needs a vector, and the bootstrap pull must re-key the cursor. It's two weeks of work to do right, which is why I haven't done it for a hypothetical use case.
 
+```
+At Phase B (RLS-on, multi-user collaborative):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — reads from local SQLite          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Push/Pull cursors (updated_at) ────────────┐
+  │ unchanged — vectors don't replace timestamps│
+  │ they augment them                            │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ chooseWinner ──────────────────────────────┐
+  │ learns 'merge' path                          │  ◀── BREAKS FIRST
+  │ vector domination check + per-table merger  │     (pure function becomes impure;
+  │ +5–10 new merger files                       │      32 LOC grows to ~200; bootstrap
+  └─────────────────────────────────────────────┘     pull must re-key cursor shape)
+              │
+  ┌─ Schema (every synced table) ───────────────┐
+  │ +version_vector JSON column on each table   │
+  │ migration backfills vectors on every row    │
+  └─────────────────────────────────────────────┘
+```
+
 ### The question candidates always dodge
 Q: Your same-second tie rule says cloud wins. Walk me through the edge case where the user types on the device, the row is pushed, and then a network blip causes pull to fire on the same second. Doesn't local lose its own write?
 
 A: Almost. After the push succeeds, the local row has `updated_at = T` and `synced_at = T'` (where T' is server time, slightly later). The cloud row has `updated_at = T`. On the immediate pull, `chooseWinner` sees `local.updated_at == cloud.updated_at` and returns `'cloud'`. Then pull upserts the cloud row over local. The values are byte-identical (it's the same row I just pushed) so the user notices nothing — but the local `synced_at` stays correct because the upsert path stamps it again. The case where this would actually hurt is if my local row had a *newer* `updated_at` than what cloud received (because my push was racy and stamped after the cloud's accept timestamp), but my code path stamps `updated_at` before push specifically to avoid that. The risk is real but bounded; if I observed it in the wild I'd add a strict `>` instead of `>=` in `chooseWinner` and accept the rare miss.
+
+```
+                  Path taken (tie → cloud)              Suggested (tie → local)
+                  ──────────────────────────────        ──────────────────────────────
+ping-pong         impossible — pull terminates after    pull keeps re-applying local;
+                  one tie resolution                    every pull cycle re-runs
+data outcome      byte-identical row overwrites local   local stays; cloud round-trips
+                  (no observable change)                back next push
+synced_at         restamped on upsert — correct         needs a separate fix
+                                                          (currently relies on push stamp)
+edge case where   theoretical: local newer than what    no edge — but pull-cycle
+ it hurts         cloud actually stored                 inefficiency is real
+mitigation if     swap `>=` → strict `>` in compare;    none simple — would need to
+ observed in wild accept rare miss                      teach pull to skip self-pushed rows
+real risk today   bounded (push stamps updated_at       unbounded — pull churn grows
+                  before send; same-second tie rare)    with row count
+```
 
 ### One-line anchors
 - "LWW is the simplest rule that fits the actual conflict surface — single user, sequential devices."
@@ -188,3 +306,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a pure-function decision table, not a cross-layer composition.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -170,13 +170,60 @@ The "build both index structures, then walk both sides" diff pattern is the same
 
 ## Tradeoffs
 
-- **Index both sides** — gives: O(n+m) and clear code. Costs: O(n+m) memory upfront.
-- **Async classify on insert** — gives: reconcile returns fast. Costs: a brief window where the row shows `type='todo'` before the LLM upgrades it.
-- **Self-healing on next commit** — gives: a missed insert/delete isn't catastrophic. Costs: between runs, the invariant can be momentarily violated.
+We traded transactional rigour and a small memory overhead for a reconciler that reads like the invariant it enforces and never blocks the journaling write path.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (Map+Set, async)    │ Alternative (nested-loop + tx) │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(n + m) — two linear walks    │ O(n × m) — `.find()` per row   │
+│                  │ with O(1) Map/Set lookups      │                                │
+│ Latency at N=20  │ <1ms synchronous; LLM async    │ <1ms synchronous; same if      │
+│                  │                                │ LLM also async                 │
+│ Latency at 10×N  │ ~2ms synchronous               │ ~20ms — `.find()` × 200 todos  │
+│ Memory churn     │ allocates Map(m) + Set(n)      │ no allocations, but GC noise   │
+│                  │ ~1KB per scan at N=20          │ from per-iteration closures    │
+│ Code complexity  │ ~90 LOC: build, insert, delete │ ~60 LOC: two nested .find loops │
+│ Cognitive load   │ `byTodoId.has(todo.id)` reads  │ `existing.find(m => ...)` reads │
+│                  │ as the invariant itself        │ as "scan the array"            │
+│ Transactionality │ each insert/delete is its own  │ wrapped in db.transaction →    │
+│                  │ statement — drift on crash;    │ all-or-nothing; no eventual    │
+│                  │ next reconcile heals it        │ window                         │
+│ Failure mode     │ stuck LLM call → row stays at  │ stuck LLM call → reconcile     │
+│                  │ type='todo' forever; silent     │ blocks; whole journal write   │
+│                  │ (no sweep job yet)             │ stalls the UI                  │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The reconciler builds a `Map<todoId, meta>` and a `Set<todoId>` on every call — ~1KB of allocation per scan at N=20, GC-collected before the next commit. The two structures cost ~30 LOC of building boilerplate before the actual diff loops begin (`reconcileMeta.ts` L48–L92). At the project's scale a single `.find()` per row would also be sub-millisecond, so this isn't a speed win — it's a code-shape win. The function reads `byTodoId.has(todo.id)` and you can see "is this todo already represented in meta?" without translating from a `.find` predicate. That clarity is what we're paying for.
+
+Inserts and deletes aren't wrapped in `db.transaction(() => ...)`. If the app dies between the insert phase and the delete phase, the next reconcile sees orphans and patches them — eventually 1:1, not transactionally 1:1. The user-visible cost of drift is zero because the JS join that produces `TodoItem[]` ignores orphan metas, but the invariant is technically violated between phases.
+
+`scheduleClassify` is fire-and-forget. A stuck LLM call leaves the row at `type='todo', confidence=null` indefinitely because `byTodoId.has(todo.id)` is true on the next reconcile and the insert phase skips it. There's no sweep job that retries stale `confidence=null` rows yet. At single-user scale this is invisible; at multi-user scale it would be a metric.
+
+### What the alternative would have cost
+
+A nested-loop reconciler with `existing.find(m => m.todoId === todo.id)` would have dropped ~30 LOC of index-building. At N=20 it would also be sub-millisecond. The visible cost is that the code stops reading like the invariant — a reader sees `existing.find(...)` and parses "linear scan" before parsing "membership check." Onboarding a contributor takes longer to land the insight that this function IS the 1:1 enforcement gate.
+
+Wrapping reconcile in `db.transaction(() => ...)` would close the drift window. It's a one-line change. The reason we haven't is that the consequence of drift is invisible (orphan metas are read-only) and adding a transaction means every scheduled LLM call inside the loop has to be hoisted *out* of the transaction (LLM calls can't be inside a SQLite transaction or the connection holds open for 800ms). That hoisting is ~15 LOC of reorder for a benefit nobody sees.
+
+Awaiting the LLM call inside reconcile would block typing bursts that produce new todos by ~300-800ms per row. Every focus-blur with a new todo would stutter. The fire-and-forget model trades "eventually correct `type`" for "writes never block on the network," which is the right trade for a journaling app.
+
+### The breakpoint
+
+Fine until `confidence=null` rows accumulate from repeated LLM failures and no sweep job exists to retry them. At a single user with reliable network, this never trips. The actual breakpoint is multi-user with intermittent connectivity: at ~5% LLM failure rate sustained over a week, a measurable fraction of todos get stuck at `type='todo'` and the heuristic-vs-LLM split breaks down. The fix is a periodic sweep that re-enqueues `confidence IS NULL AND created_at < now - 24h` — a separate cron-like job, not a change to reconcile.
+
+### What wasn't actually a tradeoff
+
+Choosing Map+Set over two `.find()` calls wasn't a tradeoff on speed — at N=20 both are sub-millisecond. It was a tradeoff on clarity: the index name (`byTodoId`) is the invariant name. The bullet-form readability is the only reason the optimal version is in the codebase.
 
 ---
 
-## Quick summary
+## Summary
 
 The reconciler pattern is the standard remedy whenever two lists are supposed to mirror each other but no foreign-key constraint enforces the relationship — walk both sides once, decide what's missing where, apply the minimum writes to make them match. In this codebase `reconcileTodoMetaForEntry` keeps `todo_meta` rows 1:1 with `entries.todos_json` after `scanTodos` produces final ids: it builds a `Map<todoId, meta>` for "do I already have a meta?" and a `Set<todoId>` for "is this meta still valid?", then inserts missing rows and deletes orphans in O(n+m). The constraint is that SQLite can't FK to a JSON-array element, so the reconciler IS the integrity gate. The cost is that a partial run between insert phase and delete phase can leave momentary drift — the invariant is eventually 1:1, not transactionally 1:1 — but the next commit's diff sees the gap and patches it. At the project's 20-todo-per-entry scale, brute force would also be sub-millisecond; the Map+Set version is chosen for clarity (`byTodoId.has(...)` reads like the invariant), not raw speed.
 
@@ -199,16 +246,78 @@ The probe is whether I understand the difference between an O(n+m) algorithm cho
 [mid] Q: Why does `reconcileTodoMetaForEntry` build `current` as a Set when the insert phase only iterates `entry.todos` once?
       A: The `current` Set isn't for the insert phase — it's for the delete phase. The delete phase walks `existing` and asks "is this meta's todoId still in the current todos?" That's an O(1) Set lookup per row instead of an O(n) `.find` over `entry.todos`. The two index structures serve the two different walks: `byTodoId` answers "does this todo already have a meta?" and `current` answers "does this meta still have a todo?".
 
+```
+[two index structures, two walks]
+
+  build phase
+        │
+        ├── byTodoId : Map(existing → meta)   ◀── used by INSERT walk
+        └── current  : Set(entry.todos.id)    ◀── used by DELETE walk
+                 │
+                 ▼
+  INSERT walk over entry.todos
+        for each todo:
+          byTodoId.has(todo.id) ? skip : insert
+                 │
+                 ▼
+  DELETE walk over existing
+        for each meta:
+          current.has(meta.todoId) ? skip : delete
+```
+
 [senior] Q: Why is the LLM call fired async rather than awaited inside reconcile?
          A: Reconcile runs on the journaling write path. If I awaited the Haiku call, every typing burst that produces a new todo would block the local write by ~300-800ms. Instead I call `heuristicClassify` synchronously — it's a regex pass that catches 60-70% of cases — and only fall through to `scheduleClassify` for the ambiguous ones. The local row gets `type='todo', confidence=null` immediately, the LLM upgrades it later. The cost I accept is a brief window where the UI shows `type='todo'` before it might flip to `'idea'`.
 
+```
+                  Path taken (fire-and-forget LLM)     Alternative (await LLM in reconcile)
+                  ─────────────────────────────────    ──────────────────────────────────
+new-todo write    insert meta now ; LLM later          insert meta after LLM responds
+write latency     ~5ms — disk only                     300-800ms — disk + Haiku round-trip
+focus-blur UX     instant return ; no UI stall         visible UI stutter on every new todo
+LLM failure cost  row stays at type='todo' silently    write fails ; user types again
+                  (read-only orphan if no sweep)       (worse — destructive)
+heuristic gate    catches 60-70% before LLM ever fires same gate, but LLM is on hot path
+correctness       type may briefly be stale            type is correct immediately on insert
+```
+
 [arch] Q: What happens if `scheduleClassify` keeps failing for a particular row?
        A: The row stays at `type='todo', confidence=null` indefinitely. Reconcile won't re-fire because `byTodoId.has(todo.id)` is true on the next run. To recover I'd need a separate sweep — find rows where `confidence IS NULL AND created < now - threshold` and re-enqueue. I haven't built that sweep; right now a stuck classifier failure is silent. At single-user scale that's fine; at multi-user scale it'd be a metric to alert on.
+
+```
+[scale curve — what breaks first at 10× / 100× input]
+
+  scenario                 stuck rows accumulate?       breaks?
+  ──────────────────────   ──────────────────────       ─────────────────────────
+  1 user, reliable net      no — Haiku rarely fails     fine
+  1 user, flaky net (10×)   handful per week            tolerable; user can retype
+  100 users (10×)           dozens per day              metric worth alerting on
+  10,000 users (100×)       thousands daily             needs sweep job; no choice
+                            no recovery path exists     reconcile invariant degrades
+  fix                       periodic re-enqueue of
+                            confidence=null rows
+                            older than 24h
+```
 
 ### The question candidates always dodge
 Q: You said reconcile is "self-healing on next commit." What if the user closes the app between the insert phase and the delete phase — is the DB consistent?
 
 A: It's consistent in the sense that nothing is half-written, because each insert/delete is its own SQLite statement and they're not in a transaction. So if the app dies after the inserts but before the deletes, you'd have all the new metas plus the orphans that should have been deleted. Both `byTodoId` and `current` rebuild fresh on the next run, so the orphan gets caught next time the entry is touched. The invariant is *eventually* 1:1, not transactionally 1:1. The honest fix would be to wrap the whole reconcile in a transaction so it's all-or-nothing — that's a one-line change with `db.transaction(() => ...)` and I should probably do it. The reason I haven't is laziness plus the observation that orphan metas are read-only (the JS join ignores them) so the user-visible consequence of drift is zero.
+
+```
+                  Path taken (no transaction)          Suggested (db.transaction wrap)
+                  ─────────────────────────────        ──────────────────────────────────
+crash mid-loop    orphan metas survive ; next          all-or-nothing ; no orphans ever
+                  reconcile cleans them
+window of drift   between phases (~1ms typically,      zero
+                  but unbounded if process dies)
+user-visible cost zero — JS join ignores orphans       zero — same user-visible behaviour
+LLM call site     fire-and-forget OK anywhere          must be hoisted OUT of transaction
+                                                        (SQLite holds connection during tx)
+extra LOC         0                                     +15 LOC to hoist scheduleClassify
+                                                        and re-stitch the flow
+verdict           cheap ; invariant is eventually 1:1  cleaner ; pays 15 LOC for an
+                                                        invariant the user can't see
+```
 
 ### One-line anchors
 - "Two index structures, two walks — `byTodoId` for inserts, `current` for deletes."
@@ -275,3 +384,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

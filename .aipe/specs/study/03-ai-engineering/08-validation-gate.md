@@ -84,13 +84,69 @@ If validation fails, the behaviour depends on the feature:
 
 ## Tradeoffs
 
-- **Hard validation gate** — gives: SQLite always holds well-shaped data. Costs: a model output that's *almost* right gets rejected.
-- **One retry then give up** — gives: bounded cost on bad responses. Costs: occasional features just don't run; user gets "couldn't expand."
-- **Parse + validate split** — gives: each step has a single failure mode. Costs: two functions to maintain per chain.
+We traded "nearly-right outputs go to SQLite" tolerance for a hard parse-and-validate gate — never letting malformed model output reach storage, and accepting that almost-right answers get thrown away.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (hard gate)         │ Alternative (fill defaults /   │
+│                  │                                │ soft accept)                   │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Money            │ ~1 wasted call per drift event │ 0 wasted calls — but downstream│
+│ ($/call)         │ (~$0.04 on Sonnet/expand);     │ "render broken comp" bugs each │
+│                  │ retry only on expand           │ cost dev hours to track down   │
+│ Latency          │ 1 extra retry on expand (~3s); │ no retry latency; instant fail │
+│                  │ skip otherwise                 │ surfaces only when user reads  │
+│ Quality          │ no malformed data in SQLite;   │ ~1-3% of rows carry shape bugs │
+│ (% correct)      │ recovery = re-fire             │ (default-filled, half-parsed); │
+│                  │                                │ silent corruption              │
+│ Failure mode     │ loud + bounded — caption skips,│ silent — wrong clipOrder       │
+│                  │ expand returns malformed       │ renders broken editor; user    │
+│                  │ reason; user sees nothing wrong│ doesn't know why               │
+│ Debugging        │ wrong row → wrong validator    │ wrong row → 4 possible causes  │
+│                  │ rule; one place to fix         │ (parser, default-filler,       │
+│                  │                                │ model drift, race)             │
+│ Cognitive load   │ "parse, then validate, then    │ "parse, fix-up, then trust" —  │
+│                  │ persist" — uniform across 5    │ where does fix-up logic live   │
+│                  │ chains                         │ for each chain?                │
+│ Model upgrades   │ validators are the canary —    │ model drift slips through;     │
+│                  │ Sonnet 5 schema drift fails    │ surfaces as user-visible bugs  │
+│                  │ loudly                         │ weeks later                    │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up the ability to accept "nearly-right" outputs. When the model returns a caption with 3 of 4 variants present and `parseAndValidate` rejects it, the user sees no caption variants that day — the structured summary still saves, but the 4-variant strip on the dashboard is empty. The model produced 75% of the right answer; we threw all of it away. In aggregate this is rare (~1-3% of caption calls drift), but it does happen and the recovery is "try again tomorrow" not "use the partial."
+
+We pay for an extra LLM call on every expand validation failure. The one-retry-with-stricter-prompt pattern in `expand.ts` adds ~$0.04 and ~3s of latency on each retry — affordable at single-user volume but real at scale. Caption, summarize, and classify don't retry: when they fail validation, the chain silently skips and the user gets no AI annotation for that event. That's the deliberate asymmetry — retry budget tracks user intent (expand is button-fired; others are automatic).
+
+The interpret chain is the deliberate exception: its "validator" is the 11-line `cleanMarkdown`, not a schema. We accept that the model can drift into clinical language, that emoji H2 headings can become plain `##` headings, that the structural template can flatten — all of which slip through `cleanMarkdown` because the user is the integrity check, not the app. The cost is no canary on `interpret.ts` model upgrades; we'd notice degradation only by reading the modal output.
+
+### What the alternative would have cost
+
+A "fill defaults on partial output" path would have meant deciding what to do when each required field was missing. For caption, what's a default `punchy` variant? For summarize, what's a default `clipOrder` if the model returned an empty array? Every default is a product decision masquerading as a fallback — and the choice "use whatever default" is the choice "let the user see the default and assume the AI worked." That's silent corruption: the editor renders a "summary" that's mostly empty, the user doesn't know why, and the bug is invisible until they ask a question we can't answer.
+
+The deeper cost is observability. With a hard gate, model drift surfaces immediately — a Sonnet upgrade that returns a slightly different shape fails `validateSummary` on the next call, the error lands in `ai_summaries.error`, and the dev (me) notices the next time I look. With soft-fill defaults, the same drift quietly renders broken UI for weeks until a user complains. The validators are the canary; turning them into a fix-up layer would silence the canary.
+
+Cross-cutting: where does the fix-up logic live? Each chain has different required fields, different default shapes, different consumers. The defaulting code would either live in each validator (5 places to update on schema change) or in a shared `fillMissingFields(schema, partial)` utility (which is just another validator with a different return shape). Neither is simpler than the current "parse, validate, skip" pattern.
+
+### The breakpoint
+
+The pattern flips the day the cost of "missed annotation" exceeds the cost of "silent corruption". Concrete trigger shapes: an AI annotation becomes load-bearing (the editor refuses to render without it), the user pays for an AI feature where "couldn't generate" feels like a broken product, or the rate of validation failures climbs past ~5% — at which point retry-once isn't enough and we'd need either prompt-tuning, a more reliable model, or graceful fallback to a simpler shape.
+
+Today the pattern works because every AI feature is *advisory*: missing classify → row stays at `type='todo'`, missing caption → no variants strip, missing expand → user sees the "couldn't expand" UI and re-fires. The day any of those failures becomes user-visible *as a failure* (not just as missing annotation), we'd need a different recovery path. None of them are today.
+
+A secondary trigger: model upgrades that consistently fail the current validators. If Sonnet 5 changes its JSON shape and `validateSummary` rejects 30% of calls, the right answer is to update the schema, not to relax the gate. The gate is the canary, not the bottleneck.
+
+### What wasn't actually a tradeoff
+
+JSON Schema vs hand-rolled validators wasn't a real choice for this codebase. The validators are 30-100 LOC each (`validateSummary` L12+, `validateExpansion` L77–L142, `parseAndValidate` L169–L199) and each one knows its chain-specific rules (clipId-exists, all-four-variants-present, per-type-required-fields). Standardizing on JSON Schema would mean importing a runtime validator (Zod, ajv) and translating each chain's rules into schema files — same logic, more indirection, no portability gain because the validators aren't shared across services.
 
 ---
 
-## Quick summary
+## Summary
 
 The validation gate is the "parse, don't validate" pattern applied to LLM output — every model response is treated as untrusted input, parsed into a strongly-typed value at the boundary, and rejected if it doesn't match the schema. In this codebase the gate lives in `validate.ts` (`validateSummary`), `caption.ts` (`parseAndValidate`), `expand.ts` (`validateExpansion`), and `interpret.ts` (`cleanMarkdown`) — each chain owns its own validator and persistence only happens after it passes. The constraint that drove it is that prompts drift, models hallucinate keys, and new model versions sometimes return slightly different JSON shapes — TypeScript types don't enforce at runtime, so the validators are the runtime guards. The cost is that a model output that's *almost* right gets rejected, and on the second failure the feature just doesn't run that time.
 
@@ -113,16 +169,96 @@ Key points to remember:
 [mid] Q: Where does `validate.ts` actually run in the flow, and what happens on failure for each chain?
       A: After the model call returns, before any DB write. `parseJson` regexes out the `{…}` and `JSON.parse`s — if that throws, returns null. Then per-feature validators run: `validateSummary` (every clipId in clipOrder must exist), `parseAndValidate` for caption (all 4 variants required: clean, smoother, reflective, punchy), `validateExpansion` (per-type required fields). On failure the behaviour differs: caption skips and the structured summary still saves; summarize surfaces the error in `ai_summaries.error`; expand retries once with a stricter system prompt and then gives up returning `{ ok: false, reason: 'malformed' }`; classify skips and the meta row stays at heuristic-or-null type. No malformed output ever reaches SQLite.
 
+```
+[validate.ts flow — uniform across 4 JSON chains]
+
+  LLM call returns string
+        │
+        ▼  parseJson — regex {...}, JSON.parse
+  parsed object | null
+        │
+        ├─ null → SKIP (caption) | log + error (summarize) |
+        │        retry once stricter (expand) | SKIP (classify)
+        │
+        ▼  per-feature validator (validateSummary / parseAndValidate /
+           validateExpansion / cleanMarkdown for interpret)
+        │
+        ├─ schema fails → same chain-specific recovery as above
+        │
+        ▼  persist to SQLite (ai_summaries / todo_meta / etc.)
+```
+
 [senior] Q: Why a hard gate instead of "fix it up" — for example, fill in missing fields with defaults?
          A: Because filling defaults silently turns model failures into user-visible wrong answers. If `validateSummary` accepted a summary with a `clipOrder` referencing a missing clipId, the editor would render a broken composition with no signal that the model misfired. Hard rejection means "no AI annotation this time" — the user sees the un-annotated state and the chain can be re-fired. The trade is that a *nearly* right output gets thrown out. I'm okay with that because the recovery path is "run it again", which is cheap, and the alternative is silent corruption.
 
+```
+                  Path taken (hard gate)              Alternative (fill defaults)
+                  ─────────────────────               ──────────────────────────
+nearly-right      thrown away — re-fire is recovery   accepted with defaults filled
+output            ($0.04 cost)
+SQLite content    always well-shaped                  ~1-3% rows carry shape bugs
+user signal       "no annotation this time" —         "annotation present but wrong" —
+                  visible absence                     invisible corruption
+failure surface   loud — appears immediately on call  silent — surfaces weeks later
+                                                      as user-visible UX bug
+debugging         wrong row → wrong validator rule    wrong row → 4 causes (parser,
+                  (one place to fix)                  default-filler, drift, race)
+recovery cost     ~$0.04 per re-fire                  dev-hours per silent bug found
+                                                      after the fact
+model-upgrade     canary fires loudly                 canary disabled — drift slips
+sensitivity                                           through silently
+```
+
 [arch] Q: How does the validation gate interact with model upgrades — say switching Sonnet 4.6 to a future Sonnet 5?
        A: It's the canary. The day a model upgrade returns a slightly different shape — extra field, renamed key, missing optional that used to be there — `validate.ts` catches it before persistence. The retry-with-stricter-prompt in `expand.ts` is a soft mitigation; if the new model consistently fails validation, I'd see it in the error logs and update either the prompt or the schema. The validators are versioned implicitly with the prompt; they're a contract test. Without them, a model upgrade looks like "the app works" until the editor renders something weird.
+
+```
+At model-upgrade day (Sonnet 4.6 → Sonnet 5):
+
+  ┌─ UI layer ──────────────────────────────────┐
+  │ unchanged — editor reads ai_summaries       │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Validators (validateSummary / Expansion) ──┐
+  │ rejects schema-drifted output IMMEDIATELY   │  ◀── CANARY FIRES FIRST
+  │ ai_summaries.error fills up                 │     (loud, before any
+  │ logs surface "Sonnet 5 returns 'clip_order' │      data is persisted)
+  │ instead of 'clipOrder'" or similar          │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Persistence (SQLite) ──────────────────────┐
+  │ stays clean — no malformed rows enter store │
+  │ recovery: update validator OR prompt         │
+  │ until validation rate is healthy again       │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: What about prompt injection? You parse the LLM output and write it to your DB. If the user pastes adversarial text into a journal entry, you trust the model output enough to commit it.
 
 A: The validation gate is a *parse* gate, not an injection gate. I check that the JSON is well-formed and matches the schema. If the model returns valid JSON with malicious content (a SQL-injection-shaped string in `summary`, a script tag in `expanded_md`), the validator passes it. In this codebase that's acceptable because the LLM only writes to derived fields — `todo_meta.expanded_md`, `ai_summaries.summary_json`, `caption.variants.*`. Those fields are never executed (markdown rendered, not eval'd), never sent back to the LLM as a system prompt, and never used as SQL. The injection surface in this app is zero. The user is also the only person who can read their own data — single-user phase A. If I added a feature that fed model output back into a system prompt (a "remember this" mode), I'd add a sanitizer at that boundary. If I added multi-user with shared content, I'd sanitize on render. Today neither exists, so the parse gate is the only gate I need.
+
+```
+                  Path taken (parse-only gate)        Suggested (also-sanitize gate)
+                  ───────────────────────────         ──────────────────────────────
+what gate checks  shape: JSON well-formed +           shape + content: deny-list
+                  schema fields present               regexes for HTML, SQL,
+                                                      system-prompt injection
+injection surface zero today — model output goes to:  same fields, additionally
+                  - markdown-rendered (never eval'd)  scrubbed
+                  - never sent back as system prompt
+                  - never used as SQL parameter
+sanitizer cost    0 LOC                               ~30-50 LOC per chain + tuning;
+                                                      brittle to bypass
+false-reject rate 0                                   non-zero — sanitizer rejects
+                                                      legitimate user content that
+                                                      pattern-matches injection
+phase-A fit       single user, no shared content —    over-engineering for the
+                  no audience to be injected into     current threat model
+when this flips   multi-user shared content,          add sanitizer at the consumer
+                  OR model-output-as-system-prompt    boundary, not as a parse gate
+                  feature ships
+```
 
 ### One-line anchors
 - "A prompt is not a contract. The validator is what enforces the contract."
@@ -191,3 +327,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -162,13 +162,52 @@ Pure render functions are fundamental to React (and to spreadsheet recalc engine
 
 ## Tradeoffs
 
-- **Pure function** — gives: O(1) per cell, no flash, easy to test. Costs: parent must prep all inputs.
-- **Decision tree (5 states)** — gives: deterministic, exhaustive. Costs: adding a 6th state means changing every consumer.
-- **Order-sensitive checks** — gives: `done` always wins; `off-day` beats `missed`. Costs: the order encodes business rules; readers must follow it.
+We traded data-prep responsibility at the parent for an O(1) pure per-cell decision the React reconciler can skip cheaply.
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (pure + parent prep)│ Alternative (per-cell I/O)     │
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Time complexity  │ O(1) per cell · O(7N) grid     │ O(N) per cell · O(7N²) grid    │
+│                  │ after parent O(N) Map build    │ if each cell scans an array    │
+│ Latency at 30    │ <1ms total grid (210 cells)    │ <1ms but with re-render flash  │
+│ habits (real N)  │                                │ on every input touch           │
+│ Latency at 10×N  │ ~3ms at 300 habits (2,100      │ ~30ms at 300 habits + DB stall │
+│                  │ cells); 60fps fine             │ on each cell if impure         │
+│ Code complexity  │ ~70 LOC for cellStateFor +     │ ~40 LOC for cell, but parent   │
+│                  │ ~20 LOC for parent Map build   │ becomes the source of races    │
+│ Cognitive load   │ reader must trace why parent   │ reader sees one place — and   │
+│                  │ prep is what makes O(1) true   │ misses why the grid flashes    │
+│ Failure mode     │ stale Map at parent → cells    │ async per-cell read → flash,   │
+│                  │ render last-tick state for ~1m │ in-flight states visible       │
+│ Extensibility    │ adding 6th state touches every │ adding 6th state touches one  │
+│                  │ consumer of the union type     │ function, but introduces I/O   │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+The parent (`DailyScheduleGrid.tsx`) carries the data-prep cost: it materialises `checkedDatesByHabit: Map<string, Set<string>>` once per render before any cell renders. That's ~20 LOC of setup the parent owns, and a contributor who modifies the parent has to know that breaking the Map shape silently degrades every cell from O(1) to O(N).
+
+The decision tree is closed — adding a 6th state (`paused`, `snoozed`, anything) means changing the union type, every consumer that switches on it, and the order of branches in `cellStateFor` to keep evidence priority intact. We picked exhaustive over open and pay the migration cost every time the product asks for a new state.
+
+Order-sensitivity is load-bearing — the branches encode "check-in beats cadence beats time-of-week" as code. A reader who reorders them to look prettier breaks the contract that an off-day check-in still renders as `done`. The comment density around the function exists to preserve that fact.
+
+### What the alternative would have cost
+
+If each cell called `getCheckIns(habit, date)` directly, the function shape would be ~40 LOC instead of ~70 — but it would either be an SQLite call (async, impure, bad in render) or a JS scan over a flat array (O(N) per cell, grid becomes O(7N²)). At 30 habits that's a 6,300-op cost vs the current 210; at 300 habits it's 630,000 vs 2,100. The 300× gap shows up as visible UI lag during scrubbing.
+
+The hidden cost is React. An impure cell renders mid-await, then re-renders when the await resolves — every cell flashes its placeholder state before the real one. The user sees the grid bloom into existence twice per render cycle, and the reconciler can't bail out of the second render because the inputs technically changed.
+
+### The breakpoint
+
+Fine until habit count exceeds ~500 in a single user's account, at which point the parent's Map build (O(N)) starts to dominate the render and the grid stutters on the first paint. The fix isn't the algorithm — it's pagination at the parent (only render the visible week's habits), which the data shape already supports.
 
 ---
 
-## Quick summary
+## Summary
 
 A pure decision function is the family of "split the expensive side (gathering) from the cheap side (deciding) so the cheap side can run hot without dragging the expensive side along" — the same shape as CSS rule resolution, React `useMemo` selectors, and Redux derived state. In this codebase `cellStateFor` and `cellStateForThread` in `src/components/home/cellState.ts` map `(habit, date, today, checkedDates)` to one of five states (`done | off-day | pending | upcoming | missed`) using a short-circuiting decision tree: check-in beats cadence beats time-of-week. The constraint is that the grid re-renders on every habit toggle, week change, and live-now tick — if the function were impure (DB read, async), the grid would flash and React's reconciler couldn't skip unchanged cells. The cost is that the parent (`DailyScheduleGrid.tsx`) has to materialise `checkedDatesByHabit: Map<string, Set<string>>` once per render and pass it down; that's the data prep that turns the per-cell call into O(1). Without the Map the algorithm collapses — each cell would scan an array per call and the grid would become O(7 × N²).
 
@@ -191,16 +230,71 @@ The probe is whether I understand that "O(1) per cell" is a property of the rend
 [mid] Q: Why does the `done` check come before the `isDueOn` check in `cellStateFor`?
       A: Because the user can check in on a day the habit isn't normally due — say they're on a M/W/F cadence and they did the run on a Tuesday. The check-in is real data; the cadence is just the schedule. If `isDueOn` ran first, an off-day check-in would render as `off-day` and the user's done-state would be invisible. Order encodes priority of evidence: the user's recorded action always wins over the schedule's prediction.
 
+```
+[branch order in cellStateFor]
+
+  cell (habit M/W/F, Tue, checkedDates={Tue})
+        │
+        ▼  branch 1
+  checkedDates has "Tue"? YES → 'done'   ◀── stops here
+        │
+        ▼  branch 2 (skipped)
+  isDueOn(habit, Tue)? would be false → 'off-day' (would hide the check-in)
+        │
+        ▼
+  evidence priority preserved
+```
+
 [senior] Q: Why pass `checkedDatesByHabit` down as a Map instead of letting each cell call `getCheckIns(habit, date)`?
          A: Because `getCheckIns` would be either an SQLite call (impure, async, bad in render) or a JS scan over a flat array (O(N) per cell, so the grid becomes O(7×N²)). The Map is a one-time O(N) build at the parent that turns every cell lookup into O(1). The grid renders in O(7N) total. It's the classic decorate-once-query-many-times pattern; the Map is the index, the render is the query.
 
+```
+                  Path taken (parent Map)              Alternative (per-cell getCheckIns)
+                  ────────────────────────             ──────────────────────────────────
+build cost        1× O(N) Map build at parent          0 — but cells pay per call
+per-cell lookup   O(1) Set.has                         O(N) array scan OR async DB read
+grid total        O(7N) at 30 habits = 210 ops         O(7N²) at 30 habits = 6,300 ops
+render purity     pure — reconciler can skip cells     impure — every cell may re-render
+                                                       when async resolves
+flash on touch    none                                 yes — placeholder, then real state
+LOC               +20 at parent, -O(N) in each cell    -20 at parent, +scan/await in cell
+```
+
 [arch] Q: What if I had 1,000 habits — does the grid still render in 16ms?
        A: 7 × 1,000 = 7,000 cell renders. The state computation is O(1) so that's fine, but React's reconciliation overhead per cell is non-trivial — at 1,000 rows you'd want virtualization (`FlashList` or `RecyclerListView` in RN) to only render the visible window. The algorithm itself doesn't change; what changes is how much of the grid you render at once. The state function is decoupled from the rendering strategy, which is exactly why the purity matters.
+
+```
+[scale curve — what breaks first at 10× and 100× habit count]
+
+  habits   cells   cellStateFor cost   React commit budget   breaks?
+  ──────   ─────   ─────────────────   ───────────────────   ──────────────────
+  30        210    <1ms                 16ms fine             no
+  300     2,100    ~3ms                 16ms fine             no
+  1,000   7,000    ~10ms                ◀ 16ms budget         reconciler stalls
+                                                              first   ◀── BREAKS FIRST
+  5,000  35,000    ~50ms                ◀◀ way over           need virtualization;
+                                                              data model still fine
+```
 
 ### The question candidates always dodge
 Q: Your function depends on `todayStr` as a string from the parent. What happens at midnight when the date rolls over and the parent hasn't ticked yet?
 
 A: The parent ticks on a 1-minute interval, so there's a window of up to 60 seconds where `todayStr` is yesterday. During that window, today's pending cells render as `missed` if they haven't been checked in, and tomorrow's upcoming cells render as `upcoming` until the tick fires. That's wrong on the technicality — yesterday's checked cells stay `done`, that's correct, but a pending habit on the new day might briefly flash as `missed` once midnight passes. The honest fix is to anchor the tick to a time-zone-aware "next midnight" timer instead of a fixed interval, so the grid recomputes exactly at the boundary. Right now the user sees a 1-minute lag at the day boundary, which has never been observable in practice because nobody is staring at the grid at 12:00:00. It's wrong and it's fine — the kind of bug I'd fix the moment it surfaced and not before.
+
+```
+                  Path taken (1-minute fixed tick)    Suggested (timezone "next midnight")
+                  ──────────────────────────────────  ──────────────────────────────────
+tick boundary     up to 60s lag at 00:00              ms-accurate at the day boundary
+worst-case state  pending → flashes as missed for     no flash — boundary recompute is
+                  ≤60s after midnight                 exact
+observable        nobody is staring at 12:00:00       same — fix is unobservable in use
+implementation    setInterval(60_000)                 setTimeout to next-midnight diff,
+                                                       chained
+DST / TZ change   silently wrong on the changeover    explicit re-compute on each
+                  day                                  midnight, robust to DST
+verdict           wrong-and-fine; fix when noticed    principled fix waiting for a user
+                                                       report
+```
 
 ### One-line anchors
 - "Pure + O(1) means React only repaints what changed."
@@ -267,3 +361,6 @@ Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + com
 ---
 Updated: 2026-05-10 — added Why care block (template v1.18.0).
 Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.

@@ -97,13 +97,72 @@ Each failure mode has a defined recovery path. The principle: **the canonical da
 
 ## Tradeoffs
 
-- **Best-effort AI** — gives: user's data never blocked. Costs: AI features may silently not run; user wonders why.
-- **Per-failure recovery** — gives: each mode has a specific behaviour. Costs: more code than "throw and bubble."
-- **MAX_CONCURRENT cap** — gives: cost ceiling on expand burst. Costs: power user trying to "expand all" hits the cap.
+We traded loud user-visible AI errors for graceful degradation — every AI failure leaves the canonical SQLite write untouched, and the worst outcome is "no annotation this time," never "lost data" or "broken commit."
+
+### Comparison table — both costs in one frame
+
+```
+┌──────────────────┬────────────────────────────────┬────────────────────────────────┐
+│ Cost dimension   │ Path taken (graceful degrade)  │ Alternative (loud throw + halt)│
+├──────────────────┼────────────────────────────────┼────────────────────────────────┤
+│ Canonical data   │ never blocked — prose to       │ at risk — sync chain failure   │
+│ integrity        │ SQLite always commits          │ could abort save; data lost    │
+│ User experience  │ silent on AI failure; banner   │ error toast on every network   │
+│                  │ surfaces persistent in-flight  │ blip; user trains to ignore    │
+│ Money            │ 1 wasted call on expand retry  │ retries on every chain would   │
+│ ($/call)         │ (~$0.04); other chains skip    │ multiply cost; no retry =      │
+│                  │ on failure (zero retry cost)   │ user manual re-tap            │
+│ Observability    │ getClassifyInFlight() banner   │ explicit per-failure-mode      │
+│ (at single user) │ + ai_summaries.error + dev     │ counter + alarms — overkill    │
+│                  │ logs                           │ for solo phase A               │
+│ Failure-mode     │ each chain has typed recovery: │ shared retry-with-backoff      │
+│ coding cost      │ skip / retry / soft error      │ utility would centralize but   │
+│                  │ surface — ~8 conditions in code│ obscure per-chain semantics    │
+│ Cognitive load   │ "AI is best-effort, canonical  │ "every failure is loud; user   │
+│                  │ data is never blocked" — one   │ retries, AI fails again, loop" │
+│                  │ universal rule                 │ — exhausting UX                │
+│ At-scale         │ silent failures hide in        │ explicit metrics scale better; │
+│ observability    │ aggregate — needs per-failure  │ but they're not needed at one  │
+│                  │ counter for 1000+ users        │ user                           │
+│ Capacity / rate  │ MAX_CONCURRENT = 3 on expand;  │ no cap → burst expansion hits  │
+│ limits           │ classify uncapped (heuristic   │ 429s; failure mode count grows │
+│                  │ bounds volume)                 │ uncontrollably                 │
+└──────────────────┴────────────────────────────────┴────────────────────────────────┘
+```
+
+### What we gave up
+
+We gave up loud, immediate error signalling on AI failures. When `scheduleClassify` fails, the user sees nothing — the row stays at `type='todo'`, the badge never upgrades, and the only signal is the `/todos` banner via `getClassifyInFlight()` showing a stuck in-flight count. When caption fails inside summarize, the structured summary still saves but the 4-variant strip on the dashboard is empty; the user might not realize the model misfired. When interpret returns clinical-language drift, `cleanMarkdown` passes it through and the user dismisses the modal — no telemetry captures the failure.
+
+At single-user phase A, this is acceptable: the developer (me) is the alarm. I notice when my own todos stop classifying, when captions go missing, when interpret reads weird. At 1000 users, this calculation flips — silent failures hide in aggregate, and "AI is degraded" needs to be a real metric with a real alarm.
+
+We also gave up retry budgets on caption, summarize, and classify. Only expand retries (once, with a stricter prompt), because expand is button-fired — the user explicitly asked for it. The other three run automatically; their recovery is "next event will fire another call." Caption skipped means tomorrow's variants might work; summarize failed surfaces error in `ai_summaries.error`; classify skipped leaves the row at `type='todo'` and the next reconcile re-fires. None of these have user-visible retry affordances today.
+
+The `MAX_CONCURRENT = 3` cap on expand is the only explicit cost-control surface. A power user trying to "expand all 12 todos at once" hits the cap and 9 of them return `{ ok: false, reason: 'in-flight-cap' }`. The user has to re-tap as the queue drains. That's a friction point we accept rather than removing the cap and risking unbounded burst cost.
+
+### What the alternative would have cost
+
+A "loud, throw, halt" failure mode would have made every AI error a user-visible event. Every network blip in a tunnel would surface a "AI failed!" toast; users would learn to ignore them within a week and the alarm becomes noise. The deeper cost is that loud failure on the canonical-data path is unacceptable: if an AI error during the summarize chain aborted the editor commit, a flaky network would block the user from saving their journal. We can't have AI failures contaminating the canonical write.
+
+A shared retry-with-backoff utility would have centralized retry logic but obscured per-chain semantics. Expand's retry uses a stricter system prompt because validation failed; that's not the same shape as "network error, exponential backoff." Centralizing both into one utility would force one or the other to use the wrong recovery shape. Five chains with five recovery semantics is more code but more honest than one chain with five branches.
+
+Explicit observability — per-failure-mode counters, "AI is degraded" banners, retry buttons on every stuck row — is genuine infrastructure that we'd need at scale. Today the cost-benefit is wrong: building it for one user is over-engineering, and the developer-as-alarm is good enough. The day we have 1000 users with no individual developer eyes, the observability investment becomes the first priority.
+
+### The breakpoint
+
+The pattern flips the day "no annotation" becomes user-visible *as failure*. Today every chain is advisory: missing classify → row stays at `type='todo'`, missing caption → no variants strip, missing summarize → editor shows un-annotated state, missing expand → user sees "couldn't expand" and re-fires, missing interpret → user closes modal. None of these are "broken product" — they're "AI didn't run this time."
+
+The trigger shapes for flipping: (a) editor refuses to render without structured summary (AI becomes load-bearing — we'd add server-side fallback or remove the dependency), (b) the user pays for an AI feature and "couldn't generate" feels like a billing dispute (we'd add explicit retry UX and SLA-style failure handling), (c) failure rate climbs past ~5% (we'd tighten validators, add backoff, or surface failures explicitly).
+
+A secondary trigger: multi-user. At 1000 users I'd need (i) a per-failure-mode counter (track which mode is firing how often), (ii) alarms when failure rates spike (model upgrade ate the schema), (iii) per-user diagnostic showing why their AI features are degraded, (iv) tighter MAX_CONCURRENT (global cost ceiling, not just per-user). The recovery shapes don't change; the observability and cost-control do.
+
+### What wasn't actually a tradeoff
+
+Silent-failure vs throwing-the-error wasn't a real choice for the canonical data path. The principle "canonical data is never blocked by AI" (spec §10 principle 3) forecloses any failure mode where an AI error halts the prose-to-SQLite write. We could have thrown errors in the AI services and caught them in callers — but the catch handler would still have to swallow them silently to preserve the canonical write. Same outcome, two function boundaries instead of one.
 
 ---
 
-## Quick summary
+## Summary
 
 Graceful-degradation for AI features is the "fail-soft + isolation" pattern — every AI failure mode has a defined recovery path that leaves the canonical data (prose, todo, entry) untouched. In this codebase that shows up as a per-failure-mode table across all 5 chains: `summarize.ts:87` wraps the caption call in its own try/catch so caption failure doesn't kill the structured summary; `expand.ts:25` caps concurrency at `MAX_CONCURRENT = 3`; `interpret.ts` adds 4 new failure surfaces (too-short, malformed-markdown, network, no-ai) via the `InterpretResult` discriminated union; `validate.ts` rejects malformed JSON before any SQLite write. The constraint that drove it is "canonical data is never blocked by AI" — the worst outcome of any AI bug is "no annotation this time," never "lost data." The cost is silent failures: a flaky network leaves classifications stuck at `type='todo'` and at single-user phase A the only signal is the `/todos` banner via `getClassifyInFlight()`.
 
@@ -126,16 +185,105 @@ Key points to remember:
 [mid] Q: Trace what happens end-to-end when the user has no API key set.
       A: Every AI service starts with `if (!apiKey) return { error: 'no API key' }` — the early return lives in `ai/config.ts` at the key-getter site. The chain never makes a network call. The caller propagates the error or surfaces it via a UI banner pointing to settings. The canonical data path is unaffected: prose still saves to SQLite, todos still parse out, the editor still commits. The user just doesn't get AI annotations until they configure a key. This is the cleanest of all the failure modes because it's a synchronous gate before any side effects.
 
+```
+[no-API-key flow — synchronous gate before side effects]
+
+  any AI chain fires (summarize / caption / classify / expand / interpret)
+        │
+        ▼  getAnthropicKey() / getOpenAIKey() from config.ts
+  apiKey === null
+        │
+        ▼  early return: { ok: false, reason: 'no-ai' }
+  caller surfaces "configure your AI key" banner
+        │
+        ▼  CANONICAL PATH UNAFFECTED:
+  prose still saves to entries.text          ← never blocked
+  scanners still extract todos / threads     ← never blocked
+  editor still commits                        ← never blocked
+```
+
 [senior] Q: Why one retry on malformed JSON in `expand.ts` and zero retries in caption/summarize/classify?
          A: Because expand's expected output is high-information per call (a typed JSON object filling 4-6 required fields like `observed`, `expected`, `suspectedCause`, `reproSteps[]` for 'bug') and the user explicitly fired the expand action. Failing silently after one network call would be a bad UX — the user pressed "expand", saw nothing happen, doesn't know why. The retry with a stricter prompt ("Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object…") rescues the borderline cases. Caption, summarize, and classify run automatically — no user intent — and they have other recovery paths (caption skipped means structured summary still saves; summarize surfaces error in `ai_summaries.error`; classify stays at heuristic-or-null). The retry budget tracks user intent, not technical possibility.
 
+```
+                  Path taken (retry tracks user intent)  Alternative (retry everything)
+                  ─────────────────────────────────────  ───────────────────────────────
+expand            user pressed button → retry once       same outcome
+                  stricter prompt → soft give-up
+caption           automatic → skip on fail               retry adds ~$0.04, no clear win
+                  (structured summary still saves)        — caption is automatic, next
+                                                         summarize fires tomorrow
+summarize         automatic → surface error in           retry could double cost on
+                  ai_summaries.error                     persistent drift; bigger lock-in
+classify          automatic → skip; next reconcile       retry would waste Haiku calls
+                  re-fires on null confidence            ($0.0001 × 30 todos = $0.003)
+                                                         per failure; pointless
+retry budget      tracks user intent — button = 1 retry  blind technical retry —
+shape             auto = next event is the retry          ignores who fired the action
+$ cost per fail   ~$0.04 (expand only); others $0       ~$0.04 × N chains; multiplies
+debugging         per-chain recovery semantics visible   uniform but obscure — when did
+                                                         retry stop helping?
+```
+
 [arch] Q: At scale — say 1000 users — how would this failure-mode list change?
        A: Most of it stays the same, but the silent-failure modes become real problems. Today a user with consistently-failing classification sees `type='todo'` on every row and might not notice. At 1000 users I'd need server-side aggregate visibility — a metric for "classification failure rate per provider per model", alarms when it spikes (model upgrade ate the schema), and a per-user diagnostic. I'd also tighten `MAX_CONCURRENT` from a per-user cap to a global cost ceiling, and probably add exponential backoff on 429s. The recovery shapes don't change; the observability and cost-control do.
+
+```
+At 1000 users (no individual dev eyes; aggregate-only signal):
+
+  ┌─ Per-chain recovery shapes ─────────────────┐
+  │ unchanged — skip / retry / soft error       │
+  │ surface — same semantics                     │
+  └─────────────────────────────────────────────┘
+              │
+  ┌─ Today: silent failures + dev-as-alarm ─────┐
+  │ getClassifyInFlight() banner                │  ◀── BREAKS FIRST
+  │ ai_summaries.error column                   │     (aggregate failures
+  │ dev-mode logs (no real user reads)          │      invisible; "AI degraded"
+  │                                              │      undetectable from any
+  │                                              │      single user's view)
+  └─────────────────────────────────────────────┘
+              │ needs replacement
+              ▼
+  ┌─ NEW: telemetry layer + alarms ─────────────┐
+  │ per-failure-mode counter (network / parse /  │
+  │ validate / 429 / rate-limit)                 │
+  │ per-provider per-model failure-rate metric  │
+  │ "AI is degraded" banner with retry action   │
+  │ global MAX_CONCURRENT cost ceiling           │
+  │ exponential backoff on 429s                  │
+  └─────────────────────────────────────────────┘
+```
 
 ### The question candidates always dodge
 Q: You list eight failure modes, but the table reads like "we log it and move on." What's a failure that would actually make you want a user-visible alarm — and why don't you have one today?
 
 A: Fair — the silent-failure modes are the gap. The one that would justify a real alarm is "classification consistently failing for this user across multiple entries" — meaning either their key is bad, the model upgrade broke the schema, or they're rate-limited. Today the only signal is the `/todos` banner showing in-flight count via `getClassifyInFlight()` which doesn't drop, and dev-mode logs no real user reads. The reason I haven't built it is the cost-benefit at single-user phase A: an alarm system means deciding what counts as "consistently failing" (3 in a row? 10 in 5 minutes?), how to surface it (toast, banner, settings badge?), and how to recover (button to retry? auto-retry?). At one user with sporadic use, the developer (me) is the alarm — I notice when my own todos stop classifying. The day this app has more users, the first observability investment is a per-failure-mode counter and a "AI is degraded" banner with a retry action. Until then, "log and move on" is the honest behaviour.
+
+```
+                  Path taken (silent log)              Suggested (per-failure alarm)
+                  ──────────────────────               ──────────────────────────────
+alarm trigger     none                                 N failures in M minutes per
+                                                       chain (e.g. 3-in-5)
+new UI surfaces   getClassifyInFlight() banner only    per-chain status badge +
+                                                       settings diagnostic panel +
+                                                       "AI is degraded" toast
+new state needed  none — failure is fire-and-forget    per-chain failure counter,
+                                                       last-failure-timestamp,
+                                                       failure-reason union
+false-alarm cost  zero                                 high — every tunnel = alarm
+                                                       fires; user trains to ignore
+phase-A fit       solo dev IS the alarm                over-engineered for one user
+$ cost            0                                    counter writes on every fail;
+                                                       trivial $$ but real LOC
+when this flips   multi-user OR paid AI feature OR     ship the alarm layer;
+                  AI becomes load-bearing              recovery shapes unchanged
+1000-user fit     blind — aggregate failures hide      essential — per-provider failure
+                                                       rate is the most important
+                                                       metric to track
+honest framing    "log and move on" is the right       ship when the cost-benefit
+                  posture for advisory AI at phase A   actually flips
+```
 
 ### One-line anchors
 - "Canonical data is never blocked by AI. The worst outcome is 'no annotation this time'."
@@ -204,3 +352,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.20.0 swap: moved primary table to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the table.
+
+---
+Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
