@@ -19,15 +19,29 @@ The context window is the model's entire universe for one call, and managing it 
 
 ## How it works
 
-Per feature, loopd picks a fixed shape:
+A suitcase with a strict weight limit at the airport check-in counter. You can't take everything — you pick what's worth carrying for each trip and leave the rest behind. The context window is the same constraint: every LLM call has a fixed token budget, and the codebase's job is to decide what gets to fly each time. Spread across five chains, the codebase carries different things for different jobs, never the kitchen sink.
+
+### Per-chain context budgets — what each call brings
+
+If you're coming from frontend, this is the same shape as a per-route data loader picking exactly what each page needs from a global store, instead of dumping the whole store into every page. Each chain's input is decided at code-write time and capped explicitly:
 
 - **classify** — text-only, ~50 tokens out. Context-free for cost: the surrounding entry isn't sent. Spec §5.3 calls this out as deliberate.
 - **summarize** — full day (all entries for one date) + clip metadata + habits list. ~1024 tokens out.
 - **caption** — `rawLog[]` (sentence-split entry text + done todo bullets) + last 5 captions for anti-repetition + mood. The 5 recent captions are the *only* multi-day context.
 - **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four JSON chains; even so, each part is capped.
-- **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` (most-recent 2000 chars; not the first 2000) and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
+- **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
 
-The cap on each section (in `expand.ts:147` `buildContext`) is what keeps the window predictable: `siblingTodos.slice(0, 5)`, `recentDates.slice(0, 3)`. For interpret, the cap is the input itself (`truncateTail`). Without those caps, a heavy journaling day could blow past the model's budget. The diagram below shows the budget shape at a glance.
+Concrete consequence: a power-user with 10 journal entries on one date triggers `expand` on a todo. The prompt builder reads the current entry text (~200 tokens), grabs 5 sibling todos (~50 tokens), and pulls the last 3 days of cached `ai_summaries` (~600 tokens combined). Total input: ~850 tokens. The model returns ~400 tokens of expansion JSON. The bill: ~$0.002, predictable per call. Boundary: caps are the load-bearing detail. Without `.slice(0, 5)` and `.slice(0, 3)`, a heavy journaling day with 50 todos and a 14-day backfill could land 5,000+ tokens in the context window and the cost-per-call jumps 10×.
+
+### Where the caps live — `buildContext` per chain
+
+Each chain has its own `buildContext` helper (e.g. `src/services/todos/expand.ts:147 → buildContext`). The helper is where slicing and truncating happen. The pattern: pull from SQLite as much as the chain might want, then slice/truncate to the per-chain budget, then build the prompt string. Think of it like a React selector that fetches the whole entity from the store and then projects only the fields the component renders — the wide read is fine, the narrow projection is what matters. Concrete consequence: `expand`'s `buildContext` reads up to 14 days of recent entries from SQLite (cheap, local), then calls `recentDates.slice(0, 3)` (cheaper, in-memory). The model sees only the slice. If a developer needs to widen the window for a specific feature, they edit the slice — not the read. Boundary: caps don't compose — five chains with different caps means five different `buildContext` functions, and a tweak to one doesn't affect the others. That's the cost of per-chain budgets and also the win.
+
+### Why `truncateTail` for interpret — most-recent matters more
+
+Interpret's input cap is unusual: `truncateTail(text, 2000)` keeps the *last* 2000 characters, not the first. The reason: when a user opens "interpret" on a long journal entry, they want a reflection on the most recent passage they wrote — what they were just thinking about. The opening paragraph of an entry is often stage-setting; the tail is where the thinking lands. If you're coming from frontend, this is the same instinct as a chat history that pages the most recent N messages instead of the first N — recency is the signal, not chronological position. Concrete consequence: a user writes a 5000-char journal entry, opens "interpret" near the end. The prompt sees the last 2000 chars (the thinking-out-loud section), not the opening 2000 chars (the agenda). The reflection lands on what the user actually wrestled with. Boundary: this breaks for entries where the lede IS the point — a single-paragraph reflection at the top followed by stream-of-consciousness afterward. The codebase accepts that mismatch because most journals don't have that shape.
+
+This is what people mean by "the prompt is the application." Once you accept that the model only sees what you put in the prompt, the engineering moves from "how do I make the model do X" to "what should the prompt contain for X to fall out." Every chain in the codebase is a separate answer to that question, and the caps in `buildContext` are the moment the team committed to what each chain actually needs vs what it might theoretically want. Wisdom in LLM engineering tends to look like a smaller `slice()`. The full picture is below.
 
 ---
 
@@ -321,3 +335,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (airport-suitcase metaphor opening / 3 layered sub-sections — per-chain budgets, where the caps live (buildContext), why truncateTail for interpret — each with frontend bridges and concrete consequences / principle paragraph on "prompt is the application").

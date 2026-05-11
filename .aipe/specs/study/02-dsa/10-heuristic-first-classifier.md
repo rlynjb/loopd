@@ -17,6 +17,10 @@ This is the cascading-classifier pattern, sometimes called early-exit or cheap-f
 
 ---
 
+## How it works
+
+A doctor's receptionist screens patients before the doctor sees them. Headaches and obvious flu go straight into a "common cold" bucket; anything weird gets escalated to the doctor. The receptionist is cheap, fast, and confident only on obvious cases; the doctor is expensive, slow, and right on the hard ones. If you're coming from frontend, this is the same shape as a `useMemo` selector that returns a cached value when inputs match a known-good pattern and falls back to an expensive recompute otherwise — short-circuit on the easy cases, defer to the expensive path on ambiguity. Two stages: regex match (try cheap rules first), then LLM fallback for the unmatched.
+
 **Real operation:** `heuristicClassify` in `src/services/todos/heuristicClassify.ts`.
 
 ---
@@ -124,6 +128,8 @@ Speculative + question checks come *before* modal + imperative because some sent
 ```
 
 When brute force is fine: at single-user scale and dev/exploration loops, $0.0004 × 100 todos/day = $0.04/day — basically free. The heuristic exists for UX (typing never waits on Haiku) more than for $.
+
+This is what people mean by "cascade by cost, bias toward abstention." The pattern lives in every pipeline that mixes deterministic and probabilistic decisions — spam filters (rules then ML), OCR (whitespace then character recognition), CDNs (cache then origin), search engines (lexical then semantic). The shared insight is that *most inputs are easy*, and routing the easy ones through a cheap gate that knows when to give up frees the expensive stage to focus on the hard ones. The asymmetry — confidence threshold on the cheap stage, never the expensive one — is what makes the architecture honest.
 
 ---
 
@@ -405,3 +411,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (doctor-receptionist metaphor + frontend bridge to useMemo short-circuit) and Move 3 principle after the Comparison block.

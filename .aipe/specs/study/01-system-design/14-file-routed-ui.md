@@ -19,11 +19,25 @@ File-based routing is the convention that a directory layout, with naming rules 
 
 ## How it works
 
-expo-router scans `app/` at build time and generates a route map. `_layout.tsx` at any level wraps the children below it. Dynamic segments are folder names in `[brackets]` and the param is read with `useLocalSearchParams()`.
+A library where the shelves ARE the catalogue. There's no index card system telling you which book is in which row — the row a book sits in IS its address. Want to know the library's entire layout? Walk the shelves. expo-router does this for screens: the `app/` directory's tree of files IS the route map, and adding a route is the same gesture as creating a file.
 
-The root `_layout.tsx` is the boot path: it initialises SQLite (via `useDatabase`), runs the bootstrap (cloud sync init), and wraps everything in providers (gesture handler, theme, fonts).
+### The route convention — file path equals URL path
 
-Navigation uses `useRouter().push('/path')`. Hardware back goes to the previous file in the stack. There is no manual route table. Here's the diagram of the whole flow.
+`app/index.tsx` renders `/`. `app/todos.tsx` renders `/todos`. `app/journal/[date].tsx` renders `/journal/:date` with `date` becoming a dynamic param. The bracket convention `[param]` is the only syntax the framework cares about; everything else is the filesystem doing the work. If you're coming from frontend, this is the same idea as Next.js's `pages/` directory or Remix's `routes/` directory — same convention, same trade. Concrete consequence: a developer wants to add a `/threads/:id` screen. They create `app/threads/[id].tsx`. No router config, no route table edit, no manual import. The next dev server reload picks up the new file. Inside the component, `useLocalSearchParams<{ id: string }>()` reads the param. Boundary: this assumes the file convention is followed exactly — a file at `app/threads/show.tsx` would create `/threads/show`, not the dynamic `:id` route the developer intended. The bracket is load-bearing.
+
+### Layouts — `_layout.tsx` at every level wraps its children
+
+`_layout.tsx` files are special: at any directory level, the `_layout.tsx` wraps everything below it. The root `app/_layout.tsx` wraps the entire app — it's the boot path. `app/(main)/_layout.tsx` (if it exists) wraps every screen in the `(main)` group. Think of it like React Router's `<Outlet />` in a parent route, or Next.js's `layout.tsx` files — the same composition pattern. Concrete consequence: the root `app/_layout.tsx` runs `useDatabase()` (initialises SQLite, runs migrations, sets up the connection pool), runs `bootstrap()` for cloud sync ([10-bootstrap-decision-tree](./10-bootstrap-decision-tree.md)), and wraps the rest of the tree in `<GestureHandlerRootView>`, theme provider, font loader, and the navigation stack. Every screen below sees a ready DB, a converged sync state, and the gesture system. Boundary: if the root layout's async setup throws (e.g. SQLite can't open), the entire tree never mounts. There's no "render the screen anyway with a broken DB" fallback because every screen depends on the DB being ready.
+
+### Dynamic params — `[date]` resolves at runtime
+
+`app/journal/[date].tsx`'s param `date` resolves to whatever string is in the URL slot. The component reads it via `useLocalSearchParams<{ date: string }>()` — a typed React hook from expo-router. If you're coming from frontend, this is the same shape as Next.js's `useParams()` or React Router's `useParams()`. Concrete consequence: the dashboard's "open today's entry" navigation calls `router.push('/journal/2026-05-10')`. Expo-router resolves this to `app/journal/[date].tsx` with `date = '2026-05-10'`. The component runs `useEntries(date)` to fetch the matching SQLite row. Closing the screen pops the navigation stack back to whatever pushed it. Boundary: the param is always a string — coercion to Date or number happens in the component. A malformed param (e.g. `/journal/not-a-date`) doesn't throw at the routing layer; the component is responsible for handling it (usually by returning an empty entry or rendering an error state).
+
+### Navigation — `useRouter().push()` and hardware back
+
+There's no manual route table, no `<Link to={...}>` requiring registration, no `routes.ts` file mapping names to components. Navigation is just `useRouter().push('/path')` where `/path` is the file path under `app/` minus the extension. Hardware back on Android pops the stack back to the previous file — Expo-router maintains the stack automatically based on push history. Think of it like the browser's history stack, except the entries are file paths instead of URLs. Concrete consequence: a screen at `app/threads/[id].tsx` shows a list with each row calling `router.push('/journal/2026-05-10')`. The user enters the journal, hits back on the device, lands at `/threads/<id>` again. No `goBack()` plumbing in the component code — the system handles it. Boundary: deep linking from outside the app (e.g. opening a push notification's link) goes through the same `router.push` API but with the URL coming from the OS — same code path, different trigger.
+
+This is what people mean by "convention over configuration for routes." The file system IS the source of truth; there's no map between names and components because the names ARE the components' paths. Every framework that has ever made routing pleasant — Next.js, Remix, Astro, SvelteKit, expo-router — has reached for some version of this. The cost is that the file tree's depth is the route depth, which can produce deep folders; the win is that "where does this route live?" never has a wrong answer. The full picture is below.
 
 ---
 
@@ -344,3 +358,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (library-shelves-as-catalogue metaphor opening / 4 layered sub-sections — file path equals URL, _layout.tsx wrapping, dynamic params, useRouter + hardware back — each with frontend bridges and concrete consequences / principle paragraph on convention-over-configuration routing).

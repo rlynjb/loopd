@@ -19,14 +19,32 @@ Provider abstraction is the layer that lets a caller use one of several intercha
 
 ## How it works
 
-`ai/config.ts` exposes `getProvider()` and key getters. Both reads hit SecureStore — fast and synchronous-ish. Every AI service starts with: get provider, get key, branch.
+Two faucets in the same sink — hot and cold. They feed the same drain through the same basin; only the source upstream of the spigot changes. If the city water gets contaminated tomorrow, you switch to the bottled-water tank under the counter and the drain doesn't notice. Provider abstraction is that switch: pick the source per call, share everything downstream.
 
-The branches are intentionally explicit. The Claude branch uses `@anthropic-ai/sdk` directly; the OpenAI branch uses raw `fetch` to `/v1/chat/completions` so the codebase can pass `response_format: json_object` (Claude doesn't have that knob).
+### The config — `getProvider()` + per-provider keys from SecureStore
 
-After both branches return, the rest of the function is shared: extract JSON, validate against schema, persist to SQLite, return.
+`src/services/ai/config.ts` exposes `getProvider()` (returns `'claude'` or `'openai'`) and `getApiKey(provider)`. Both read from `expo-secure-store` (Android Keystore-backed). The reads are async but cheap; the first call hits the keystore, subsequent calls hit memory. If you're coming from frontend, this is the same shape as a feature-flag context that decides which API client a query targets — `useApi(provider)` returns the right client and the consumer doesn't care. Concrete consequence: every AI service file starts with `const provider = await getProvider(); const apiKey = await getApiKey(provider);`. The user changes provider in Settings → AI; the next AI call picks up the new value via the next `getProvider()` read. Boundary: this assumes the key was set during onboarding; if the user opens an AI feature without configuring keys, the call throws and the UI shows an "AI not configured" hint.
 
-**What changes when you swap providers:** the model identifier and the API client. That's it.
-**What doesn't change:** the prompts, the JSON shape the model is asked to produce, the validators, the persist layer. The diagram below shows the whole flow end-to-end, with the layers it crosses.
+### The branch — Claude SDK vs raw fetch to OpenAI
+
+Every AI service has the same structure: a `switch (provider)` with two branches. The Claude branch calls `@anthropic-ai/sdk`'s typed `client.messages.create({...})`. The OpenAI branch builds a `fetch` to `https://api.openai.com/v1/chat/completions` with hand-crafted JSON, including `response_format: { type: 'json_object' }` (Claude doesn't have that knob, so the Claude branch has to extract JSON from prose). Think of it like a typed adapter pattern at the call site — same input shape going in, same string shape coming out, two different transports. Concrete consequence: in `summarize.ts`, the Claude branch builds `messages: [{role: 'user', content: prompt}]` and reads `response.content[0].text`. The OpenAI branch builds the equivalent prompt with `response_format: json_object`, POSTs, reads `response.choices[0].message.content`. Both branches return a string; the caller can't tell which provider produced it. Boundary: the abstraction is at the *call site*, not in a shared interface — every chain has its own `switch`, every chain pays the ~10-LOC duplication cost, and adding a third provider means touching all five chains.
+
+### The shared tail — parse, validate, persist (one path)
+
+After both branches return their string, the rest of every chain is shared: extract JSON (`JSON.parse` or a regex extractor for Claude's prose-wrapped JSON), validate against a schema (`src/services/ai/validate.ts`), persist to SQLite via `database.ts` helpers, return. If you're coming from React Query, this is the same shape as a mutation's `onSuccess` — the transport produced the data; now the standard write-and-cache path takes over. Concrete consequence: `caption.ts` calls Claude, gets `'{"variants":{"clean":...}}'` wrapped in prose, runs `extractJsonFromText` to recover the object, runs `parseCaptionVariants` to lift it into a typed shape, persists via `upsertAISummary(date, summary)`. If the same call had hit OpenAI, the wrapper is missing (JSON-mode returns clean JSON), but the rest is identical. Boundary: the validate step is the safety net — a model that returns malformed JSON throws at validate, the chain reports the failure, the persist step never runs. The shared tail keeps each chain's domain logic in one place.
+
+### What stays vs what changes when you swap providers
+
+| Stays the same | Changes |
+| --- | --- |
+| Prompts | Model identifier (`claude-sonnet-4-6` vs `gpt-4o`) |
+| Output JSON shape | API client (`@anthropic-ai/sdk` vs `fetch`) |
+| Validators (`validate.ts`) | Response parsing path (`content[0].text` vs `choices[0].message.content`) |
+| Persistence (`database.ts`) | Token-cost math (per-provider pricing) |
+
+If you've ever swapped a database driver behind an ORM and noticed how little of the calling code needed to change, this is the same shape. The abstraction holds because the *contract* (string in, string out, JSON shape downstream) is stable; the *transport* is what varies. Concrete consequence: the codebase swapped from Claude to OpenAI mid-2026 for one chain (caption) when JSON-mode landed. The change was ~15 LOC in `caption.ts` — adding the OpenAI branch, plumbing the `response_format`. No prompt rewrites, no persistence changes, no validator changes. Boundary: this only stays clean as long as the providers' contracts can be normalised at the response-parsing layer. If a future provider's response shape is wildly different (e.g. streaming-only, function-calling-first), the abstraction either grows knobs or splits into two abstractions.
+
+This is what people mean by "thin abstractions over thick differences." The temptation is to wrap a divergent set of APIs behind a unified interface — `class AIProvider { async call(prompt): Promise<string> }` — but the interface itself becomes the surface area that breaks when one provider adds a feature the other doesn't have. The codebase trades a little duplication (`switch (provider)` in five files) for the freedom to use each provider's native shape. Every codebase that ever survived a vendor's major version bump or a vendor swap has some version of this discipline: keep the wrapper thin enough to rewrite, keep the callers naive enough to not depend on its quirks. The full picture is below.
 
 ---
 
@@ -382,3 +400,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-faucets-one-drain metaphor opening / 4 layered sub-sections — config from SecureStore, Claude SDK vs OpenAI raw fetch branch, shared parse-validate-persist tail, what stays vs what changes — each with frontend bridges and concrete consequences / principle paragraph on thin abstractions over thick differences).

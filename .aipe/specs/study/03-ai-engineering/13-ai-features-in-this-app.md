@@ -17,7 +17,11 @@ A per-feature pattern map is a catalogue: one row per AI-touching feature, listi
 
 ---
 
-## Features overview
+## How it works
+
+A small recipe binder with five named recipes — one for each AI feature. Each recipe has its own ingredients (prompt template), oven setting (model choice), expected dish (output shape), and serving instructions (where it lands in the UI). The cook (the codebase) doesn't improvise — every dinner is one of the five recipes, made exactly the way the binder says. If you're coming from frontend, this is the same shape as a typed set of `useMutation` hooks, one per server action — each has its mutation function, its onSuccess, its inputs, and they don't cross-call each other.
+
+### The five recipes — what each AI feature does and why
 
 ```
   ┌────────────────────┬──────────────────┬─────────────────────────────────────┐
@@ -43,6 +47,18 @@ A per-feature pattern map is a catalogue: one row per AI-touching feature, listi
   │                    │                  │ result is NOT persisted.            │
   └────────────────────┴──────────────────┴─────────────────────────────────────┘
 ```
+
+Concrete consequence: the codebase has five AI files, each ~150-300 LOC, each owning one of these recipes. Adding a sixth feature means writing a sixth file with its own prompt + parser + persister; it does NOT mean adding a new branch to an existing chain. Boundary: this works as long as the recipes stay small enough that the duplication is cheaper than abstracting them.
+
+### The split between persisted and ephemeral
+
+Four of the five recipes persist their output to SQLite (`ai_summaries.summary_json`, `todo_meta.type`, `todo_meta.expanded_md`); one (interpret) doesn't. The persisted four feed downstream UI surfaces — the editor reads `summary_json`, the dashboard's todo cards read `type` and `expanded_md`. Interpret's output is shown once in a modal and discarded; the user reads it, dismisses the modal, never sees it again. Think of it like the difference between a `useMutation` that updates the React Query cache vs one that fires a side-effect without caching — same call shape, different lifecycle. Concrete consequence: a user runs interpret on the same entry tomorrow; the codebase calls the LLM again from scratch (no cache, no DB column). Costs another ~$0.005. The recipe is deliberately ephemeral because the user reads interpretations and moves on; caching would store data nobody re-reads. Boundary: this works because interpret is rare (user-triggered), not background. If interpret were running on every entry automatically, the cost would justify caching.
+
+### The two-tier model split — Sonnet for thinking, Haiku for routing
+
+The codebase uses Claude Sonnet 4.6 (or GPT-4o) for the recipes that produce *content* (summarize, caption, expand, interpret); Claude Haiku 4.5 (or GPT-4o-mini) for the recipe that produces a *label* (classify). The split tracks the task — Sonnet is good at writing, reasoning, multi-step output; Haiku is good at fast classification. If you've worked with React's tiered hooks (`useState` for sync state, `useTransition` for async non-urgent state), this is the same instinct — match the tool to the task's shape. Concrete consequence: classifying a todo costs ~$0.0004 with Haiku; summarising a day costs ~$0.01 with Sonnet. The 25× cost ratio reflects the 25× difference in output token count and reasoning depth. If classify had been built on Sonnet, the codebase would spend $0.10/day classifying todos that Haiku does for $0.004/day. Boundary: the model split assumes the two providers' model tiers track similarly. If a future model rebalances the tier (e.g., a cheap Sonnet variant lands), the codebase would re-evaluate.
+
+This is what people mean by "name the AI features and pick one pattern per feature." The temptation when adding AI to an app is to build one big assistant that does everything; the cheaper, more maintainable, and more debuggable shape is five small features each doing one thing well. The codebase's AI surface is five recipes, no more, no less — and the discipline of keeping it five rather than letting it grow into a generic "ask the AI" feature is what keeps the cost predictable, the failure modes named, and the testing tractable.
 
 ---
 
@@ -432,3 +448,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: renamed `## Features overview` to `## How it works`; added Move 1 mental-model opening (recipe-binder metaphor with frontend bridge to typed useMutation hooks); added 2 layered sub-sections — persisted vs ephemeral split, two-tier Sonnet/Haiku model split — each with frontend bridges and concrete consequences; closed with principle paragraph on naming AI features and one-pattern-per-feature.

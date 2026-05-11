@@ -17,6 +17,10 @@ This is the two-pass match — a stripped-down cousin of Myers diff, which is wh
 
 ---
 
+## How it works
+
+Imagine a teacher taking attendance against yesterday's seating chart. She first calls each name from today's list and looks for it on yesterday's chart — most students sat in the same seat, name matches, easy. For the leftover names she didn't find by roll-call, she falls back to the seat number — "whoever's in seat 5 today is whoever was in seat 5 yesterday." If you're coming from React, this is the same pattern as keyed-list reconciliation: try the strict identifier first (`key` prop / line text), fall back to positional matching for the leftovers. The two passes work because the signals are independent — name survives reseating, seat survives in-place edits.
+
 **Real operation:** `scanTodosFromText` in `src/services/todos/scanTodos.ts`. Runs at every commit (focus blur, screen leave) on `entries.text`.
 
 ---
@@ -166,6 +170,8 @@ The insight: track which existing ids are already claimed (`Set`), and iterate m
 
 When brute force is fine: never. The Set guard isn't an optimization — it's correctness. Two `[]` lines with the same text would both claim the same todo and one would be reused twice. At the project's actual scale (20-30 todos per entry) the speed delta is invisible, but the correctness gap is real even at n = 2.
 
+This is what people mean by "use the strongest evidence first." Two-pass match isn't a special algorithm — it's the discipline of layering identity checks by confidence and keeping the cheap ones in front. Git's rename detection does the same: exact hash match before content-similarity threshold before path-based heuristic. React's reconciler does the same: `key` before type before position. When you can't stamp a primary key into your source format, you reach for two cheap proxies and rank them.
+
 ---
 
 ## In this codebase
@@ -247,6 +253,26 @@ Fine until a single `entries.text` exceeds ~500 `[]` lines on a single day, at w
 ### What wasn't actually a tradeoff
 
 Choosing case-insensitive exact match in Pass 1 (`text.toLowerCase()`) wasn't a tradeoff — it was a correctness fix. Users retype todos with inconsistent capitalisation; case-sensitive matching would treat "Call mom" and "call mom" as different rows and Pass 2 would have to clean up after Pass 1's misses.
+
+---
+
+## Tech reference (industry pairing)
+
+### TypeScript Map + Set (no algorithm library)
+
+- **Codebase uses:** standard-library `Map<int, TodoItem>` (claims by index) and `Set<string>` (used-id guard) inside `src/services/todos/scanTodos.ts → scanTodosFromText()`. No external diff/match library.
+- **Why it's here:** the algorithm runs at every commit boundary; bringing in a diff library (jsdiff, deep-diff) would add weight for what is fundamentally two ordered scans plus an O(1) "already claimed" check.
+- **Leading today:** native Map/Set — `adoption-leading` for in-memory matching at this scale, 2026.
+- **Why it leads:** runtime-builtin, O(1) average insert/lookup, zero dependency cost; the algorithm at this size is more readable without a library wrapper.
+- **Runner-up:** `jsdiff` — `adoption-leading` for line-level diff with hunk semantics; the right choice if the matching ever needs to track "moved blocks of 3+ lines" or surface diff metadata to the user.
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db` — the existing `TodoItem[]` and `sourceLine` values that Pass 1/2 read against live in the `entries.todos_json` JSON column and `todo_meta.text`/`todo_meta.sourceLine` rows.
+- **Why it's here:** the "before" snapshot the algorithm matches against is whatever the previous commit wrote to SQLite. WAL mode guarantees readers see a consistent snapshot while the next commit is being prepared.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; WAL mode gives readers stable snapshots; mirrors the SQLite C API directly.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf tier for bare React Native projects.
 
 ---
 
@@ -408,3 +434,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (teacher-attendance metaphor + frontend bridge to React keyed lists); added Move 3 principle paragraph after the Comparison block. Algorithm/trace structure preserved.

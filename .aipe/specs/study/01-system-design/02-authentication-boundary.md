@@ -19,13 +19,28 @@ A trust boundary is the explicit seam between unauthenticated and authenticated 
 
 ## How it works
 
-Two layers of isolation, only one of which is active in Phase A.
+Two locked doors between the user and someone else's data, but only one of them is installed right now. The schema gate is the deadbolt — it doesn't ask who you are; it just makes the door appear to lead nowhere if you have the wrong key. The runtime gate is the security guard — it checks your ID and waves you through. Today only the deadbolt is installed; the guard is scheduled for the Phase-B activation. Two independent mechanisms, layered.
 
-The **schema gate** is composite primary keys: every synced table has `PRIMARY KEY (user_id, id)`. If the client ever asks for someone else's `id`, the row literally doesn't exist for them. This is enforced regardless of authentication state.
+### The schema gate — composite primary keys
 
-The **runtime gate** is RLS. Migration `0002_rls_policies.sql` defines policies that filter every query to `user_id = auth.uid()`. In Phase A this migration is in the file system but the policies are not installed; the user_id is hardcoded client-side.
+Every synced table in Supabase has `PRIMARY KEY (user_id, id)`. That's two columns participating in the primary key, not one — it's called a *composite primary key*. If you're coming from frontend, you're used to thinking of an `id` as globally unique (like a React key in a map). Here it's different: an `id` only means something *inside* a particular user's namespace. The compound key is `(user_id, id)`; the same `id` can exist for two different users and they refer to different rows. Concrete consequence: if user A's client sends a query for `id = 'abc123'` belonging to user B, the database looks for `(user_A_id, 'abc123')` and that row literally does not exist — not "exists but you can't see it"; it does not exist. The data is invisible at the structural level, not at the policy level. Boundary: this works whether the user is authenticated or not, whether RLS is on or off, whether the client lies about who it is — the rows are isolated at the schema. The only thing that breaks it is a client that knows the *full composite key* (both user_id and id), which the runtime gate's job is to prevent.
 
-Phase B activates the runtime gate: ship Supabase auth, drop the hardcoded id, enable RLS. The schema gate doesn't change because it was already correct. The diagram below shows it end-to-end.
+### The runtime gate — Row-Level Security
+
+Migration `supabase/migrations/0002_rls_policies.sql` defines RLS policies that filter every query to `WHERE user_id = auth.uid()`. Postgres applies these policies automatically — the client doesn't add the filter, the database does. If you're coming from frontend, this is like a backend middleware that injects an `if (user.id !== resource.userId) return 403;` check before every read and write — except it's at the database layer, not in application code, so even raw SQL access is bound by it. Concrete consequence: if user A is authenticated and runs `SELECT * FROM entries`, Postgres rewrites the query to `SELECT * FROM entries WHERE user_id = 'user-A-uuid'`. There's no way to forget the filter; the filter is *part of the table* from the policy's perspective. Boundary: RLS only works once `auth.uid()` returns the right value — that requires Supabase auth to be configured and a JWT in the request headers. Without auth, `auth.uid()` is NULL and the policy filters everything to zero rows.
+
+### Phase A / Phase B — current state vs planned
+
+- **Phase A (current):** schema gate active, runtime gate dormant. `auth/client.ts` carries a single hardcoded `PHASE_A_USER_ID` UUID; every Supabase call inserts that value into the `user_id` column on writes and reads. RLS policies exist in `0002_rls_policies.sql` but are not installed (migration not applied). The cloud database treats the hardcoded id as the sole user.
+- **Phase B (planned):** schema gate unchanged, runtime gate activated. Ship Supabase auth (`signInWithPassword` or similar), drop the hardcoded id, apply `0002_rls_policies.sql` so RLS is on. Every client request now carries a JWT; `auth.uid()` returns the authenticated user's id; the schema gate still appears identical from the outside.
+
+The point of Phase A/B here is that the **schema didn't have to change between phases**. The composite-PK shape was correct from day one; only the runtime layer (RLS, JWT auth) gets added. If you've watched a team retrofit multi-tenancy onto a single-tenant schema, you know how expensive that is — column renames, FK rewrites, data migrations. The architecture absorbed the future activation cost as a one-time `ALTER TABLE` plus an auth flow, not a re-architecture.
+
+### Defense in depth — why both gates
+
+If RLS is enough, why have the schema gate? Because RLS is a *policy*, not a *structural property*. Policies can have bugs (a misconfigured `USING` clause that returns rows it shouldn't), can be disabled accidentally (a future migration that forgets `ENABLE ROW LEVEL SECURITY`), can be bypassed by service-role keys. The schema gate doesn't depend on any of that — it depends on the relational model itself. If you're coming from frontend, this is the same shape as input sanitization plus output escaping: each layer is enough on its own under perfect conditions, and both together survive imperfect conditions. Concrete consequence: if a future PR mistakenly disables RLS, the user data isn't suddenly exposed — the composite key still makes the rows structurally invisible. The blast radius of "someone misconfigured RLS" stays bounded.
+
+This is what defense in depth looks like in a real system — two independent mechanisms with different failure modes, layered so that one mechanism's bug doesn't compromise the other. People say "defense in depth" all the time; the rare version is shipping it on a system where both layers are real, both layers are testable, and both layers stay correct under future change. The full picture is below.
 
 ---
 
@@ -345,3 +360,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-locked-doors metaphor opening / 4 layered sub-sections — schema gate composite PK, RLS runtime gate, Phase A/B, defense in depth — each with frontend bridges and concrete consequences / principle paragraph on defense in depth).

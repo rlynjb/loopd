@@ -19,11 +19,25 @@ Local-first architecture splits them apart: writes commit to an on-device store 
 
 ## How it works
 
-The UI never talks to Supabase directly. Every write path runs through the hook → service → `database.ts` chain, and the only file that opens `loopd.db` is `database.ts`. That single funnel is what makes "DB is canonical" a hard guarantee instead of a vibe — there's exactly one place to enforce `updated_at` bumps and `schedulePush()` fires.
+A bank teller who hands you the cash from the till the moment you ask, then writes the ledger entry that gets reconciled with head office later. The "money is in your pocket" event happens at the speed of the local till; the "head office knows about it" event happens on the next courier run. Two operations that most apps weld together — writes and publish — split apart so the user never waits on the network.
 
-When a write hits SQLite, the row is immediately visible to the next read. The screen rebuilds from local state; nothing waits on the network. The cloud catches up via a debounced timer that fires `pushAll()` 5 seconds after the last write event.
+### The single funnel — every write goes through `database.ts`
 
-If the device is offline, the writes pile up locally with `updated_at > synced_at`. On the next session that has network, `pushAll()` selects exactly those dirty rows and upserts them. The full picture is below.
+`src/services/database.ts` is the only file that opens `loopd.db`. Hooks (`useEntries`, `useHabits`, `useExport`, …) call services (`src/services/<domain>/<verb><Noun>.ts`), and the services call `database.ts`. If you're coming from frontend, this is the same shape as a Redux store where every action passes through one root reducer — the funnel exists so two invariants can be enforced in one place: `updated_at = now()` and `schedulePush()` get called on every synced write, no exceptions. Concrete consequence: if a new contributor adds a mutation in a per-domain service file and forgets `schedulePush()`, the write lands in SQLite but never propagates to Supabase. The funnel makes that mistake hard to make — the helper that opens `loopd.db` is the same helper that fires the debounce. Boundary: if any other file opens the DB handle directly (e.g. a future migration script bypassing the helper), the invariants stop being enforceable.
+
+### Synchronous local write — the cursor never lags
+
+Inside `database.ts`, the mutator runs SQLite via `expo-sqlite`. In WAL mode this is a synchronous in-process call — write commits in single-digit milliseconds and the next read sees the new row. If you're coming from frontend, this is the same shape as calling `setState` in React: the next render sees the new state without waiting on anything external. Concrete consequence: a user types `[]` at t=0 and the autosave fires at t=1ms; the line is in `entries.text` immediately, the next focus blur's scanner reads it, the `todo_meta` row exists by t=5ms. The user has never observed the network. Boundary: this assumes the local DB is healthy — if `loopd.db` is corrupted or locked by another process (which can't happen in single-process mobile, but matters in unit tests), the synchronous contract collapses.
+
+### Debounced push — the cloud trails by 5 seconds
+
+After the local write, `database.ts` calls `schedulePush()` (`src/services/sync/schedulePush.ts` L14–L21). The function clears any pending timer and starts a new 5-second one. After 5s of write quiet, `fire()` kicks off `pushAll()`, which walks the 10-table SyncableTable registry and upserts any rows where `updated_at > synced_at`. Think of it like React's batching: hundreds of `setState` calls in one render produce one re-render, not hundreds — same idea, except the batched output is HTTPS upserts to Supabase. Concrete consequence: a user types `[] call mom` at t=0, `[] write spec` at t=2s, then backgrounds at t=3s. Both rows are in SQLite by t=3s. The push fires at t=7s (5s after the last write). If the device is offline at t=7s, the push errors and the rows stay dirty (`updated_at > synced_at`); the next session with network picks them up via the boot-time `pushAll()` in `app/_layout.tsx`. Boundary: the 5-second window assumes a single writer. With two devices the user can observe staleness (open the tablet immediately after typing on the phone — the tablet sees yesterday's state for up to 5s).
+
+### Offline reconciliation — dirty rows wait
+
+If the network is down, the local writes pile up with `updated_at > synced_at` and the push fails silently. The boot-time `pushAll()` in `app/_layout.tsx` is what catches these on the next launch with network. If you've worked with offline-first React Native apps via `NetInfo` + a queue, the queue is what this codebase replaces with the `updated_at > synced_at` SQL predicate — the dirty filter IS the queue, and SQLite is the durable store. Concrete consequence: a user writes 8 entries on a plane with no network. The pushes all error; the rows stay dirty. When they land and the device gets WiFi, the next foreground `pushAll()` walks the registry, selects all 8 dirty rows, upserts them in one batch, stamps `synced_at = now()`. The user's experience: their writes survived; the cloud caught up silently. Boundary: this assumes the next boot eventually happens — if the device dies forever, the writes never make it to the cloud, but the user can still recover from the local SQLite file.
+
+This is what people mean by "decouple availability from durability." The user's writes get availability — they land instantly, the cursor never lags, the device is the canonical store. The cloud gets eventual durability — it catches up at its own pace, batched. Every framework that has ever felt fast — Git, the OS page cache, Firebase's offline cache, every collaborative editor — does some version of this. The full picture is below.
 
 ---
 
@@ -366,3 +380,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (bank-teller metaphor opening / 4 layered sub-sections with frontend bridges — single funnel, synchronous local write, debounced push, offline reconciliation / principle paragraph on decoupling availability from durability).

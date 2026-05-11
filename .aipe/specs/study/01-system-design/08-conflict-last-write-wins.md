@@ -19,11 +19,25 @@ Last-write-wins is the simplest possible answer: attach a timestamp to every row
 
 ## How it works
 
-`chooseWinner` is a pure function. No side-effects, no DB reads, no clock reads. It takes the two rows and returns a string. The caller (`pull.ts`) acts on the result.
+Two children walk up to the same toy at the same time. The rule: whoever touched it most recently keeps it. No negotiation, no merging, no "you take the head and I'll take the wheels." It's a brutal rule on purpose — fast, deterministic, easy to reason about. The cost is that one child walks away empty-handed every time there's a conflict; the win is that you never get stuck in a stalemate.
 
-The same-second tie rule biases toward cloud because the pull path is the one calling — if cloud has a same-second row, it's because that row arrived after the device last pulled. Letting cloud win prevents an infinite ping-pong.
+### `chooseWinner` is pure — input rows in, label out
 
-The malformed-timestamp branch is defensive. If a row has a non-ISO string in `updated_at`, the comparison returns NaN; treating cloud as the winner means the locally-corrupt row gets overwritten with the well-formed cloud version, which is the desired healing direction. The diagram below shows it end-to-end.
+`chooseWinner(local, cloud)` in `src/services/sync/conflict.ts` takes two rows and returns a string: `"local"`, `"cloud"`, or `"tie-cloud-wins"`. No side effects, no DB reads, no `Date.now()` call inside. The caller (`pull.ts`) is responsible for acting on the result. If you're coming from frontend, this is the same shape as a Redux reducer or a pure React selector: take the state, return the projection, don't reach for any external resource. Concrete consequence: every call to `chooseWinner(rowA, rowB)` with the same two rows returns the same answer forever — there's no race, no timestamp drift, no "this passed yesterday but fails today." Boundary: the purity only holds because the inputs are already typed (`updated_at` is an ISO string on the row). A malformed timestamp would make the parse return NaN, which the function handles explicitly.
+
+### The comparison rule — ISO string compare, not Date math
+
+`chooseWinner` compares `local.updated_at` and `cloud.updated_at` as ISO 8601 strings using string ordering. ISO 8601 (e.g. `"2026-05-10T14:32:18.000Z"`) is lexicographically sortable — string `>` produces the same result as `Date.parse(...) >`, but without the parse cost and without timezone footguns. If you're coming from frontend, this is the same trick `localStorage`-keyed records use when they want to sort by timestamp without parsing — the ISO string IS the sortable key. Concrete consequence: if local has `updated_at = "2026-05-10T14:32:18.000Z"` and cloud has `"2026-05-10T14:33:00.000Z"`, the string compare returns cloud > local → cloud wins. If cloud has the same string, the tie rule applies. Boundary: this assumes both sides write ISO strings; a future migration that changes the column format would break the comparator.
+
+### Same-second tie → cloud wins (biased to converge)
+
+If `local.updated_at == cloud.updated_at` (same millisecond, identical strings), `chooseWinner` returns `"tie-cloud-wins"`. The bias toward cloud is deliberate: the path that calls `chooseWinner` is pull, and if cloud has a row with the same timestamp as local's, the cloud row probably arrived from a different device that's already converged on that value. Letting cloud win prevents an infinite ping-pong where two devices keep pulling the same row, each thinking their copy is fresher. Concrete consequence: device A writes `name='loopd'` at 14:32:18.000Z. Device B independently writes `name='loopd-app'` at exactly 14:32:18.000Z. Both push. Cloud now has one of them (last-write-wins on the server side via the upsert). On the next pull from device A, cloud's value comes back and the tie rule applies — cloud wins, A's local copy gets overwritten. The bias converges the cluster. Boundary: if two clocks are perfectly skewed and produce identical timestamps for genuinely different edits, the tie rule silently picks one. The fix is millisecond-grained timestamps and operational acceptance that ties are rare.
+
+### Malformed timestamp → cloud wins (defensive healing)
+
+If `Date.parse(local.updated_at)` returns NaN (or `cloud.updated_at` does), `chooseWinner` returns `"cloud"`. The reason: a malformed timestamp on local probably means the local DB has a corrupt row (manual edit, migration bug, JSON parse glitch); overwriting it with the cloud version is the desired healing direction. If you've ever shipped a feature that started writing dates as Unix timestamps instead of ISO strings and then had to recover, you know how valuable this is — the pull path heals the corruption automatically. Concrete consequence: a user opens the app after a bad migration that wrote `updated_at = "ABCDEF"` to several rows. Next pull: `chooseWinner("ABCDEF", "2026-05-10T14:32:18.000Z")` parses local to NaN, returns `"cloud"`. The corrupt local row gets overwritten with the cloud's well-formed version. The user never sees the bug. Boundary: this only heals one direction — corrupt rows on the cloud are dragged into local. The reverse is a real problem; the codebase trusts cloud writes to be well-formed because they go through the typed Supabase SDK.
+
+This is what people mean by "convergent merge under a total order." Last-write-wins is the simplest converging algorithm — it's not the *best* in every dimension (you lose the loser's edits), but it's the cheapest one that always terminates and always produces an identical result on every replica. Every distributed system that has ever shipped under a "good-enough" merge has done some version of this: DNS records, CRDT LWW-Registers, Riak's last-write-wins bucket type, Dropbox's "keep one, mark the other as conflict." The boundary case — true concurrent edits that need to merge content — is where CRDTs and operational transforms become load-bearing. Until then, the timestamp wins. The full picture is below.
 
 ---
 
@@ -327,3 +341,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-children-one-toy metaphor opening / 4 layered sub-sections — pure chooseWinner, ISO-string compare, same-second cloud bias, malformed-timestamp healing — each with frontend bridges and concrete consequences / principle paragraph on convergent merge under total order).

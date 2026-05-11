@@ -17,6 +17,10 @@ This is a pure decision function — sometimes called a finite-state classifier 
 
 ---
 
+## How it works
+
+A traffic light. Green if it's allowed to go, red if it's not, yellow if it's about to change. The light doesn't query the road network on every cycle — it just looks at its internal counter and decides. The cell state is the same shape: given (habit cadence, this date, today, the set of dates the habit was checked), pick one of five labels. No DB call, no `await`, no state hook — the decision is a closed-form function of its arguments, evaluated thousands of times per render with zero I/O cost. If you're coming from frontend, this is exactly the pattern you reach for when a `useMemo` selector starts feeling expensive — gather the inputs once at the top, decide per-item in pure code, never let the leaf component own data fetching.
+
 **Real operation:** `cellStateFor` and `cellStateForThread` in `src/components/home/cellState.ts`.
 
 ---
@@ -124,6 +128,8 @@ The insight: order the branches by frequency-and-evidence-priority so the cheape
 
 When brute force is fine: never matters for correctness — both return the same state. The optimal version's win is purely constant-factor + readability: the branch order encodes "check-in beats cadence beats time-of-week," which is a business rule worth making visible.
 
+This is what people mean by "split gather from decide." The expensive side (build a `Set<string>` of checked dates once, hand a habit's cadence config down) runs once per render at the top; the cheap side (one decision per cell, O(1)) runs thousands of times in the inner loop. The pattern is everywhere — CSS rule resolution, React `useMemo`, Redux derived state, OS file system attribute caches. The boundary the architecture maintains is that leaf cells never own data fetching; they own decisions, and decisions are pure.
+
 ---
 
 ## Why pure matters here
@@ -204,6 +210,26 @@ The hidden cost is React. An impure cell renders mid-await, then re-renders when
 ### The breakpoint
 
 Fine until habit count exceeds ~500 in a single user's account, at which point the parent's Map build (O(N)) starts to dominate the render and the grid stutters on the first paint. The fix isn't the algorithm — it's pagination at the parent (only render the visible week's habits), which the data shape already supports.
+
+---
+
+## Tech reference (industry pairing)
+
+### React function component + props (pure render)
+
+- **Codebase uses:** `src/components/home/DailyScheduleGrid.tsx` builds `checkedDatesByHabit: Map<string, Set<string>>` once via a `useMemo` and passes it down; the cell calls `cellStateFor(habit, dateStr, todayStr, checkedDates)` in pure code.
+- **Why it's here:** the cell renders thousands of times per session; making the decision pure means React can short-circuit re-renders via referential-equal props.
+- **Leading today:** React functional components + `useMemo` selectors — `adoption-leading` for derived-state rendering, 2026.
+- **Why it leads:** pairs naturally with React's reconciler — pure props + memoised selectors skip unnecessary re-renders without manual `shouldComponentUpdate` discipline.
+- **Runner-up:** Reselect / TanStack Query select — `innovation-leading` when selectors get composable across modules; here the decision is small enough that an inline pure function is clearer.
+
+### TypeScript `Set<string>` for membership testing
+
+- **Codebase uses:** `Set<string>` per habit containing checked-date strings, built once at the parent. O(1) `.has(dateStr)` check inside `cellStateFor`.
+- **Why it's here:** the cell calls `checkedDates.has(dateStr)` 7×N times per render; making the lookup O(1) is what keeps the grid render flat.
+- **Leading today:** native `Set` — `adoption-leading` for membership tests at this scale, 2026.
+- **Why it leads:** runtime-builtin, O(1) average, zero dependency cost; reading `checkedDates.has(dateStr)` names the invariant.
+- **Runner-up:** `Map<string, true>` — equivalent at this scale; functionally interchangeable.
 
 ---
 
@@ -364,3 +390,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (traffic-light metaphor + frontend bridge to useMemo selectors) and Move 3 principle after the Comparison block.

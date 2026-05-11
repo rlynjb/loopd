@@ -19,11 +19,34 @@ Single source of truth is the discipline of designating exactly one writable ori
 
 ## How it works
 
-Every prose-derived feature has the same shape: a scanner reads `entries.text`, produces an array of structured rows, and a reconciler diffs those rows against what's already in the DB. Inserts what's new, deletes what's gone, leaves matching rows alone (preserving identity, classifier output, manual overrides).
+There's one filing cabinet and a stack of photocopies. The cabinet is `entries.text` — every drop the user typed, in the order they typed it. The photocopies are `todos_json`, `todo_meta`, `nutrition`, `thread_mentions` — typed rows the app reads to render lists, counts, and charts. The rule is that the cabinet is the only place anyone writes, and the photocopies get rebuilt from the cabinet whenever the user pauses long enough for the system to catch up.
 
-The scanners run at commit boundaries — focus blur, screen leave, save events — not on every keystroke. The keystroke path autosaves the prose to SQLite; the scanners catch up at the next natural pause.
+### The canonical surface — `entries.text`
 
-Habits are an exception: they're first-class user-managed entities, not derived from prose. There's no `scanHabits` because the user creates and edits habits directly in the more/habits screen. Here's the diagram of the whole flow.
+The user's keystrokes land in `entries.text`, a TEXT column on the `entries` table. Drops are encoded inline as markers: `[]` for todos, `** food N kcal` for nutrition, `#tag` for thread mentions. If you're coming from frontend, you're used to controlled inputs where state lives in `useState` and the rendered DOM mirrors that state — same idea here, except the React state is the SQLite column and the "DOM" is every derived row that exists downstream. If the user types `[] call mom` at t=0 and the autosave fires at t=1ms, the line is in `entries.text` immediately; nothing else has moved yet. The rule holds as long as there is exactly one writer for any given prose surface — multi-device editing of the same `entries.text` row would need CRDT semantics on the prose itself before the rest of the chain keeps working.
+
+### The scanner — one function per prose-derived feature
+
+A scanner is a pure function over a prose string. `scanTodosFromText(text)` reads `entries.text`, walks every line, and returns an array of `TodoItem` objects. `parseTags(text)` does the same for `#tag`. `scanNutrition(text)` for `** food N kcal`. If you've ever written a custom parser for a React form field — extracting `@mentions` from a comment box, say — you've written this exact thing. The codebase has no parser-combinator library; the scanners are hand-written regex-plus-state-machine functions, ~100–200 lines each, because the marker grammar is sparse enough that a library would add weight without adding correctness. The concrete consequence: if a scanner has a bug, every wrong derived row points back at one named function — there's exactly one place to fix it.
+
+### The reconciler — diff scanner output against existing DB state
+
+A scanner produces an array; the reconciler takes that array and merges it into the DB. `reconcileTodoMetaForEntry(entry_id, items)` is the canonical example: it pulls the existing `todo_meta` rows for this entry, matches each scanner-produced item against them (via two-pass matching — see [04](./04-two-pass-matching.md)), inserts what's new, soft-deletes what's missing, and leaves matching rows alone. Think of it like React's reconciler diffing a new virtual DOM against the previous one to decide what to mount, update, and unmount — except here the "virtual DOM" is the scanner output and the "real DOM" is the SQLite rows. The concrete consequence: when a user deletes the line `[] call mom`, the scanner returns an array without that item, the reconciler diffs the ids, and the orphaned `todo_meta` row gets `deleted_at` stamped — no DELETE TODO code path, no button handler, no event listener. The todo went away because the prose did. Boundary: this fails if a contributor adds a write path that mutates `todo_meta` *without* a prior prose change — that would create a row the next scanner pass thinks is orphaned and soft-deletes immediately.
+
+### The commit boundary — when scanners run
+
+Scanners do not run on every keystroke. They run at *commit boundaries* — focus blur on the journal text input, screen leave (navigating away from `journal/[date]`), and a few explicit save events. In React terms, this is like deferring an expensive `useMemo` until a `useEffect` cleanup fires; the cheap path (keystroke → DB) stays cheap, and the expensive path (parse + diff + write) batches up the work. Concrete consequence: while the user is mid-burst typing, `todos_json` is stale by a few hundred milliseconds — but no UI surface reads `todos_json` during keystroke entry; the user is looking at the prose, not at the derived view. When they tab away or close the screen, the catch-up happens in one pass. The boundary breaks down if any UI surface starts reading derived state during the typing burst — at that point either the scanner runs more often or the UI reads from a different source.
+
+### The principled exceptions
+
+Two carve-outs are documented in the spec:
+
+- **Habits are first-class.** There's no `scanHabits`. The user creates and edits habits in the `more/habits` screen with explicit form fields for cadence type, days-of-week, and time-of-day bucket. The reason: cadence metadata (e.g. "Tuesdays + Thursdays at 7am") doesn't fit inline in prose. Forcing it would either expand the marker grammar or pollute the journal with structured strings the user didn't type. The cost of the exception is that habits don't appear in journal exports unless the user mentions them.
+- **The manual-touch deviation** (see [12](./12-manual-touch-deviation.md)) — `toggleThreadTouchToday` writes a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id`. This is the one published exception to "every derived row points back at prose," scoped to a single function, capped at a budget of 1. The discipline isn't refusing to carve; it's making the carve named, bounded, and visible.
+
+If you're coming from frontend, both exceptions are familiar — they're the same shape as React's escape hatches (`useRef` for non-rendering state, `flushSync` for breaking the batching contract). The framework's discipline survives because each escape is in a named file, the reviewer can see it, and the carve-out itself is on the floor plan.
+
+This is what people mean by "one writable surface, every other representation is a cache." Once you accept that constraint, the cost of every new derived feature is fixed — one scanner plus one reconciler — and "edit the line, the row updates" becomes a universal rule rather than a per-feature affordance you have to wire up by hand. The full picture is below.
 
 ---
 
@@ -133,6 +156,26 @@ Fine until the app becomes multi-author or supports concurrent prose edits acros
 ### What wasn't actually a tradeoff
 
 Auto-deriving rows from text via an ORM-style schema mapper wasn't on the table. The canonical surface is free-form prose with sparse markers (`[]`, `** food N kcal`, `#tag`) — not a typed structured form an ORM can consume. The hand-written scanners do the work an ORM can't.
+
+---
+
+## Tech reference (industry pairing)
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` in WAL mode against `loopd.db`, opened only from `src/services/database.ts`. The `entries.text` TEXT column is the canonical surface.
+- **Why it's here:** the synchronous TEXT column that makes "keystroke → autosave → read-back at next render" possible — if prose lived anywhere asynchronous, the canonical-surface rule collapses on every typing burst.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; WAL mode gives readers a stable snapshot while writers commit; mirrors the SQLite C API with zero bridge cost.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf-tier choice for bare React Native projects.
+
+### Hand-written scanners (no parser library)
+
+- **Codebase uses:** `src/services/todos/scanTodos.ts → scanTodosFromText()`, `src/services/threads/scanThreads.ts → parseTags()`, `src/services/nutrition/scanNutrition.ts`. Each is a regex-plus-state-machine TS function, ~100–200 LOC, no parser-combinator dependency.
+- **Why it's here:** each scanner extracts one marker class (`[]` / `#tag` / `** food N kcal`) from a prose string and returns a typed array — that array is what the reconciler diffs against the DB.
+- **Leading today:** hand-written matchers — `adoption-leading` for sparse-marker text formats, 2026.
+- **Why it leads:** the marker grammar is intentionally sparse; a parser combinator would add weight (typed grammar, error recovery) without adding correctness for ~150-line scanners.
+- **Runner-up:** `chevrotain` / `nearley` — `innovation-leading` parser combinators with typed grammars; the right move once the marker grammar grows beyond ~5 markers or starts needing recovery on malformed input.
 
 ---
 
@@ -316,3 +359,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.

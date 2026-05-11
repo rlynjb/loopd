@@ -17,6 +17,10 @@ This is the batched-upsert pattern with checkpoint-per-batch progress — the sa
 
 ---
 
+## How it works
+
+A mover loading boxes onto a truck in groups of 50. After each group lands safely in the warehouse, the mover crosses those box numbers off the manifest. If the truck breaks down halfway, only the boxes still on the truck need to be reloaded — the warehouse manager won't re-receive what's already there. If you're coming from frontend, this is the same shape as React Query's mutation queue with idempotency keys — the client doesn't track "have I already sent this?" because the server's upsert-on-conflict makes resends safe. Three moves: select dirty rows, batch in 50s, upsert + stamp synced_at per successful batch.
+
 **Real operation:** `pushTable` in `src/services/sync/push.ts`.
 
 ---
@@ -134,6 +138,8 @@ One giant upsert would make a 50KB+ payload that supabase-js doesn't love, and a
 ```
 
 When brute force is fine: never on a real sync path — latency dominates. The only place per-row is OK is a small dev script (<20 rows). Even then, batching is one extra line of code.
+
+This is what people mean by "batch under, but small enough to retry cheaply." Every bulk-load utility in every database does this (`COPY` with commit intervals, message queue consumers committing offsets per batch). The trick is sizing the batch so a network failure costs at most one batch's worth of work, while still amortising per-call overhead. 50 is the sweet spot for HTTPS-over-Supabase at this codebase's row sizes; the number isn't sacred, it's tuned.
 
 ---
 
@@ -402,3 +408,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (mover-with-manifest metaphor + frontend bridge to React Query mutation queue) and Move 3 principle after the Comparison block.

@@ -17,6 +17,10 @@ This is cursor-based incremental pull — the same shape as RSS feed readers (`L
 
 ---
 
+## How it works
+
+A newspaper delivery service that drops off only the editions printed after your last delivery — the carrier reads the last-delivered date stamp from your mailbox, fetches everything dated after that, and stamps your mailbox with today's edition date when done. If you're coming from frontend, this is the same shape as React Query's pagination cursors plus `staleTime` — pull pages of new data anchored to a cursor, advance the cursor only after the page lands. Three moves: ask the server what time it is, page through cloud rows newer than the cursor, write each row with conflict resolution and stamp `synced_at` from the server's clock.
+
 **Real operation:** `pullTable` in `src/services/sync/pull.ts`.
 
 ---
@@ -147,6 +151,8 @@ Local clock skew. If the device clock is 30s behind, pulling rows newer-than-Dat
 ```
 
 When brute force is fine: only on initial bootstrap when "new = everything" anyway (see [14-firstpull-bootstrap](./14-firstpull-bootstrap.md)). For every subsequent pull, brute is wrong by an order of magnitude.
+
+This is what people mean by "incremental sync via a monotonic cursor." RSS readers do it with `Last-Modified` / `If-Modified-Since`, change-data-capture pipelines do it with `WHERE updated_at > ?`, event-sourced replicas do it with stream offsets. The shared trick is naming the cursor (a value both sides agree on), advancing it only on successful application, and anchoring it to a clock the client doesn't own — server time, logical timestamps, or stream sequence numbers. Anything else lets clock skew silently break the watermark.
 
 ---
 
@@ -421,3 +427,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (newspaper-delivery metaphor + frontend bridge to React Query pagination + staleTime) and Move 3 principle after the Comparison block.

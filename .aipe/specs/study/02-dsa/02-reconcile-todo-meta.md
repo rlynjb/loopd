@@ -17,6 +17,10 @@ That shape is the reconciler pattern, and it shows up everywhere you can't lean 
 
 ---
 
+## How it works
+
+Two stacks of index cards — one fresh from today's scan, one pulled from the filing cabinet. You want every card in stack A to have a matching card in stack B, no extras on either side. Walk stack A once; for each card, peek into a hash of stack B's ids and either skip (already matched) or mark "needs an insert." Walk stack B once with the same hash built from A; anything not in A's hash gets a soft-delete. If you're coming from React, this is exactly how the reconciler decides what to mount and unmount between two virtual DOM trees — except here the "trees" are flat arrays of ids and the operations are SQL inserts and soft-deletes instead of DOM mutations.
+
 **Real operation:** `reconcileTodoMetaForEntry` in `src/services/todos/reconcileMeta.ts`. Runs after `scanTodos` produces final `todos_json`.
 
 ---
@@ -139,6 +143,8 @@ The insight: build two index structures — a `Map<todoId, meta>` for O(1) "do I
 
 When brute force is fine: at the 20-todo scale of a typical entry, both run in under a millisecond. The reason the optimal version is in the codebase isn't speed — it's clarity (`byTodoId.has(...)` reads like the invariant).
 
+This is what people mean by "reconcile two sources of truth in linear time." The pattern is everywhere because the problem is everywhere — Kubernetes controllers reconcile desired against actual state on every tick, Git's index reconciles tracked vs working-tree files, React's reconciler diffs `next` against `current`. The trick is always the same: pay O(n+m) up-front to build a hash, then scan both sides linearly. When you can't have a foreign-key constraint do the work for you, this is the second-cheapest enforcement mechanism available.
+
 ---
 
 ## In this codebase
@@ -220,6 +226,26 @@ Fine until `confidence=null` rows accumulate from repeated LLM failures and no s
 ### What wasn't actually a tradeoff
 
 Choosing Map+Set over two `.find()` calls wasn't a tradeoff on speed — at N=20 both are sub-millisecond. It was a tradeoff on clarity: the index name (`byTodoId`) is the invariant name. The bullet-form readability is the only reason the optimal version is in the codebase.
+
+---
+
+## Tech reference (industry pairing)
+
+### TypeScript Map + Set (no ORM, no FK)
+
+- **Codebase uses:** `Map<todoId, TodoMetaRow>` and `Set<todoId>` inside `src/services/todos/reconcileMeta.ts → reconcileTodoMetaForEntry()`. Raw SQL via `database.ts` for inserts and soft-deletes.
+- **Why it's here:** SQLite can't FK to a JSON-array element (`entries.todos_json` holds the canonical id list); the reconciler IS the integrity gate. Map+Set is the cheapest expression of "do I have this id?" at this scale.
+- **Leading today:** application-side reconciler with native collections — `adoption-leading` when the relationship can't be expressed as a foreign-key constraint, 2026.
+- **Why it leads:** runtime-builtin, O(1) lookups, no library overhead; the reconciler reads like the invariant it enforces.
+- **Runner-up:** Drizzle / Prisma with typed schemas — `innovation-leading` once the relationship CAN be expressed in the schema; here it can't (JSON-array element child), so the application reconciler wins.
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db`. The reconciler inserts new `todo_meta` rows and stamps `deleted_at` on orphans through the `database.ts` connection.
+- **Why it's here:** the inserts and soft-deletes must hit SQLite atomically per row so the next focus-blur scan sees consistent state.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; WAL mode lets the next read see a consistent snapshot while the reconciler commits.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf tier for bare React Native projects.
 
 ---
 
@@ -387,3 +413,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (index-cards metaphor + frontend bridge to React reconciler) and Move 3 principle after the Comparison block. Algorithm/trace structure preserved.

@@ -17,6 +17,10 @@ This is multi-output structured prompting — a specific application of the broa
 
 ---
 
+## How it works
+
+A photographer who needs four different shots of the same scene — wide, medium, close, detail. The lazy approach is to shoot the scene four times from four different positions. The right approach is to set up the camera once and switch lenses; same vantage point, same lighting, same moment in time. The four variants are guaranteed to be of the *same scene* because they share the take. If you're coming from frontend, this is the same shape as a single `useQuery` that returns four derived projections instead of four separate `useQuery`s — one network round-trip, one input snapshot, four consistent outputs. One prompt, one call, one validated JSON object containing four caption variants keyed by tone.
+
 **Real operation:** `generateCaption` in `src/services/ai/caption.ts`; persistence in `src/services/ai/summarize.ts` L87–L96.
 
 ---
@@ -157,7 +161,9 @@ Complexity: O(1) LLM round-trip for all 4 variants + theme · O(V) memory for pa
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: never for this UX. The shared-context single-call is the whole point — four variants of the same day must use the same nouns. Parallel calls give you latency parity but not noun consistency; only single-call shares the context once. Here's the diagram of the whole flow.
+When brute force is fine: never for this UX. The shared-context single-call is the whole point — four variants of the same day must use the same nouns. Parallel calls give you latency parity but not noun consistency; only single-call shares the context once.
+
+This is what people mean by "constrained generation with all-or-nothing validation." The pattern lives wherever multiple model outputs need to agree on shared facts — quiz generation (questions and answers must reference the same source), code-with-tests (the test must call the function the model just declared), multilingual translation sets (each language must translate the same source sentence). The trade is bimodal — one consistent output or no output at all, no partial credit — and the discipline is naming that as a feature when consistency between the parts is what makes the whole useful. Here's the diagram of the whole flow.
 
 ---
 
@@ -478,3 +484,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (photographer-with-four-lenses metaphor + frontend bridge to single useQuery with derived projections) and Move 3 principle after the Comparison block.

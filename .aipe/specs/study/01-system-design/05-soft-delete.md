@@ -19,11 +19,25 @@ A tombstone is a row that's marked as gone instead of physically removed, with a
 
 ## How it works
 
-Soft-delete is a tombstone pattern. A row marked `deleted_at = now` is invisible to every read in the app (every query carries `WHERE deleted_at IS NULL`). The row stays in the DB so the sync layer can propagate the deletion to the cloud — push will see `updated_at > synced_at` and upsert the tombstone, pull will see the cloud tombstone and apply it locally.
+A gravestone. The body is gone but the marker stays — readers of the cemetery know to walk past, the records department knows the person existed, and the groundskeeper can come back in thirty years to actually remove the marker if it's no longer needed. Soft-delete is a tombstone: a column called `deleted_at` stamped with a timestamp, plus a "filter at read time" convention, plus a future cleanup job that removes the marker once it's safe.
 
-Hard delete is reserved for the future "30-day vacuum" — a job that hard-deletes rows whose `deleted_at` is more than 30 days old, on both sides. That job is deferred until the volume warrants it.
+### The deletion gesture — UPDATE, not DELETE
 
-The combination "every CRUD delete stamps `deleted_at` + bumps `updated_at`" + "every read filters the column" + "every write triggers `schedulePush()`" makes deletes behave like any other edit from the sync layer's perspective. There is no special "delete protocol." The diagram below shows it end-to-end.
+When the user "deletes" anything in this app — an entry, a todo, a habit — the SQL that runs is `UPDATE … SET deleted_at = now, updated_at = now`, not `DELETE FROM`. If you're coming from frontend, this is like a Redux reducer that marks an item as `{ archived: true }` instead of removing it from the array — the array length doesn't change but the consumer sees the item differently. Concrete consequence: a user deletes journal entry e123 at 14:32. `UPDATE entries SET deleted_at='2026-05-10T14:32', updated_at='2026-05-10T14:32' WHERE id='e123'`. The row is still in `loopd.db`; its `deleted_at` is set. The next `SELECT * FROM entries WHERE deleted_at IS NULL` returns 24 entries instead of 25. The user's experience is identical to a real delete; the data is intact. Boundary: this only works as long as every read carries `WHERE deleted_at IS NULL` — a query that forgets the filter would resurrect ghosts.
+
+### The read filter — every query carries `WHERE deleted_at IS NULL`
+
+Every read in the application — UI queries, scanner reads, sync exports — carries `WHERE deleted_at IS NULL`. The discipline is universal; the codebase has no read paths that "see" deleted rows except the sync layer itself. If you're coming from frontend, this is the same shape as a React selector that always filters `state.items.filter(i => !i.archived)` — the source of truth has everything; the consumer always projects. Concrete consequence: when the dashboard reads `SELECT * FROM entries`, it gets `WHERE deleted_at IS NULL` automatically (via the `database.ts` helper functions). A new write path that forgets the filter is a known bug shape — the linter doesn't catch it, the type system doesn't catch it; the convention is enforced by code review and the `database.ts` funnel ([01-local-first-request-flow](./01-local-first-request-flow.md)). Boundary: it breaks the moment a new read path queries the DB directly without going through the helpers — that's why `database.ts` is the single mouth (see Principle 1 in `docs/spec.md`).
+
+### Why sync needs the tombstone — the row has to survive locally
+
+Cloud sync sees soft-deleted rows as ordinary "updated" rows. `pushAll()` selects rows where `updated_at > synced_at`, which now includes the just-deleted row. Supabase receives an upsert with `deleted_at` set; the cloud mirror's read paths (if there are any) filter it the same way. Pull does the reverse: a cloud row with `deleted_at` set arrives via `pullAll()`, gets upserted locally; the local read filter hides it. Think of it like a Git tombstone commit: even when you delete a file, the commit that deletes it is part of history — every clone of the repo agrees the file is gone because every clone has the deletion. Concrete consequence: user deletes entry e123 on the phone. 5 seconds later the row is in Supabase with `deleted_at` set. Tomorrow they open the same Supabase project from a different device; the first pull brings the row in with `deleted_at`; the local read filter hides it. The "deletion" propagated without a special channel. Boundary: this breaks if a third party (e.g. a server-side admin tool) tries to DELETE the row directly — pull would never see the deletion because it's looking at `(updated_at, deleted_at)`, not row presence.
+
+### The deferred vacuum — hard delete after 30 days
+
+Hard delete is reserved for a future "vacuum" job: walk every synced table, hard-delete rows where `deleted_at < now - 30 days`, run on both sides. The 30-day window gives undo, gives sync time to converge, gives a forensic trail if a delete was accidental. If you're coming from frontend, this is the same pattern as a "trash" folder that empties itself after a month — the immediate experience is "gone," the storage cost is delayed until the cleanup runs. The vacuum job is **not yet built** because the row volume in a single-user journaling app doesn't warrant the operational overhead. Concrete consequence: today, a row deleted in 2026-05-10 is still in `loopd.db` and Supabase on 2027-05-10, hidden but present. The DB grows monotonically. Boundary: at the project's scale (single user, ~30 entries per month), this is invisible — a year of soft-deletes might add a few MB. At 100K users it would matter; the vacuum job becomes table stakes.
+
+This is what people mean by "deletes as ordinary edits." Once you stamp `deleted_at` and trust every reader to filter, the sync layer doesn't need a special "delete protocol" — it propagates deletes the same way it propagates edits. Every distributed system that has ever survived a partition does some version of this: Cassandra's tombstones, Git's deleted-file commits, S3's versioned-delete markers. The shape generalises; the 30-day window is just the dial you turn for your domain. The full picture is below.
 
 ---
 
@@ -333,3 +347,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (gravestone metaphor opening / 4 layered sub-sections — UPDATE not DELETE, the read filter, why sync needs the tombstone, the deferred 30-day vacuum — each with frontend bridges and concrete consequences / principle paragraph on deletes-as-ordinary-edits).

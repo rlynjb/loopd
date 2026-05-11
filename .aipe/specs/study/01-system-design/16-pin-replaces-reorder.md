@@ -19,18 +19,40 @@ Replacing manual ordering with a single boolean flag is a specific case of "down
 
 ## How it works
 
-The `pinned` column landed via migration `0005_todo_meta_pinned.sql` and a corresponding local schema bump. The /todos page reads `meta.pinned` per row and sorts:
+A grocery list where you star the milk so it floats to the top. You don't drag every item into the right place every time you open the app; you just star the one or two things that matter today. Everything else sorts by when it landed. One boolean column replaces an ordered-position dance — and the dance was machinery the user never asked for.
 
+### The schema move — `pinned` BOOLEAN replaces `position` INTEGER
+
+Migration `0005_todo_meta_pinned.sql` added a `pinned BOOLEAN NOT NULL DEFAULT false` column to `todo_meta`. The old `position INTEGER NULL` column was *not* dropped — it stays in the schema, no UI reads it, every cloud-sync upsert writes NULL into it. If you're coming from frontend, this is the same shape as a typed enum widening to a union where most variants become `never` after a refactor — the type can express positions but nothing ever sets one. Concrete consequence: a fresh todo from `scanTodos` produces a `todo_meta` row with `pinned=false, position=NULL`. A user-pinned todo gets `pinned=true, position=NULL`. The sort key never reads `position`; the column is dead-but-kept until the next destructive Postgres migration cleans up several deprecated columns at once. Boundary: the column lives forever in this state if the team never decides "now is the time for a destructive migration"; the cost is one nullable int per row, paid in storage and ignored everywhere else.
+
+### The sort key — pinned-first, then chronological
+
+The /todos page and the dashboard's `SmartTodoList` both run:
+
+```sql
+SELECT * FROM todo_meta
+ WHERE deleted_at IS NULL
+ ORDER BY pinned DESC, createdAt DESC
 ```
-  pinned: true rows first
-  same-pin: createdAt DESC (newest at top)
-```
 
-The dashboard's `SmartTodoList` matches this exactly. New captures land at the top because they're newest by `createdAt`. Pin acts as a sticky modifier on top of recency.
+If you've ever sorted a React array with `arr.sort((a, b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)` you've written exactly this — group by the sticky flag, then break ties by recency. Concrete consequence: a user with 8 todos, 1 pinned, will see the pinned item at row 1 every time; the other 7 land in created order, newest at top. A new capture lands at row 2 (newest unpinned), unless the user immediately pins it, in which case it lands at row 1 (newest pinned). Boundary: the sort can't express "pinned A before pinned B" — all pinned items sort by `createdAt` among themselves. If two items are pinned, the newest-pinned wins the top slot, no exception.
 
-The `position` column stays on the schema because dropping it would require a destructive Postgres migration and the cloud round-trip still includes it (it's just always `null` on writes now). The `stage` column is in the same boat — kept on the schema with a single-value default, no UI surface.
+### The gesture — tap pin → toggle → write → re-sort
 
-The same commit that introduced `pinned` removed the drag-reorder gestures and the three-stage status filter, and added the `Swipeable` wrapper for swipe-to-delete on each todo row. The diagram below shows it end-to-end.
+The pin icon is a `Pressable` on each todo row. Tap fires `togglePin(meta_id)` in `database.ts`, which writes `UPDATE todo_meta SET pinned = NOT pinned, updated_at = now() WHERE id = ?`, then `schedulePush()`. The hook subscribing to the query re-runs, gets the new row order, and React re-renders. If you're coming from React, this is the same pattern as toggling `selected` state on a list item — the only difference is the state lives in SQLite instead of `useState`, and the re-sort comes from the query, not from `useMemo`. Concrete consequence: tap pin on todo #5 → 1ms SQLite write → re-render shows todo #5 at the top → 5 seconds later `pushAll()` upserts the change to Supabase. No drag-gesture state, no inter-row position calculation, no race condition between two simultaneous reorders. Boundary: if the user pins five items in rapid succession, they all land at the top in `createdAt` order — there's no "I pinned this one first so it should rank highest" affordance.
+
+### What got deleted
+
+The same commit that added `pinned` removed the drag-handle gestures, the position-renumber logic that ran on every reorder, the three-stage status filter (`todo` / `next` / `done`), and added a `Swipeable` wrapper for swipe-to-delete on each row. About 300 lines of UI plus the `react-native-draggable-flatlist` dependency footprint went away in one commit. If you've ever shipped a feature and then watched a redesign delete it cleanly, this is the same shape — the value was in the subtraction, not in the next iteration.
+
+### Phase A / Phase B — `position` as a dead-but-kept column
+
+- **Phase A (current):** `pinned` column live and the sole sort modifier. `position` column in the schema, never read by any UI, written as NULL on every cloud upsert. Both columns mirror to Supabase via the existing sync layer; no migration was needed beyond the additive `pinned` column.
+- **Phase B (deferred):** drop `position` from `todo_meta` in a future destructive migration once it's certain no old client is still writing to it. The trigger condition is "no installed version older than 2026-05-05 in the field for 90 days."
+
+The point of Phase A/B here is that the schema didn't have to change between phases — `position` becoming NULL forever is a Phase-A state that costs one ignored int per row. The architecture absorbed the simplification without forcing a synchronous schema cleanup; the cleanup gets to be lazy.
+
+This is what people mean by "find a cheaper version of the same affordance." Drag-to-reorder is the canonical answer to "let users prioritise," but the cheapest version — pin one thing — covers 90% of real usage. The disciplined move is to ship the cheap version first and only build the expensive one when usage data forces it. Most products that ship drag-to-reorder never gather the data that would tell them whether anyone uses it. The full picture is below.
 
 ---
 
@@ -151,6 +173,26 @@ Fine until a credible "I want manual order back" signal arrives. The recovery pa
 ### What wasn't actually a tradeoff
 
 Dropping `position` and `stage` from the schema wasn't on the table at ship time. The cost is a destructive Postgres migration that would break older app versions still trying to write the columns; rolling that across user devices means coordinating an app-version cutoff that we don't have machinery for. The "schema squash" path (consolidate migrations 0001-0005 into a new baseline and drop the dead columns at the same time) is the right cleanup window, deferred until the migration log gets long enough to need squashing.
+
+---
+
+## Tech reference (industry pairing)
+
+### expo-sqlite (WAL) + Supabase Postgres
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db` plus `@supabase/supabase-js` against managed Supabase Postgres. `todo_meta.pinned BOOLEAN` lives on both sides; `todo_meta.position INTEGER NULL` is dead-but-kept on both.
+- **Why it's here:** the schema move had to land in both stores without a destructive migration — the additive `pinned` column was applied locally via `database.ts` schema bump and to Supabase via `supabase/migrations/0005_todo_meta_pinned.sql`. The dual-store mirror is what made "additive only" non-negotiable.
+- **Leading today:** Supabase — `adoption-leading` for Postgres-as-a-service in 2026; `expo-sqlite` — `adoption-leading` for Expo local storage.
+- **Why it leads:** Supabase's PostgREST upsert with `onConflict` handles the round-trip for both columns transparently; the `position` column becoming NULL on writes costs zero migration work.
+- **Runner-up:** `op-sqlite` for the local tier (JSI-direct, no bridge cost); Neon + Drizzle for the cloud tier (typed SQL + branch-per-PR).
+
+### React Native `Pressable` (no drag library)
+
+- **Codebase uses:** `Pressable` from `react-native` on the pin icon in each todo row. No `react-native-draggable-flatlist`, no `react-native-gesture-handler` rebinding, no per-row drag state.
+- **Why it's here:** the whole point of the pin pattern is to delete the gesture machinery — `Pressable` is the simplest input that captures the toggle. Bringing in a drag library would re-introduce exactly the cost the pattern subtracted.
+- **Leading today:** `Pressable` — `adoption-leading` for React Native list-item taps, 2026.
+- **Why it leads:** ships with React Native core; first-party tap-target handling with proper accessibility; replaced `TouchableOpacity` as the standard in RN 0.63+.
+- **Runner-up:** `react-native-gesture-handler` `<Pressable>` variant — `innovation-leading` when the row also needs swipe gestures (this codebase uses it on the `Swipeable` wrapper, but the pin tap itself stays on `react-native`'s plain `Pressable`).
 
 ---
 
@@ -343,3 +385,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.

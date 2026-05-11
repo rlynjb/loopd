@@ -17,6 +17,10 @@ This is the "special case is a parameter, not a fork" principle — the same ins
 
 ---
 
+## How it works
+
+A subway turnstile that treats your first ride the same as every other ride — same swipe motion, same fare calculation, same gate animation. The "first ride" isn't a special button; it's just the case where your prior balance was zero. If you're coming from frontend, this is the same shape as `useEffect(() => {…}, [])` with empty deps treating mount as "the same kind of event as any other render, just with prior state equal to undefined" — no special "first-mount" branch, just the regular reducer fed an empty input. The trick: set the pull cursor to `null` (a value the predicate `> cursor` treats as "everything is newer"), call the regular `pullAll()`, done. The same paginated upsert-with-LWW logic that runs on every normal sync runs on first install.
+
 **Real operation:** `firstPullAll` in `src/services/sync/firstPull.ts`. Called from `bootstrapCloudSync` in `src/services/sync/bootstrap.ts:82` when local is empty and cloud has data.
 
 ---
@@ -146,7 +150,9 @@ Complexity: ⌈N/200⌉ network round-trips across all tables · O(200) memory p
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: only on a dev fixture where you know the total cloud row count is tiny and the device is online. In production, paginated reuse is the only viable shape — and the brute version doesn't actually exist in the codebase because `firstPullAll` reuses `pullTable`. The diagram below shows it end-to-end.
+When brute force is fine: only on a dev fixture where you know the total cloud row count is tiny and the device is online. In production, paginated reuse is the only viable shape — and the brute version doesn't actually exist in the codebase because `firstPullAll` reuses `pullTable`.
+
+This is what people mean by "special case is a parameter, not a fork." Every time you avoid forking a code path, you halve the bug surface — the rare path gets exercised by every regular run, the regression-test suite covers it for free, and the architecture stays narrow. Null-object pattern, epoch-zero timestamps, sentinel rows: all variations of the same discipline. The fix-by-parameter is so cheap once you see it that the only excuse for forking the path is "I didn't notice they were the same shape." The diagram below shows it end-to-end.
 
 ---
 
@@ -478,3 +484,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (subway-turnstile metaphor + frontend bridge to useEffect with empty deps) and Move 3 principle after the Comparison block.

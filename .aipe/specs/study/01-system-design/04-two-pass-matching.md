@@ -19,13 +19,25 @@ Exact-then-fallback matching is a layered reconciliation strategy: try the stric
 
 ## How it works
 
-The scanner produces a list of "matches" (every `[]` line found in the prose). The matcher then walks the list twice.
+Imagine a librarian re-cataloguing a shelf after someone rearranged the books. First she looks for each book by its title (exact match) — most of the time that works, the title's the same, only the position moved. For any book whose title got changed in pencil (someone scribbled a correction over the cover), she falls back to its old position on the shelf. Two ordered identity checks, exact first, position second — and only the leftovers from pass 1 are eligible for pass 2.
 
-Pass 1 looks for an existing todo whose text equals the match's text (case-insensitive). If found and the existing row hasn't been claimed by an earlier pass, claim it. This catches the common case: nothing changed except line position.
+### Pass 1 — exact-text match
 
-Pass 2 walks the still-unclaimed matches and looks for an existing todo whose `sourceLine` equals the match's current line index. This catches the case: the user edited the words but the line position is the same.
+The matcher walks every item the scanner produced and tries to find an existing `todo_meta` row whose `text` matches the new line's text (case-insensitive, whitespace-normalised). If a match is found and that existing row hasn't already been claimed by a prior item in this pass, the row is claimed and the new item inherits its id. If you're coming from React, this is the same job `key` props do for list reconciliation — give every item a stable identifier and the framework can preserve component identity across re-renders even when the array reorders. Here the "key" is the text content itself, and the framework is the matcher. Concrete consequence: if a user has `[] call mom` on line 3 today and adds three new lines above tomorrow pushing it to line 6, pass 1 finds `"call mom"` in the existing rows, claims that row's id, and the `todo_meta` keeps every piece of attached metadata — `expanded_md`, `classifier_confidence`, `pinned`, `user_overridden_type`. Nothing was deleted; nothing was re-created. Boundary: pass 1 fails the moment the user edits the line in place (changes the text by even one character), at which point the row appears to be missing.
 
-Anything left unmatched is a new todo. Anything unmatched on the existing side is a "carryover" (its line is gone from prose; the row is preserved with `sourceLine` cleared). The full picture is below.
+### Pass 2 — line-index fallback
+
+For every item that pass 1 *didn't* claim, the matcher takes a second walk and looks for an existing row whose previous `sourceLine` matches this item's new line index. Think of it like React's reconciliation when no `key` is provided — the framework falls back to positional matching, with the well-known caveat that reordering corrupts identity. Same trade here, intentionally accepted. Concrete consequence: if a user has `[] call mom` on line 3 and edits it in place to `[] call mom about flight`, pass 1 fails (the text changed) but pass 2 succeeds (this line is still index 3, and the previous scan tagged the row at line 3). The row keeps its id. Boundary: pass 2 fails when the user deletes line 3 *and* inserts a new line at position 3 in the same commit — pass 1 finds no match (new text), pass 2 finds the index but it now belongs to a different prose line. The match is wrong, the existing row gets a wrong text update, and the deleted item's row is now orphaned (and soft-deleted on the next reconcile).
+
+### Why both passes — neither alone is enough
+
+If you ran only pass 1 (text-only), the moment the user fixes a typo in place the row is treated as new — they lose its classifier result and `expanded_md`. If you ran only pass 2 (index-only), the moment the user reorders lines every row's metadata shifts to the wrong todo. The pattern works because the two signals are independent — text identity survives reordering, position identity survives same-line edits — and the matcher consumes them in the right order: cheap-and-strict first, fuzzy-and-positional as a safety net for the leftovers.
+
+### The last-known scan record — what pass 1 reads against
+
+Pass 1 doesn't compare against the new scan; it compares against what the previous scan stored as `text` on each `todo_meta` row. That's the "before" snapshot the matcher diffs into the "after." If you've worked with React's reconciler, this is the equivalent of the previous virtual DOM — the framework keeps it around so the next render has something to diff against. The codebase stores it directly on `todo_meta.text`; every successful reconcile updates it so the next pass's pass 1 reflects today's state.
+
+This is what people mean by "graceful identity preservation." When you can't stamp a primary key into your source format, you reach for two cheap proxies (content + position) and rank them by strictness. The same pattern shows up in `git`'s rename detection (content similarity threshold + path heuristic), in `react`'s reconciler (`key` first, position second), in `diff` algorithms (LCS first, fall back to position when ties tie). The full picture is below.
 
 ---
 
@@ -162,6 +174,26 @@ We'd also have to strip tokens from every export, every share, every clipboard c
 ### The breakpoint
 
 Fine until the app needs to round-trip prose between writers — collaborative editing, bulk import from a third-party source, OCR pipelines that produce todo-like lines. At that point "the user's prose IS the identifier" stops holding because identity has to survive crossing trust boundaries. The fix is either CRDT-prose (which carries identity at the character level, see [08-conflict-last-write-wins](./08-conflict-last-write-wins.md)) or a versioned snapshot system where the matcher runs against the prior snapshot, not the current row state.
+
+---
+
+## Tech reference (industry pairing)
+
+### Hand-written matchers (no parser library)
+
+- **Codebase uses:** TypeScript matcher functions in `src/services/todos/scanTodos.ts` (Pass 1 + Pass 2 over `[]` lines) and `src/services/threads/reconcileMentions.ts` (Pass 1 + Pass 2 with ±3 line shift window for `#tag`).
+- **Why it's here:** the algorithm has to run on every focus blur and screen leave — bringing in a parser dependency would add weight for what is fundamentally two ordered scans over typed arrays.
+- **Leading today:** hand-written matchers — `adoption-leading` for sparse-marker prose reconciliation, 2026.
+- **Why it leads:** the matching grammar is tiny (one comparator per pass); a library would add startup cost, types to maintain, and error-recovery code the use case doesn't need.
+- **Runner-up:** `chevrotain` / `nearley` — `innovation-leading` parser combinators with typed grammars; the right move once the marker grammar grows recovery requirements or supports more than ~5 marker classes.
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db` — `todo_meta.text` and `todo_meta.sourceLine` are the columns the matcher reads as the "before" snapshot for Pass 1 and Pass 2 respectively.
+- **Why it's here:** the matcher needs synchronous read access to the previous scan's output; SQLite's WAL gives readers a stable snapshot while writers commit, so the matcher sees a consistent "before" state.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; WAL mode is battle-tested; mirrors the SQLite C API directly with zero bridge cost.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf tier for bare React Native projects.
 
 ---
 
@@ -346,3 +378,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.

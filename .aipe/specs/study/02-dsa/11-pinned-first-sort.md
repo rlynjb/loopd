@@ -17,6 +17,10 @@ This is sort with priority partition — a two-key lexicographic comparator wher
 
 ---
 
+## How it works
+
+A grocery list where the milk has a star next to it. Whatever you starred floats to the top; everything else sorts by when you wrote it down. Two keys: starred-first, then recency. If you're coming from frontend, this is `[...items].sort((a, b) => Number(b.starred) - Number(a.starred) || new Date(b.createdAt) - new Date(a.createdAt))` — one comparator, one line, evaluated lazily so the recency comparison only runs when both items share the same pinned state. The win is that "pinned" is a single boolean column and "recency" is already there; the sort is free.
+
 **Real operation:** the inline `out.sort(...)` in `app/todos.tsx` (lines ~187-194) and `src/components/home/SmartTodoList.tsx`.
 
 ---
@@ -130,6 +134,8 @@ The insight: a two-key comparator handed to `Array.prototype.sort` lets TimSort 
 
 When brute force is fine: at the journaling scale of a few hundred todos, both are sub-millisecond. The reason to prefer `Array.prototype.sort` is that TimSort is already in the runtime and handles partially-sorted lists in near-linear time — the comparator stays the only piece of code I own.
 
+This is what people mean by "express the policy in the comparator." The pinned flag is one column; the comparator is one line; the sort is free. Every priority queue ever built is a variant of this — a primary key that names the priority class, a secondary key that breaks ties by time. Email inboxes, chat apps, file managers, RSS readers: the pattern is so cheap that any list-of-things UI eventually grows into it.
+
 ---
 
 ## In this codebase
@@ -215,6 +221,26 @@ Fine until a user genuinely needs ordering inside the pinned group (e.g., 20+ re
 ### What wasn't actually a tradeoff
 
 Picking TimSort (via `Array.prototype.sort`) over a hand-rolled sort isn't a tradeoff — the runtime already has it, it's stable, and it's near-linear on partially-sorted inputs (which our list usually is, since pinning toggles one row at a time). The comparator is the only code we own.
+
+---
+
+## Tech reference (industry pairing)
+
+### JavaScript `Array.prototype.sort` + inline comparator
+
+- **Codebase uses:** `out.sort((a, b) => Number(b.pinned) - Number(a.pinned) || dateCmp)` inline at `app/todos.tsx` L187–L194 and `src/components/home/SmartTodoList.tsx`. No external sort library.
+- **Why it's here:** the comparator IS the policy; declaring it inline means the rule and the code that enforces it sit next to each other.
+- **Leading today:** native `Array.prototype.sort` — `adoption-leading` for in-memory sort in JS/TS, 2026.
+- **Why it leads:** TimSort is the V8/JSC default — O(n log n) worst case, near-O(n) on partially-sorted input, stable by ES2019 spec.
+- **Runner-up:** SQL `ORDER BY pinned DESC, createdAt DESC` — `adoption-leading` when the list comes from the DB and the sort can live in the query. The codebase does this in some call sites and the in-memory sort in others; both shapes are correct.
+
+### `todo_meta.pinned` BOOLEAN column
+
+- **Codebase uses:** `todo_meta.pinned BOOLEAN NOT NULL DEFAULT false` (added in migration `0005_todo_meta_pinned.sql`). The sort key reads it directly via `meta.pinned`.
+- **Why it's here:** the sort key needs a stable boolean attribute on every row; without it, every comparator call has to derive "is this pinned" from somewhere expensive.
+- **Leading today:** boolean flag column for sort priority — `adoption-leading` for the simplest priority partition, 2026.
+- **Why it leads:** SQL boolean columns are 1 bit (logically) per row; updating the flag is one column write; the sort key is constant-time per comparison.
+- **Runner-up:** `todo_meta.position INTEGER` — `adoption-leading` for richer manual ordering, dormant in this codebase since pin-replaces-reorder. The right move if the boolean ever needs to express "I want this one before that one" within the pinned group.
 
 ---
 
@@ -383,3 +409,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (starred-grocery metaphor + frontend bridge to Array.sort comparators) and Move 3 principle after the Comparison block.

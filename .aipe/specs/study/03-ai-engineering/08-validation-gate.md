@@ -19,16 +19,32 @@ The validation gate treats every model output as untrusted input — the same wa
 
 ## How it works
 
-The output of every LLM call is treated like input from an untrusted client. The first step is `parseJson`: regex out the `{…}` substring (in case the model added a preamble), `JSON.parse`. If that throws, return `null`.
+A border-control officer who stamps passports. Whatever the traveller says, the officer checks the paperwork against the rules — name on the form, photo matches, dates valid, visa in the right column. If the paperwork passes, the traveller comes in; if not, the traveller is sent back. The model is the traveller, the validators are the officer, and the persistence layer is the country. Untrusted input never gets stamped without the officer's check. If you're coming from frontend, this is the same shape as treating LLM output like user-submitted form data — never paste it into your application state without parsing and validating it first, exactly the way you wouldn't paste a `<form>` POST body into your DB.
 
-The second step is per-feature validation: `validateSummary` checks every clipId in `clipOrder` exists; `validateExpansion` checks the per-type required fields; `parseAndValidate` for caption checks all 4 variants present.
+### Step 1 — `parseJson`: extract the JSON, fail closed if malformed
 
-If validation fails, the behaviour depends on the feature:
-- **caption** — skip; the structured summary still saves. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }` and on success `summarize.ts:91–92` persists those as `summary_json.variants` and `summary_json.variantsTheme` — note the theme key is *renamed* on persistence (`detectedTheme` → `variantsTheme`), not pass-through; the variants object is pass-through.
-- **expand** — retry once with a stricter system prompt (`"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."`). After that, give up and return `{ ok: false, reason: 'malformed' }`.
+Every chain that returns JSON runs `parseJson(text)` first. The function regex-matches the first `{…}` substring (in case the model wrapped the JSON in a prose preamble like `"Sure! Here's the JSON: { ... }"`), then runs `JSON.parse` on the substring. If either step fails, it returns `null` — the chain treats that as a parse failure and short-circuits. Think of it like a typed form's `parse()` step that returns `Either<Error, T>` — the parse outcome is the contract; downstream code only sees the success branch. Concrete consequence: Claude returns `"Here are the variants: {\"clean\": \"...\", \"smoother\": ...}"`. `parseJson` regexes the substring `{...}`, parses it, returns the typed object. If Claude had returned `"I can't generate captions today."`, the regex finds no JSON, returns `null`, the chain skips and the UI shows the previous variants (or an empty state). Boundary: the regex is greedy — if the model emits nested JSON or unbalanced braces, the extract may grab the wrong substring. The parser then throws and the chain fails closed.
+
+### Step 2 — per-feature schema validators
+
+After `parseJson`, each chain runs its own validator: `validateSummary` checks every `clipId` in `clipOrder` exists in the input; `validateExpansion` checks the per-type required fields match the discriminated union; `parseAndValidate` for caption checks all 4 variants are present. The validators are hand-written (not Zod, not Ajv) — small enough that a library wouldn't add value. Think of it like the same shape as a typed React form's per-field check before submit — "is this field present, is it the right shape, does it cross-reference correctly to other inputs." Concrete consequence: `summarize.ts` gets back a JSON object claiming `clipOrder: ["c1", "c2", "c3"]`, but the input only had clips `c1` and `c2`. `validateSummary` catches the unknown id `c3`, returns failure. The chain skips persistence; the UI shows the previous summary or an error state. Boundary: the validators trust the JSON parser to have produced typed data — if a future migration changes the schema, validators have to be updated in lockstep, or the safety net silently widens.
+
+### The per-feature failure policy
+
+The behaviour on a validation failure depends on the chain — there's no one-size-fits-all retry/skip policy. Naming the policy per chain is part of the integrity contract:
+
+- **caption** — skip on failure; the structured summary still saves. The variants column stays at its previous value (or empty).
+- **expand** — retry once with a stricter system prompt: `"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."` If the retry also fails, give up and return `{ ok: false, reason: 'malformed' }`.
 - **summarize** — skip; surface error in `ai_summaries.error` for the next render.
 - **classify** — skip; the meta row stays at heuristic-or-null type.
-- **interpret** — different shape entirely: validation is `cleanMarkdown` (11 lines), which strips an outer ``` fence and rejects empty/whitespace-only output as `'malformed'`. There is no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions; tone or section drift slips through. The user is the integrity check (they see the modal output and dismiss it if wrong). The full picture is below.
+
+If you've worked with React Query mutations that have different `retry` strategies per mutation, this is the same shape — the retry policy is part of each chain's design, not a global default. Concrete consequence: a user with intermittent malformed expand outputs gets one automatic retry per failed call (the model often succeeds on the second try with the stricter prompt); a user with malformed caption outputs sees the variants stay stale until the next successful run. Both outcomes are deliberate. Boundary: too many retries inflate cost and latency; too few retries make the chain fragile. One retry on expand is the empirical sweet spot for this codebase.
+
+### The interpret exception — markdown can't be schema-validated
+
+`interpret` returns markdown, not JSON. Its validator is `cleanMarkdown` (11 lines): strip an outer triple-backtick fence if present, reject empty/whitespace-only output as `'malformed'`. There's no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions (e.g. "produce four sections: Observations, Patterns, Questions, A Next Step"), but tone or section drift slips through. The user is the integrity check — they see the modal output and dismiss it if wrong. If you're coming from frontend, this is the same shape as a textarea input that doesn't enforce structure — you can validate length and presence, but you can't validate "the user made a coherent argument." Concrete consequence: a malformed interpret output (missing sections, wrong tone) reaches the UI; the user reads it, decides it's not useful, closes the modal. There's no cached row to corrupt. Boundary: this works because interpret's output is ephemeral — there's no downstream consumer that would break on a malformed reflection. A future feature that *caches* interpret outputs would need a stronger validator.
+
+This is what people mean by "treat the model as an untrusted client." Every LLM application that has ever shipped a feature without this discipline has eventually had the model return something that broke the consumer — a missing field, a numeric value as a string, a list with the wrong cardinality. The validation gate is what keeps the model's stochasticity from leaking into the application's invariants. Every form-handling backend ever written has the same discipline at the boundary; the only thing new here is recognising that "the model" is just another untrusted source. The full picture is below.
 
 ---
 
@@ -347,3 +363,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (border-officer metaphor opening / 4 layered sub-sections — parseJson extract, per-feature validators, per-chain failure policy, interpret exception — each with frontend bridges and concrete consequences / principle paragraph on treating the model as an untrusted client).

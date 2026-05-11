@@ -17,6 +17,10 @@ This is the multi-key comparator pattern, and it's the same shape as SQL's `ORDE
 
 ---
 
+## How it works
+
+A dictionary sorts words by their first letter; for words that share a first letter, by their second; and so on. The comparator's job is exactly that: walk the keys in priority order, and the moment two items disagree on a key, that's the answer — no need to look at the remaining keys. If you're coming from frontend, this is the same shape as a tuple-comparison in a `useMemo` selector, or what `Array.prototype.sort((a, b) => a.priority - b.priority || a.timestamp - b.timestamp)` does in two lines. Three keys, ordered by importance, evaluated lazily — fast because each row pays for at most one comparison per key, and clear because the rule reads top-to-bottom.
+
 **Real (legacy) operation:** `rankTodos` in `src/services/todos/rank.ts`.
 
 ---
@@ -150,6 +154,8 @@ The insight: a single `flat.sort(comparator)` lets the engine's TimSort do n log
 
 When brute force is fine: at todo-list scale (a few hundred max), even O(n²) is sub-millisecond. The reason to prefer `Array.prototype.sort` isn't speed — it's that TimSort is already in the runtime, handles partially-sorted lists in near-linear time, and the comparator stays explicit about the policy.
 
+This is what people mean by "lexicographic ordering" — compare on the most significant key, only break the tie when it's actually a tie. The pattern shows up in SQL's `ORDER BY a, b, c`, in Python's `key=lambda x: (a, b, c)`, in every spreadsheet's "sort by primary then secondary" dialog. The reason it generalises is that any ranking that humans understand is multi-key by nature — most-important attribute first, fall-through for ties. The codebase's current sort isn't `rankTodos`; pin-replaces-reorder ([01-system-design/16](../01-system-design/16-pin-replaces-reorder.md)) reduced it to two keys. But the pattern stays callable for the day a richer order rule becomes load-bearing.
+
 ---
 
 ## In this codebase
@@ -237,6 +243,26 @@ Fine until the source-tier policy stops matching user intent. The actual breakpo
 ### What wasn't actually a tradeoff
 
 Using `Array.prototype.sort` instead of writing a manual merge-sort wasn't a tradeoff — TimSort is in the runtime, handles partially-sorted input in near-linear time, and is stable by spec since ES2019. Writing a custom sort would have been work for negative value.
+
+---
+
+## Tech reference (industry pairing)
+
+### JavaScript `Array.prototype.sort` (TimSort under the hood)
+
+- **Codebase uses:** built-in `Array.prototype.sort()` with an inline 3-key comparator inside `src/services/todos/rank.ts → rankTodos()`. No external sort library.
+- **Why it's here:** the comparator IS the policy; using the runtime sort with a typed comparator means the algorithm and the rule are next to each other and the implementation is one line.
+- **Leading today:** native `Array.prototype.sort` — `adoption-leading` for in-memory sort in JS/TS, 2026.
+- **Why it leads:** TimSort is the V8/JSC default — O(n log n) worst case, near-O(n) on partially-sorted input, stable by ES2019 spec. Zero dependency cost.
+- **Runner-up:** `lodash.orderBy` — `adoption-leading` for multi-direction sorts when the comparator would otherwise need `(a, b) => a.x - b.x || b.y - a.y` mixing.
+
+### Dormant code as architectural memory
+
+- **Codebase uses:** `rankTodos` itself — kept in `src/services/todos/rank.ts` even though no UI call site reaches it as of 2026-05-05 (pin-replaces-reorder removed the only caller).
+- **Why it's here:** the 3-key comparator is the recovery path if a user signals "I want manual order back." Wiring a `rankTodos`-backed setting is ~50 LOC; deleting the function would force re-deriving the rule from scratch.
+- **Leading today:** "preserve dormant escape hatches" — `adoption-leading` discipline in small codebases that have made subtractive design moves, 2026.
+- **Why it leads:** dormant code costs nothing at runtime (tree-shaken or never imported) and serves as an executable spec of the prior design. Deleting it would force re-discovery.
+- **Runner-up:** "delete and recover from git" — `adoption-leading` purist alternative; the right move once the dormant code has rotted past the point where it would compile cleanly.
 
 ---
 
@@ -410,3 +436,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; normalised Tradeoffs heading from "(in its prime, vs alternatives)" to plain "Tradeoffs"; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (dictionary-comparator metaphor + frontend bridge to Array.sort tuple comparators) and Move 3 principle after the Comparison block.

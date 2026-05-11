@@ -17,15 +17,31 @@ Retrieval-augmented generation is the pattern that lets a generic model answer s
 
 ---
 
-## How it works (in apps that do RAG, which loopd doesn't)
+## How it works
 
-1. **Embed**: pass each chunk of data through an embedding model. Get a vector.
-2. **Index**: store the vectors in a vector DB (pgvector, Pinecone, Qdrant).
-3. **Query**: at request time, embed the user's query, find top-k nearest vectors, fetch the originals.
-4. **Stuff**: put the retrieved chunks in the prompt with the user's question.
-5. **Answer**: the LLM answers using the retrieved context.
+A library where you don't know what book you want, you only know what you want to read about. RAG is the librarian who runs your topic through a "meaning catalogue" (an index of book-themes, not titles), pulls the top-5 books closest in meaning, and hands them to you to read. Loopd doesn't have that librarian because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
 
-Loopd skips all of this and uses hand-picked retrieval: `summarize.ts:buildCaptionInput()` grabs the last 5 captions for anti-repetition (and hands them to caption.ts); `expand.ts:buildContext()` grabs the last 3 days of entries plus their cached summaries. The diagram below contrasts the two shapes end-to-end.
+### The RAG pipeline — embed, index, query, stuff, answer
+
+The five stages of RAG, in order:
+
+1. **Embed:** every chunk of source data (paragraph, document, code block) goes through an embedding model — a separate ML model that produces a 1024-or-so-dimensional vector representing the chunk's meaning.
+2. **Index:** vectors get stored in a vector database (pgvector, Pinecone, Qdrant, Weaviate). The index supports k-nearest-neighbour search.
+3. **Query:** at request time, the user's question gets embedded the same way. The vector DB returns top-k chunks whose vectors are closest in meaning.
+4. **Stuff:** the retrieved chunks get pasted into the LLM prompt alongside the user's question.
+5. **Answer:** the LLM produces an answer grounded in the retrieved context.
+
+If you're coming from frontend, this is the same shape as building a search-with-suggestions feature where the suggestion engine is a separate service that returns "top-5 things relevant to what you typed" — except the relevance metric is vector similarity in meaning-space, not keyword overlap. Concrete consequence: an app like Notion AI or Glean uses RAG because the user could ask about *any* document and the system has to find the relevant one without knowing in advance which it is. Embed cost is one-time per chunk; query cost is one embedding + one vector search per user prompt; storage cost is sized to the corpus. Boundary: RAG quality depends entirely on the embedding model's notion of similarity and the retriever's top-k tuning — get either wrong and the LLM gets unhelpful chunks pasted into the prompt.
+
+### What loopd does instead — hand-picked deterministic retrieval
+
+Loopd's chains know exactly which past data is relevant: `caption.ts` always wants the last 5 captions (anti-repetition), `expand.ts` always wants the last 3 days of entries plus their cached summaries. These are time-based predicates against SQLite, not similarity searches. Think of it like a typed SQL query that always knows its `WHERE created_at > NOW() - INTERVAL '3 days' LIMIT 5` — deterministic, fast, no separate ML pipeline. Concrete consequence: `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3`. The query takes microseconds, costs zero, returns exactly the rows the chain knows it needs. No embedding model, no vector DB, no top-k tuning, no "is this similar enough?" judgment call. Boundary: this only works because the codebase *knows in advance* what context each chain needs. The day a chain needs "the most relevant entries about topic X" — where the topic is supplied at runtime — RAG becomes the load-bearing approach.
+
+### Why loopd can skip RAG — the corpus shape
+
+The user's journal is *small and time-shaped*. A heavy month is 50 entries; an active year is ~365. RAG's value scales with corpus size — at 50 entries, top-k vector search doesn't outperform "give me the last 5"; at 50,000 entries, RAG's similarity match becomes essential because nobody can scroll-find what they want. The codebase's corpus profile is "small enough that recency + thread tags do the relevance job." If you've worked with a search bar that just queries `LIKE %query%` for small datasets and only graduates to Elasticsearch when the dataset crosses some threshold, this is the same instinct — the cheap shape works as long as the corpus stays small. Concrete consequence: at 365 entries × 200 words = ~75K tokens of full corpus, the entire journal could fit in Claude's context window twice over. The choice between "stuff the whole corpus" and "retrieve relevant chunks" isn't pressing yet. Boundary: the codebase's threshold for adding RAG is "the day a chain needs query-time relevance over a corpus too large to stuff." Until then, hand-picked retrieval wins.
+
+This is what people mean by "RAG is a tradeoff, not a requirement." The pattern is essential when the corpus is large and the query is unpredictable; the pattern is overhead when the corpus is small and the relevance rule is deterministic. The codebase ships an LLM application without RAG because the application's shape — small corpus, time-shaped relevance, fixed chains — doesn't earn the operational cost of an embedding pipeline + vector DB. Every team that has ever paid for a vector DB it didn't need has learned this in retrospect; saving the cost up front is the rarer move. The full picture is below.
 
 ---
 
@@ -369,3 +385,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (librarian-with-meaning-catalogue metaphor opening / 3 layered sub-sections — the RAG pipeline, what loopd does instead, why loopd can skip RAG — each with frontend bridges and concrete consequences / principle paragraph on RAG-as-tradeoff-not-requirement).

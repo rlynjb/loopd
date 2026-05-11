@@ -17,11 +17,34 @@ The "no agents" decision is an architectural stance: do the smallest amount of L
 
 ---
 
-## How it works (in loopd: it doesn't)
+## How it works
 
-Loopd does not chain LLM calls. There is no orchestration layer. Each AI service file owns one chain and returns when that chain finishes.
+A factory line where each station does one operation and hands off to the next — punch, stamp, paint, pack. Nobody at the factory tries to be a one-person assembly; each station has a single job and a typed output. Compare this with an agent: one person who walks down the line making decisions about which station to use next, going back and forth, talking to whichever station seems useful. The factory is predictable, debuggable, and cheap. The wandering agent is flexible, slow, and hard to test. The codebase is a factory, deliberately.
 
-The patterns that *surround* the LLM (heuristic-first gate, async fire-and-forget, validation gate, user-override lock) are app-code conventions, not chain orchestrations. They run before or after the model — never instead of it. The diagram below contrasts the two shapes end-to-end.
+### Loopd's shape — five single-shot chains, no orchestrator
+
+There are five chain files in the codebase: `summarize`, `caption`, `classify`, `expand`, `interpret`. Each runs in one call: build a prompt with pre-fetched data, call the LLM once, parse, validate, persist. No retry loop except `expand`'s single retry on malformed JSON ([08-validation-gate](./08-validation-gate.md)). No call from one chain into another. No "the chain decides what to do next." Think of it like five separate `useMutation` hooks in React Query — each owns its inputs, its mutation function, its onSuccess. None call into each other. Concrete consequence: when a user types a journal entry and focus-blurs, the codebase runs `scanTodos` → `reconcileTodoMetaForEntry` (which fires `scheduleClassify` for unsure todos) → `pushAll` 5s later. Zero LLM-driven decisions about what to do; every step is deterministic application code. Boundary: this works as long as the user-visible features can be served by predetermined chains. The day a feature needs "the LLM picks which sub-flow runs," the architecture has to grow.
+
+### What's NOT here — the orchestrator, the agent loop, the planning step
+
+Notable absences:
+
+- **No orchestrator** that asks the LLM "what should I do next?" and dispatches based on the answer.
+- **No agent loop** that re-prompts the model with observations after a tool call ([06-tool-calling](./06-tool-calling.md)).
+- **No planning step** where the LLM produces a multi-step plan that the application then executes.
+- **No multi-turn conversation memory** — every chain is single-shot, no model-side conversational state.
+
+If you've worked with LangChain agents or OpenAI Assistants, the absences are precisely what makes those frameworks heavy and the codebase light. Concrete consequence: a new feature request like "let the user ask 'what was my mood last month?' as a free-form question" cannot be implemented in the current architecture without adding either (a) a new typed chain with a fixed input shape, or (b) an agentic shape (orchestrator + tool calls). The codebase forces the question — is this feature worth the agentic shape's cost? — instead of silently sliding into one. Boundary: the codebase's surface area (5 chains, all background or modal-triggered) doesn't need agents. The threshold is "the feature requires the model to choose what data to fetch at runtime"; until then, agents are overhead.
+
+### The patterns that surround the LLM — app-code conventions, not orchestration
+
+There ARE patterns around the LLM calls: the heuristic-first gate ([05-heuristic-before-llm](./05-heuristic-before-llm.md)), the async fire-and-forget classifier ([09-async-classification](./09-async-classification.md)), the validation gate ([08-validation-gate](./08-validation-gate.md)), the user-override lock ([10-user-overridden-type-lock](./10-user-overridden-type-lock.md)). None of these are *agent patterns*. They're typed application code that runs before or after the model — never instead of the model, never as a result of the model's decision. Think of it like middleware around a single HTTP handler — the middleware enforces auth, validates input, formats output. The handler still does one job. Concrete consequence: `scheduleClassify(todoId, text)` runs `classifyTodo` (one LLM call), then writes the result via `updateTodoMeta` (one SQL write). The function is 15 lines; there's no loop, no model decision, no "let me retry with a different prompt." Boundary: these conventions scale to ~10 chains comfortably. Beyond that, the duplication starts to bite and an agentic shape becomes attractive.
+
+### Why no agents is the right call here — predictability + cost
+
+Two reasons agents lose at this codebase's scale: predictability (typed JSON output beats free-form decisions; the codebase persists structured data, not chat transcripts) and cost (each agent loop iteration is another LLM round-trip, ~4× the calls of a one-shot). At single-user solo-dev scale, predictability + cost wins. If you've watched a team ship an "AI assistant" feature that worked great in demos and fell apart in production because the agent made unpredictable tool-call sequences, you know the failure mode. Concrete consequence: every chain in the codebase has a known cost per call (~$0.001 to $0.01), known latency (~600ms to 4s), known output shape (typed JSON). An agentic version would have variable cost (depending on the number of loop iterations), variable latency (5-30s for a complex flow), and unpredictable output (whatever the model decides to produce). Production diagnosis would shift from "this prompt produced wrong output" to "this prompt led to a tool call that led to a re-prompt that produced wrong output." Boundary: the day the codebase ships a feature where the user asks open-ended questions about their journal, agents stop being avoidable. The architecture buys time, not permanent immunity.
+
+This is what people mean by "the cheapest agent is no agent." Most AI features that look like they need agents actually need typed chains with thoughtful prompt builders. Agents earn their cost when the user's input space is so open that pre-building the chain is intractable; until then, the codebase's job is to know the data the model needs and fetch it deterministically. Every codebase that has ever shipped an LLM application without agentic shapes has stayed cheaper, more debuggable, and easier to iterate on. The full picture is below.
 
 ---
 
@@ -381,3 +404,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (factory-line metaphor opening / 4 layered sub-sections — loopd's 5-chain shape, what's NOT here, surrounding patterns as middleware not orchestration, why no-agents is right at this scale — each with frontend bridges and concrete consequences / principle paragraph on "cheapest agent is no agent").

@@ -19,13 +19,25 @@ Debouncing collapses a stream of rapid events into a single fire at the end of a
 
 ## How it works
 
-`schedulePush()` clears any existing timer and starts a new one. The body is a single line: `if (timer) clearTimeout(timer); timer = setTimeout(fire, 5000);`. The next write within 5s resets it; the timer only fires when there's been a 5-second gap.
+A waiter who clears your table only after you've stopped putting things on it for five seconds. Every new plate restarts his wait. The busboy run happens exactly once, after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
 
-When the timer fires, `fire()` checks whether a push is already in flight. If yes, it re-arms (so the in-flight push doesn't get clobbered and the new writes are picked up on the next pass). If no, it kicks off `pushAll()`.
+### `schedulePush()` — the debounce trigger
 
-`pushAll()` walks the SyncableTable registry and runs `pushTable()` per table. Any table with no dirty rows returns early. The orchestration is sequential per table — Supabase is the bottleneck, not the local query.
+Every synced write in `database.ts` calls `schedulePush()`. The body is one line of state plus one setTimeout: `if (timer) clearTimeout(timer); timer = setTimeout(fire, PUSH_DEBOUNCE_MS)`. If you're coming from frontend, you've debounced search inputs with `lodash.debounce` or with a cleanup function in `useEffect` — same exact pattern here, except the work being deferred is a network upsert instead of a re-render, and the input source is `database.ts` writes instead of an `<input onChange>`. Concrete consequence: if the user types `[] call mom` at t=0, `[] write spec` at t=2s, then backgrounds the app at t=3s, both writes hit SQLite synchronously (the row is canonical the moment it lands), the timer was reset at t=2s, and `fire()` is scheduled for t=7s. At t=3s the cloud is still empty; at t=7s the push runs. Boundary: the debounce window assumes typing comes in bursts shorter than 5s; if the user types one keystroke every 6 seconds, every keystroke triggers its own push. That's fine — it's the wrong scenario for debounce, but the wrong scenario costs no more than no-debounce would.
 
-The 5-second value is a tuning knob. Shorter feels chattier (more round-trips per typing burst), longer means more risk of unsaved-to-cloud state on app kill. 5s is the empirical sweet spot for journaling cadence. The full picture is below.
+### `fire()` — the timer callback that respects in-flight pushes
+
+When the timer expires, `fire()` checks a single boolean: `pushing`. If a push is already in flight (e.g. the previous burst's push is still upserting to Supabase), `fire()` calls `schedulePush()` again instead of starting a second push. Think of it like React's `flushSync` being declined when you're already inside a render — the framework doesn't queue a parallel render; it makes you wait. Concrete consequence: if a push that started at t=7s is still uploading at t=12s (slow network, big batch), and another write at t=10s scheduled a second fire for t=15s, the t=15s `fire()` sees `pushing = true` and re-arms for t=20s. The in-flight push is never clobbered; the new writes never get lost (they're already in SQLite and will be `updated_at > synced_at` on the next pass). Boundary: this is single-process — two parallel `pushAll()` calls would race on `synced_at`. The re-arm guard prevents that.
+
+### `pushAll()` — the orchestrator over the SyncableTable registry
+
+`fire()` calls `pushAll()`, which walks a registry of `SyncableTable` entries (10 entries: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`) and calls `pushTable()` for each. `pushTable()` selects dirty rows (`updated_at > synced_at`), upserts them to Supabase, and stamps `synced_at = now()` on success. If you've ever written a Redux saga that walks an array of action creators in sequence, this is the same shape — the registry is the array, the `pushTable()` call is the work. The orchestration is sequential per table because Supabase is the bottleneck, not the local query — running 10 tables in parallel would only thrash the same HTTPS pipe. Concrete consequence: if 8 of the 10 tables are clean (no dirty rows), they return in microseconds; the actual work is concentrated on the 1–2 tables that received writes during the burst. Boundary: this scales linearly with table count and per-table dirty row count; the burst-batching means it scales with *bursts* not *keystrokes*, which is the load profile the user actually produces.
+
+### The 5-second tuning knob
+
+`PUSH_DEBOUNCE_MS = 5_000` lives at `src/services/sync/schedulePush.ts` L9 — it's the only parameter the whole pattern exposes. Shorter feels chattier (more round-trips per typing burst, more battery and data on cellular); longer means a longer "is my last write in the cloud?" window after the user stops typing. 5s is the empirical sweet spot for journaling cadence (people type a sentence, pause, type the next sentence; a 5s gap reliably signals end-of-burst). Concrete consequence: an app kill at t=4.9s loses the cloud copy of the most recent burst (still in SQLite, picked up on next launch's `pushAll()`); an app kill at t=5.1s loses nothing. Boundary: if a second device starts polling, the freshness lag becomes visible — 5s is too long for "I edited on my phone and opened my tablet immediately." The day a second device joins is the day this number drops to 1s (or per-write).
+
+This is what people mean by "write-behind cache": make the user's writes synchronous on the device, defer the publish-to-the-world step, batch the bursts. The kernel's page cache does it. Database group commit does it. Log-structured merge trees do it. Every collaborative editor that "feels responsive" does it. The full picture is below.
 
 ---
 
@@ -136,6 +148,26 @@ Fine until the write pattern changes. If loopd starts shipping a feature that pr
 ### What wasn't actually a tradeoff
 
 A "push on screen blur" / "push on background" approach was not on the table. The OS doesn't guarantee a background hook on app kill — Android can kill the process without notice. Relying on a lifecycle event to push would mean ~100% of OS-kill scenarios end with cloud-lagged data, which is much worse than the 5-second worst case we have today. The boot-time `pushAll()` is the correct fallback because cold start is the only event the OS guarantees.
+
+---
+
+## Tech reference (industry pairing)
+
+### Native `setTimeout` / `clearTimeout`
+
+- **Codebase uses:** JavaScript `setTimeout` / `clearTimeout` directly in `src/services/sync/schedulePush.ts` (L14–L21) — no debounce library, no scheduler abstraction.
+- **Why it's here:** the debounce is a single timer reset on every write; bringing in a library would add a wrapper around two native APIs that already do exactly what's needed.
+- **Leading today:** native timer APIs — `adoption-leading` for single-key debounce, 2026.
+- **Why it leads:** zero dependency cost; behaviour is the JS runtime spec, not a library version; the timer reset pattern is one line.
+- **Runner-up:** `lodash.debounce` — `adoption-leading` for multi-key debounce or trailing+leading edge customization; RxJS `debounceTime` — `innovation-leading` when the same flow needs throttling/filtering composed with debouncing.
+
+### `@supabase/supabase-js` + Supabase Postgres
+
+- **Codebase uses:** `@supabase/supabase-js` v2 invoked from `src/services/sync/orchestrator.ts → pushAll()` (L38–L60), which walks the 10-table `REGISTRY` and upserts dirty rows per table.
+- **Why it's here:** the eventual destination of every debounced burst — Postgres is the durable mirror that survives device loss; the debounce determines *when* writes land, this determines *where*.
+- **Leading today:** Supabase — `adoption-leading` for Postgres-as-a-service, 2026.
+- **Why it leads:** managed Postgres + auth + RLS + Storage in one console; SDK mirrors PostgREST, so an upsert with `onConflict` is one call.
+- **Runner-up:** Neon + Drizzle — `innovation-leading` typed SQL with branch-per-PR; Convex is the reactive-first alternative when the eventual mirror should fan out to subscribed clients.
 
 ---
 
@@ -326,3 +358,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.

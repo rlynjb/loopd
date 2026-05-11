@@ -17,6 +17,10 @@ This is two-phase matching followed by an explicit "carryover or delete" decisio
 
 ---
 
+## How it works
+
+Two snapshots of the same fridge a day apart. You compare the lists, decide which items moved shelves (same item, different position), which items were renamed (same shelf, different label), and which items are simply gone. For todos, "gone from prose" means "kept around but marked carryover" — the user might bring the line back tomorrow. For nutrition, "gone from prose" means "hard-deleted" — every food log corresponds to exactly one prose line, and if the line's gone the row is meaningless. Same matching algorithm, opposite cleanup rules. If you're coming from frontend, this is the same shape as `rsync` modes: `--delete` mirrors the source exactly, while no-flag preserves destination-only files. The matcher is shared; the apply step is where the domain rule lives.
+
 **Real operation:** `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts`. Runs after every entry text change via `useEntries.ts:20`.
 
 ---
@@ -161,7 +165,9 @@ Complexity: O(n + m) time after the Set conversion · O(n + m) space.
   └─────────────────┴────────────────┴──────────────────┘
 ```
 
-When brute force is fine: at the typical scale of a handful of food lines per entry, both versions are sub-millisecond. The Set guard isn't an optimization — it's correctness. Two identical `** apple 95 kcal` lines on the same entry would double-claim the same row without it. The diagram below shows the whole flow end-to-end.
+When brute force is fine: at the typical scale of a handful of food lines per entry, both versions are sub-millisecond. The Set guard isn't an optimization — it's correctness. Two identical `** apple 95 kcal` lines on the same entry would double-claim the same row without it.
+
+This is what people mean by "share the matcher, vary the apply step." The same two-pass-match algorithm survives for todos, threads, and nutrition because the matching question (which prior row is this line?) is identity-shaped — it doesn't care about the domain. The differences live in the apply step: todos preserve unmatched rows as carryovers because the user might restore them; nutrition deletes unmatched rows because their meaning was the prose line that no longer exists. The discipline is recognising which cleanup rule the domain actually needs, and not letting one feature's policy bleed into another's. The diagram below shows the whole flow end-to-end.
 
 ---
 
@@ -279,6 +285,26 @@ Fine until a user genuinely needs an "undo last delete" affordance for nutrition
 ### What wasn't actually a tradeoff
 
 Choosing two passes over one pass with a combined predicate isn't really a tradeoff — the precedence "exact (name, kcal) beats line-index" needs ordered evaluation. A combined predicate with a tiebreak would handle reorderings worse: a line that just moved would race against another line whose value happens to match the moved row's old position. The two-pass shape encodes evidence quality correctly; one pass is the wrong primitive.
+
+---
+
+## Tech reference (industry pairing)
+
+### TypeScript Map + Set + linear scan (no diff library)
+
+- **Codebase uses:** native `Map<id, NutritionRow>` and `Set<id>` (used-row guard) inside `src/services/nutrition/scanNutrition.ts → scanNutritionForEntry()`. Raw SQL inserts/updates/deletes through `database.ts`.
+- **Why it's here:** the algorithm has to run after every entry text edit; the Set guard is the cheapest enforcement of "claim each existing row at most once" and the Map is the cheapest "find by id" lookup.
+- **Leading today:** native collections — `adoption-leading` for in-memory matching + hard-delete cleanup at this scale, 2026.
+- **Why it leads:** runtime-builtin, O(1) average, zero dependency cost; the algorithm fits in ~120 LOC of typed scanner+reconciler code.
+- **Runner-up:** `jsdiff` / `fast-diff` — `adoption-leading` for richer line-level diff with hunk semantics; the right move if the scanner ever needs to surface diff metadata or support undo.
+
+### expo-sqlite — hard-delete for prose-bound rows
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db`. The cleanup phase runs `DELETE FROM nutrition WHERE id NOT IN (...usedIds)` — not a soft-delete. The row truly disappears.
+- **Why it's here:** unlike `todo_meta` (which carryover-preserves to maintain identity across prose edits), `nutrition` rows are 1:1 with their prose line — if the line is gone, the row is meaningless. Hard delete is the right call.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** native SQLite `DELETE` is the canonical disposal; no library needed; the cloud-sync layer above handles soft-delete semantics for the cross-device case.
+- **Runner-up:** soft-delete via `deleted_at` — `adoption-leading` discipline for cloud-synced tables. The codebase uses soft-delete everywhere *except* here, because nutrition's prose-line binding makes hard-delete more correct than convention.
 
 ---
 
@@ -445,3 +471,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (fridge-snapshot metaphor + frontend bridge to rsync --delete) and Move 3 principle after the Comparison block.

@@ -19,16 +19,29 @@ Single-purpose chains belong to the same family as Unix pipes, microservices, an
 
 ## How it works
 
-Each AI service file owns one job. It builds a system prompt that says exactly what the output shape should be, builds a user prompt with the live data, calls the model once, parses (or cleans, for interpret), validates, and persists (or renders, for interpret).
+A kitchen with five stations, each doing one thing well: prep, sauce, grill, plate, garnish. Nobody tries to do two jobs in one motion. If the sauce burns, the grill keeps going; if the garnish runs late, the plates still leave. Failures stay local. If you're coming from frontend, this is the same shape as splitting a giant `useEffect` with five side-effects into five focused `useEffect`s — when one of them throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of the one effect.
 
-The 5 chains:
-- **summarize** — produces the structured editor data (clip order, trims, filter, mood) + a freeform summary string.
-- **caption** — produces 4 tonal voice variants (clean / smoother / reflective / punchy) of one day's text.
-- **classify** — picks 1 of 5 thinking modes (todo/idea/knowledge/study/reflect) for one todo line. Was 7 modes pre-2026-05-10.
-- **expand** — runs a per-type chain (one of 4 templates: idea/knowledge/study/reflect — `'todo'` is non-expandable) to produce typed JSON expansion of a todo.
-- **interpret** — produces a long-form markdown reflection on a journal entry. User-triggered, ephemeral, **markdown out, not JSON**. The only chain whose output is a piece of writing the user reads, not data the app uses.
+### The five chains — one prompt, one shape, one persist
 
-Caption was *split out* of summarize when the 4-variant prompt was added — caption failures don't fail summarize. Interpret was *added separately* in 2026-05-10 because its output contract (markdown, not JSON) doesn't fit the validate-and-persist pattern of the other 4. Both moves are examples of "single-purpose": each chain should fail independently. The full picture is below.
+Each AI service file owns one job. The shape: build a system prompt naming the exact output contract, build a user prompt with live data, call the model once, parse, validate, persist. Five files, five chains, five contracts. The chains:
+
+- **summarize** (`src/services/ai/summarize.ts`) — produces the structured editor data (clip order, trims, filter, mood) + a freeform summary string. JSON out.
+- **caption** (`src/services/ai/caption.ts`) — produces 4 tonal voice variants (clean / smoother / reflective / punchy) of one day's text. JSON out.
+- **classify** (`src/services/todos/classify.ts`) — picks 1 of 5 thinking modes (todo/idea/knowledge/study/reflect) for one todo line. JSON out.
+- **expand** (`src/services/todos/expand.ts`) — runs a per-type chain (one of 4 templates: idea/knowledge/study/reflect — `'todo'` is non-expandable) to produce typed JSON expansion. JSON out.
+- **interpret** (`src/services/ai/interpret.ts`) — produces a long-form markdown reflection on a journal entry. User-triggered, ephemeral. **Markdown out, not JSON.**
+
+If you've worked with React Query, this is the same shape as separate `useMutation` hooks per side-effect — each owns its own retry, error state, and cache invalidation. The five chains don't share helpers beyond `getProvider()` and the `database.ts` persistence layer. Concrete consequence: when Anthropic ships a new model parameter that the codebase wants to start using on `caption` only, the change is a few lines in `caption.ts` and nothing else. No cross-file contract to renegotiate. Boundary: this shape costs duplication — five places where "call the model, parse JSON, validate" gets repeated. The codebase accepts that cost because the alternative (a unified helper) leaks the wrong abstraction.
+
+### Why split — failures stay local
+
+`caption` used to live inside `summarize`. The day the 4-variant prompt landed, the codebase split them. The reason: if `caption` fails (a tonal variant comes back malformed), the *editor data* shouldn't fail too. By splitting, a caption failure shows a "couldn't generate captions, retry" toast while the editor still loads the structured summary. Think of it like a microservices boundary at the function level — one service crashing shouldn't take down its neighbour. Concrete consequence: on 2026-05-08, OpenAI's API returned a malformed `variants` object for one day's caption call. `caption.ts` threw; the editor still loaded with `summary_json.summary` populated from the still-cached summarize result. The user saw "AI captions unavailable" instead of "AI features unavailable." Boundary: the split only works because the data shape they share (`ai_summaries.summary_json`) allows partial fill — one column can be present while another is empty.
+
+### The interpret carve-out — different output contract, different chain
+
+`interpret` was added in 2026-05-10 because its output contract is markdown, not JSON. The other four chains all return JSON the app reads programmatically; interpret returns prose the user reads directly. Bolting markdown rendering onto the validate-and-persist pattern of the other four would have either weakened the JSON validators (to accept "or markdown") or required a runtime branch every chain has to navigate. The cleaner move was a separate chain with its own contract — no JSON parser, no schema validator, no persistence step (the output is shown once and discarded). If you've worked with React Server Components vs Client Components, this is the same instinct — when the contract differs in kind (sync vs async, JSON vs markdown), splitting the abstraction is cheaper than over-generalising one. Concrete consequence: `interpret.ts` builds a long prompt, calls the LLM, receives ~400-800 words of markdown, hands it to the UI, done. No `validate.ts` step, no `database.ts` upsert. The other four chains never had to grow a "skip persistence" branch. Boundary: interpret's lack of caching means every invocation costs a round-trip; the codebase accepts that because the feature is user-triggered and rare.
+
+This is what people mean by "one chain, one contract, one persist." The chain-per-feature shape doesn't scale to a thousand chains, but at five it produces a debuggable, separable AI surface where one chain's bug is one chain's problem. Every LLM application that has ever grown into a "monolithic AI service" eventually pays the cost — chains start sharing helpers, the helpers grow toggles, and one chain's needs start to constrain another's. Splitting early keeps the helpers thin and the failure modes named. The full picture is below.
 
 ---
 
@@ -364,3 +377,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (five-kitchen-stations metaphor opening / 3 layered sub-sections — the five chains and their contracts, why split for local failures, the interpret carve-out — each with frontend bridges and concrete consequences / principle paragraph on one-chain-one-contract).

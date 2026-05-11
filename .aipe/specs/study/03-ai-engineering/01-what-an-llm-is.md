@@ -19,11 +19,21 @@ The pattern here is the mental model itself: treat a language model as a pure fu
 
 ## How it works
 
-The model takes a sequence of tokens (the "prompt") and produces a probability distribution over the vocabulary. A sampler picks a token (greedy, top-k, top-p, temperature). That token is appended to the input; the loop runs again. The output stops when a stop token appears or the max-tokens budget is exhausted.
+A vending machine with no memory between customers. You drop in coins, push a button, get a snack. The machine doesn't remember you, doesn't know what time it is, doesn't know what season — it just runs the same coin-in-snack-out logic every time someone uses it. A language model is the same: stateless input → stateless output, with the smarts baked into the machine itself rather than the conversation.
 
-Crucially: nothing happens between calls. No state persists. No I/O is performed. No tools are invoked unless the surrounding code interprets the output as a tool call (see [06-tool-calling](./06-tool-calling.md)). The "model" is a pure function from token sequence to token sequence.
+### The mechanic — next-token prediction in a loop
 
-This framing keeps the AI surface debuggable: when something looks wrong, you can re-run a single call deterministically by re-sending the same prompt. The diagram below shows it end-to-end.
+The model accepts a sequence of tokens (your "prompt") and outputs a probability distribution over its vocabulary. A sampler picks one token (greedy, top-k, top-p, temperature — knobs that shape randomness). That token gets appended to the input; the loop runs again. The output ends when a stop token appears or the `max_tokens` budget is exhausted. If you're coming from frontend, this is the same shape as a pure reducer in a loop — `state = reduce(state, action)` where the action is "predict the next token" and the state is the growing prompt. Concrete consequence: a call to `claude-sonnet-4-6` with `"The capital of France is "` produces, roughly: P("Paris") = 0.92, P("Lyon") = 0.04, P("the") = 0.02, …; the sampler picks "Paris"; the loop appends it; the next iteration sees `"The capital of France is Paris"` and samples again, producing perhaps ".", which is a stop. Total: 1 round-trip, 1 returned string. Boundary: this is the algorithm regardless of model size or vendor — Claude, GPT, Llama, Gemini all do the same loop. The differences are in the training data, parameter count, and sampling defaults.
+
+### What the model is not — no memory, no senses, no clock
+
+Between calls, the model holds zero state. There is no "session" the server remembers. There is no clock the model can read; the date is whatever the prompt says it is. There is no internet access unless the codebase wraps the call with a tool-calling loop ([06-tool-calling](./06-tool-calling.md)). Think of it like calling a stateless backend handler — `(req) => resp` — where the handler has no database connection of its own; if you want it to "know" something, you put it in the request. Concrete consequence: this codebase's `summarize(date)` doesn't say "give me a summary for today" — it says "given the following journal text, produce JSON with these fields:" and pastes today's text into the prompt. The model has no way to access yesterday's text unless yesterday's text is in the prompt. If you call `summarize` twice in a row, the second call has no memory of the first — every call is its own universe. Boundary: features that look like memory (Claude "Projects," ChatGPT "Memory") are server-side context injection, not in-model state.
+
+### Why this framing matters — debuggability
+
+The stateless contract is the reason AI surfaces in this codebase are tractable. When `caption.ts` returns a wrong variant, you can grab the exact prompt that was sent, paste it into the API console, and reproduce the failure deterministically (modulo sampling randomness, which is controlled by `temperature`). If the model held hidden state, every bug would depend on call history — irreproducible, untestable. If you've debugged a stateful service with hidden session state, you know how much harder it is than debugging a pure function. Concrete consequence: when a user reports "the AI gave a weird caption today," the codebase can log the exact prompt that produced it, re-run the call against the same model + same temperature, and either reproduce the bug or prove the call is now correct. Boundary: prompt caching is a server-side optimisation that doesn't change the contract — same prompt, same output (within sampling). Caching is below the API; the contract above it stays pure.
+
+This is what people mean by "treat the model as a pure function." Once you accept that contract, every AI feature in your codebase becomes a problem of "build the right prompt and parse the response" rather than "negotiate state with a service." Every framework that has ever tried to make LLMs feel stateful (LangChain memory modules, agent frameworks with "tools that persist") is just code on the outside of the call assembling the next prompt. The model itself is always pure. The full picture is below.
 
 ---
 
@@ -307,3 +317,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (vending-machine metaphor opening / 3 layered sub-sections — next-token-prediction loop, what the model is not, why this framing aids debuggability — each with frontend bridges and concrete consequences / principle paragraph on treating the model as a pure function).

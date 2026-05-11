@@ -17,6 +17,10 @@ This is lexical masking with offset preservation — what tokenizers do when the
 
 ---
 
+## How it works
+
+A redaction office. Sensitive lines aren't snipped out of the document — that would mess up the page numbers; instead, a thick black bar is laid over them, same length as the underlying text. The reader sees the structure (line breaks, page count) but can't read the masked content. If you're coming from frontend, this is exactly the trick `MonacoEditor` uses for "masked input" fields where the cursor position has to stay accurate even though the character at each position is hidden — replace, don't remove. Two phases: phase 1 walks the string and overwrites every code-fenced region with spaces of equal length; phase 2 scans the masked string for `#tag` matches with line numbers that still point at the original document.
+
 **Real operation:** `parseTags` in `src/services/threads/scanThreads.ts`.
 
 ---
@@ -148,6 +152,8 @@ The reconcile pass (`reconcileMentions`) keys on `sourceLine`. If `maskCode` col
 
 When brute force is fine: at a few KB per entry both run sub-millisecond. But brute force is also *incorrect*: stripping fences with `.replace(..., '')` shifts line numbers and breaks reconcile. The space-preserving mask is the cheapest correct shape.
 
+This is what people mean by "preserve the geometry, mask the content." The pattern lives in every lexer that has to skip string literals and comments before scanning keywords, every linter that ignores code blocks inside doc comments, every diff tool that strips whitespace without renumbering lines. The shared insight is that downstream consumers depend on offsets (line, column, byte position), and the cheapest way to keep their assumptions intact is to overwrite, not delete.
+
 ---
 
 ## In this codebase
@@ -232,6 +238,26 @@ Fine until input length crosses ~1MB or fence density gets pathological. At that
 ### What wasn't actually a tradeoff
 
 Choosing same-length space replacement over deletion isn't a tradeoff — deletion would shift line indices and break the reconciler contract. The "tradeoff" is between two correctness states, and only one of them is correct.
+
+---
+
+## Tech reference (industry pairing)
+
+### JavaScript regex with lazy quantifier (no parser library)
+
+- **Codebase uses:** `/```[\s\S]*?```/g` (and inline backtick siblings) inside `parseTags`, replaced with same-length spaces via `String.prototype.replace`. No parser library, no markdown AST.
+- **Why it's here:** the masking only needs to identify fence ranges and preserve length; a full markdown parser would build a syntax tree the algorithm never reads.
+- **Leading today:** native regex with `*?` lazy quantifier — `adoption-leading` for sparse-marker lexical masking at this scale, 2026.
+- **Why it leads:** runtime-builtin, no dependency cost, two lines of code; the lazy quantifier matches the smallest possible fence which is what correctness requires.
+- **Runner-up:** `remark` / `unified` markdown parser — `innovation-leading` once the codebase needs proper AST manipulation; here it would add weight for a problem that doesn't need a tree.
+
+### Two-phase lexical scan (no token library)
+
+- **Codebase uses:** phase-1 `maskCode` + phase-2 `#tag` regex match inside `parseTags`. Both phases live in the same file, ~40 LOC total.
+- **Why it's here:** the two phases are independent enough to be readable, dependent enough to be co-located; bringing in a lexer framework (`moo`, `chevrotain`) would over-structure a 40-LOC operation.
+- **Leading today:** hand-written two-phase scan — `adoption-leading` for sparse-grammar lexing in small codebases, 2026.
+- **Why it leads:** the algorithm reads top-to-bottom; the contract between phases (string in, string out, offsets preserved) is enforced by the type signature.
+- **Runner-up:** `moo` tokenizer — `adoption-leading` for richer multi-token grammars where the state machine needs to track nested contexts; the right move once the masking has to handle nested fences or escape sequences.
 
 ---
 
@@ -407,3 +433,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (redaction-office metaphor + frontend bridge to masked-input fields) and Move 3 principle after the Comparison block.

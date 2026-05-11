@@ -17,6 +17,10 @@ This is fuzzy match with a displacement window — strongest evidence first (exa
 
 ---
 
+## How it works
+
+A sticky note stuck to page 12 of a notebook. Tomorrow the user adds two new pages at the front; what was on page 12 is now on page 14, but the sticky note still belongs there. The librarian's rule: first check the original page number; if nothing matches the note's text, sweep three pages above and below and see if the note's text appears there. If yes, the note slides to the new page; if no, the note belongs to the trash. If you're coming from frontend, this is the same idea as react-window's "scroll-restoration" — when the underlying list changes, the framework first tries the exact prior index, then expands a small window of nearby indices before giving up. Two ordered checks, exact first, tolerance second, with a hard cap on how far identity can drift before being abandoned.
+
 **Real operation:** `reconcileMentions` in `src/services/threads/scanThreads.ts`.
 
 ---
@@ -154,6 +158,8 @@ The insight: a `used` Set prevents double-claim; pass-priority encodes evidence 
 
 When brute force is fine: here. Pass 2 is the cheap path. The `find` is linear over a per-entry list — no Map needed because the predicate is "threadId AND text AND |line shift| ≤ 3", which doesn't index cleanly. At per-entry scale (handful of mentions), the constant overhead of building a Map exceeds the savings. The "optimal" version isn't asymptotically better — it just adds the `used` Set guard for correctness against double-claim.
 
+This is what people mean by "anchor on identity, allow a bounded slip on position." The ±3 window is the cap that keeps the algorithm honest — small enough that wrong matches stay rare, large enough that ordinary edits don't burn identity. Git blame does it across commits, PDF annotation tools do it across reflowed pages, IDE breakpoints do it when a file changes outside the editor. The shape generalises to anything that needs to keep an anchor pinned to a moving target.
+
 ---
 
 ## In this codebase
@@ -232,6 +238,26 @@ Fine until a single entry has more than ~200 tags or `reconcileMentions` is call
 ### What wasn't actually a tradeoff
 
 Case-insensitive `tagText` comparison in Pass 2 isn't a tradeoff — `#Health` and `#health` resolve to the same thread by design (the thread slug is case-insensitive). Matching case-sensitively here would create phantom mismatches that Pass 2's whole purpose is to tolerate.
+
+---
+
+## Tech reference (industry pairing)
+
+### TypeScript Set + linear-scan find (no algorithm library)
+
+- **Codebase uses:** native `Set<string>` (used-row guard) and `Array.prototype.find` (Pass 2 window scan) inside `src/services/threads/scanThreads.ts → reconcileMentions()`.
+- **Why it's here:** Pass 2's predicate ("threadId AND text AND |line shift| ≤ 3") doesn't index cleanly into a single hash key; linear find over per-entry mentions is cheaper than building a multi-key index at this scale.
+- **Leading today:** native Set + linear find — `adoption-leading` for sparse per-entry matching, 2026.
+- **Why it leads:** zero dependency cost; the predicate fits in two lines; building a multi-key Map for ~5 mentions per entry would cost more than it saves.
+- **Runner-up:** `lodash` `keyBy` + filter — `adoption-leading` for richer multi-key indexing once the predicate grows beyond two fields.
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db` — `thread_mentions` rows live here, and the "existing per-entry mentions" array Pass 1/2 reads against is fetched via the `database.ts` connection.
+- **Why it's here:** the matcher needs a synchronous read of the previous scan's mentions; WAL mode gives a consistent snapshot while the next commit is being prepared.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with Expo; WAL mode is battle-tested; zero bridge cost.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding for bare RN.
 
 ---
 
@@ -392,3 +418,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (sticky-note metaphor + frontend bridge to react-window scroll restoration) and Move 3 principle after the Comparison block. Algorithm/trace structure preserved.

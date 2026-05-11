@@ -19,9 +19,25 @@ A documented exception is an explicit, narrow carve-out from an architectural in
 
 ## How it works
 
-The daily-schedule grid renders one row per thread per visible week. Each cell is a date. Tapping the cell for "today" toggles a manual-touch — if there's already a manual-touch row for `(thread_id, today)`, soft-delete it; otherwise insert a new one with `entry_id=NULL`, `todo_id=NULL`, `source_line=0`, `tag_text=''`.
+Every house has one front door. This house has one front door and a documented service entrance — the staff use it, every other guest uses the front door, and the service entrance is drawn on the floor plan in the same colour as the front door. The rule "everyone enters through the front" is preserved precisely because the exception is named, bounded, and visible.
 
-Downstream consumers (`computeStaleness`, `getThreadCards`, the 14-day activity strip) read `thread_mentions` uniformly. The 14-day activity strip specifically queries `WHERE entry_id IS NULL AND todo_id IS NULL` to build the `activeDates` set per thread; the staleness label uses any non-deleted mention regardless of shape. The full picture is below.
+### The rule the deviation violates
+
+Every prose-derived feature in the codebase has the same shape: a marker in `entries.text` (`[]`, `#tag`, `** food N kcal`) gets scanned out and a derived row is written to a typed table (`todo_meta`, `thread_mentions`, `nutrition`). The invariant — Principle 11 in `docs/spec.md` — is that every `thread_mentions` row's `entry_id` or `todo_id` points back at the prose that produced it. If you're coming from frontend, this is the same invariant a typed Redux store has: every state slice has a typed action that produced it, and you can trace any value back to the dispatch that wrote it. Concrete consequence: if you query `SELECT thread_id, count(*) FROM thread_mentions GROUP BY thread_id` and want to know *why* thread X has 7 mentions, the invariant means you can join back to `entries.id` or `todos_json` and see the 7 prose lines that produced them. Boundary: the invariant assumes every gesture that affects thread state has a prose representation to attach to.
+
+### The deviation — `toggleThreadTouchToday`
+
+There's exactly one gesture that doesn't fit: the user taps a thread chip on the dashboard's daily-schedule grid for "today" — a soft commitment to the thread without typing anything. `toggleThreadTouchToday` writes a `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`, `source_line = 0`, `tag_text = ''`. The 54-line file is the entire exception — there's nothing else in the codebase that produces a NULL-keyed `thread_mentions` row. Think of it like a TypeScript `as any` cast that lives in one named file with a comment explaining why — the type system survives because the escape is in one place, the reviewer can see it, and the cast itself is on the floor plan. Concrete consequence: tap the dashboard chip for thread `loopd` at 3pm. `toggleThreadTouchToday(loopd_id)` inserts `(thread_id=loopd_id, entry_id=NULL, todo_id=NULL, entry_date='2026-05-10', source_line=0, tag_text='')`. The 14-day activity strip for `loopd` now shows today as active. Tap the chip again — the row gets `deleted_at` stamped, the activity strip's today cell goes inactive. Boundary: the deviation is allowed because the soft commitment has no natural prose representation — you can't synthesize a prose line without polluting the user's journal with content they didn't type.
+
+### Why the staleness math still composes uniformly
+
+Downstream readers — `computeStaleness`, `getThreadCards`, the 14-day activity strip — all read `thread_mentions` *the same way regardless of source*. The staleness label uses any non-deleted mention regardless of `entry_id`/`todo_id`; the 14-day strip queries the NULL-keyed rows specifically for the "touch" cell shape but treats them as identical to prose-derived mentions for the activity count. If you've worked with React Context, this is the same shape as a context value that's typed identically whether it came from a provider or a default — the consumer doesn't care about the origin. Concrete consequence: if a thread has 3 prose mentions and 2 manual touches in the last 14 days, `computeStaleness` returns "5 mentions, last 0 days ago" — the math is uniform. The activity strip shows 5 active cells, regardless of which were prose and which were touches. Boundary: the uniformity breaks the moment a reader wants to distinguish "prose-derived" from "touch-only" — e.g. the journal export, which by design *excludes* touch rows because they have no prose to print.
+
+### The exception budget — one, capped
+
+The carve-out is allowed because it's the *only* one. The discipline isn't refusing to add exceptions; it's making each exception named, documented in `docs/spec.md` Principle 11, scoped to one function, and capped at a budget. Adding a second deviation (say, a button that writes to `nutrition` without prose) would change the rule's shape from "prose canonical with one named exception" to "prose canonical with N exceptions" — at which point the rule is just "sometimes canonical" and the contract dissolves. If you're coming from frontend, think of it like having exactly one `useEffect` with an empty dep array per file — the rule's spirit survives one carve-out but not a forest of them. Concrete consequence: if a future PR wants to add a second NULL-keyed write site, the reviewer's job is to ask "can the soft commitment be expressed as prose instead?" before the budget gets spent. Boundary: a second deviation forces a rewrite of Principle 11 itself — at that point the architecture, not the rule, has shifted.
+
+This is what people mean by "principled exception." Every architecture rule will need a carve-out eventually; the discipline isn't refusing to carve, it's making the carve-out named, documented, bounded, and visible. One named exception plus a published rule beats five undocumented compromises every time — and the rule survives precisely because its limits are on the page next to it. The full picture is below.
 
 ---
 
@@ -128,6 +144,26 @@ Fine until a second deviation becomes necessary. If a feature ships that needs a
 ### What wasn't actually a tradeoff
 
 Tracking touch state in a separate table (`thread_touches`) wasn't a real alternative. The staleness math (`computeStaleness`, the 14-day activity strip) consumes `thread_mentions` uniformly — it doesn't care about the row's source, only that it exists for the date. Splitting into two tables means every consumer becomes a UNION, every query a join, and the uniform consumer interface that made this deviation tolerable disappears. The deviation works precisely because the shape is preserved.
+
+---
+
+## Tech reference (industry pairing)
+
+### expo-sqlite (WAL)
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db` — the `thread_mentions` table allows NULL on both `entry_id` and `todo_id` columns, and `toggleThreadTouchToday()` writes that NULL-keyed row directly.
+- **Why it's here:** the deviation lives at the schema level — `thread_mentions` is the uniform feed and SQLite is what enforces its shape. If the schema forbade NULL on `entry_id` or `todo_id`, the deviation couldn't exist at all.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with the Expo SDK; nullable columns are a 30-year-old SQL feature, not a library trick; the deviation is allowed by SQL semantics, not by any framework escape hatch.
+- **Runner-up:** `op-sqlite` — `innovation-leading` JSI-direct binding with no bridge cost; the perf tier for bare React Native projects with the same nullable-column semantics.
+
+### Hand-rolled CRUD service (no ORM)
+
+- **Codebase uses:** `src/services/threads/touch.ts → toggleThreadTouchToday()` (54 LOC, the entire file). Raw SQL via the `database.ts` connection; no ORM layer, no validator, no model class.
+- **Why it's here:** the deviation needs to write a row that violates the project's prose-derivation invariant — an ORM with strict typing or a schema-validator middleware would block it. The hand-rolled CRUD lets the carve-out exist *inside one named file* the reviewer can see and audit.
+- **Leading today:** hand-written CRUD service modules — `adoption-leading` for narrow exception paths in small codebases, 2026.
+- **Why it leads:** the deviation's discipline depends on visibility; one named TypeScript function is the most reviewable form of exception. An ORM would diffuse the exception across model + migration + validator files.
+- **Runner-up:** `drizzle-orm` — `innovation-leading` typed SQL; the right choice when the codebase grows past ~10 carve-outs and the type-safety benefit outweighs the loss of single-file exception visibility.
 
 ---
 
@@ -323,3 +359,9 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.

@@ -17,6 +17,10 @@ This is the N+1 query problem and its standard remedy — the dataloader / batch
 
 ---
 
+## How it works
+
+A waiter who takes everyone's order before walking back to the kitchen instead of running one ticket at a time. The cost of crossing the room (the round-trip) is the bottleneck, not the cost of writing down four orders versus one. The bulk-then-join pattern is exactly this: pull the parent rows once, pull all the children once keyed by parent-id, then assemble the cards in memory. If you're coming from frontend, this is the same shape as React Query's batched-`useQueries` or GraphQL's DataLoader — defer per-row fetches, hoist them to a single bulk query, stitch results client-side. The in-memory join is microseconds; the SQLite round-trip is the part you can't afford to repeat.
+
 **Real operation:** `getThreadCards` in `src/services/threads/getThreadCards.ts`.
 
 ---
@@ -160,6 +164,8 @@ The insight: pull all aggregates in bulk SQL (one query each), then join in-memo
 
 When brute force is fine: never on a hot render path. The N+1 pattern is the textbook scaling failure — even at 30 threads (~150 SQL roundtrips on the dashboard) it shows as visible lag. The codebase ships the 4-query + 2-join shape for exactly this reason.
 
+This is what people mean by "batch then stitch." The pattern lives wherever cost is dominated by per-call overhead, not per-call work — GraphQL DataLoader for HTTP, ORM eager-loading for SQL, kernel `readv()` for syscalls, gRPC streaming for RPCs. Once you internalise that round-trip latency is the enemy and CPU is the friend, you reach for it instinctively.
+
 ## Why not run a giant JOIN in SQL?
 
 Could. But `getAllEntries` is already in memory (it's the dashboard's primary state) so reusing it is free. Two SQL roundtrips traded for one in-memory join.
@@ -249,6 +255,26 @@ Fine until `getAllEntries` no longer fits in memory — at roughly 100k entries 
 ### What wasn't actually a tradeoff
 
 The defensive skip on missing `meta` or `todo` isn't really a tradeoff — it's a correctness fix. The 1:1 invariant between `todos_json` and `todo_meta` is enforced by `reconcileMeta.ts` at commit time; between commits a drift can briefly exist. Crashing the dashboard render in that window would expose an architectural race that's already designed to self-heal.
+
+---
+
+## Tech reference (industry pairing)
+
+### expo-sqlite (WAL) + raw SQL
+
+- **Codebase uses:** `expo-sqlite` against `loopd.db`. `getThreadCards` runs 4 small SQL queries through the `database.ts` connection — no ORM, no query builder, just typed SQL strings and row mappers.
+- **Why it's here:** the batched-bulk pattern depends on having control over the exact SQL — an ORM that auto-eagerloads would either over-fetch or fall back to N+1; hand-written SQL is what makes the 4-query shape predictable.
+- **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
+- **Why it leads:** ships with Expo; raw SQL is the cheapest expression of the batched-then-join pattern at this scale; WAL gives stable read snapshots.
+- **Runner-up:** Drizzle ORM — `innovation-leading` typed SQL with explicit eager-loading and no per-call ORM overhead; the right move once the read shapes diversify enough that hand-typed SQL strings start drifting from the types.
+
+### Hand-written in-memory join (no library)
+
+- **Codebase uses:** the 2 in-memory joins (`todos + todo_meta`, `threads + activity`) inside `getThreadCards.ts` — plain `Map<id, …>` lookups followed by row stitching.
+- **Why it's here:** the join cost is microseconds; bringing in a library (lodash `groupBy`, ramda) would add weight for what is a 10-line stitch.
+- **Leading today:** native Map + linear stitch — `adoption-leading` for small-N in-memory joins, 2026.
+- **Why it leads:** runtime-builtin, O(1) lookup, zero dependency cost; the algorithm reads as the spec.
+- **Runner-up:** GraphQL DataLoader — `innovation-leading` when the join graph fans out beyond two levels; here it would add a layer of indirection without correctness benefit.
 
 ---
 
@@ -409,3 +435,9 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (waiter-bulk-order metaphor + frontend bridge to React Query batching) and Move 3 principle after the Comparison block.

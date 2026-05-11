@@ -19,16 +19,36 @@ The principle here is graceful degradation: the AI layer is best-effort, and a f
 
 ## How it works
 
-Each failure mode has a defined recovery path. The principle: **the canonical data path (prose → SQLite) is never blocked by AI failures.**
+An office where the regular workflow (sort the mail, file it, send replies) keeps running even when the new AI assistant is offline. The assistant can be helpful, slow, or completely down — the mail still gets sorted. Every named failure mode has a named recovery path; the canonical data path (prose → SQLite) is never blocked by AI failures. If you're coming from frontend, this is the same shape as treating the LLM call as a non-critical async dependency — like a feature-flag service that the app gracefully degrades around when unreachable.
 
-1. **No API key** — every service starts with `if (!apiKey) return { error }`. The UI shows "configure your AI key" banner.
+### The principle — the canonical path never waits on AI
+
+The user types prose into `entries.text`. The autosave commits to SQLite synchronously. The scanners produce `todos_json`, `nutrition`, `thread_mentions`. The reconciler enforces 1:1 on `todo_meta`. None of this requires an LLM call to succeed. If you've worked with optimistic-UI mutations that have a "the network is gravy" mental model, this is the same — local commit is the contract; AI enrichment is the optional later step. Concrete consequence: a user with no API key configured types journal entries for 30 days. SQLite fills with prose, todos, nutrition, threads. Zero AI features run. The journal works. The day they configure a key, the AI features start running on new entries; old entries can be backfilled via the catch-up classifier. Boundary: features that *require* AI output (caption variants for vlog export, expand for todo detail) gracefully degrade — the export still runs without captions, the todo detail shows raw text without expansion.
+
+### The eight named failure modes
+
+Each failure has a defined recovery path. Naming them is the discipline; the codebase doesn't have unnamed AI failure modes:
+
+1. **No API key** — every service starts with `if (!apiKey) return { error }`. The UI shows a "configure your AI key" banner.
 2. **Network error** — `fetch` rejects, caller catches, returns `null`. SQLite row stays in pre-AI state. Next event (next save, next user action) gets another shot.
-3. **Malformed JSON** — `parseJson` returns `null`. expand retries once; others skip.
+3. **Malformed JSON** — `parseJson` returns `null`. `expand` retries once; others skip.
 4. **Missing required field** — `validate.ts` rejects; the row ignored.
 5. **Caption-call fails inside summarize** — caption is wrapped in its own try/catch (`summarize.ts:87`). Failure logs; the structured summary still saves.
 6. **User overrode type** — `user_overridden_type` lock; classifier reads and skips.
 7. **MAX_CONCURRENT exceeded** — `expand.ts:25` caps at 3 concurrent expansions; over-cap returns `{ok:false, reason:'in-flight-cap'}`.
-8. **Heuristic uncertain** — async LLM scheduled; UI shows placeholder type until update. The full failure-modes table is below.
+8. **Heuristic uncertain** — async LLM scheduled; UI shows placeholder type until update.
+
+Think of it like an enumerated error union in a typed React Query mutation — each failure case has its own UI affordance, each has its own retry policy, none of them silently corrupt downstream state. Concrete consequence: a user with intermittent network gets the same row through cases 2 (network error → skip) and 3 (malformed JSON → expand retries once). The row never lands in a corrupt state; the UI either shows the previous value or a placeholder. Boundary: the eight modes are exhaustive at today's surface area. A new AI feature with a new failure shape (e.g., rate-limit headers requiring backoff) needs to add a ninth named mode rather than swallow the failure under an existing one.
+
+### The split between "skip" and "retry once"
+
+The codebase distinguishes two recovery strategies. **Skip** means "the operation failed; the row stays at its prior state; the next event gets another shot." **Retry once** means "the operation failed once; try one more time with a stricter prompt; if that fails, return failure to the caller." Only `expand` uses retry-once; the others all skip. The reason: `expand` is user-triggered (the user tapped a todo to see its expansion), so a visible failure-state matters; the others are background (typing → autosave → classify), so the user never sees a failure UI. If you've worked with TanStack Query's `retry` option, this is the same shape — per-mutation policy, not a global default. Concrete consequence: user taps an idea todo to see its expansion. Claude returns malformed JSON. `expand` retries with `"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."` and succeeds. The user sees the expansion ~1.5s later (one extra round-trip) instead of an error. Boundary: too many retries inflate cost; one retry on `expand` is the empirical sweet spot, calibrated against observed malformed-output rates.
+
+### The cap on concurrency — `MAX_CONCURRENT = 3`
+
+`expand.ts` caps concurrent expansions at 3. A 4th simultaneous request returns `{ok: false, reason: 'in-flight-cap'}`; the UI shows a "wait a moment" affordance. The cap exists because expansions can chain (user expands one, scrolls, expands another) and uncapped concurrency would let a runaway user pile up 20 in-flight requests, each costing money. If you've worked with `useQueries` and a max-parallel option, this is the same pattern at the application layer instead of the library layer. Concrete consequence: a user power-clicks through 6 todos in two seconds. The first 3 fire normally; the next 3 return `in-flight-cap`. The UI shows a "wait" badge on the over-cap ones; as the first 3 land, the queued ones run. Total cost: 6 expansion calls, none parallel beyond 3. Boundary: the cap is an application-side guardrail, not a server-side rate limit. If Anthropic's actual rate limit is lower, the codebase would still hit it under sustained traffic; the cap is a politeness measure, not a fallback.
+
+This is what people mean by "graceful degradation for non-critical paths." Every AI feature in the codebase has an answer to "what happens if this fails?" and the answer is never "the user is stuck." The discipline is naming the failure modes — when you've named them, you've designed for them; the unnamed ones are the ones that surprise you in production. Every system that has ever shipped a critical dependency on a flaky service has learned the same lesson: the canonical path stays cheap and local, the enriching paths fail open. The full picture is below.
 
 ---
 
@@ -380,3 +400,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (office-without-AI-assistant metaphor opening / 4 layered sub-sections — canonical path never waits on AI, the 8 named failure modes, skip vs retry-once split, MAX_CONCURRENT cap — each with frontend bridges and concrete consequences / principle paragraph on graceful degradation for non-critical paths).

@@ -17,13 +17,21 @@ The heuristic-first pattern is a two-stage classifier: a cheap deterministic che
 
 ---
 
-## How it works
+A doorman at a club. Most arrivals are easy — regulars who wave their card, obvious VIPs, obvious no-gos. The doorman handles those in two seconds. Anyone ambiguous gets sent inside to the manager, who has more time and more authority. The doorman's job isn't to decide everything; it's to decide the obvious cases and route the hard ones up. If you're coming from frontend, this is the same shape as a `useMemo` that returns a cached cheap value for known input shapes and falls through to an expensive recompute otherwise — short-circuit on the easy cases, defer to the heavy path on ambiguity.
 
-The heuristic is a series of ordered regex tests (see [02-dsa/10-heuristic-first-classifier](../02-dsa/10-heuristic-first-classifier.md) for the algorithm). Returns either `'todo'` (confident) or `null` (uncertain).
+### The cheap path — heuristic regex
 
-Confident `'todo'` results bypass the LLM entirely — meta is inserted with `classifierConfidence='heuristic'`.
+`heuristicClassify(text)` runs a series of ordered regex tests (see [02-dsa/10](../02-dsa/10-heuristic-first-classifier.md) for the algorithm). The tests look for obvious markers — verbs in the imperative, action-word patterns, common todo phrasings — and return either `'todo'` (high confidence) or `null` (don't know). The function is synchronous, runs in microseconds, costs zero dollars. Concrete consequence: a user types `[] call mom`. The heuristic regex hits the imperative pattern (`call <object>`), returns `'todo'`. The codebase inserts a `todo_meta` row with `type='todo'` and `classifierConfidence='heuristic'`. The LLM is never called. Boundary: the heuristic is precision-tuned — it returns `'todo'` only when it's sure. False positives (calling something a todo when it isn't) corrupt the data; false negatives (not knowing) just defer to the LLM. Bias toward abstention.
 
-`null` results insert with `classifierConfidence=null`, then fire `scheduleClassify(todoId, text)` async. The scan returns immediately; the LLM call lands later via DB update + event. The diagram below shows it end-to-end.
+### The fallback — async LLM classifier
+
+When the heuristic returns `null`, the codebase inserts the meta row with `classifierConfidence=null` (acknowledged unknown) and fires `scheduleClassify(todoId, text)` — an async background task that calls `claude-haiku-4-5` with the todo text and gets back a typed mode (`todo` / `idea` / `knowledge` / `study` / `reflect`). When the call returns, the codebase updates the row with the new `type` and `classifierConfidence='haiku'`. Think of it like a deferred React Query mutation — fire it, let the UI render with stale (null) data, update when the response lands. Concrete consequence: a user writes `[] thinking about how to redesign the onboarding flow`. Heuristic returns `null` (no imperative match). Meta inserted with `type='todo'` (the default), `confidence=null`. Async classify runs ~600ms later, returns `idea`. The row updates; the UI re-renders. The user sees the type shift from default-todo to idea in under a second, without ever waiting on the LLM. Boundary: if the LLM call fails (network, rate limit, malformed response), the row stays at `type='todo'` `confidence=null`. A future periodic sweep could retry; the codebase doesn't currently have one. The acknowledged-unknown state is the safety net.
+
+### Why typing never waits — the UX argument over the cost argument
+
+The cost win is real ($0.0004 per Haiku classify × 100 todos/day × 30 days = ~$1.20/month avoided), but the UX win is bigger. If the LLM ran inline on every `[]` line, every typing burst with new todos would stutter for 300-800ms while the network round-trip resolved. The user's input would lag. By routing through the heuristic synchronously and the LLM async, the codebase guarantees that the keystroke path never waits on a network. If you've worked with optimistic UI in React Query, this is exactly that pattern — commit local first, show the optimistic state, reconcile with the server result later. Concrete consequence: a user adds three todos in five seconds. All three meta rows land instantly with their heuristic types (or default + null confidence). The dashboard renders without lag. The Haiku calls trickle back over the next 2-3 seconds; the UI updates per-row as the responses land. The user never noticed the LLM was involved. Boundary: this works because the default type (`todo`) is safe and useful — wrong only in the sense that it could be more specific. If the default were unusable, the user would see broken UI during the async window.
+
+This is what people mean by "cascade by cost, route hot cases through cheap stages." Spam filters work this way (rules then ML), OCR pipelines work this way (whitespace detection then character recognition), CDNs work this way (cache then origin). The shared insight is that *most inputs are easy*, and a cheap gate that knows when to abstain saves the expensive stage for the hard cases. The asymmetry is the design — precision-tuned on the cheap path, recall-tuned on the expensive one — and the discipline is naming when to defer instead of brute-forcing every input through the expensive engine. The full picture is below.
 
 ---
 
@@ -344,3 +352,6 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 
 ---
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
+
+---
+Updated: 2026-05-10 — v1.24.0 pass: added `## How it works` heading with three moves (doorman-at-club metaphor opening / 3 layered sub-sections — cheap-path heuristic, async LLM fallback, why typing never waits — each with frontend bridges and concrete consequences / principle paragraph on cascade-by-cost).
