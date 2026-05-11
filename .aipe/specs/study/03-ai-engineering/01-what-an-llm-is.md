@@ -124,6 +124,25 @@ A secondary breakpoint is provider-feature drift. If Anthropic's prompt caching 
 
 Treating the model as a function did not cost us "AI quality" in any measurable way — the model is what it is regardless of how the surrounding code frames it. The framing is purely about our debugging surface, not the model's behavior.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk ─────────────────────────────────────────────┐
+│ Codebase uses:    @anthropic-ai/sdk (client.messages.create),   │
+│                   claude-sonnet-4-6 / claude-haiku-4-5          │
+│ Why it's here:    the SDK the codebase calls for every LLM      │
+│                   chain — the function that takes tokens in      │
+│                   and returns tokens out                         │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└──────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -290,3 +309,5 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.

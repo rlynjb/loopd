@@ -160,6 +160,42 @@ A secondary trigger: multi-user. At 1000 users I'd need (i) a per-failure-mode c
 
 Silent-failure vs throwing-the-error wasn't a real choice for the canonical data path. The principle "canonical data is never blocked by AI" (spec §10 principle 3) forecloses any failure mode where an AI error halts the prose-to-SQLite write. We could have thrown errors in the AI services and caught them in callers — but the catch handler would still have to swallow them silently to preserve the canonical write. Same outcome, two function boundaries instead of one.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk / Claude Sonnet 4.6 + Haiku 4.5 ────────────┐
+│ Codebase uses:    @anthropic-ai/sdk for summarize, caption,      │
+│                   expand, interpret (Sonnet) and classify (Haiku)│
+│ Why it's here:    Anthropic is the primary provider; every       │
+│                   failure mode in the table (malformed JSON,     │
+│                   network error, no-API-key) applies per-call    │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ Raw fetch to OpenAI /v1/chat/completions ──────────────────────┐
+│ Codebase uses:    raw fetch; OpenAI is the alternate provider    │
+│                   branched in callOpenAI() across all 5 chains   │
+│ Why it's here:    the failure-mode table applies to both         │
+│                   providers — network errors, 429s, malformed    │
+│                   JSON all fire on the OpenAI path too           │
+│                                                                  │
+│ Leading today:    OpenAI Node SDK — adoption-leading, 2026       │
+│ Why it leads:     typed request/response shapes, built-in        │
+│                   retries, and the most-used OpenAI client in    │
+│                   production                                     │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading wrapper unifying OpenAI +   │
+│                   Anthropic + others under one interface         │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -355,3 +391,5 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary table to after How it works 
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, raw fetch to OpenAI.

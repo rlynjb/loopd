@@ -137,6 +137,39 @@ The cognitive load also shifts. Every test, every migration script, every dev-ac
 
 Fine until the first non-me user installs the APK. At that point the hardcoded UUID stops being a placeholder for "me on my device" and starts being a real cross-user collision — two installs share the same `user_id`, and every row from device A appears on device B's dashboard. The fix is Phase B exactly: ship auth UI, replace `PHASE_A_USER_ID` with `auth.uid()`, enable migration 0002, run a one-time `user_id` backfill on existing rows.
 
+### Tech reference (industry pairing)
+
+┌─ expo-secure-store ─────────────────────────────────────────────────────────┐
+│ Codebase uses:    expo-secure-store (Android Keystore-backed secret storage) │
+│ Why it's here:    the Supabase anon key lives here; it is the only           │
+│                   mitigation between a stolen key and full cloud read access  │
+│                   in Phase A                                                  │
+│                                                                              │
+│ Leading today:    expo-secure-store — adoption-leading for RN secrets, 2026  │
+│ Why it leads:     Expo-native; Android Keystore + iOS Keychain behind one    │
+│                   API; zero extra dependency for Expo projects               │
+│                                                                              │
+│ Runner-up:        react-native-keychain                                       │
+│                   broader feature set (biometric prompts), bare-RN-friendly  │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ Supabase (auth + RLS) ─────────────────────────────────────────────────────┐
+│ Codebase uses:    Supabase anon key (Phase A); RLS staged in migration 0002  │
+│                   for Phase B; composite (user_id, id) PKs on every synced   │
+│                   table enforced via Supabase Postgres                        │
+│ Why it's here:    Supabase is both the auth provider the file frames Phase B  │
+│                   around and the enforcement surface for the runtime gate     │
+│                                                                              │
+│ Leading today:    Supabase — adoption-leading for Postgres-as-a-service       │
+│                    with integrated auth and RLS, 2026                         │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in one console;    │
+│                   SDK mirrors PostgREST; auth.uid() wires directly to RLS    │
+│                   policies without extra middleware                           │
+│                                                                              │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL with          │
+│                   branch-per-PR; Convex is the reactive-first alternative    │
+└──────────────────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -319,3 +352,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-secure-store, @supabase/supabase-js.

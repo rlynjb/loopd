@@ -159,6 +159,40 @@ The four existing chains stay single-chain even after we add agents. Agents earn
 
 Chain-with-retry (expand's pattern) vs agent loop wasn't a real choice. `expand.ts` retries once with a stricter system prompt when validation fails — that's a re-call of the *same chain* with the same job, not a new step the model chose. An agent would be the model saying "I want to call tool X" or "let me critique my own draft." The retry pattern is a chain-internal recovery, not a step transition; we already have it without becoming an agent.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk / Claude (Sonnet 4.6 + Haiku 4.5) ──────────┐
+│ Codebase uses:    @anthropic-ai/sdk across all 5 single-chain    │
+│                   service files; no orchestrator wrapping them   │
+│ Why it's here:    the "no agents" decision is about keeping      │
+│                   control flow in app code — each chain fires    │
+│                   the SDK directly, one call, one return         │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ OpenAI Assistants API / LangChain agents / LangGraph ──────────┐
+│ Codebase uses:    none — intentionally absent                    │
+│ Why it's here:    named in the file as the alternative the       │
+│                   codebase explicitly chose not to use           │
+│                                                                  │
+│ Leading today:    OpenAI Assistants API — adoption-leading for   │
+│                   managed-agent setups, 2026                     │
+│ Why it leads:     hosted memory + tool routing in one managed    │
+│                   surface; no self-hosted orchestrator needed    │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK Agents                           │
+│                   innovation-leading typed agent loop,           │
+│                   framework-agnostic, composable with useChat    │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -356,3 +390,5 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, OpenAI Assistants API / LangChain agents / LangGraph.

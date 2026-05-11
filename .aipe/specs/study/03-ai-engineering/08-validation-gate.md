@@ -144,6 +144,24 @@ A secondary trigger: model upgrades that consistently fail the current validator
 
 JSON Schema vs hand-rolled validators wasn't a real choice for this codebase. The validators are 30-100 LOC each (`validateSummary` L12+, `validateExpansion` L77–L142, `parseAndValidate` L169–L199) and each one knows its chain-specific rules (clipId-exists, all-four-variants-present, per-type-required-fields). Standardizing on JSON Schema would mean importing a runtime validator (Zod, ajv) and translating each chain's rules into schema files — same logic, more indirection, no portability gain because the validators aren't shared across services.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk / Claude Sonnet 4.6 ─────────────────────────┐
+│ Codebase uses:    @anthropic-ai/sdk (callClaude in summarize.ts, │
+│                   caption.ts, expand.ts, interpret.ts)           │
+│ Why it's here:    the validator gate runs on every LLM output;   │
+│                   Anthropic SDK is the primary provider          │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└──────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -330,3 +348,5 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.

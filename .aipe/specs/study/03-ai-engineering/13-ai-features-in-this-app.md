@@ -209,6 +209,63 @@ The doc-drift breakpoint is concrete: the day the SYSTEM_PROMPT in `caption.ts` 
 
 Per-feature vs per-domain organization wasn't a real choice. The five chains naturally cleave along functional lines (summarize a day, caption a day, classify a todo, expand a todo, interpret an entry) — not domain lines. Domains (entries / todos / vlogs) don't map 1:1 onto chains; summarize touches entries and clips, caption touches summaries and recent captions, expand touches todos and entries. Per-feature is the natural shape; per-domain would have meant cross-cutting prompts that nobody asked for.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk / Claude Sonnet 4.6 + Haiku 4.5 ────────────┐
+│ Codebase uses:    @anthropic-ai/sdk; Sonnet 4.6 for summarize,   │
+│                   caption, expand, interpret; Haiku 4.5 for      │
+│                   classify                                       │
+│ Why it's here:    the per-feature pattern map is organised around│
+│                   which model each chain uses — Sonnet for output│
+│                   quality, Haiku for cheap high-volume labels    │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026     │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ Raw fetch to OpenAI /v1/chat/completions ──────────────────────┐
+│ Codebase uses:    raw fetch; gpt-4o for summarize/caption/expand │
+│                   /interpret, gpt-4o-mini for classify —         │
+│                   branched in callOpenAI() per chain             │
+│ Why it's here:    OpenAI is the alternate provider across all 5  │
+│                   chains; model-choice reasoning (cost vs        │
+│                   quality) applies equally to both providers     │
+│                                                                  │
+│ Leading today:    OpenAI Node SDK — adoption-leading, 2026       │
+│ Why it leads:     typed request/response shapes, built-in        │
+│                   retries, and the most-used OpenAI client in    │
+│                   production                                     │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading wrapper unifying OpenAI +   │
+│                   Anthropic + others under one interface         │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js; Supabase mirrors the    │
+│                   AI-derived rows (ai_summaries, todo_meta) that │
+│                   are written by the five chains                 │
+│ Why it's here:    AI persistence is framed as "Supabase mirror + │
+│                   sync mapper" in the Tradeoffs — the cost of    │
+│                   persisting a new feature (e.g. interpretations)│
+│                   is measured in Supabase migrations             │
+│                                                                  │
+│ Leading today:    Supabase — adoption-leading for Postgres-as-a- │
+│                   service, 2026                                  │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in one │
+│                   console; no separate infra for each primitive  │
+│                                                                  │
+│ Runner-up:        Neon + Drizzle                                 │
+│                   innovation-leading typed SQL with serverless   │
+│                   branching and zero-cold-start Postgres         │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -399,3 +456,5 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, raw fetch to OpenAI, @supabase/supabase-js.

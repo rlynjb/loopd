@@ -148,6 +148,26 @@ A different breakpoint: if the codebase adds a *second* cost-gated chain (say, a
 
 Embedding the heuristic in the prompt ("if this is obviously a todo, return immediately") was never an option. The whole point of the gate is to avoid the LLM round-trip; folding it into the prompt would pay the network cost on every call to skip the network cost. A pre-prompt heuristic is the right shape; a prompt-side heuristic is a category error.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk / claude-haiku-4-5 ─────────────────────────┐
+│ Codebase uses:    @anthropic-ai/sdk with claude-haiku-4-5 (via  │
+│                   classifyTodo in classify.ts) — the LLM that   │
+│                   fires only when the heuristic returns null    │
+│ Why it's here:    the cost gate exists specifically because even │
+│                   Haiku costs ~$0.0001/call; the heuristic       │
+│                   skips this call for ~50% of todos             │
+│                                                                  │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026    │
+│ Why it leads:     native SDK gives first-class access to prompt  │
+│                   caching, JSON output, and tool calling that    │
+│                   wrappers sometimes flatten or delay            │
+│                                                                  │
+│ Runner-up:        Vercel AI SDK                                  │
+│                   innovation-leading multi-provider streaming    │
+│                   with typed message structures and useChat hook │
+└──────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -327,3 +347,5 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk / claude-haiku-4-5.

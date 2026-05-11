@@ -237,6 +237,24 @@ Fine until the new-rows-per-pull count exceeds ~5,000, at which point the per-ro
 
 Anchoring `last_pull_at` to server time isn't really a tradeoff against local clock — the local clock is wrong by definition under multi-device sync. We paid 200ms per pull to make the cursor correct, not faster; the RPC is correctness, not optimization.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js (.gt + .order + .limit │
+│                   cursor-based pagination)                      │
+│ Why it's here:    .gt('updated_at', cursor) + .order ASC +     │
+│                   .limit(200) is the monotonic pagination that  │
+│                   keeps pull cost proportional to new rows only │
+│                                                                 │
+│ Leading today:    Supabase — adoption-leading, 2026            │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in   │
+│                   one console; SDK mirrors PostgREST directly   │
+│                                                                 │
+│ Runner-up:        Neon + Drizzle                                │
+│                   innovation-leading typed SQL with             │
+│                   branch-per-PR workflow                        │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -403,3 +421,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.

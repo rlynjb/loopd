@@ -133,6 +133,35 @@ Fine until multi-device usage becomes a real flow. The day a user expects "log i
 
 Replacing SQLite with WatermelonDB or another higher-level local store wasn't on the table. WatermelonDB layers on top of SQLite anyway; the gain is reactive query observation, which the codebase doesn't need (React state derives from query results synchronously). Adding the dependency would mean ~5 MB of code, a new query language to learn, and no improvement on the actual problem the storage layer solves.
 
+### Tech reference (industry pairing)
+
+┌─ expo-sqlite (WAL) ─────────────────────────────────────────────┐
+│ Codebase uses:    expo-sqlite with WAL mode (loopd.db, 12 tables│
+│ Why it's here:    canonical local store for all structured data; │
+│                   every read in the app goes here first         │
+│                                                                 │
+│ Leading today:    expo-sqlite — adoption-leading, 2026          │
+│ Why it leads:     ships with Expo SDK; battle-tested; mirrors   │
+│                   SQLite C API directly                         │
+│                                                                 │
+│ Runner-up:        op-sqlite — innovation-leading JSI-direct     │
+│                   binding (perf-tier, no bridge overhead)       │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js (Supabase JS client)    │
+│ Why it's here:    async mirror of 10 SQLite tables to Postgres; │
+│                   never the canonical read source               │
+│                                                                 │
+│ Leading today:    Supabase — adoption-leading, 2026             │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in    │
+│                   one console; SDK mirrors PostgREST directly   │
+│                                                                 │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL │
+│                   with branch-per-PR; Convex is the reactive-   │
+│                   first alternative                             │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -331,3 +360,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-sqlite, @supabase/supabase-js.

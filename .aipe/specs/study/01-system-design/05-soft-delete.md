@@ -118,6 +118,26 @@ The hidden cost is the divergence-from-edits problem. With hard-delete-plus-outb
 
 Fine until either (a) the table tops ~100k rows, at which point the read filter needs a partial index and the 30-day vacuum becomes mandatory, or (b) the second non-me user installs the app, at which point GDPR right-to-erasure is a legal obligation, not a deferrable concern. Both events are predictable and the fix is the same job: the vacuum, plus a `vacuum_now(user_id)` admin path. The pattern survives both events; the deferred work has to land before they arrive.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js + Supabase Postgres ─────────────────────────────────┐
+│ Codebase uses:    Supabase Postgres as the cloud replica; tombstones are     │
+│                   upserted to Supabase via pushAll() so the cloud learns     │
+│                   about deletions the same way it learns about edits         │
+│ Why it's here:    the sync convergence property ("delete is just an edit     │
+│                   with deleted_at set") only holds because the cloud         │
+│                   receives upserts — not DELETEs — over the Supabase client  │
+│                                                                              │
+│ Leading today:    Supabase — adoption-leading for Postgres-as-a-service,     │
+│                    2026                                                       │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in one console;    │
+│                   upsert with onConflict makes tombstone propagation a       │
+│                   single SDK call with no extra protocol                     │
+│                                                                              │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL with          │
+│                   branch-per-PR; Convex is the reactive-first alternative    │
+└──────────────────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -315,3 +335,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.

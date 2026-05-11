@@ -216,6 +216,22 @@ Fine until two writers exist (multi-device, future feature) or until a single us
 
 `onConflict: 'user_id,id'` with Last-Write-Wins isn't really a tradeoff against application-level CRDTs — at single-user-per-account scale the rows have one writer and LWW is the correct semantics, not a compromise. CRDTs would matter the moment two writers concurrently edited the same row, which the current product surface doesn't permit.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js (upsert + onConflict)  │
+│ Why it's here:    batch upsert with conflict semantics drives   │
+│                   the idempotent per-batch retry mechanism      │
+│                                                                 │
+│ Leading today:    Supabase — adoption-leading, 2026            │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in   │
+│                   one console; SDK mirrors PostgREST directly   │
+│                                                                 │
+│ Runner-up:        Neon + Drizzle                                │
+│                   innovation-leading typed SQL with             │
+│                   branch-per-PR workflow                        │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -384,3 +400,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.

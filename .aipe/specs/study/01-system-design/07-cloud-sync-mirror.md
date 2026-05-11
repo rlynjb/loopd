@@ -163,6 +163,45 @@ The offline story would collapse. The user opens loopd on the subway, can't read
 
 Fine until the app becomes collaborative — two writers on the same row at the same time. LWW is correct exactly once per row per second; concurrent edits to the same field produce undefined ordering. The next architecture isn't "fix LWW" — it's CRDTs (Y.js / Automerge) on the prose layer so edits compose deterministically before scanners run. That replaces `chooseWinner` and rewrites the conflict path; the rest of push/pull/orchestrator survives.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js + Supabase Postgres ─────────────────────────────────┐
+│ Codebase uses:    Supabase Postgres as the canonical cloud mirror;            │
+│                   supabase.from(table).upsert() and .gt('updated_at', ...)   │
+│                   are the two SDK calls the entire push/pull engine is        │
+│                   built on; get_server_time() RPC anchors the pull cursor    │
+│ Why it's here:    the cloud-sync-mirror pattern is defined entirely in terms  │
+│                   of Supabase's upsert + cursor-query API; the 10-table       │
+│                   REGISTRY, sync_meta ledger, and chooseWinner all assume     │
+│                   Supabase's conflict semantics and PostgREST interface       │
+│                                                                              │
+│ Leading today:    Supabase — adoption-leading for Postgres-as-a-service,     │
+│                    2026                                                       │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in one console;    │
+│                   SDK mirrors PostgREST; onConflict upsert + server-time     │
+│                   RPC make the sync engine expressible in ~12 files          │
+│                                                                              │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL with          │
+│                   branch-per-PR; Convex is the reactive-first alternative    │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌─ expo-sqlite (WAL) ─────────────────────────────────────────────────────────┐
+│ Codebase uses:    expo-sqlite, WAL mode, via database.ts; local-canonical    │
+│                   store that push reads from and pull writes back to         │
+│ Why it's here:    the "local canonical" half of the mirror pattern depends   │
+│                   on expo-sqlite's synchronous WAL writes; synced_at and     │
+│                   deleted_at live as columns in expo-sqlite tables, and      │
+│                   the dirty-set query (updated_at > synced_at) runs locally  │
+│                                                                              │
+│ Leading today:    expo-sqlite — adoption-leading for RN local DB, 2026       │
+│ Why it leads:     ships with Expo SDK; battle-tested WAL mode mirrors        │
+│                   SQLite C API directly; zero bridge cost for Expo projects  │
+│                                                                              │
+│ Runner-up:        op-sqlite                                                   │
+│                   innovation-leading JSI-direct binding with no bridge cost; │
+│                   perf-tier alternative for bare-RN projects                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -346,3 +385,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js, expo-sqlite.

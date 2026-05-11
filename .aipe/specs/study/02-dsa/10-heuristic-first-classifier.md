@@ -212,6 +212,26 @@ Fine until non-English users are a real fraction of the user base, at which poin
 
 Returning `null` on uncertainty isn't really a tradeoff against returning the LLM's best guess — `null` is a signal, not a default. A heuristic that guessed wrong on edge cases would silently mis-classify user input and ship friction; the abstention contract is correctness, not laziness.
 
+### Tech reference (industry pairing)
+
+┌─ @anthropic-ai/sdk (Haiku as classifier) ───────────────────────┐
+│ Codebase uses:    @anthropic-ai/sdk — Haiku 4.5 called via     │
+│                   classifyTodo() as the LLM fallback for        │
+│                   ambiguous lines that heuristicClassify        │
+│                   returns null on                               │
+│ Why it's here:    Haiku's low latency and cost make it the      │
+│                   right fallback for the ~30-40% of inputs      │
+│                   the regex gate cannot confidently classify    │
+│                                                                 │
+│ Leading today:    @anthropic-ai/sdk — adoption-leading, 2026   │
+│ Why it leads:     native SDK gives first-class access to prompt │
+│                   caching, JSON output, and tool calling        │
+│                                                                 │
+│ Runner-up:        Vercel AI SDK                                 │
+│                   innovation-leading multi-provider streaming   │
+│                   with typed message structures                 │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -387,3 +407,6 @@ Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk.

@@ -136,6 +136,23 @@ Fine until ~50 screens OR until nested navigation depth exceeds 2 levels. Past t
 
 Hybrid "file-based + manual override for nested cases" wasn't a real option. expo-router does support groups and modals (`(tabs)`, `(modal)` directory conventions) for nested patterns, but combining them with a manual registry means maintaining two routing models in parallel — one for the convention-driven screens, one for the registry-driven escape hatches. The complexity tax is higher than picking one model and living with its limits.
 
+### Tech reference (industry pairing)
+
+┌─ expo-router ───────────────────────────────────────────────────┐
+│ Codebase uses:    expo-router 55                                │
+│ Why it's here:    file-based routing drives the entire app/     │
+│                   directory as the route table with no          │
+│                   separate routes.ts                            │
+│                                                                 │
+│ Leading today:    expo-router — adoption-leading, 2026          │
+│ Why it leads:     file-based routing brings Next.js-style       │
+│                   ergonomics to mobile; EAS and Expo ecosystem  │
+│                   align on it as the default                    │
+│                                                                 │
+│ Runner-up:        React Navigation — older bare-RN default;     │
+│                   larger existing production install base       │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -326,3 +343,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-router.

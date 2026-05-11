@@ -135,6 +135,22 @@ Fine until ~50 migrations or until the replay cost crosses a minute. At 50 files
 
 Manual hotfixes outside the migration ledger weren't a real option. The ledger is the only source of truth for "what has this environment run." A SQL change applied via Supabase Studio's UI that doesn't go through `scripts/db-migrate.mjs` produces exactly the drift the append-only discipline is meant to prevent. The runner's ledger query is the audit gate; bypassing it defeats the design.
 
+### Tech reference (industry pairing)
+
+┌─ pg + db-migrate.mjs ───────────────────────────────────────────┐
+│ Codebase uses:    scripts/db-migrate.mjs — 153 LOC, pg + dotenv │
+│ Why it's here:    hand-written runner applies append-only SQL    │
+│                   files to Supabase Postgres via _migrations    │
+│                   ledger; chosen over ORMs to avoid toolchain   │
+│                                                                 │
+│ Leading today:    Prisma Migrate — adoption-leading, 2026       │
+│ Why it leads:     schema-first DSL + auto-generated typed       │
+│                   client; widely adopted across JS backends     │
+│                                                                 │
+│ Runner-up:        Drizzle Kit — innovation-leading typed SQL    │
+│                   with compile-time migration generation        │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -326,3 +342,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for pg + db-migrate.mjs.

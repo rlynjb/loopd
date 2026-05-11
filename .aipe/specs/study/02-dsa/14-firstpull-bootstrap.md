@@ -286,6 +286,42 @@ Fine until per-table row counts exceed ~50,000, at which point the firstPull bec
 
 Choosing NULL over the magic epoch literal `'1970-01-01...'` in `sync_meta.last_pull_at` isn't really a tradeoff — NULL is the explicit "never pulled" sentinel at the schema level, and the `??` defaulting in `pullTable` is the one place the epoch string lives. Writing the literal into `sync_meta` directly would duplicate magic across two files; NULL keeps the semantics in one place.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js — pullTable delegates  │
+│                   paged .gt + .order + .limit calls to Supabase│
+│                   for all 10 SYNCED_TABLES during bootstrap     │
+│ Why it's here:    the cursor-based paginated pull that          │
+│                   firstPullAll reuses is built on the Supabase  │
+│                   SDK's query builder and PostgREST pagination  │
+│                                                                 │
+│ Leading today:    Supabase — adoption-leading, 2026            │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in   │
+│                   one console; SDK mirrors PostgREST directly   │
+│                                                                 │
+│ Runner-up:        Neon + Drizzle                                │
+│                   innovation-leading typed SQL with             │
+│                   branch-per-PR workflow                        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ expo-sqlite (WAL) ─────────────────────────────────────────────┐
+│ Codebase uses:    expo-sqlite (WAL mode) — localUpsert +       │
+│                   sync_meta cursor writes during the bootstrap  │
+│                   page-by-page restore into local SQLite        │
+│ Why it's here:    per-page localUpsert + per-table cursor stamp │
+│                   in sync_meta are the durable progress record  │
+│                   that makes bootstrap resumable after a drop   │
+│                                                                 │
+│ Leading today:    expo-sqlite — adoption-leading, 2026         │
+│ Why it leads:     ships with Expo SDK; battle-tested WAL mode   │
+│                   for concurrent read/write on-device           │
+│                                                                 │
+│ Runner-up:        op-sqlite                                     │
+│                   innovation-leading JSI-direct binding for     │
+│                   performance-tier local DB workloads           │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -452,3 +488,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js, expo-sqlite.

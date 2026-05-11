@@ -127,6 +127,30 @@ Fine until a second human edits a row, or until true concurrent device usage bec
 
 Per-row "merge whole rows by concatenation" wasn't on the table. The prose field is a string — concatenating two divergent versions produces nonsense. Any real merge needs field-level semantics (text uses CRDT, integers use add/max, booleans use OR), which is the CRDT migration above. There's no halfway version.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js + Supabase Postgres ─────────────────────────────────┐
+│ Codebase uses:    Supabase Postgres as the cloud side of the conflict;        │
+│                   chooseWinner determines whether pullTable upserts the       │
+│                   cloud row over local, with same-second ties going to cloud  │
+│                   to prevent ping-pong in the pull path                       │
+│ Why it's here:    the "tie → cloud" rule and the "malformed → cloud heals"   │
+│                   rule both depend on Supabase being the authoritative        │
+│                   well-formed copy; the file frames LWW as a deliberate      │
+│                   choice against the complexity of CRDT-aware Supabase        │
+│                   schema changes                                              │
+│                                                                              │
+│ Leading today:    Supabase — adoption-leading for Postgres-as-a-service,     │
+│                    2026                                                       │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in one console;    │
+│                   SDK mirrors PostgREST; the same upsert path that carries   │
+│                   edits also carries conflict resolution without a separate  │
+│                   protocol                                                    │
+│                                                                              │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL with          │
+│                   branch-per-PR; Convex is the reactive-first alternative    │
+└──────────────────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -309,3 +333,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.

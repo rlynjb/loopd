@@ -142,6 +142,35 @@ Fine until Phase B opens. The moment multi-device migration becomes a real user 
 
 "Always cloud wins on ambiguity" was not on the table. The user who configures cloud sync for the first time after writing for two weeks would lose those two weeks if cloud wins — the cloud is empty, "cloud wins" means we delete local. That's a worse default than the current one. There is no silent rule that handles all four quadrants correctly; the only correct algorithm involves asking the user.
 
+### Tech reference (industry pairing)
+
+┌─ @supabase/supabase-js ─────────────────────────────────────────┐
+│ Codebase uses:    @supabase/supabase-js (Supabase JS client)    │
+│ Why it's here:    bootstrap queries the cloud side to check     │
+│                   cloudHasData before routing to a branch       │
+│                                                                 │
+│ Leading today:    Supabase — adoption-leading, 2026             │
+│ Why it leads:     managed Postgres + auth + RLS + Storage in    │
+│                   one console; SDK mirrors PostgREST directly   │
+│                                                                 │
+│ Runner-up:        Neon + Drizzle — innovation-leading typed SQL │
+│                   with branch-per-PR; Convex is the reactive-   │
+│                   first alternative                             │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ expo-sqlite (WAL) ─────────────────────────────────────────────┐
+│ Codebase uses:    expo-sqlite with WAL mode                     │
+│ Why it's here:    bootstrap checks localHasData via SQLite row  │
+│                   count before deciding which branch to take    │
+│                                                                 │
+│ Leading today:    expo-sqlite — adoption-leading, 2026          │
+│ Why it leads:     ships with Expo SDK; battle-tested; mirrors   │
+│                   SQLite C API directly                         │
+│                                                                 │
+│ Runner-up:        op-sqlite — innovation-leading JSI-direct     │
+│                   binding (perf-tier, no bridge overhead)       │
+└─────────────────────────────────────────────────────────────────┘
+
 ---
 
 ## Summary
@@ -334,3 +363,6 @@ Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it work
 
 ---
 Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
+
+---
+Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js, expo-sqlite.
