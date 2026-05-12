@@ -199,6 +199,39 @@ BM25 / keyword search vs vector embeddings was never a real choice today. The co
 
 ---
 
+## Project exercises
+
+The current file describes the "hand-picked, no RAG" decision. The curriculum's Phase 2A turns that into a *bounded* statement: hand-picked stays for the bounded chains, embeddings come in for unbounded scope. This file's exercises set up the decision boundary; the Case B files [24-embeddings-geometric.md](./24-embeddings-geometric.md) through [34-graphrag.md](./34-graphrag.md) own the implementation details.
+
+### [B1.4] Update principle #11 via /aipe:refactor
+
+- **Exercise ID:** `[B1.4]`
+- **What to build:** A `loopd/.aipe/specs/refactor/principle-11-update.md` produced via `/aipe:refactor`. Replaces the current "No RAG" wording with the updated principle: *"RAG above threshold. The expand chain stays hand-picked (recency-based, ≤ 1000 chars per source) because the corpus is bounded by today. The interpret chain at week/month scope and the 'find related entries' feature on threads use embeddings + cosine search. The threshold is documented per-feature; default is no RAG until a feature provably needs it."*
+- **Why it earns its place:** unblocks every Phase 2A build item. Until the principle is updated, the codebase reads as "we don't do RAG"; after the update, the reader knows exactly which chains stay hand-picked and which earn RAG.
+- **Files to touch:** new `loopd/.aipe/specs/refactor/principle-11-update.md`; eventual edit of `loopd/docs/spec.md` §10 Principle 11.
+- **Done when:** the refactor spec exists; `docs/spec.md` Principle 11 is updated; this file's Tradeoffs breakpoint is rephrased to match.
+- **Estimated effort:** `1–4hr`.
+
+### [B2A.7] Ship "interpret this week" feature (Phase 2A primary buildable)
+
+- **Exercise ID:** `[B2A.7]`
+- **What to build:** A 7-day-scope variant of `interpret` that takes a week of entries, retrieves the top-k semantically-similar entries from the rest of the corpus (via embeddings from `[B2A.1]`), and feeds both into the interpret prompt. UI: a "this week" entry point alongside the existing per-entry interpret modal.
+- **Why it earns its place:** this is the *first* feature in loopd that crosses the bounded-corpus threshold — a week is too big to hand-pick. It's the smallest possible buildable surface that justifies the entire Phase 2A RAG pipeline.
+- **Files to touch:** new `src/services/ai/interpretWeek.ts`; depends on `entry_embeddings` table from `[B2A.2]`; UI entry in `app/journal/[date].tsx` or a new `app/interpret/week.tsx`.
+- **Done when:** the feature ships end-to-end on device; eval set from `[B2A.9]` shows top-k hits include at least 3 thematically-relevant entries per week-scope query on the 20-30 (query, expected entry ID) pairs.
+- **Estimated effort:** `≥1 week`.
+
+### [B2A.8] Ship "related entries" on thread detail (Phase 2A — GraphRAG seed)
+
+- **Exercise ID:** `[B2A.8]`
+- **What to build:** A "related entries" rail on the thread-detail screen that surfaces entries semantically similar to the thread's prose mentions but not yet `#tag`-linked. Uses the same embedding pipeline as `[B2A.7]`.
+- **Why it earns its place:** loopd's `#tag` system is already a *graph* over entries; adding semantic neighbours turns it into a real GraphRAG-shaped surface. The interview answer "tell me about a GraphRAG you shipped" becomes concrete.
+- **Files to touch:** `app/threads/[id].tsx`, `src/services/threads/getThreadDetail.ts`, new `getRelatedEntries.ts`.
+- **Done when:** the rail renders; user can tap a related entry to add a `#tag` link to that thread; the action propagates through soft-delete and sync.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Retrieval-augmented generation is the standard pattern for letting a generic LLM answer specific questions about data it wasn't trained on, by embedding a corpus, vector-searching at request time, and stuffing the nearest chunks into the prompt. This codebase doesn't do vector RAG — `summarize.ts:buildCaptionInput()` calls `getRecentAISummaries(date, 5)` at L131 for caption anti-repetition, and `expand.ts:buildContext()` at L147 pulls last 3 days plus ≤5 sibling todos via SQL with explicit `.slice(0, N)` caps. The constraint that drove it is that the corpus is tiny — one user with ~365 entries per year, and the most context any chain assembles is "last 3 days plus 5 siblings plus 5 captions", which fits in the budget without semantic search. The cost is that features needing "find anything semantically similar" can't be built without adding an embedding pipeline, a vector index, and a nearest-neighbour step — none of which exist today.

@@ -264,6 +264,19 @@ Fine until loopd ships multi-user features. The day User A's entry text reaches 
 
 ---
 
+## Project exercises
+
+### [B5.7] Prompt-injection guards on user-generated text
+
+- **Exercise ID:** `[B5.7]`
+- **What to build:** A *narrow* guard, not a sanitizer. Concretely: for the chains where injection would cause real harm — `interpret` (model reads → user reads, longest blast radius) and `caption` (model output goes into the rotation history and shapes future calls) — add a hard cap on input length (already exists for interpret, formalize for caption), a documented "user prose is untrusted" comment per call site, and an output-side check that the model didn't echo system-prompt content (a marker string check). Leave classify and summarize as-is — the output validators already gate them.
+- **Why it earns its place:** the file's stance is "input filtering is brittle; output validation is the real defense." That's right — but it leaves two specific surfaces (interpret's user-reads output, caption's history feedback loop) where a successful injection has consequences. Guarding those two surfaces specifically is the principled middle ground.
+- **Files to touch:** `src/services/ai/interpret.ts` (add output-side marker check), `src/services/ai/caption.ts` (formalize input cap + output check on `variants.clean` before it lands in history).
+- **Done when:** both chains have a documented "blast radius" comment, an input cap (interpret already has `MAX_INPUT_CHARS = 2000` — codify caption's), and an output-marker check that fails fast if the model echoes `SYSTEM:` or `USER:` from its own prompt scaffolding.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 Prompt injection is the LLM-era version of "untrusted input crossing a trust boundary." In this codebase, every chain reads user prose into its user message verbatim — there is no input filter, no sanitiser, no allowlist. The defense lives at the output layer: `validate.ts:validateSummary` (L12–L137), `caption.ts:parseAndValidate` (L169–L199), `classify.ts:parseClassifyJson` (L74–L83) — every chain's output is parsed defensively, every field is checked against a typed contract, anything that doesn't match gets clamped, defaulted, or dropped. The constraint that shaped this is that input filtering against prompt injection is brittle (every paraphrase bypasses, every legitimate use of the filtered phrases gets rejected) — the industry has converged on validating output rather than filtering input. The cost is that successful injections that *happen to* pass validation (e.g., a coerced `mood='great'` when the day was flat) become UX bugs the user has to manually correct.

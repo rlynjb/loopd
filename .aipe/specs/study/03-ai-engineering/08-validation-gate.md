@@ -174,6 +174,19 @@ JSON Schema vs hand-rolled validators wasn't a real choice for this codebase. Th
 
 ---
 
+## Project exercises
+
+### [B1.1] Add Zod schemas for every AI input/output across loopd's 5 chains
+
+- **Exercise ID:** `[B1.1]`
+- **What to build:** Replace each hand-rolled validator (`validateSummary`, `parseAndValidate` in caption, `validateExpansion`, `cleanMarkdown`) with a Zod schema per chain. Schemas live in `src/services/ai/schemas/` and are imported by both the chain and the test fixtures.
+- **Why it earns its place:** typed contracts are the difference between "we validate" and "we have a single source of truth for what each chain returns." Surfaces output-mode-mismatch issues (C1.12) by making the contract structural rather than ad-hoc.
+- **Files to touch:** new `src/services/ai/schemas/{summary,caption,expansion,interpret,classify}.ts`; edit `src/services/ai/validate.ts`, `caption.ts`, `expand.ts`, `interpret.ts`, `classify.ts`.
+- **Done when:** every chain's parse/validate path goes through a Zod schema; `npx tsc --noEmit` passes; running the existing `expand` retry-on-failure path under a forced-malformed fixture still rejects cleanly.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 The validation gate is the "parse, don't validate" pattern applied to LLM output — every model response is treated as untrusted input, parsed into a strongly-typed value at the boundary, and rejected if it doesn't match the schema. In this codebase the gate lives in `validate.ts` (`validateSummary`), `caption.ts` (`parseAndValidate`), `expand.ts` (`validateExpansion`), and `interpret.ts` (`cleanMarkdown`) — each chain owns its own validator and persistence only happens after it passes. The constraint that drove it is that prompts drift, models hallucinate keys, and new model versions sometimes return slightly different JSON shapes — TypeScript types don't enforce at runtime, so the validators are the runtime guards. The cost is that a model output that's *almost* right gets rejected, and on the second failure the feature just doesn't run that time.

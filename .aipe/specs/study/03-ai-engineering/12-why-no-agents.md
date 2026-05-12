@@ -204,6 +204,21 @@ Chain-with-retry (expand's pattern) vs agent loop wasn't a real choice. `expand.
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (curriculum's Phase 4 — `[C4.9]` "when *not* to use an agent" is the conceptual anchor here). The defense is the build; the curriculum's recommendation for Phase 4 is Path C anchored to contrl-mo, not loopd. loopd's contribution to Phase 4's "when not to" answer is this file plus a written defense.
+
+### [B4.6] Write the "when *not* to" section
+
+- **Exercise ID:** `[B4.6]`
+- **What to build:** A standalone section — either as a Phase 4 proof artifact (when that phase lands) or as a 1-pager `loopd/docs/why-no-agents.md` — that names the conditions under which an agent loop is the wrong tool. Concrete loopd evidence: five chains, no chain has a "decide what to do next" question, every job is knowable in advance, retry budget is bounded by `MAX_CONCURRENT=3`.
+- **Why it earns its place:** the "when not to" answer is what separates senior candidates from candidates who default to agents because they're fashionable. Having a written, evidence-grounded answer turns the interview question into a story.
+- **Files to touch:** new `loopd/docs/why-no-agents.md` OR a section inside `<phase-4-project>/.aipe/specs/features/agent-architecture.md` when Path C lands.
+- **Done when:** the section names three conditions (jobs are knowable in advance, retry budget can't compound, observability matters more than autonomy) and walks each one through loopd's chain evidence.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 "No agents" is the architectural stance of doing the smallest amount of LLM work that solves the problem and keeping control flow in normal code — prefer the boring deterministic pipeline to the autonomous loop. In this codebase that means five single-chain service files (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`), no `agent.ts`, no `orchestrator.ts`, no graph anywhere — and the surrounding patterns (heuristic-first, async fire-and-forget, validation gate, user-override lock) are app-code conventions that run before or after the model, not multi-step LLM reasoning. The constraint that drove it is that the five jobs are knowable in advance: none of them have a "decide what to do next" question for the model. The cost is a ceiling on task complexity — features that genuinely need planning, critique, and revision would have to land as a new service file with explicit iteration cap and cost ceiling, not as a modification to the existing chains.

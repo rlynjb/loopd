@@ -225,6 +225,19 @@ Fine until a classifier failure becomes visible to the user — e.g., the same t
 
 ---
 
+## Project exercises
+
+### [B1.3] Temperature variance per caption variant (sampling experiment)
+
+- **Exercise ID:** `[B1.3]`
+- **What to build:** Verify the existing `recentCaptions` anti-repetition pattern works on the 4-variant caption chain (it was built for legacy single captions), then introduce *deliberate* temperature variance per variant — e.g., `clean=0.5`, `smoother=0.7`, `reflective=0.9`, `punchy=1.1` — and measure how often each variant repeats yesterday's phrasing. The experiment turns "we use default sampling" into a documented sampling policy with evidence.
+- **Why it earns its place:** the only chain in loopd that actually has user-noticeable variance pressure is caption. Every other chain has a structured output the user doesn't read as prose. This is the one place where temperature *should* matter — and right now it's running on autopilot.
+- **Files to touch:** `src/services/ai/caption.ts` (read existing `recentCaptions` plumbing, then add per-variant temperature in the call payload); new `scripts/measure-caption-repetition.mjs` for the eval.
+- **Done when:** per-variant temperature is configurable (constants at top of `caption.ts`), the script measures repetition rate against last-5-captions across 30 entries, and the result either confirms current defaults are fine or motivates a change with numbers.
+- **Estimated effort:** `1–4hr` for the wiring, `1–2 days` end-to-end with the eval script.
+
+---
+
 ## Summary
 
 Sampling parameters — temperature, top-p, top-k — control how greedy the LLM is when picking each next token from the probability distribution the model produces. In this codebase, only `interpret.ts` tunes them (L14: `TEMPERATURE = 0.7` for prose warmth); every other chain accepts the provider's default of `temperature=1` and runs at full vocabulary access. The constraint that shaped this is bandwidth — a solo dev iterates faster on prompt content than on sampling parameters, and the validation gate catches downstream schema drift either way. The cost is that the classifier could in principle pick different modes for the same todo on different runs, and the structured chains run hotter than their typed contracts strictly need.

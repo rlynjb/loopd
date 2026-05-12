@@ -148,6 +148,16 @@ Treating the model as a function did not cost us "AI quality" in any measurable 
 
 ---
 
+## Project exercises
+
+The "model as a function" framing is Phase 1 foundational — every Phase 1 build item assumes it. The curriculum doesn't tag this concept to a specific `[Bx.y]` item; it's the conceptual floor every other exercise stands on.
+
+**Status:** `learn-only` (Phase 1 — LLM application foundations). The proof artifact for landing this understanding is the rest of Phase 1: every chain in `src/services/ai/` made debuggable by treating the call as a pure function. If `[B1.1]` (Zod schemas across 5 chains), `[B1.3]` (temperature variance), and `[B1.6]` (provider-swap eval) all ship cleanly, you've internalised the framing.
+
+See [21-tokenization.md](./21-tokenization.md) for the token-level mechanics and [22-streaming.md](./22-streaming.md) for the one variant of the function signature loopd doesn't use.
+
+---
+
 ## Summary
 
 An LLM is a stateless function from a token sequence to a probability distribution over the next token, sampled repeatedly to produce text — every call stands alone, with no memory, no I/O, and no tools. In this codebase that framing drives every chain in `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`): one prompt in, one string out, parse, validate, persist. The constraint that made this the right call here is debuggability — the same prompt fed to the same model with the same sampler reproduces the same problem, which is how `validate.ts` and the one-retry pattern in `expand.ts` are even possible. The cost is that "memory" — like the anti-repetition context for captions — has to be assembled by app code (a SQLite query in `summarize.ts:buildCaptionInput()` plus a string concat), not by the model.

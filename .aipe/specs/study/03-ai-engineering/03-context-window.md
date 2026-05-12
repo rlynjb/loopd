@@ -170,6 +170,21 @@ Sending zero context on classify was never a quality-vs-cost tradeoff in any mea
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (Phase 1 — `[C1.2]` context windows is tagged `learn-only — surfaces in Phase 2 chunking`). The context window itself isn't the build target; how chunks fit into it is, in Phase 2A's RAG work — see [26-chunking-strategies.md](./26-chunking-strategies.md) for the matched build items.
+
+### Measure caption-input token width across a real week
+
+- **Exercise ID:** *cross-cutting (supports `[B1.2]` token logging + `[B1.8]` cost panel)*
+- **What to build:** A one-off script that walks the last 7 days of `entries.text` plus their `getRecentAISummaries(date, 5)` slices, assembles the caption prompt as `summarize.ts:buildCaptionInput()` would, and prints the resulting token count per day.
+- **Why it earns its place:** "context window is fine for our chains" is a claim until you've measured it. The script catches the edge where one long entry + 5 historical captions starts crowding the window — and the result becomes the budget Phase 2A's RAG chunking has to fit inside.
+- **Files to touch:** new `scripts/measure-caption-tokens.mjs`; calls into `summarize.ts:buildCaptionInput()`.
+- **Done when:** the script outputs per-day token counts for 7 days; the largest day is ≤ 4k tokens (well under Sonnet 4.6's working set); if any day exceeds 8k, document the truncation rule that would apply.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 The context window is a fixed-size buffer that holds everything the model sees for one call, and packing it well is the central engineering discipline of any LLM-powered product. In this codebase every chain hand-picks a small, explicitly-capped context: `expand.ts:buildContext()` pulls last 3 days plus ≤5 sibling todos, `summarize.ts:buildCaptionInput()` pulls the 5 most-recent captions via `getRecentAISummaries(date, 5)` at L131, `classify.ts` sends no surrounding context at all, and `interpret.ts` runs `truncateTail` to a 2000-char cap on the single entry. The constraint that drove it is predictable cost on the highest-volume chains and being able to use small fast models — every `.slice(0, N)` and `truncateTail` is a knob that bounds spend regardless of how heavy the user's day is. The cost is that the model never sees anything you didn't explicitly hand it, and any feature needing richer history has to add its own fetch.

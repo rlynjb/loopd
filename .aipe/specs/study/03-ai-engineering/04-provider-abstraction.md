@@ -229,6 +229,28 @@ Reading provider per call vs caching it at app start was never a real performanc
 
 ---
 
+## Project exercises
+
+### [B1.6] Provider-swap eval across all five chains
+
+- **Exercise ID:** `[B1.6]`
+- **What to build:** A fixture set of 10 representative inputs per chain (50 total). Run each fixture through Claude (Sonnet 4.6 / Haiku 4.5 for classify) and through OpenAI (GPT-4o / GPT-4o-mini for classify) using the same prompt. Diff outputs side-by-side; document where the providers diverge meaningfully (JSON-format quirks, system-prompt handling, refusal patterns).
+- **Why it earns its place:** "provider-agnostic at the service layer" is a claim until you've shown the swap works on real inputs. This is the receipt and surfaces the one or two places where the chains aren't actually provider-agnostic.
+- **Files to touch:** new `scripts/provider-swap-eval.mjs`; fixtures under `scripts/fixtures/provider-swap/{summarize,caption,classify,expand,interpret}/`; reads existing chains from `src/services/ai/*.ts`.
+- **Done when:** a `scripts/provider-divergences.md` exists listing every meaningful divergence (rubric or LLM-judge'd pairwise); at least one divergence is root-caused to a specific provider quirk or chain assumption.
+- **Estimated effort:** `1–2 days`.
+
+### [B1.9] user_overridden_* lock pattern audit (cross-link)
+
+- **Exercise ID:** `[B1.9]` — primary exercise lives in [10-user-overridden-type-lock.md](./10-user-overridden-type-lock.md). Included here because provider swap is the most likely moment the lock could regress.
+- **What to build:** A test fixture that runs `classify` on a todo with `user_overridden_type=1` and verifies the override survives a re-classification — on BOTH Claude and OpenAI classify outputs.
+- **Why it earns its place:** the lock is the one place where provider behavior must NOT leak into user-visible state. Verifying both providers honor it closes the only real risk of provider abstraction breaking a user-facing invariant.
+- **Files to touch:** `src/services/todos/classify.ts`, `src/services/todos/reconcileMeta.ts`; new test fixture.
+- **Done when:** the fixture runs cleanly on both providers and asserts `user_overridden_type=1` is preserved end-to-end.
+- **Estimated effort:** `<1hr` after `[B1.6]` plumbing.
+
+---
+
 ## Summary
 
 Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface, and the call-site-branch shape is the deliberately-honest variant of it. In this codebase every AI service reads `getProvider()` from `src/services/ai/config.ts` at call time and branches into either the Anthropic SDK (`client.messages.create`) or a raw fetch to OpenAI's `/v1/chat/completions` — 5 chains × 2 providers = 10 explicit branch arms across `summarize`, `caption`, `classify`, `expand`, and `interpret`. The constraint that drove it is honesty about real differences between the two SDKs — OpenAI's `response_format: json_object` exists, Claude's doesn't, and a unified `BaseChatModel` would either lie about that or force the lowest common denominator. The cost is duplicated code per caller and cross-cutting features (token counting, streaming, retries) landing in every branch arm. With a third provider added the unified-interface alternative starts winning.

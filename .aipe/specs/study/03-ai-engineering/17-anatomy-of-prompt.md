@@ -253,6 +253,28 @@ Fine until the prompt grows past ~600 tokens or until the constraints section gr
 
 ---
 
+## Project exercises
+
+### [B1.7] Ship template-style-guide.md in aipe (cross-project)
+
+- **Exercise ID:** `[B1.7]` — primary anchor is the *aipe* repo, included here because aipe's templates are the most concentrated example of the four-section prompt shape applied at meta level.
+- **What to build:** A `template-style-guide.md` in the aipe repo documenting the prompt engineering principles encoded across the 11 templates (`/aipe:feature`, `/aipe:refactor`, `/aipe:study`, `/aipe:audit`, `/aipe:debugging`, etc.). Each template is a production prompt with its own role / task / constraints / output sections — the guide names the shape and the recurring sub-patterns (e.g., "every template has an UPDATE MODE", "every template has a STOP-and-confirm step").
+- **Why it earns its place:** prompt engineering as a discipline is `[C1.7]`. loopd has five concrete chains; aipe has eleven concrete templates that *teach the discipline*. The style guide is the proof artifact for the discipline track.
+- **Files to touch:** new `aipe/template-style-guide.md`; cross-reference from aipe's own README.
+- **Done when:** the guide names the four-section shape, points at one concrete template per section as an example, and lists the recurring meta-patterns across all 11 templates.
+- **Estimated effort:** `1–4hr`.
+
+### Audit loopd's 5 chains against the four-section shape
+
+- **Exercise ID:** *cross-cutting (Phase 1)*
+- **What to build:** A short audit of each of loopd's 5 chain SYSTEM_PROMPTs against the four-section structure described in this file. Score each chain: does it have an explicit role line? a single task statement? a constraints section (explicit "never" rules)? an output section that matches the validator?
+- **Why it earns its place:** the file claims "all 5 chains use the same four-section shape" — the audit is the receipt. Likely uncovers one chain where role/task are conflated or where the output section drifts from the actual validator.
+- **Files to touch:** read `src/services/ai/{summarize,caption,classify,expand,interpret}.ts`; output a `prompt-shape-audit.md` (gitignored or under `docs/`).
+- **Done when:** every chain has a passed/failed mark per section; failures have a one-line "what to fix" note.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 A production prompt has four sections — role, task, constraints, output — and every section has one job. In this codebase all five chains follow the shape: role names what the model is, task describes the work with its rules and examples, constraints draw the negative space ("never write 'I'"), output names the format (JSON shape or markdown structure). The user message carries only the per-call payload, built by per-chain functions (`buildPrompt`, `buildUserPrompt`). The constraint that shaped this is that loose prompts produce loose outputs the validator has to compensate for; structured prompts narrow each dimension separately and let each section be tuned independently. The cost is ~100–600 tokens of overhead per call and longer prompt files in code review.

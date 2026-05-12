@@ -202,6 +202,28 @@ Silent-failure vs throwing-the-error wasn't a real choice for the canonical data
 
 ---
 
+## Project exercises
+
+### [B5.1] Request queue with retry/backoff for all chains + RAG retrievals
+
+- **Exercise ID:** `[B5.1]`
+- **What to build:** A small async queue in `src/services/ai/queue.ts` that wraps every chain call. Exponential backoff (250ms → 500ms → 1s) on 5xx and network errors; per-chain concurrency cap (`MAX_CONCURRENT = 3` for expand stays; classify gets its own bucket). When Phase 2A ships, the queue covers RAG retrievals too.
+- **Why it earns its place:** the current pattern is per-chain try/catch with no retry. A failed network call right now means "no annotation this time"; with the queue, transient failures recover silently and the failure-modes table only fires after the retry budget exhausts.
+- **Files to touch:** new `src/services/ai/queue.ts`; edit `summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts` to enqueue rather than call directly.
+- **Done when:** every chain goes through the queue; an injected 503 fixture retries twice and then surfaces the failure; per-chain concurrency caps hold under stress.
+- **Estimated effort:** `1–2 days`.
+
+### [B5.4] Circuit breaker for provider outage
+
+- **Exercise ID:** `[B5.4]`
+- **What to build:** A circuit breaker layered on top of `[B5.1]`'s queue. After N consecutive failures (default 5) on a provider, the breaker opens for T minutes (default 2). Open state short-circuits new calls and surfaces a clean error to callers; half-open state lets one probe through to test recovery.
+- **Why it earns its place:** during a real provider outage, retries make things worse. The breaker is the difference between "the app degrades gracefully" and "the app retry-storms a dying provider."
+- **Files to touch:** new `src/services/ai/circuitBreaker.ts`; integrates with `[B5.1]` queue; surfaced in `[B1.8]` AI ops panel.
+- **Done when:** the breaker opens after 5 consecutive failures, blocks for 2 minutes, then probes; ops panel shows breaker state per provider.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Graceful-degradation for AI features is the "fail-soft + isolation" pattern — every AI failure mode has a defined recovery path that leaves the canonical data (prose, todo, entry) untouched. In this codebase that shows up as a per-failure-mode table across all 5 chains: `summarize.ts:87` wraps the caption call in its own try/catch so caption failure doesn't kill the structured summary; `expand.ts:25` caps concurrency at `MAX_CONCURRENT = 3`; `interpret.ts` adds 4 new failure surfaces (too-short, malformed-markdown, network, no-ai) via the `InterpretResult` discriminated union; `validate.ts` rejects malformed JSON before any SQLite write. The constraint that drove it is "canonical data is never blocked by AI" — the worst outcome of any AI bug is "no annotation this time," never "lost data." The cost is silent failures: a flaky network leaves classifications stuck at `type='todo'` and at single-user phase A the only signal is the `/todos` banner via `getClassifyInFlight()`.

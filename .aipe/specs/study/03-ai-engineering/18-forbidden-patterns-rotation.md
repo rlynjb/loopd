@@ -265,6 +265,21 @@ Removing the rotation entirely was never a real option. Captions without rotatio
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (`[C1.7]` prompt-engineering detail). The pattern is already in the caption chain; the curriculum doesn't tag a dedicated `[Bx.y]` because it's a sub-discipline pattern. The work that *would* move the pattern forward, surfaced explicitly by this file's "what's missing today" line in Tradeoffs:
+
+### Feed the 4 caption variants back into the rotation history
+
+- **Exercise ID:** *cross-cutting (depends on caption + summarize)*
+- **What to build:** Today `getRecentAISummaries(date, 5)` reads legacy single captions only. After loopd shipped the 4-variant chain (clean/smoother/reflective/punchy), the rotation history stopped including those four — meaning the rotation feature is degrading silently as the legacy column gets stale. Update the rotation source to read from `variants` (and pick one variant deterministically, e.g., `clean`) so the rotation block carries actual recent phrasing.
+- **Why it earns its place:** the file's Tradeoffs section names this gap explicitly: *"the gap today is that 4-variant captions aren't being fed back to the rotation history, only legacy single captions are."* Fixing it is the smallest possible exercise that turns a documented gap into closed work.
+- **Files to touch:** `src/services/ai/summarize.ts:buildCaptionInput()` (specifically `getRecentAISummaries` consumer at L131), check `src/services/ai/caption.ts` `buildUserPrompt` L113–L117.
+- **Done when:** the rotation block in caption prompts reads from `variants.clean` for any AISummary newer than the cutover date and falls back to legacy `caption` for older rows; a captured prompt on a fresh day shows variant-derived captions in the LAST_5_CAPTIONS block.
+- **Estimated effort:** `<1hr` to `1–4hr` depending on backfill ambition.
+
+---
+
 ## Summary
 
 Forbidden patterns + rotation is the two-layer anti-repetition shape: static "never" rules in the system prompt kill default convergence (no "Today I…", no first-person pronouns, no platitudes), and the dynamic last-5-captions block in the user message kills the model's drift toward yesterday's phrasing. In this codebase only the caption chain uses both layers: the `UNIVERSAL RULES` block in `caption.ts` L73–L82 holds the static constraints, and `buildUserPrompt` L113–L117 injects the rotation block. The data source is `getRecentAISummaries(date, 5)` reading the last 5 cached `AISummary` rows. The constraint that shaped this is that captions are formula-prone — humans notice when "Today I…" opens every entry — so the cost of carrying ~200–500 tokens of rotation per call is worth it. The cost is per-call tokens; the gap today is that 4-variant captions aren't being fed back to the rotation history, only legacy single captions are.

@@ -203,6 +203,30 @@ Splitting `expand.ts` into 4 separate files (one per ExpandableType) was never g
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (Phase 1 — `[C1.10]` chains vs agent loops is tagged `learn-only — defended in Phase 4 framing`). loopd already ships five single-purpose chains; the interview signal is the *defense* of that shape, not another chain.
+
+### Defend the chain shape via Phase 4 framing
+
+- **Exercise ID:** *cross-cutting (supports `[B4.6]` "when *not* to" section in the deferred Phase 4 agent build)*
+- **What to build:** A 1-page write-up — either a new `loopd/docs/why-no-agents.md` or an extension to `docs/spec.md` §10 Principle 10 commentary — that names the five chain boundaries, the three failure modes single chains avoid that agent loops invite (untyped intermediate state, retry amplification, observability gap), and the threshold at which loopd would adopt an agent.
+- **Why it earns its place:** the interview question candidates dodge is "why not agents?" — a written argument grounded in five real chains is the strongest possible answer.
+- **Files to touch:** `loopd/docs/spec.md` §10, or new `loopd/docs/why-no-agents.md`. Cross-references [12-why-no-agents.md](./12-why-no-agents.md).
+- **Done when:** the doc names each of the five chains, the agent-loop alternative for each, and the cost a loop would add at single-user scale.
+- **Estimated effort:** `1–4hr`.
+
+### Audit each chain for boundary leakage
+
+- **Exercise ID:** *cross-cutting (supports `[B1.1]` typed contracts)*
+- **What to build:** A grep audit across `src/services/ai/` for any chain function that does two things — e.g. a chain that both classifies and persists, or both summarizes and re-prompts. Document findings; if any leak exists, split.
+- **Why it earns its place:** "five single-purpose chains" is only true if each chain is actually single-purpose. The audit is the receipt.
+- **Files to touch:** `src/services/ai/summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`.
+- **Done when:** no chain function exceeds "build prompt → call model → parse → validate → return"; persistence and orchestration live in callers only.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 Single-purpose chains is the family of "one LLM call, one job, one output contract" — each chain has a fixed system prompt, a per-call user prompt, and a contract on what it returns. In this codebase five chains do five jobs (`summarize`, `caption`, `classify`, `expand`, `interpret`), and four of them return JSON while `interpret` returns markdown. The constraint that drove it is debuggability and independent failure — caption was split out of summarize when conjoined chains started failing conjointly, and interpret was added separately because its markdown contract didn't fit the validate-and-persist shape. The cost is no cross-chain reasoning at the LLM layer — any "summarize then expand each summary item" orchestration lives in app code, not in a single chain.

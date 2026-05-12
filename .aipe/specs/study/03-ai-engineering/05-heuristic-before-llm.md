@@ -170,6 +170,28 @@ Embedding the heuristic in the prompt ("if this is obviously a todo, return imme
 
 ---
 
+## Project exercises
+
+### [B1.5] Document heuristic regex coverage as assertions
+
+- **Exercise ID:** `[B1.5]`
+- **What to build:** Walk `src/services/todos/heuristicClassify.ts`. For every regex branch, list the patterns it catches AND the false-negative patterns it misses (e.g., "study for math" matches a `study` keyword, but "thinking about studying calculus" does not). Encode the misses as named assertions so future-you knows what the heuristic intentionally defers.
+- **Why it earns its place:** the heuristic is the gate that saves money on every classify call. A miss isn't a bug — it's a delegated decision. Naming the delegation is the difference between "we have a heuristic" and "we have a documented heuristic budget."
+- **Files to touch:** new `src/services/todos/heuristicClassify.coverage.md`; cross-reference from `heuristicClassify.ts`.
+- **Done when:** every regex branch has a "catches" line and a "misses" line; the false-negative list contains at least 5 realistic examples per branch with a one-line note on why the heuristic intentionally defers.
+- **Estimated effort:** `1–4hr`.
+
+### [B1.8] AI cost & latency panel in app/settings/ai.tsx
+
+- **Exercise ID:** `[B1.8]`
+- **What to build:** A panel in `app/settings/ai.tsx` reading from the new `ai_call_log` table (from `[B1.2]`). Shows per-chain count, p50/p95 latency, token spend, and the heuristic skip-rate for classify — what fraction of todos never hit the network.
+- **Why it earns its place:** the heuristic-first pattern only earns its name if you can show how often it saves a call. The panel is the receipt; the skip-rate number is the senior-interview answer to "how do you know the heuristic is worth keeping?"
+- **Files to touch:** `app/settings/ai.tsx`, new `src/services/ai/aiCallLog.ts` query helper; depends on `[B1.2]` `ai_call_log` table.
+- **Done when:** the panel renders on device; skip-rate displays for classify; tapping a chain row reveals last-24h latency p50/p95 and last-30d token spend.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Heuristic-before-LLM is a two-stage cascade classifier: a cheap deterministic check decides whether the input is easy enough to skip the model, and only the residual uncertain cases pay for inference. In this codebase every new todo runs through `heuristicClassify()` in `src/services/todos/heuristicClassify.ts` (L71–L102, regex tables L12–L62) before any LLM call — confident `'todo'` results bypass the model entirely; `null` results insert with `classifierConfidence=null` and fire `scheduleClassify()` async. The constraint that drove it is cost on the highest-volume chain — classify is ~$0.0001 per call on Haiku/4o-mini and a heavy journaling day produces 30+ todos, so the heuristic catching 60-70% for free is the whole win. The cost is a regex table to maintain and a bias toward `null` that fires more LLM calls than strictly necessary — but false negatives cost a fraction of a cent while false positives would be silent and need user-initiated overrides.

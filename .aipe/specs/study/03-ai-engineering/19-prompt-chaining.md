@@ -253,6 +253,21 @@ Also fine until per-call latency becomes UX-critical. The current chain runs onc
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (`[C1.10]` chains vs agent loops — Phase 4 deferred). The two-stage summarize→caption chain is already in the codebase; the next exercise that would extend it isn't a curriculum-tagged build but a deliberate measurement.
+
+### Measure the two-stage handoff (stage-1 mood → stage-2 caption agreement)
+
+- **Exercise ID:** *cross-cutting (supports `[B3.3]` caption rubric eval)*
+- **What to build:** A small eval on 30 entries: for each, log stage-1's structured `mood` field and rubric-rate stage-2's four caption variants on whether they read as that mood. A disagreement count exposes whether the mood-passing handoff is doing the work the chain claims.
+- **Why it earns its place:** the file's Tradeoffs section names "stage-1 mood drives stage-2 caption tone" as the load-bearing decision. The eval turns that claim into a measurable agreement rate — and if the rate is low, it's evidence the handoff needs explicit caption-tone guidance rather than implicit mood inheritance.
+- **Files to touch:** new `scripts/measure-mood-caption-agreement.mjs`; reads `ai_summaries` rows and feeds them to an LLM-judge rubric.
+- **Done when:** the script outputs per-variant agreement rate against stage-1 mood across 30 entries; the result is documented in `docs/ai-evals.md` or similar.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Prompt chaining splits a multi-job LLM task across two or more focused calls run in sequence. In this codebase, the summary-then-caption flow is the canonical example: `summarize(date)` produces a structured `AISummary` object (headline, mood, clipOrder, …) in stage 1; `generateCaption(captionInput)` produces four tonal variants + a detected theme in stage 2. The hand-off is `buildCaptionInput(date, entries, summary.mood)` — stage 2 inherits the mood from stage 1, ensuring the captions and the structured editor data agree on the day's emotional shape. The constraint that shaped this is that a single mega-prompt for both jobs was ~120+ lines and the model's attention split between the two; two focused prompts each get their full attention budget. The cost is 2× latency and ~1.5× API spend per generation; the win is two independently-debuggable chains and graceful failure on the caption stage without losing the structured editor data.

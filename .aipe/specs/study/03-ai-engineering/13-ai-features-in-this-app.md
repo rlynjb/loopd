@@ -255,6 +255,21 @@ Per-feature vs per-domain organization wasn't a real choice. The five chains nat
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` — this file is the catalogue, not a single concept with a `[Bx.y]` exercise. Every Phase 1 build item touches at least one row of this catalogue; the exercises that *maintain* the catalogue are:
+
+### Keep the catalogue in sync with the chains
+
+- **Exercise ID:** *cross-cutting (depends on `[B1.1]` typed contracts)*
+- **What to build:** A small CI check (or a manual pre-merge step) that asserts every chain file in `src/services/ai/*.ts` has a row in this catalogue and vice versa — no orphan chain, no orphan row. When `[B1.1]` lands, the check can additionally assert the schema referenced in the catalogue matches the Zod schema in code.
+- **Why it earns its place:** doc drift is the named cost of this pattern (called out in the Tradeoffs section). A check turns the cost from "always present" to "caught at PR time."
+- **Files to touch:** new `scripts/check-ai-catalogue.mjs`; runs against this file + `src/services/ai/`.
+- **Done when:** the script exits non-zero if (a) a chain in code has no catalogue row, (b) a catalogue row references a chain that doesn't exist, or (c) a referenced model is no longer in `src/services/ai/config.ts`.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 The per-feature pattern map is a system-inventory catalogue — one row per AI-touching feature with prompt shape, input, output contract, and model choice, organised like an OpenAPI spec rather than a tutorial. In this codebase five chains do five jobs: `summarize.ts` (day summarize, Sonnet/4o, structured JSON), `caption.ts` (4-variant caption, Sonnet/4o, the most opinionated prompt with `parseAndValidate`), `classify.ts` (5-mode classify, Haiku/4o-mini, heuristic-gated), `expand.ts` (per-type expand with 4 schemas, Sonnet/4o, `MAX_CONCURRENT = 3`), and `interpret.ts` (markdown reflection, Sonnet/4o, ephemeral). Four chains emit JSON for derived state; `interpret` emits markdown the user reads. The constraint that drove it is cost-and-value asymmetry: Sonnet for output quality where it earns its keep, Haiku for cheap labels, no surrounding context for classify because half the volume gets caught by the heuristic. The cost is doc drift — this catalogue is a snapshot, and when SYSTEM_PROMPTs change the file must be re-checked.

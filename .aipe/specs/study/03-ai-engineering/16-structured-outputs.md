@@ -267,6 +267,19 @@ Fine until the contract sprawls past ~10 fields per chain with nested objects. A
 
 ---
 
+## Project exercises
+
+### [B1.1] Add Zod schemas for every AI input/output across loopd's 5 chains
+
+- **Exercise ID:** `[B1.1]`
+- **What to build:** Replace each hand-rolled validator (`validateSummary`, `parseAndValidate` in caption, `validateExpansion`, `parseClassifyJson`) with a Zod schema per chain. Schemas live in `src/services/ai/schemas/` and are imported by both the chain and the test fixtures. Surface `[C1.12]` output-mode-mismatch issues by making the contract structural rather than spread across prompt prose + TypeScript type + validator function.
+- **Why it earns its place:** the named cost in this file's Tradeoffs is "the contract lives in three places and stays in sync only by discipline." Zod schemas collapse it to one place. The interview signal is "I migrated a hand-rolled validator pattern to typed contracts; here's the before-and-after."
+- **Files to touch:** new `src/services/ai/schemas/{summary,caption,expansion,classify}.ts`; edit `validate.ts`, `caption.ts`, `classify.ts`, `expand.ts`.
+- **Done when:** every JSON chain's parse/validate path goes through a Zod schema; `npx tsc --noEmit` passes; forcing a malformed fixture into `expand`'s one-retry path still rejects cleanly; the catalogue in [13-ai-features-in-this-app.md](./13-ai-features-in-this-app.md) lists the schema file per chain.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Structured outputs are typed contracts at the LLM boundary — the model is told via prompt to return JSON matching a specific shape, the response is parsed defensively, and a hand-written validator narrows the parsed object into a TypeScript type with field-level fallbacks. In this codebase every chain except `interpret` follows this pattern: `validate.ts:validateSummary` is the longest validator (137 lines, validates the structured summary contract); `caption.ts:parseAndValidate` validates the 4-variant caption + theme; `classify.ts:parseClassifyJson` validates the classifier's `{type, confidence}` shape. The constraint that shaped this is that the LLM is the producer and the database is the consumer — anything malformed must be rejected before persistence. The cost is that the contract lives in three places (TypeScript type, prompt prose, validator function) and stays in sync only by discipline.

@@ -173,6 +173,19 @@ Locking on every write vs locking on user-confirmed writes wasn't a real choice.
 
 ---
 
+## Project exercises
+
+### [B1.9] user_overridden_* lock pattern audit
+
+- **Exercise ID:** `[B1.9]`
+- **What to build:** A repo-wide grep audit identifying every site that writes `todo_meta.type` (the protected field) and confirming each one checks `user_overridden_type` before clobbering. Then promote the pattern: any future AI-driven field that should be user-overridable gets a parallel `user_overridden_<field>` column, documented in `docs/spec.md` as the canonical pattern.
+- **Why it earns its place:** the lock is one of loopd's named invariants (Principle 9 in `docs/spec.md`). Auditing every write site is the only way to know the invariant holds; promoting the pattern is the work that makes it durable for future AI-assigned attributes (e.g., the future `mood` field on AISummary).
+- **Files to touch:** new `docs/user-override-lock-audit.md`; cross-reference from `docs/spec.md` Principle 9.
+- **Done when:** the audit doc names every write site for `todo_meta.type`; `scheduleClassify`'s success handler, `migrateMeta.ts` L71 and L111 are all confirmed honoring the lock; the doc names one or two candidate future fields where the same pattern would apply.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 The `user_overridden_type` lock is the "sticky override" pattern — a single boolean on `todo_meta` that marks a field as manually set, so every AI-driven write path consults it and refuses to overwrite. In this codebase the column is declared in `src/types/todoMeta.ts`, flipped to `true` by `TypeChangePicker.tsx` in the same `updateTodoMeta` write that sets the new `type`, and read by `scheduleClassify`'s success handler plus the catch-up paths in `migrateMeta.ts` L71 and L111. The constraint that drove it is trust — the LLM is sometimes wrong, the user corrects, and without the lock the next batch run silently undoes the correction. The cost is no "try again" affordance: the user can't let the AI take another swing at the same field without manually picking a new type or clearing the flag in dev mode.

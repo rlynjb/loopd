@@ -174,6 +174,21 @@ Function calling (the API mechanism) vs tool calling (the architectural pattern)
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` for loopd. The curriculum's Phase 4 (Agents and tool use) recommends Path C anchored to contrl-mo, not loopd. loopd's existing Path B option (`[B4B.1]`–`[B4B.5]` — classifier → mini-agent loop) remains an option but is currently deferred; the loopd-side interview defense is "why no tool calls" (see [12-why-no-agents.md](./12-why-no-agents.md)).
+
+### Optional — Path B: classifier mini-agent loop (deferred)
+
+- **Exercise ID:** `[B4B.1]`–`[B4B.5]` *(Phase 4 — deferred for loopd; build only if interview targeting demands an agent surface in loopd specifically)*
+- **What to build:** Wrap `classifyTodo` in a mini-loop — classify → if `classifier_confidence < 0.7`, retrieve via Phase 2A RAG → re-classify with retrieved context → finalize. Tools: `retrieve_similar_todos`, `get_user_override_history`. Termination: confidence ≥ 0.7 or 2 iterations.
+- **Why it earns its place:** would turn loopd's heuristic-first cascade into a true agent loop with retrieval. Only earns its place after Phase 2A ships — otherwise there's nothing to retrieve.
+- **Files to touch:** `src/services/todos/classify.ts` (wrap), new `src/services/todos/classifyAgent.ts`. Depends on the embedding pipeline from Phase 2A.
+- **Done when:** confidence < 0.7 paths route through retrieval; eval on 50 ambiguous todos shows lift over single-shot classify; termination is bounded.
+- **Estimated effort:** `≥1 week` (requires Phase 2A complete).
+
+---
+
 ## Summary
 
 Tool calling is the pattern that wires a stateless text model to a stateful outside world: the model emits a structured request, the app runs it, the result is fed back as an observation, and the loop continues until the model returns a final answer. This codebase deliberately does not implement it — every chain in `src/services/ai/` returns on the first response, the closest cousin being `scheduleClassify` which is app code firing an LLM call, not the model asking the app to do work. The constraint that drove it is that every loopd feature is a one-shot transformation (text → JSON for four chains, text → markdown for `interpret`) where the data the model needs is already in hand at call time via `buildContext()`. The cost is that features genuinely needing navigation — "find me the day I was sickest last month" — can't be expressed as a single chain and would require a new service file with iteration caps and timeouts.

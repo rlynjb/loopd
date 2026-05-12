@@ -237,6 +237,28 @@ Markdown vs prose-formatted JSON (with `{ text: '...' }` as a single field) wasn
 
 ---
 
+## Project exercises
+
+### [B2A.7] Interpret at week scope (Phase 2A — the RAG threshold crossing)
+
+- **Exercise ID:** `[B2A.7]`
+- **What to build:** A 7-day variant of `interpretEntry` — `interpretWeek(weekStartDate)` — that takes a week of entries, retrieves the top-k semantically-similar entries from the rest of the corpus (via the `entry_embeddings` table from `[B2A.2]`), and feeds both the literal week text and the retrieved neighbours into the interpret prompt. UI: a "this week" entry point alongside the existing per-entry modal.
+- **Why it earns its place:** this is *the* feature in loopd that crosses the bounded-corpus threshold and turns the codebase from "no RAG" into "RAG above threshold." It's the smallest possible buildable surface that justifies the entire Phase 2A pipeline. Without it, embeddings are infrastructure without a customer.
+- **Files to touch:** new `src/services/ai/interpretWeek.ts`; depends on `entry_embeddings` from `[B2A.2]` and the chunking decision from `[B2A.5]`; UI entry in `app/journal/[date].tsx` or a new `app/interpret/week.tsx`.
+- **Done when:** the feature ships end-to-end on Android; `[B2A.9]`'s eval set (20-30 query/expected pairs) confirms top-k recall on week-scope queries; an SLO is documented (target: ≤ 3s p95 end-to-end including embedding query).
+- **Estimated effort:** `≥1 week`.
+
+### [B5.8] Semantic cache for interpret chain
+
+- **Exercise ID:** `[B5.8]`
+- **What to build:** A semantic cache layer in front of `interpretEntry()` (and `interpretWeek` once shipped). On call, hash the input text + chain version; check `interpret_cache` table for a hit; on miss, call the model and store. TTL keyed by `entries.updated_at` — a re-tap on an unchanged entry returns the cached markdown instantly.
+- **Why it earns its place:** interpret is the most-expensive chain per call (Sonnet, ~2k input tokens, markdown out). Today re-tapping the same unchanged entry costs another full call. The semantic cache turns that into a free read for the most common interpret access pattern.
+- **Files to touch:** new `src/services/ai/interpretCache.ts`, new `interpret_cache` local table + Supabase mirror migration; integrates with `interpret.ts`.
+- **Done when:** repeated interpret on an unchanged entry returns from cache in < 50ms; an edit to the entry invalidates the cache; cache hit rate measurable in the AI ops panel from `[B1.8]`.
+- **Estimated effort:** `1–2 days`.
+
+---
+
 ## Summary
 
 Interpret is the user-facing generation chain — the pattern where the model's output is the final artifact the user reads, not an intermediate value the app stores and re-renders. In this codebase `interpretEntry()` at `src/services/ai/interpret.ts` L114–L149 calls Sonnet/4o with a 32-line opinionated SYSTEM_PROMPT, runs two input guards (`MIN_TEXT_LENGTH = 20`, `MAX_INPUT_CHARS = 2000` via `truncateTail`), validates output with the 11-line `cleanMarkdown`, and returns the markdown to `InterpretModal` for render — nothing is persisted to SQLite. The constraint that drove it is that the consumer is the user, not the app: the value-per-bit of a one-time read doesn't justify a new `interpretations` table, sync mapping, conflict resolution, and soft-delete columns. The cost is no hard validation gate — model drift shows up as visibly worse output rather than a rejected call, and re-tapping the same entry costs another LLM call.

@@ -1,68 +1,112 @@
 # 03 — AI engineering
 
-Every AI pattern in loopd, organized by sub-discipline. Each file opens with a diagram and ends with an Elaborate block.
+Every AI concept in scope for loopd via the curriculum, organized by sub-discipline AND by curriculum phase. Each file opens with a "Why care" zoom-out, walks the mechanics in "How it works," and closes with Interview defense + Validate.
+
+**Mode:** curriculum-loaded (loopd is anchored to Phase 1 / 2A / 3 / 5 of `aieng-curriculum.md`).
+
+Files for already-implemented concepts have Case A `## In this codebase` (real code references). Files for not-yet-implemented concepts have Case B `## In this codebase` ("Not yet implemented — deferred to Phase X") and use `## Project exercises` as the primary buildable target.
+
+## Index by curriculum phase
+
+Use this view to trace each phase's concepts in order.
+
+### Phase 1 — LLM application foundations (anchor: loopd + aipe)
+
+| # | Concept | Status | Curriculum ID | One-line |
+|---|---|---|---|---|
+| 21 | [Tokenization](./21-tokenization.md) | learn-only | `[C1.1]` | Why context windows are sized in tokens; loopd consumes counts, doesn't tokenize. |
+| 03 | [Context window](./03-context-window.md) | Case A (learn-only) | `[C1.2]` | Hand-picked, capped slices per chain. |
+| 15 | [Sampling parameters](./15-sampling-parameters.md) | Case A | `[C1.3]` | Only `interpret` tunes temperature; defaults elsewhere. |
+| 16 | [Structured outputs](./16-structured-outputs.md) | Case A | `[C1.4]` | Every JSON chain validates after parse. |
+| 22 | [Streaming responses](./22-streaming.md) | learn-only | `[C1.5]` | loopd doesn't stream; the design decision is why. |
+| 23 | [Token economics](./23-token-economics.md) | Case B | `[C1.6]` | The `ai_call_log` table and AI ops panel. |
+| 17 | [Anatomy of a production prompt](./17-anatomy-of-prompt.md) | Case A | `[C1.7]` | Four-section prompt shape across all 5 chains. |
+| 04 | [Provider abstraction](./04-provider-abstraction.md) | Case A | `[C1.8]` | Call-site branch, no shared `BaseChatModel`. |
+| 05 | [Heuristic before LLM](./05-heuristic-before-llm.md) | Case A | `[C1.9]` | Cheap regex gate before classify. |
+| 02 | [Single-purpose chains](./02-single-purpose-chains.md) | Case A | `[C1.10]` | Five chains, five jobs, no agent loops. |
+| 10 | [user_overridden_type lock](./10-user-overridden-type-lock.md) | Case A | `[C1.11]` | Sticky user override survives re-classification. |
+| 08 | [Validation gate](./08-validation-gate.md) | Case A | `[C1.12]` | Parse, don't validate — validators are runtime guards. |
+| 18 | [Forbidden patterns + rotation](./18-forbidden-patterns-rotation.md) | Case A | `[C1.7]` detail | Anti-repetition layer for caption. |
+| 19 | [Prompt chaining](./19-prompt-chaining.md) | Case A | `[C1.10]` detail | summarize → caption two-stage chain. |
+| 01 | [What an LLM is](./01-what-an-llm-is.md) | foundational | — | The function-of-tokens framing. |
+
+### Phase 2A — RAG over personal corpus (anchor: loopd)
+
+All Case B except where noted — Phase 2A is the curriculum's next phase.
+
+| # | Concept | Status | Curriculum ID | One-line |
+|---|---|---|---|---|
+| 24 | [Embeddings (geometric)](./24-embeddings-geometric.md) | Case B | `[C2.1]` | Vectors are positions in a learned space; cosine = angle. |
+| 25 | [Embedding model choice](./25-embedding-models.md) | Case B | `[C2.2]` | Pick by eval on your data, not by MTEB. |
+| 26 | [Chunking strategies](./26-chunking-strategies.md) | Case B | `[C2.3]` | Whole-entry first; sentence-window only if eval fails. |
+| 27 | [Dense vs sparse retrieval](./27-dense-vs-sparse.md) | Case B | `[C2.4]` | Each handles cases the other gets wrong. |
+| 28 | [Hybrid retrieval (RRF)](./28-hybrid-retrieval-rrf.md) | Case B | `[C2.5]` | `Σ 1/(60 + rank)`. Parameter-free combiner. |
+| 29 | [Reranking (cross-encoder)](./29-reranking-cross-encoder.md) | Case B | `[C2.6]` | Two-stage; eval-driven decision in `[B2A.11]`. |
+| 30 | [Vector databases](./30-vector-databases.md) | Case B | `[C2.7]` | sqlite-vec local, pgvector cloud; not a new service. |
+| 31 | [Query rewriting / HyDE](./31-query-rewriting-hyde.md) | Case B | `[C2.8]` | Conditional; eval-driven on `[B2A.8]` first. |
+| 32 | [Stale embeddings](./32-stale-embeddings.md) | Case B | `[C2.11]` | Mark-stale on write; re-embed on idle. |
+| 33 | [Incremental indexing](./33-incremental-indexing.md) | Case B | `[C2.12]` | Three lifecycle paths: insert / update / delete. |
+| 34 | [GraphRAG](./34-graphrag.md) | Case B | `[C2.13]` | `thread_mentions` is loopd's graph; combine with vectors. |
+| 07 | [RAG](./07-rag.md) | Case A (no-RAG today) | `[C2.1]` overview | The "no RAG above bounded scope" decision. |
+
+### Phase 3 — Evals and observability (anchor: loopd + aipe + contrl-mo)
+
+| # | Concept | Status | Curriculum ID | One-line |
+|---|---|---|---|---|
+| 35 | [Eval set types](./35-eval-set-types.md) | Case B | `[C3.1]` | Golden + adversarial + regression; three jobs. |
+| 36 | [Eval methods](./36-eval-methods.md) | Case B | `[C3.2]` | Five methods; match to output shape. |
+| 37 | [LLM-as-judge bias](./37-llm-as-judge-bias.md) | Case B | `[C3.3]` | Position + verbosity + self-preference; controls for each. |
+| 39 | ["No-click is not a negative label"](./39-no-click-not-negative.md) | learn-only | `[C3.7]` | Implicit feedback is partial truth. |
+| 38 | [LLM observability](./38-llm-observability.md) | Case B | `[C3.10]` + `[C3.11]` | Trace tree per call; local SQLite at solo scale. |
+
+### Phase 5 — Production serving (anchor: loopd + contrl-mo)
+
+| # | Concept | Status | Curriculum ID | One-line |
+|---|---|---|---|---|
+| 40 | [LLM caching](./40-llm-caching.md) | Case B | `[C5.1]` | Two layers: prompt cache (provider) + semantic cache (app). |
+| 41 | [LLM cost optimization](./41-llm-cost-optimization.md) | Case B | `[C5.3]` | Five levers, ROI-ordered. |
+| 42 | [Rate limiting + backpressure](./42-rate-limiting-backpressure.md) | Case B (partial) | `[C5.4]` | Centralized queue + per-chain caps. |
+| 43 | [Retry + circuit breaker](./43-retry-circuit-breaker.md) | Case B | `[C5.5]` | Retry small failures; break on big ones. |
+| 11 | [Failure modes](./11-failure-modes.md) | Case A | `[C5.5]` + `[C5.7]` | Graceful degradation across all 5 chains. |
+| 20 | [Prompt injection](./20-prompt-injection.md) | Case A | `[C5.7]` | Output-validation as defense; no input sanitiser. |
+
+### Cross-cutting (codebase-specific, no direct curriculum tag)
+
+| # | Concept | Status | One-line |
+|---|---|---|---|
+| 06 | [Tool calling](./06-tool-calling.md) | Case A (not used) | One-shot calls only; tool calling deferred. |
+| 09 | [Async background classification](./09-async-classification.md) | Case A | Fire-and-forget; event-driven re-render. |
+| 12 | [Why no agents](./12-why-no-agents.md) | Case A | Single chains by design. |
+| 13 | [AI features in this app](./13-ai-features-in-this-app.md) | Case A | Per-feature pattern map. |
+| 14 | [Interpret](./14-interpret.md) | Case A | Markdown out, no JSON, no persistence. |
 
 ## Index by sub-discipline
 
-### LLM foundations
+(Original v1.25.0 grouping retained for cross-referencing.)
 
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 01 | [What an LLM actually is](./01-what-an-llm-is.md) | *(pedagogical — no industry rename)* | A function. Tokens in → tokens out. No memory, no I/O. |
-| 15 | [Sampling parameters](./15-sampling-parameters.md) | **Temperature, top-p (nucleus sampling), top-k** *(industry standard)* | Only `interpret` tunes temperature (=0.7); every other chain runs on the provider default. |
-| 16 | [Structured outputs](./16-structured-outputs.md) | **Structured outputs, JSON mode, schema-validated outputs** *(industry standard)* | Every JSON chain returns text → regex → JSON.parse → typed-contract validator. |
-| 05 | [Heuristic before LLM](./05-heuristic-before-llm.md) | **Pre-filter / cost-aware fast path** *(language agnostic)* | Cheap regex gate before the network call. |
-| 04 | [Provider abstraction](./04-provider-abstraction.md) | **Adapter / Strategy pattern** *(industry standard)* | Read on every call, no shared interface. |
-| 10 | [user_overridden_type lock](./10-user-overridden-type-lock.md) | **Sticky user override / manual override flag** *(language agnostic)* | Manual user pick is permanent until reversed. |
+### LLM foundations
+01 · 03 · 04 · 05 · 10 · 15 · 16 · 21 · 22 · 23
 
 ### Prompt engineering
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 17 | [Anatomy of a production prompt](./17-anatomy-of-prompt.md) | **Four-section prompt structure (role/task/constraints/output)** *(industry standard)* | All 5 chains use the same four-section shape; user message carries payload only. |
-| 02 | [Single-purpose chains](./02-single-purpose-chains.md) | **Single-step chain / one-shot LLM call** *(industry standard — LangChain)* | Loopd's only pattern. Five chains, five jobs. |
-| 18 | [Forbidden patterns and rotating formulas](./18-forbidden-patterns-rotation.md) | **Anti-repetition, rotation prompting** *(industry standard)* | Static UNIVERSAL RULES + dynamic last-5-captions block in the user message. |
+02 · 17 · 18
 
 ### Context and prompts
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 03 | [Context window](./03-context-window.md) | **Context window** *(industry standard)* | Hand-picked, capped slices per feature. |
-| 19 | [Prompt chaining](./19-prompt-chaining.md) | **Prompt chaining, multi-step LLM pipeline** *(industry standard)* | summarize → caption two-stage chain; mood flows from stage 1 to stage 2. |
+03 · 19
 
 ### Retrieval and RAG
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 07 | [RAG](./07-rag.md) | **Retrieval-Augmented Generation (RAG)** *(industry standard)* | Not used here; hand-picked retrieval is enough. |
+07 · 24 · 25 · 26 · 27 · 28 · 29 · 30 · 31 · 32 · 33 · 34
 
 ### Agents and tool use
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 06 | [Tool calling](./06-tool-calling.md) | **Tool use / function calling** *(industry standard)* | Not used here; one-shot calls only. |
-| 12 | [Why no agents](./12-why-no-agents.md) | *(no industry rename — descriptive)* | Single chains only, by design. |
+06 · 12
 
 ### Evals and observability
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 09 | [Async background classification](./09-async-classification.md) | **Fire-and-forget / async write-behind** *(industry standard)* | Fire-and-forget; result lands later via DB write + event. |
-| 11 | [Failure modes](./11-failure-modes.md) | **Graceful degradation / failure mode analysis** *(industry standard)* | Every AI failure leaves canonical data untouched. |
+09 · 11 · 35 · 36 · 37 · 38 · 39
 
 ### Production serving
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 08 | [Validation as a hard gate](./08-validation-gate.md) | **Output guardrails / schema-validated outputs** *(industry standard)* | Every model output is parsed + re-validated before persist. |
-| 20 | [Prompt injection](./20-prompt-injection.md) | **Prompt injection, indirect prompt injection** *(industry standard)* | User prose feeds every chain; output validation is the real defense, not input filtering. |
+08 · 11 · 20 · 40 · 41 · 42 · 43
 
 ### How this codebase uses AI
-
-| # | Concept | Industry term | One-line |
-|---|---|---|---|
-| 13 | [AI features in this app](./13-ai-features-in-this-app.md) | *(no industry rename — codebase-specific)* | Per-feature prompt + input + output reference. |
-| 14 | [Interpret — long-form markdown chain](./14-interpret.md) | *(no industry rename — feature-specific)* | 5th chain. User-triggered, markdown out, no JSON, no persistence. |
+13 · 14
 
 ## AI features table
 
@@ -109,16 +153,18 @@ The classifier picks one of **5** modes (was 7; reduced 2026-05-10 in migration 
 
 `ExpandableType = Exclude<TodoType, 'todo'>` so expand has 4 typed schemas: idea, knowledge, study, reflect.
 
-## Sub-disciplines not represented in this codebase
+## Curriculum scope vs current implementation
 
-The v1.25.0 AI catalog covers ~34 patterns across 8 sub-disciplines. loopd uses 20; the others were deliberately omitted because the codebase doesn't have the surface area:
+loopd's curriculum scope is **Phase 1 / 2A / 3 / 5**. Phase 2C (classical ML) is anchored to contrl-mo, not loopd — loopd has no trained-model surface and the `04-machine-learning/` section is intentionally absent. Phase 4 (agents) is recommended for contrl-mo (Path C); loopd's option (Path B) is deferred — `06-tool-calling.md` and `12-why-no-agents.md` carry the "why no agents in loopd" position.
 
-- **Tokenization, streaming, token economics** — no token-level instrumentation; no chat UI; single-user spend is invisible.
-- **All retrieval / RAG sub-patterns** (embeddings, embedding model choice, chunking strategies, vector databases, dense vs sparse retrieval, hybrid retrieval with RRF, reranking with cross-encoder, query rewriting / HyDE, stale embeddings, incremental indexing, GraphRAG) — no embeddings, no vector storage; the codebase relies on prose as canonical and hand-picked retrieval. See [07-rag.md](./07-rag.md) for why this is the right call here.
-- **ReAct, tool routing, agent memory, error recovery in agents** — no agents; see [12-why-no-agents.md](./12-why-no-agents.md).
-- **Eval set types, eval methods, LLM-as-judge bias, LLM observability** — no eval set; manual UAT on the device after each meaningful change.
-- **LLM caching, cost optimization, rate limiting and backpressure, retry and circuit breaker** — covered partially by [05-heuristic-before-llm.md](./05-heuristic-before-llm.md) (cost) and [11-failure-modes.md](./11-failure-modes.md) (failure handling); the standalone patterns aren't load-bearing at single-user scale.
-- **Lost-in-the-middle, few-shot prompting, chain-of-thought, output mode mismatch** — either implied by other patterns (output-mode-mismatch is folded into [08-validation-gate.md](./08-validation-gate.md)) or not used (no few-shot, no CoT).
+**Current state across the 43 concept files:**
+- **Case A (implemented)**: ~20 files — Phase 1's foundations and the chain-shape concepts loopd already ships.
+- **Case B (not yet implemented)**: ~22 files — Phase 2A's RAG pipeline, Phase 3's eval suites, Phase 5's production hardening. Each is a `[Bx.y]` build target with a measurable Done-when condition.
+- **learn-only**: a handful — concepts the curriculum tags as foundation-only (tokenization, streaming, no-click signal).
+
+The `## Project exercises` block on every file names the curriculum's `[Bx.y]` Build items that exercise the concept — Case A files name extensions ("the next deepening"); Case B files name the primary buildable target ("the spec for building it").
+
+→ See `system-design-templates/` for IK-style interview reframes (search ranking, tech support chatbot).
 
 ---
 
@@ -126,3 +172,6 @@ Updated: 2026-05-10 — added 14-interpret to index, added Interpret + reduced e
 
 ---
 Updated: 2026-05-11 — v1.25.0 pass: re-grouped index by sub-discipline (LLM foundations / Prompt engineering / Context and prompts / Retrieval and RAG / Agents and tool use / Evals and observability / Production serving / How this codebase uses AI); added 6 new concept files (15-sampling-parameters, 16-structured-outputs, 17-anatomy-of-prompt, 18-forbidden-patterns-rotation, 19-prompt-chaining, 20-prompt-injection); added "Sub-disciplines not represented in this codebase" section naming the deliberate omissions. `04-machine-learning/` section not created — loopd has no trained-model surface.
+
+---
+Updated: 2026-05-11 — v1.26.0 + v1.29.0 pass: switched Section 03 to curriculum-loaded mode (curriculum auto-installed from `~/.config/aipe/global/aieng-curriculum.md`). Added `## Project exercises` blocks to all 20 existing AI files mapping each to the curriculum's `[Bx.y]` Build items. Added 23 new files (21-43) covering Phase 1 remainder, Phase 2A in full, Phase 3, and Phase 5 — each Case B file names the primary buildable target. Replaced the v1.25.0 "Sub-disciplines not represented" section with "Curriculum scope vs current implementation." Added an index-by-curriculum-phase view alongside the existing sub-discipline grouping. Created `system-design-templates/` sub-directory (v1.29.0) with `01-search-ranking.md` and `02-tech-support-chatbot.md`. `04-machine-learning/` remains intentionally absent — loopd is LLM-only; Phase 2C is anchored to contrl-mo.

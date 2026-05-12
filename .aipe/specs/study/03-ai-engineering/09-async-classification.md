@@ -197,6 +197,24 @@ Polling vs event-based UI updates wasn't a real choice. Polling would have meant
 
 ---
 
+## Project exercises
+
+**Status:** `learn-only` (codebase-specific pattern). The fire-and-forget classify pattern is loopd's solution to editor-commit latency; the curriculum doesn't tag a specific `[Bx.y]` to it because async LLM annotation isn't a discipline-level concept the curriculum names separately. The pattern's quality is exercised indirectly by:
+
+- `[B1.2]` (token logging) — every async classify call lands in `ai_call_log` for observability.
+- `[B3.13]` (drift detection — applies to ML side; for LLM-side async classify the analog is "stuck `type='todo'` rate") — see Phase 3 exercises in [38-llm-observability.md](./38-llm-observability.md).
+
+### Surface stuck-classification rate in the AI ops panel
+
+- **Exercise ID:** *cross-cutting (extends `[B1.8]` cost panel)*
+- **What to build:** Add a "stuck classifications" metric to `app/settings/ai.tsx` showing the count of `todo_meta` rows where `classifier_confidence IS NULL` AND `created_at > NOW() - 7 days` AND `user_overridden_type = 0`. These are the rows where async classify silently failed and the user hasn't manually fixed.
+- **Why it earns its place:** the failure mode of fire-and-forget is silent failure. A counter on the ops panel turns the silent failure into a noticeable one.
+- **Files to touch:** `app/settings/ai.tsx`, `src/services/todos/queries.ts` (new query helper).
+- **Done when:** the metric renders; tapping it lists the stuck rows so the user can manually re-classify or override.
+- **Estimated effort:** `1–4hr`.
+
+---
+
 ## Summary
 
 Async background classification is the "fire-and-forget" pattern applied to LLM annotation — kick off the slow network call without awaiting it, let the synchronous path return, and write back when the result arrives. In this codebase `reconcileTodoMetaForEntry` inserts each new ambiguous row with a `type='todo'` placeholder and fires `scheduleClassify` without awaiting; `classifyTodo` later calls Haiku/4o-mini, `updateTodoMeta` writes the result, and `CLASSIFY_PROGRESS_EVENT` tells the `/todos` screen to re-render the badge. The constraint that drove it is editor-commit latency — a 30-todo entry with 10 ambiguous lines would otherwise wait 3-5 seconds for sequential round-trips. The cost is that failures are silent: a flaky network leaves rows stuck at `type='todo'` and the user might not notice without the `/todos` banner from `getClassifyInFlight()`.
