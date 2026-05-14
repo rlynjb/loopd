@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine two children walking up to the same toy at the same time. One grabbed it ten seconds ago, the other grabbed it five seconds ago. They disagree about who had it first. The supervising adult needs a rule that ends the fight without negotiating, without merging the toy in half, and without leaving them stuck in a stalemate. The rule that's easiest to teach: whoever touched it most recently keeps it. It's brutal — one child walks away every time — but it's deterministic, terminates instantly, and produces the same answer if you ask any adult in the room.
+Open a Notion page on two devices, edit different paragraphs simultaneously, then watch what happens when the network catches up. Notion picks a winner — usually the more recent edit by their server's clock — and the other edit is lost without a merge attempt. CouchDB ships the same rule by default; Firebase Realtime Database does it; every CRDT-less sync system eventually has a moment where two writes claim the same field and one has to lose. The rule that's easiest to reason about: whoever wrote most recently wins, deterministically, by server-clock timestamp. It's brutal — one device's write disappears every time there's a conflict — but it terminates instantly, it's idempotent on replay, and it produces the same answer no matter which order you replay the events.
 
-The question those children answer is one any replicated store has to answer: when two writes claim the same row and neither side knows the other exists, who wins? Not "merge them" — that requires understanding what merging *means* for the data type, which is expensive. Not "ask the user" — that requires UI that doesn't exist on a background sync. The answer is *last-write-wins*: attach a timestamp to every row, compare on conflict, keep the bigger one.
+The question those concurrent edits answer is one any replicated store has to answer: when two writes claim the same row and neither side knows the other exists, who wins? Not "merge them" — that requires understanding what merging *means* for the data type, which is expensive. Not "ask the user" — that requires UI that doesn't exist on a background sync. The answer is *last-write-wins*: attach a timestamp to every row, compare on conflict, keep the bigger one.
 
 **What depends on getting this right:** whether the sync layer can resolve a conflict without human intervention, and whether the resolution is the same on every device every time it runs. In this codebase the resolver lives in `src/services/sync/conflict.ts` as `chooseWinner(local, cloud)`. It's a pure function — no DB reads, no `Date.now()`, no side effects — that returns `"local"`, `"cloud"`, or `"tie-cloud-wins"`. The comparison is ISO 8601 string compare (`"2026-05-10T14:32:18.000Z" > "2026-05-10T14:30:00.000Z"`), which is lexicographically sortable and avoids Date.parse cost. Same-second ties go to cloud (biased to converge — prevents ping-pong between two devices that already agree). Malformed timestamps also go to cloud (defensive healing — a corrupt local row gets overwritten by the well-formed cloud copy).
 
@@ -36,7 +36,7 @@ The resolver is a referee that always blows the whistle the same way.
 
 ## How it works
 
-Two children walk up to the same toy at the same time. The rule: whoever touched it most recently keeps it. No negotiation, no merging, no "you take the head and I'll take the wheels." It's a brutal rule on purpose — fast, deterministic, easy to reason about. The cost is that one child walks away empty-handed every time there's a conflict; the win is that you never get stuck in a stalemate.
+Postgres MVCC + a `last_updated` timestamp is the canonical pattern. Two writes to the same row race; the row keeps the value of whichever write the server timestamped later. No negotiation, no merging, no "device A keeps half of the field and device B keeps the other half" — just pick the more recent timestamp. It's a brutal rule on purpose — fast, deterministic, easy to reason about. The cost is that one writer's value silently disappears every time there's a conflict; the win is that you never get stuck in a stalemate and replay always converges. CouchDB and Firebase Realtime Database both ship LWW as their default conflict resolver for the same reason.
 
 ### `chooseWinner` is pure — input rows in, label out
 
@@ -364,3 +364,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-children-one-toy adult-rule scenario → LWW pattern named as the deterministic answer → bolded "what depends on getting this right" with pure-function/ISO-compare stakes → before/after walking a plane-vs-cafe concurrent edit → one-line "the resolver is a referee that always blows the whistle the same way").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-children-with-toy analogies with Notion two-device concurrent edits + CouchDB/Firebase LWW + Postgres MVCC last_updated timestamp). Both Move 1s were missed by the original triage agent.

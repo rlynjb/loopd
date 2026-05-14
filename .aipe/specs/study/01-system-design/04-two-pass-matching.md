@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a librarian rebuilding a shelf after someone rearranged the books. She has yesterday's catalogue card — the books in the order they used to sit — and today's actual shelf, with the books in some new order. Some titles are unchanged but moved positions. Some have a penciled correction over the cover. A couple are missing; a couple are new. Her job is to figure out which book on the shelf today is "really" which book from yesterday's card — because every note she's pinned to those books (loan history, classification, sticky tabs) only makes sense if the identity carries across.
+Open React DevTools and drag-reorder an item in any keyed list. The reconciler doesn't tear down every `<li>` and rebuild — it walks the new render and matches each entry against the previous one by `key` prop first, then falls back to position for whatever didn't match. That's why React warns when you forget `key` on a list: without the strong signal, only position is left, and any insert at the top reassigns every row below to the wrong piece of state. Git's rename detection runs the same shape: exact-hash match first, content-similarity threshold second, path-based heuristic third. Two ordered identity checks, strongest evidence first, with a hard rule that nothing claimed by pass 1 is eligible for pass 2.
 
-The question she's solving is one any system without stable IDs has to solve: when the source format doesn't carry a primary key, what cheap proxies do you use to recognise "this is the same item as before"? Not a single check — a single check is fragile against either reordering or in-place edits. The answer is a *layered identity match*: try the strict cheap signal first, fall back to a fuzzier positional one for the leftovers only.
+The question those reconcilers solve is one any system without stable IDs has to solve: when the source format doesn't carry a primary key, what cheap proxies do you use to recognise "this is the same item as before"? Not a single check — a single check is fragile against either reordering or in-place edits. The answer is a *layered identity match*: try the strict cheap signal first, fall back to a fuzzier positional one for the leftovers only.
 
 **What depends on getting this right:** whether every piece of metadata pinned to a todo — its AI-classified `type`, its 400-word `expanded_md`, its `pinned` flag, its `user_overridden_type` — survives when the user edits a typo or reorders lines, or vanishes the next time they touch the entry. In this codebase the source format is prose: `entries.text` carries `[]`-marked lines that the user reorders and edits like text, with no stable IDs in the prose itself. The matcher in `reconcileTodoMetaForEntry` runs two passes — pass 1 matches scanner output against existing `todo_meta.text` (exact, case-insensitive, whitespace-normalised), pass 2 takes the leftovers and matches by `sourceLine`. The two signals are independent on purpose: text identity survives reordering, position identity survives same-line edits.
 
@@ -30,13 +30,13 @@ With two passes (text first, line-index second):
 - Pass 1 fails; pass 2 finds the previous row at `sourceLine = 3`
 - The row's id is preserved; the matcher updates `text` in place; `type`, `expanded_md`, `pinned` survive untouched
 
-The matcher is just a careful librarian: title first, shelf position second.
+The matcher is React's keyed-list reconciler applied to backend rows: strong identifier (text) first, position (line-index) second.
 
 ---
 
 ## How it works
 
-Imagine a librarian re-cataloguing a shelf after someone rearranged the books. First she looks for each book by its title (exact match) — most of the time that works, the title's the same, only the position moved. For any book whose title got changed in pencil (someone scribbled a correction over the cover), she falls back to its old position on the shelf. Two ordered identity checks, exact first, position second — and only the leftovers from pass 1 are eligible for pass 2.
+React's keyed-list reconciler is the canonical version. Pass 1 matches new entries to old by `key` prop (the strong identifier — most rows survive a reorder unchanged); Pass 2 falls back to position for whatever Pass 1 didn't claim (catching the case where the user edited a row's value but kept its slot in the list). Two ordered checks, strongest evidence first, with a hard rule that nothing matched in Pass 1 is eligible for Pass 2. Git's `--find-renames` flag runs the same shape on file paths: exact hash match first, content-similarity threshold second.
 
 ### Pass 1 — exact-text match
 
@@ -404,3 +404,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian rebuilding a rearranged shelf scenario → layered identity match pattern named as the answer → bolded "what depends on getting this right" with metadata-preservation stakes → before/after walking a typo-fix on a classified todo → one-line "title first, shelf position second").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced librarian-rebuilding-shelf + librarian-re-cataloguing analogies with React keyed-list reconciler + git rename detection layered identity checks). Both Move 1s were missed by the original triage agent.

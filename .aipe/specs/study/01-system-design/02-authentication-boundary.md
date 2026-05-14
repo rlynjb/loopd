@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a bank vault with two locks on the door. The outer lock is a deadbolt that only opens for a specific key shape — the wrong key won't even fit the slot. The inner lock is a guard at a desk who asks for your ID and checks it against a list. Most days the deadbolt alone is enough, but on the day someone copies a key, the guard is what stops them. Take either lock away and the vault still looks locked from the street — but only one of them is doing the work that would catch a real attempt.
+Open a GitHub repo with branch protection enabled and try to merge a PR. Two independent gates have to pass: at least one approved code review AND all required CI checks green. Either one alone would let bad merges through — a review might miss a test failure, and CI might miss a logic issue a human would catch. Together, they catch what each one misses. Stripe enforces the same shape on webhook delivery: signature verification (schema-level — wrong key, request rejected immediately) AND IP allowlist (runtime — only Stripe's outbound IPs reach the endpoint). Take either gate away and the endpoint still *looks* locked from the outside; only one of them is doing the work that would catch a real attempt.
 
-The question that vault answers is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
+The question those gates answer is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
 
 **What depends on getting this right:** whether one user's journal becomes readable by anyone holding a copy of the anon key, and whether the cost of activating real auth later is "a one-line config swap" or "rewrite the schema." In this codebase the schema gate is composite `PRIMARY KEY (user_id, id)` on every synced Supabase table — even with bad code, a query for the wrong user's `id` returns no rows because the row's full key includes a `user_id` the caller doesn't know. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but disabled in Phase A; Phase A uses a hardcoded `PHASE_A_USER_ID` UUID in `src/services/sync/client.ts`. The schema was built to accept the runtime gate later without a migration — because the composite PK was correct from day one, Phase B activation is `auth.uid()` replacing the hardcoded UUID plus enabling migration 0002, not a schema rewrite.
 
@@ -27,13 +27,13 @@ With two gates (composite PK + staged RLS):
 - Queries still return no rows because the row's full composite key isn't visible to the wrong caller
 - The bug is "RLS off," recovery is "re-enable the policy"
 
-The schema is the deadbolt; RLS is the guard at the desk. The vault stays locked even when one mechanism fails.
+The composite PK is the structural gate; RLS is the runtime gate. Same shape as GitHub's "review AND status checks both required" — defense in depth, two independent mechanisms, the endpoint stays locked even when one fails.
 
 ---
 
 ## How it works
 
-Two locked doors between the user and someone else's data, but only one of them is installed right now. The schema gate is the deadbolt — it doesn't ask who you are; it just makes the door appear to lead nowhere if you have the wrong key. The runtime gate is the security guard — it checks your ID and waves you through. Today only the deadbolt is installed; the guard is scheduled for the Phase-B activation. Two independent mechanisms, layered.
+GitHub's branch-protection model: two independent gates, both required, evaluated by different mechanisms. The composite PK (`(user_id, id)`) is the structural gate — it doesn't ask who you are; it just makes the row appear to not exist if your scope doesn't include it. RLS (`auth.uid() = user_id`) is the runtime gate — it consults the JWT, evaluates a policy, and rejects unauthorised reads. Today only the structural gate is active in loopd; the runtime gate is scaffolded (migration 0002) but disabled in Phase A. Two independent mechanisms, layered — same shape as GitHub requiring review AND status checks before merge.
 
 ### The schema gate — composite primary keys
 
@@ -380,3 +380,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bank-vault two-locks scenario → defense-in-depth pattern named as the answer → bolded "what depends on getting this right" with composite PK + staged RLS stakes → before/after walking an accidental RLS-disable PR → one-line "schema is the deadbolt; RLS is the guard").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced bank-vault + two-locked-doors analogies with GitHub branch protection requiring review + status checks, and Stripe webhook signature + IP allowlist defense-in-depth). Both Move 1s were missed by the original triage agent; this re-scan caught them.

@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine two filing cabinets in the same office. The first cabinet holds folders for every active project. The second cabinet holds a single metadata card for each project — billing contact, last review date, classification. The rule is "every folder in cabinet A has exactly one card in cabinet B; no orphans on either side." Nobody chained the two cabinets together physically; the discipline is enforced by a clerk who walks past both at the end of every shift, notes mismatches, and patches them. If the clerk skips a shift, an orphaned card sits in cabinet B for a project that no longer exists in cabinet A — and someone reading the card has no way to know it points at nothing.
+Open the Kubernetes dashboard for a running cluster and watch how Deployments and Pods stay in sync. The Deployment spec says "I want 3 Pods running this image"; the actual Pod set might briefly be 2 Pods (one crashed mid-rollout), or 4 Pods (the previous deploy's leftovers haven't terminated yet), or 3 Pods running the wrong image. No foreign-key constraint enforces "every Deployment has exactly N Pods" — the kubelet IS the integrity gate. It walks the desired set and the actual set on every tick, notices the gap, and emits the minimum operations to close it. The discipline survives because the reconciler is reliable, the sets are small, and the comparison is cheap.
 
-The question that office answers is one any system with split-but-coupled state has to answer: when a database engine can't enforce referential integrity between two stores — because one side is a JSON array element, or a document field, or a row in a different database — what keeps them in sync? Not a foreign key (the syntax doesn't exist for these targets). The answer is an *application-enforced invariant*: a rule the schema can't check, kept honest by a reconciler that walks both sides and patches the diff.
+The question Kubernetes answers is one any system with split-but-coupled state has to answer: when a database engine can't enforce referential integrity between two stores — because one side is a JSON array element, or a document field, or a row in a different database — what keeps them in sync? Not a foreign key (the syntax doesn't exist for these targets). The answer is an *application-enforced invariant*: a rule the schema can't check, kept honest by a reconciler that walks both sides and patches the diff.
 
 **What depends on getting this right:** whether deleting a todo from prose silently leaves orphaned `todo_meta` rows that the dashboard reads as ghosts, or whether the 1:1 contract holds tight enough that every `todo_meta` row points back at a live `TodoItem` in `entries.todos_json`. In this codebase `entries.todos_json` is a JSON column containing an array of `TodoItem` objects each with its own UUID; `todo_meta` is a separate SQLite table keyed by `todoId`. SQLite has no syntax for `FOREIGN KEY (todoId) REFERENCES entries.todos_json[*].id` — JSON array elements aren't FK targets. So `reconcileTodoMetaForEntry(entry_id, items)` in `src/services/todos/reconcileMeta.ts` is the *only* enforcement layer: it diffs the scanned `items[]` against the existing `todo_meta` rows, inserts what's new, soft-deletes what's missing, and leaves matched rows alone. If the reconciler has a bug, drift is real and visible on the next read.
 
@@ -30,13 +30,13 @@ With the reconciler (1:1 invariant enforced every commit):
 - That row gets `deleted_at` stamped; the dashboard joins return 2 todos
 - The orphan was caught at the next commit boundary, not at the next bug report
 
-The reconciler is the clerk — without it the invariant is just a wish.
+The reconciler is Kubernetes's tick loop applied at every commit — without it the invariant is just a wish.
 
 ---
 
 ## How it works
 
-Two filing cabinets that have to stay perfectly synchronised — for every folder in cabinet A there's exactly one matching folder in cabinet B, no orphans on either side. Nobody chains the two cabinets together physically. Instead, a clerk walks past both at the end of every shift, fixes any mismatches, and goes home. The discipline survives because the clerk is reliable, the cabinets are small, and the comparison is cheap.
+Kubernetes runs a reconciler that walks Deployment specs and Pod state on every tick — no foreign key ties them together, the reconciler IS the integrity gate. React's keyed-list reconciler does the same on virtual DOM trees, emitting the minimum mount/unmount operations to make the live tree match the next render. The discipline survives because the comparison is cheap (Map + Set lookups, both O(1)), the sets are small (one entry's todos, not a whole table's worth), and the reconciler runs reliably on every commit boundary.
 
 ### The 1:1 contract — every TodoItem has exactly one `todo_meta`
 
@@ -384,3 +384,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-filing-cabinets-with-clerk scenario → application-enforced invariant named as the answer → bolded "what depends on getting this right" with JSON-array-no-FK stakes → before/after walking a prose-delete that orphans a `todo_meta` row → one-line "the reconciler is the clerk; without it the invariant is just a wish").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-filing-cabinets-with-clerk analogies with Kubernetes Deployment/Pod reconciliation + React virtual-DOM reconciler). Both Move 1s were missed by the original triage agent.

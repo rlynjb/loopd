@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a kitchen with two stoves — a gas range and an induction cooktop — both wired into the same wall outlet via a switch on the counter. The chef cooks every dish the same way: pick a burner, set the heat, drop the pan, watch the food. What's underneath the pan is different physics (flame vs. magnetic field) but the chef's gesture is the same. The day the gas line gets shut off for maintenance, the chef flips the switch to induction, and the same pan keeps cooking. The reason this is cheap is that the chef never wired the gas line into the recipe.
+React Native's platform-specific module pattern — `Foo.ios.ts` and `Foo.android.ts` resolved by the bundler based on the platform target — is exactly this shape. The component imports `from './Foo'`; the bundler picks the right file; the rest of the app is platform-agnostic. The day a platform changes, only the platform-specific file changes; everything that imports `./Foo` stays put. Stripe's `PaymentIntent` accepts `payment_method_types: ['card', 'apple_pay', 'us_bank_account']` for the same reason — same upstream call, same downstream parse, only the method picked at request time changes. Vercel's adapter pattern lets the same Next.js app target Edge or Node runtimes with one swap point.
 
-The question that kitchen answers is one any codebase with replaceable backends has to answer: when a vendor changes pricing, deprecates an endpoint, or goes down for a day, how prepared is the call site for a swap? Not "sprinkle the vendor's SDK across every file" — that's a week-long chase to swap providers. Not "wrap everything behind a single interface that both vendors satisfy" — that interface becomes the surface area that breaks when one vendor adds a feature the other doesn't have. The answer is a *thin strategy seam*: pick provider, then branch in each call site, then converge on a shared tail.
+The question those swap-point patterns answer is one any codebase with replaceable backends has to answer: when a vendor changes pricing, deprecates an endpoint, or goes down for a day, how prepared is the call site for a swap? Not "sprinkle the vendor's SDK across every file" — that's a week-long chase to swap providers. Not "wrap everything behind a single interface that both vendors satisfy" — that interface becomes the surface area that breaks when one vendor adds a feature the other doesn't have. The answer is a *thin strategy seam*: pick provider, then branch in each call site, then converge on a shared tail.
 
 **What depends on getting this right:** whether adding or swapping a third-party LLM provider costs an afternoon or a week, and whether each provider's native features (Claude's prompt caching, OpenAI's `response_format: json_object`) can be used without an abstraction smearing them flat. In this codebase `src/services/ai/config.ts` exposes `getProvider()` (returns `'claude'` or `'openai'`) and `getApiKey(provider)`, both reading from `expo-secure-store`. Every AI service file (`summarize.ts`, `classifyTodo.ts`, `expandTodo.ts`, `generateCaption.ts`, `interpret.ts`) starts the same way: read the provider, then `switch (provider)` with two branches — Claude calls `@anthropic-ai/sdk`'s typed `client.messages.create({...})`; OpenAI builds a raw `fetch` to `https://api.openai.com/v1/chat/completions`. Both branches produce a string. The shared tail (parse JSON, validate against a Zod-like schema in `validate.ts`, persist via `database.ts`) runs identically regardless. There's no `AIProvider` interface — the abstraction is at the call-site, not in a shared contract.
 
@@ -29,13 +29,13 @@ With the thin seam (`getProvider()` + branch + shared tail):
 - Each branch can still use that provider's native features (Claude's prompt caching survived because the abstraction never tried to express it)
 - The swap is one config write plus a smoke test
 
-The seam is a switch on the counter — same pan, different burner.
+The seam is `Foo.ios.ts` / `Foo.android.ts` — one import path, two implementations, picked at resolution time.
 
 ---
 
 ## How it works
 
-A power strip with two outlets. The lamp doesn't care which outlet it's plugged into; it just needs current. The codebase has two AI providers (Claude and OpenAI) wired to the same call shape — pick provider, get key, build prompt, call, parse JSON, persist. The lamp is the AI service; the outlets are the providers. The strip is the config file that decides which outlet is live at any moment.
+React Native's `.ios.ts` / `.android.ts` resolution is the canonical pattern. Two implementations behind one import path; the bundler picks one based on the platform target; everything that imports the path is platform-agnostic. The codebase has two AI providers (Claude and OpenAI) wired to the same call shape — pick provider, get key, build prompt, call, parse JSON, persist. The two providers are the platforms; the import path is the chain function; the resolution lives in `getProvider()` reading from SecureStore at call time. Same shape as Stripe's `payment_method_types` parameter — one upstream call, one downstream parse, only the swap point changes.
 
 ### The config — `getProvider()` + key getters from SecureStore
 
@@ -410,3 +410,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-stoves-one-switch kitchen scenario → thin strategy seam named as the answer → bolded "what depends on getting this right" with getProvider/switch-branch/shared-tail stakes → before/after walking an Anthropic-to-OpenAI swap → one-line "the seam is a switch on the counter — same pan, different burner").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-two-stoves + power-strip analogies with React Native platform-specific module pattern .ios.ts/.android.ts + Stripe PaymentIntent payment_method_types + Vercel adapter). Both Move 1s were missed by the original triage agent.

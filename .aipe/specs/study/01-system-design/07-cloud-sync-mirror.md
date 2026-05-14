@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine two filing cabinets, one in your office and one across town. The office cabinet is the one you actually use — every file you open, every form you sign, every receipt you staple into a folder happens at the office. The across-town cabinet is a copy that a courier updates whenever they run between the two. Most days you forget the across-town cabinet exists. The day your office burns down, it's the only reason you have any records left.
+Open Linear on your laptop, edit an issue, then close the laptop and open Linear on your phone. The phone shows the edit within seconds — but if both devices were offline at the moment of the edit, the change still landed locally and waited for the network. Linear isn't asking the cloud "what's the current state?" on every read; it's reading from a local store and using the cloud as a *mirror* that catches up via background sync. Notion does the same. Apple Photos with iCloud does the same. The local store is canonical; the cloud is durability and cross-device propagation, not the source of truth.
 
-The question that setup answers is one any system with a cloud component has to answer: when there are two copies of every file, which one is authoritative — the one the user reads and writes, or the one that's durable and shareable? Not "the cloud, because it's the database" — that's the answer that makes the app stall on a loading spinner. The answer is a *replica-as-mirror flip*: the device is canonical, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer.
+The question those local-first apps answer is one any system with a cloud component has to answer: when there are two copies of every file, which one is authoritative — the one the user reads and writes, or the one that's durable and shareable? Not "the cloud, because it's the database" — that's the answer that makes the app stall on a loading spinner. The answer is a *replica-as-mirror flip*: the device is canonical, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer.
 
 **What depends on getting this right:** whether every screen renders instantly from local data or waits for a network round-trip, and whether the app stays useful when the network is gone. In this codebase the local store is `loopd.db` (SQLite); the mirror is Supabase Postgres. Push and pull are independent flows in `src/services/sync/orchestrator.ts` over the same 10-table `SyncableTable` registry. `pushTable()` selects `WHERE updated_at > synced_at OR synced_at IS NULL`, batches in 50s, upserts via `@supabase/supabase-js` with `onConflict: 'user_id,id'`, then stamps `synced_at = now()` on success. `pullTable()` selects cloud rows where `updated_at > sync_meta[table].last_pull_at`, pages 200 at a time, and runs `chooseWinner` (LWW) per row against the local copy. The dirty filter (`updated_at > synced_at`) is what makes each direction idempotent — a failed push just leaves `synced_at` alone and gets retried on the next pass.
 
@@ -37,7 +37,7 @@ The cloud is a sync mirror, not the canonical source.
 
 ## How it works
 
-A photocopier room with two filing cabinets — one in the office, one across town. The office cabinet is canonical; the across-town one is a copy that gets updated whenever a courier runs between the two. The courier carries paperwork in both directions: changes from the office go out, changes that happened across town (or arrived via a different copy) come back in. The point of having a copy at all isn't to ask it questions — it's to have something to fall back to when the office burns down.
+Git's local repo + remote is the canonical pattern. The local `.git` directory is where every read, every commit, every branch-switch happens. The remote (`origin`) is a mirror that gets updated when you `git push` and consulted when you `git pull`. You can work entirely offline; the remote catches up when the network agrees. loopd uses the same shape — SQLite is `.git`, Supabase Postgres is `origin`, `schedulePush()` is `git push` on a debounced trigger. The mirror's job isn't to answer questions; it's to have a copy somewhere durable when the local store is lost.
 
 ### Push and pull are independent flows over the same registry
 
@@ -408,3 +408,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (office cabinet + across-town courier-updated cabinet scenario → replica-as-mirror flip named as the answer → bolded "what depends on getting this right" with push/pull-registry stakes → before/after walking a dashboard open on a train tunnel → one-line "cloud is a sync mirror, not the canonical source").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-cabinets-with-courier + photocopier-room analogies with Linear/Notion local-first sync + Apple Photos iCloud + git local repo and origin remote). Both Move 1s were missed by the original triage agent.

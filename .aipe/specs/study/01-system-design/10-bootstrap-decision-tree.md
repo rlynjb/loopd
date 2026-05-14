@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine standing at an airport baggage claim watching two suitcases come down the belt, both yours-looking, both identical from across the room. Before you walk off with either, you check the tag. There are four possible states: neither tag matches you (walk away — not yours), one tag matches and one doesn't (take the matching one), the other tag matches (take that one instead), or both match (now you have a real problem — call an attendant). The rule isn't "always grab the first bag" or "always grab the second"; it's "look at what's actually on each tag, then route."
+Open the Service Worker debug panel in Chrome DevTools and watch what happens on a website's first load vs every subsequent load. First load: no SW exists yet → install. Subsequent load with the same SW version → activate from cache. Subsequent load with a new SW version → install the new one + activate. Install failed → fall back to network. Four possible states, four different code paths, decided by inspecting the actual SW state at boot. The rule isn't "always install" or "always serve from cache"; it's "look at what's actually present, then route."
 
-The question that baggage check answers is one any app with both a local and a cloud store has to answer on first launch: there might be data on the device from a previous install, or nothing. There might be data in the cloud from a previous session on another phone, or nothing. Four combinations, each demanding a different first move. Not "always pull cloud" — that overwrites the user's recent local work. Not "always push local" — that overwrites cloud data that's already converged. The answer is a *first-run decision tree*: a one-shot classifier that inspects both sides at cold start, picks one of four branches, then sets a flag so it never runs again.
+The question that decision tree answers is one any app with both a local and a cloud store has to answer on first launch: there might be data on the device from a previous install, or nothing. There might be data in the cloud from a previous session on another phone, or nothing. Four combinations, each demanding a different first move. Not "always pull cloud" — that overwrites the user's recent local work. Not "always push local" — that overwrites cloud data that's already converged. The answer is a *first-run decision tree*: a one-shot classifier that inspects both sides at cold start, picks one of four branches, then sets a flag so it never runs again.
 
 **What depends on getting this right:** whether a user's existing work survives the first sync, or whether one side silently overwrites the other. In this codebase `bootstrap()` runs in `app/_layout.tsx` on cold start. Two SecureStore reads gate it: `isCloudConfigured()` checks for `supabase_url` + `supabase_anon_key`, and `cloud_initial_push_done` is the post-decision flag. When neither short-circuits, `bootstrap()` queries both sides cheaply: `localHasData = SELECT COUNT(*) > 0 FROM entries` plus a HEAD-style probe against one canonical cloud table. The two booleans pick a branch: `(no, no)` → no-op, `(yes, no)` → `initial-push` walks every syncable table and pushes everything, `(no, yes)` → `firstPull()` pulls every cloud row in pages, `(yes, yes)` → the awkward case, where Phase A treats local as canonical and logs a warning (Phase B's plan is a UI dialog). The flag prevents re-running because the `(yes, yes)` branch isn't idempotent — running it twice would re-push local over any cloud-side edits since the last boot.
 
@@ -30,13 +30,13 @@ With the decision tree + flag:
 - `cloud_initial_push_done` is set; bootstrap exits in <1ms on every subsequent boot
 - Normal incremental sync (push + pull with LWW) runs from then on; the cold-start path is invisible
 
-The flag is the airport's stamp: once it's on your boarding pass, the gate stops asking.
+The flag is the Service Worker install-event semantics: once registered, the bootstrap decision stops re-running.
 
 ---
 
 ## How it works
 
-Two suitcases at an airport's baggage claim. One is yours, one is someone else's that looks identical. Before you walk off with either, you check the tag. The bootstrap decision is the same kind of check — runs once when the app first wakes up against a new device or new cloud, asks four questions, and routes the data flow accordingly. After the check, the flag goes down and the app never asks again until you reinstall.
+React Query's hydration check is the same shape. On app boot, the client checks whether the persisted cache exists, whether its version matches the current schema, whether the user's auth state is still valid — and routes the boot flow accordingly: hydrate from cache, refetch on stale match, prompt for re-auth, or run first-time setup. After the check, the boot flag goes down and the app never re-runs the decision until next cold start. The Service Worker install event has the same shape: four states decided once, never re-asked, until you clear site data and force a fresh boot.
 
 ### The gating reads — SecureStore decides whether to ask at all
 
@@ -395,3 +395,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (baggage-claim two-suitcases-check-the-tag scenario → first-run decision tree named as the answer → bolded "what depends on getting this right" with bootstrap()/SecureStore-flag stakes → before/after walking a `(yes, yes)` first boot → one-line "the flag is the airport's stamp; once it's on your pass, the gate stops asking").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced airport-baggage-claim-with-suitcases analogies with Chrome DevTools Service Worker install event four-state decision tree + React Query hydration check). Both Move 1s were missed by the original triage agent.

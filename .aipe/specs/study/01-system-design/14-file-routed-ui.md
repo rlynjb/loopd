@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a library where the shelves *are* the catalogue. There's no index card system telling you which book sits in which row — the row a book sits in IS its address, and walking the shelves IS reading the catalogue. Want to add a new book? You put it on a shelf. Want to know where a book lives? You read the spine and you know. Compare this to a library where every book has a number in a card catalogue that may or may not match where the book actually is — the catalogue and the shelves are two systems that have to be kept in sync by hand, and one of them is always slightly wrong.
+Open a Next.js 13+ app's `app/` directory and look at the file tree. There's no `routes.ts` file declaring what's a route — the filesystem IS the route map. `app/page.tsx` is `/`, `app/blog/[slug]/page.tsx` is `/blog/anything`, `app/(marketing)/about/page.tsx` is `/about` with the parens denoting a layout group. Want a new route? Create the file. Want to know where a route lives? Read the path. Remix and SvelteKit ship the same convention. Compare this to an Express app where every route is registered manually in a router file that drifts from the handler implementations over time — the file-routed approach kills that drift by making one the other.
 
-The question that library answers is one every app with more than a handful of screens has to answer: should there be a config file that maps URL patterns to components, or should the directory tree on disk be the map? Not a giant `routes.ts` lookup table — that's the first thing to drift from reality. The answer is *file-based routing*: a directory layout with naming rules for dynamic segments and shared layouts that defines the URL space directly.
+The question file-routed frameworks answer is one every app with more than a handful of screens has to answer: should there be a config file that maps URL patterns to components, or should the directory tree on disk be the map? Not a giant `routes.ts` lookup table — that's the first thing to drift from reality. The answer is *file-based routing*: a directory layout with naming rules for dynamic segments and shared layouts that defines the URL space directly.
 
 **What depends on getting this right:** whether adding a screen is "create a file" or "create a file, edit the route table, register the import, restart the dev server," and whether removing a screen always also removes the route. In this codebase the `app/` directory tree IS the route map. `app/index.tsx` renders `/`. `app/journal/[date].tsx` renders `/journal/:date` with `date` as a dynamic param read via `useLocalSearchParams<{ date: string }>()`. `_layout.tsx` files at any level wrap their children — the root `app/_layout.tsx` runs `useDatabase()`, `bootstrap()`, theme providers, and font loading before any screen mounts. Navigation is `useRouter().push('/journal/2026-05-10')` — the path is the file path under `app/` minus the extension. Hardware back pops the navigation stack automatically. There is no `routes.ts`.
 
@@ -37,7 +37,7 @@ The filesystem is the router.
 
 ## How it works
 
-A library where the shelves ARE the catalogue. There's no index card system telling you which book is in which row — the row a book sits in IS its address. Want to know the library's entire layout? Walk the shelves. expo-router does this for screens: the `app/` directory's tree of files IS the route map, and adding a route is the same gesture as creating a file.
+Next.js 13+'s `app/` directory routing is the canonical pattern. The folder structure IS the route table; there's no separate config file declaring what routes exist; adding a new route is the same gesture as creating a new file. expo-router ships exactly this convention for React Native: the `app/` directory's tree of files IS the route map, and the file naming (`.tsx` for screens, `_layout.tsx` for nested layouts, `[param].tsx` for dynamic segments) carries the routing semantics. Remix and SvelteKit follow the same model. The discipline kills the "router config drifts from screen files" failure mode by making the screen files the config.
 
 ### The route convention — file path equals URL path
 
@@ -382,3 +382,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (library-where-shelves-are-the-catalogue scenario → file-based routing named as the answer → bolded "what depends on getting this right" with `app/`-tree + `[date]` + `_layout.tsx` stakes → before/after walking add-and-remove-a-screen with a manual route table → one-line "the filesystem is the router").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced library-shelves-as-catalogue analogies with Next.js 13+ app/ directory routing + Remix + SvelteKit + Express manual route registration as the failure mode). Both Move 1s were missed by the original triage agent.

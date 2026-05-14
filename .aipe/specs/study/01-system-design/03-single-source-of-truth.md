@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine an office where two people keep separate copies of the customer phone list. Both copies start identical. One person updates a number on a Tuesday; the other person updates a different number on the Wednesday. Each thinks their copy is current. A month later somebody dials a customer and gets a stranger — and there's no way to know which copy was wrong, because both have been edited, both have been used, and both were trusted as authoritative. The bug isn't that a write went wrong; it's that the same fact was writable in two places.
+Open a React app where the same value lives in two places — component state AND a Redux store, or `useState` AND URL params, or local state AND a server-side cache — held together by a comment promising they stay in sync. Inevitably someone updates one and forgets the other; a refresh shows different values from a click; the bug isn't that any single write went wrong, it's that the same fact was writable in multiple places. Every senior frontend engineer eventually learns the fix: pick one canonical source and derive every other view from it. Redux makes it explicit at the store layer; React Query makes it explicit at the cache layer; the database equivalent is naming one table the source of truth and treating everything else as a materialised view.
 
-The question that office has to answer is the same one any system with derived data has to answer: which copy of a fact is allowed to change, and which copies are required to follow it? Not "do we have a database" — that's the storage question. The interesting answer is *single source of truth*: name one writable surface as canonical, treat every other representation as a cache that gets rebuilt from it.
+The question that pattern answers is the same one any system with derived data has to answer: which copy of a fact is allowed to change, and which copies are required to follow it? Not "do we have a database" — that's the storage question. The interesting answer is *single source of truth*: name one writable surface as canonical, treat every other representation as a cache that gets rebuilt from it.
 
 **What depends on getting this right:** whether "the user edited the line and the row updates" is a universal property or a per-feature affordance you have to wire up by hand. In this codebase the canonical surface is `entries.text` — the journal prose, edited by the user. Every typed table downstream — `todo_meta`, `nutrition`, `thread_mentions` — is derived state, rebuilt by scanners (`scanTodosFromText`, `scanNutrition`, `parseTags`) at commit boundaries (focus blur, screen leave). If someone adds a UI button that writes directly to `todo_meta` without a corresponding prose edit, the next scanner pass sees a row whose `todoId` isn't in the prose's `todos_json` array and soft-deletes it on the spot — the derived row vanishes because the rule says only prose can spawn one.
 
@@ -29,13 +29,13 @@ With the rule (only prose is canonical):
 - Every derived row points back at exactly one prose line
 - Bug-search shrinks to "which scanner produced this row?"
 
-The prose is the cabinet; every typed table is a photocopy.
+Prose is the Redux store; every typed table is a selector — derived on read, never written directly.
 
 ---
 
 ## How it works
 
-There's one filing cabinet and a stack of photocopies. The cabinet is `entries.text` — every drop the user typed, in the order they typed it. The photocopies are `todos_json`, `todo_meta`, `nutrition`, `thread_mentions` — typed rows the app reads to render lists, counts, and charts. The rule is that the cabinet is the only place anyone writes, and the photocopies get rebuilt from the cabinet whenever the user pauses long enough for the system to catch up.
+Redux's single store with one root reducer is the same shape. The store is `entries.text` — every drop the user typed, in the order they typed it. The derived selectors are `todos_json`, `todo_meta`, `nutrition`, `thread_mentions` — typed views the UI reads to render lists, counts, and charts. The rule is that the store is the only writable surface, and the selectors recompute from it whenever the underlying text changes. React Query's `queryClient` as a derived cache over server state works the same way: one canonical fetch, many cached projections.
 
 ### The canonical surface — `entries.text`
 
@@ -60,7 +60,7 @@ Two carve-outs are documented in the spec:
 - **Habits are first-class.** There's no `scanHabits`. The user creates and edits habits in the `more/habits` screen with explicit form fields for cadence type, days-of-week, and time-of-day bucket. The reason: cadence metadata (e.g. "Tuesdays + Thursdays at 7am") doesn't fit inline in prose. Forcing it would either expand the marker grammar or pollute the journal with structured strings the user didn't type. The cost of the exception is that habits don't appear in journal exports unless the user mentions them.
 - **The manual-touch deviation** (see [12](./12-manual-touch-deviation.md)) — `toggleThreadTouchToday` writes a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id`. This is the one published exception to "every derived row points back at prose," scoped to a single function, capped at a budget of 1. The discipline isn't refusing to carve; it's making the carve named, bounded, and visible.
 
-If you're coming from frontend, both exceptions are familiar — they're the same shape as React's escape hatches (`useRef` for non-rendering state, `flushSync` for breaking the batching contract). The framework's discipline survives because each escape is in a named file, the reviewer can see it, and the carve-out itself is on the floor plan.
+If you're coming from frontend, both exceptions are familiar — they're the same shape as React's escape hatches (`useRef` for non-rendering state, `flushSync` for breaking the batching contract). The framework's discipline survives because each escape is in a named file, the reviewer can see it, and the carve-out itself is documented in `docs/spec.md` alongside the rule.
 
 This is what people mean by "one writable surface, every other representation is a cache." Once you accept that constraint, the cost of every new derived feature is fixed — one scanner plus one reconciler — and "edit the line, the row updates" becomes a universal rule rather than a per-feature affordance you have to wire up by hand. The full picture is below.
 
@@ -384,3 +384,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-copies-of-the-phone-list office scenario → SSOT pattern named as the answer → bolded "what depends on getting this right" with prose-canonical stakes → before/after walking a direct-write-to-todo_meta bug → one-line "the prose is the cabinet; every typed table is a photocopy").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-office-phone-lists + filing-cabinet-photocopies analogies with Redux single store + React Query queryClient as derived cache). Both Move 1s were missed by the original triage agent.

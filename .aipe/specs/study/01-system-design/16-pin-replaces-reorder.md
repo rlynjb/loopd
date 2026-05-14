@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a grocery list with twelve items on it. You could drag each one into its perfect priority order every time you opened the app — milk above bread above eggs above the spare batteries — and the list would always reflect your exact preferences. Or you could just star the milk so it floats to the top, and let everything else fall in the order you added them. The first option is more flexible; the second covers the actual use case (one thing matters today, the rest are background). Most days, you'd never reach for the drag handle. You'd reach for the star.
+Open Gmail and look at how starred messages work. You don't drag every important email into the "top of inbox" position; you star the ones that matter today and they float to the top of a separate strip, while everything else stays sorted by date. Open GitHub and look at pinned repositories on your profile — same shape: pin the ones you reach for daily, the rest stay sorted by recent activity. Slack does pinned messages in channels; Linear has favorited issues. The first option (drag-to-reorder) is more flexible; the second (boolean flag) covers the actual use case (one thing matters today, the rest are background). Most days, you'd never reach for the drag handle.
 
-The question that grocery list answers is one every product team eventually has to answer: when usage data shows a flexible affordance is being used in exactly one way, do you keep the flexibility (because someone might use it differently someday) or do you delete it and ship the simpler thing that captures the same intent? Not "add a setting that toggles between drag and star" — that ships both. The answer is *subtractive design*: downgrade the data model and the UI to match what people actually do.
+The question subtractive design answers is one every product team eventually has to answer: when usage data shows a flexible affordance is being used in exactly one way, do you keep the flexibility (because someone might use it differently someday) or do you delete it and ship the simpler thing that captures the same intent? Not "add a setting that toggles between drag and star" — that ships both. The answer is *subtractive design*: downgrade the data model and the UI to match what people actually do.
 
 **What depends on getting this right:** whether the codebase carries a `position INTEGER` column plus drag-handle gesture state plus a position-renumber routine plus a race condition between two simultaneous reorders, or whether it carries one boolean and a one-line sort key. In this codebase migration `0005_todo_meta_pinned.sql` added `pinned BOOLEAN NOT NULL DEFAULT false` to `todo_meta`. The old `position INTEGER NULL` column stayed in the schema (dead-but-kept; cloud-sync upserts write NULL into it; Phase B's destructive migration will drop it). The /todos page and the dashboard's `SmartTodoList` both sort `ORDER BY pinned DESC, createdAt DESC`. The pin gesture is a `Pressable` that calls `togglePin(meta_id)` in `database.ts` — `UPDATE todo_meta SET pinned = NOT pinned, updated_at = now()` plus `schedulePush()`. The same commit that added `pinned` deleted ~300 lines of drag-handle UI, the position-renumber logic, the three-stage status filter, and the `react-native-draggable-flatlist` dependency.
 
@@ -36,7 +36,7 @@ Find the cheapest version of the same affordance and ship that.
 
 ## How it works
 
-A grocery list where you star the milk so it floats to the top. You don't drag every item into the right place every time you open the app; you just star the one or two things that matter today. Everything else sorts by when it landed. One boolean column replaces an ordered-position dance — and the dance was machinery the user never asked for.
+Gmail's `starred + created_at DESC` ordering is the canonical pattern. You don't drag every important message into a perfect-priority list; you star the one or two that matter today, and everything else sorts by recency. Slack's pinned messages, GitHub's pinned repos, and Linear's favorited issues all use the same shape. loopd's `todo_meta.pinned` boolean is this exact pattern: one column to flag what matters today, recency as the tiebreak for everything else — and the drag-handle UI machinery the user never asked for never gets built.
 
 ### The schema move — `pinned` BOOLEAN replaces `position` INTEGER
 
@@ -411,3 +411,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (grocery-list drag-vs-star scenario → subtractive design named as the answer → bolded "what depends on getting this right" with `pinned`/`position`/300-line-deletion stakes → before/after walking a rapid reorder with vs. without `position` → one-line "find the cheapest version of the same affordance and ship that").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced grocery-list-with-star analogies with Gmail starred + GitHub pinned repositories + Slack pinned messages + Linear favorited issues). Both Move 1s were missed by the original triage agent.

@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a waiter at a busy cafe. The customer keeps putting plates on the table — saucers, cups, side dishes, one after another in a burst. If the waiter clears each item the moment it lands, he walks a hundred trips to the kitchen for one meal. If he waits until the customer has stopped placing things for a few seconds, then makes one trip, the table still gets cleared but the kitchen sees one round instead of a hundred. Same work; fewer trips; same final state.
+Type fast into the search box on any production app — Google, Linear, Algolia's docs. The autocomplete doesn't fire a request on every keystroke; it waits until you've stopped typing for ~300ms and then fires one request with the final query. Lodash's `_.debounce` ships this primitive; React Query exposes it via `useDebouncedCallback`; React 18's `useDeferredValue` is a related shape. Without the debounce, every keystroke costs a round-trip; with it, a 50-character search produces one round-trip instead of fifty. Same work; fewer trips; same final state.
 
-The question that waiter answers is one any system with bursty input has to answer: when a single user action produces dozens of small events that all want to trigger the same expensive work, how do you collapse them into one fire without losing any of the input? Not "skip every other event" — that drops state. The answer is *debouncing*: every new event resets a timer; the work runs once when the timer expires after a quiet window.
+The question debouncing answers is one any system with bursty input has to answer: when a single user action produces dozens of small events that all want to trigger the same expensive work, how do you collapse them into one fire without losing any of the input? Not "skip every other event" — that drops state. The answer is *debouncing*: every new event resets a timer; the work runs once when the timer expires after a quiet window.
 
 **What depends on getting this right:** whether the cloud sync layer sends one HTTPS upsert per typing burst or one per keystroke, and whether a write that hit SQLite at t=4.9s gets shipped or lost on app kill at t=5s. In this codebase every synced write in `database.ts` calls `schedulePush()` (`src/services/sync/schedulePush.ts` L14–L21). The body is one line of state plus one setTimeout: `clearTimeout(timer); timer = setTimeout(fire, PUSH_DEBOUNCE_MS)` where `PUSH_DEBOUNCE_MS = 5_000`. When `fire()` finally runs, it checks an in-flight `pushing` boolean — if a previous push is still uploading, it re-arms instead of racing — and then calls `pushAll()` to walk the 10-table `SyncableTable` registry. The local write is always synchronous; only the cloud publish gets batched.
 
@@ -29,13 +29,13 @@ With debounce (5s quiet window):
 - One HTTPS upsert carries the final state
 - App kill at t=4.9s: the writes are still in SQLite; the next launch's `pushAll()` picks them up via the dirty filter
 
-The waiter clears once, after the burst is over.
+Debounce once, after the burst is over — same shape as `_.debounce` on a production search box.
 
 ---
 
 ## How it works
 
-A waiter who clears your table only after you've stopped putting things on it for five seconds. Every new plate restarts his wait. The busboy run happens exactly once, after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
+Lodash's `_.debounce(fn, 5000)` is the canonical pattern. Every call to the debounced function resets a timer; the inner function fires only after the timer has been quiet for the configured window. React Query's `useDebouncedCallback` ships the same primitive for client-side handlers; the Gmail autosave that batches keystrokes runs on the same shape. loopd's `schedulePush()` is this pattern applied to cloud sync — every `database.ts` write resets a 5-second timer; `pushAll()` fires once after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
 
 ### `schedulePush()` — the debounce trigger
 
@@ -383,3 +383,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (busy-cafe waiter-clearing-once scenario → debounce named as the answer → bolded "what depends on getting this right" with schedulePush/PUSH_DEBOUNCE_MS stakes → before/after walking a 30-keystroke typing burst → one-line "the waiter clears once, after the burst is over").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced waiter-at-cafe-clearing-table analogies with search-box autocomplete debouncing + Lodash _.debounce + React Query useDebouncedCallback + Gmail autosave). Both Move 1s were missed by the original triage agent.

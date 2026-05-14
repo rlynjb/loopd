@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a graveyard with two kinds of plots: ones where the body and the headstone are both gone, and ones where the body is removed but the headstone stays. Walk past an empty plot of the first kind and you'd never know anything used to be there — there's no record. Walk past a headstone with no body and you know exactly when the person died, that they're not coming back, and that nobody needs to dig where the marker stands. Now imagine you copied the second cemetery to a sister town: the sister cemetery's records still show the headstones, so nobody there tries to "restore" the person by re-burying them.
+Open GitHub and look at a closed PR or an archived repo. The PR didn't disappear from storage — it stayed queryable, the comments survive, the URL still resolves, and anyone with the link can read the entire history. Linear archives issues the same way: archived issues drop out of the default list view but stay in search, in linked references, in the audit trail. Stripe's API does it for subscriptions — cancelled subscriptions stay queryable with a `canceled_at` timestamp, and every report can still distinguish "was active in March, cancelled in April" from "never existed." Hard delete erases the past; the record-with-timestamp pattern preserves it for the readers who need to know the row existed.
 
-The question that scenario answers is one any replicated store has to answer: how do you propagate the *absence* of a row when "the row isn't there anymore" looks identical to "the row never existed here"? Not a hard `DELETE` — that erases evidence. The answer is a *tombstone*: keep the row, stamp the time of death on it, and trust every reader to walk past.
+The question those archive patterns answer is one any replicated store has to answer: how do you propagate the *absence* of a row when "the row isn't there anymore" looks identical to "the row never existed here"? Not a hard `DELETE` — that erases evidence. The answer is a *tombstone*: keep the row, stamp the time of death on it, and trust every reader to walk past.
 
 **What depends on getting this right:** whether a delete on one device stays deleted after sync, or whether the cloud (or a second device) cheerfully resurrects the row the next time it pulls. In this codebase every synced table has a `deleted_at TEXT` column. Deletes write `UPDATE entries SET deleted_at = now, updated_at = now WHERE id = ?`, never `DELETE FROM`. Reads filter `WHERE deleted_at IS NULL` everywhere — UI, scanners, exports. The sync layer treats a tombstoned row as an ordinary "updated" row: `pushAll()` selects it via `updated_at > synced_at` and upserts the `deleted_at` value to Supabase; `pullAll()` brings tombstoned rows back to other devices and their read filter hides them. The "deletion" propagated without a special channel — just like an edit, only the edit was "this row is gone now."
 
@@ -36,7 +36,7 @@ The tombstone is just an edit that says "I'm not here anymore."
 
 ## How it works
 
-A gravestone. The body is gone but the marker stays — readers of the cemetery know to walk past, the records department knows the person existed, and the groundskeeper can come back in thirty years to actually remove the marker if it's no longer needed. Soft-delete is a tombstone: a column called `deleted_at` stamped with a timestamp, plus a "filter at read time" convention, plus a future cleanup job that removes the marker once it's safe.
+Linear's archived issues are the canonical pattern. The issue stays in storage; the default list view filters it out; deep links still resolve; the audit log shows when it was archived. Soft-delete is the schema-level version: a `deleted_at TEXT` column stamped with a timestamp, every read filters `WHERE deleted_at IS NULL`, and a future cleanup job (loopd's 30-day vacuum, deferred) hard-removes the row once nothing depends on it. Stripe's `canceled_at` on subscriptions ships the same shape — every reader can still ask "did this exist on March 1?" and get a true answer.
 
 ### The deletion gesture — UPDATE, not DELETE
 
@@ -370,3 +370,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (graveyard with-and-without-headstones scenario → tombstone pattern named as the answer → bolded "what depends on getting this right" with sync-resurrection stakes → before/after walking a delete-then-pull on a tablet → one-line "tombstone is an edit that says 'I'm not here anymore'").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced graveyard + gravestone analogies with GitHub closed PRs + Linear archived issues + Stripe canceled_at subscriptions). Both Move 1s were missed by the original triage agent.

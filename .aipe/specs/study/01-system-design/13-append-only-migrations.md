@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine an old-fashioned accounting ledger in a bound book. Every entry is dated, numbered, and inked in permanently. Yesterday's page has a typo — someone wrote $1,520 instead of $1,250. The accountant doesn't erase yesterday's entry; the page has already been photocopied for three branch offices, and erasing it would leave those copies disagreeing with the master. Instead she writes a correction on today's page that references the bad entry and adjusts the running balance. Anyone reading the ledger from page 1 forward sees the same sequence of events, in the same order, and ends up at the same final number.
+Open `git log` on any repo with more than two contributors. Yesterday's commit has a typo in the message — `fxi` instead of `fix`. The engineer doesn't `git commit --amend` because the commit has already been pushed and pulled by three teammates; amending would create divergent history and force everyone to recover. Instead they push a follow-up commit that explains or fixes the typo. Anyone reading the log from the beginning sees the same sequence of events, in the same order, and arrives at the same final state. Postgres's WAL (write-ahead log) ships this discipline at the database layer; event sourcing ships it at the application layer; every "the build works on my machine" bug that traces back to schema drift is the consequence of breaking it.
 
-The question that ledger answers is one any system whose state is "the result of applying a sequence of changes" has to answer: when a past change turns out to be wrong, do you edit it (and risk divergence between anyone who already applied it and anyone who didn't) or do you write a correction forward? Not "edit in place" — that breaks every copy that's already past the bad entry. The answer is *append-only history*: once a change is committed and applied anywhere, it is frozen; corrections ship as new entries that reference the old ones.
+The question git answers is one any system whose state is "the result of applying a sequence of changes" has to answer: when a past change turns out to be wrong, do you edit it (and risk divergence between anyone who already applied it and anyone who didn't) or do you write a correction forward? Not "edit in place" — that breaks every copy that's already past the bad entry. The answer is *append-only history*: once a change is committed and applied anywhere, it is frozen; corrections ship as new entries that reference the old ones.
 
 **What depends on getting this right:** whether a fresh Supabase clone (production, staging, a new contributor's local instance) converges on the same schema as production, or whether environments silently diverge by the size of a typo. In this codebase every schema change is `supabase/migrations/NNNN_<description>.sql`, where `NNNN` is a zero-padded sequence number. The runner is `scripts/db-migrate.mjs`: it reads a `_migrations` ledger table for the list of already-applied filenames and runs every file in `supabase/migrations/` that isn't in the ledger, in numeric order, then records the filename. A fresh project replays `0001` through whatever's latest; an existing one runs only what's new. The rule: once `0001` is in any environment's `_migrations` table, you don't edit it — you ship `0006_fix_the_typo.sql` with an `ALTER TABLE`.
 
@@ -37,7 +37,7 @@ The migration history *is* the schema — never edit history, append corrections
 
 ## How it works
 
-A ledger book in an old accounting office. Every entry is dated, numbered, and inked in permanently. If yesterday's entry has a typo, you don't erase it — you write a correction on today's page that references the bad row. Anyone who reads the book from page 1 forward sees the same sequence of events, in the same order, and ends up with the same final balance.
+Git's published commit history is the canonical pattern. Every commit is dated, hashed, and immutable once pushed. If yesterday's commit has a bad change, you don't `git rebase -i` and rewrite history (that would break every teammate's clone) — you push a follow-up commit that explicitly reverts or corrects. Anyone who reads the repo from commit 0 forward sees the same sequence, in the same order, and arrives at the same final tree. Supabase migrations enforce the same shape at the schema layer: every migration file is numbered, dated, immutable; corrections come as new files, not edits to old ones.
 
 ### The numbered file convention — `NNNN_description.sql`
 
@@ -384,3 +384,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bound-ledger correction-on-today's-page scenario → append-only history named as the answer → bolded "what depends on getting this right" with NNNN-file/_migrations-ledger stakes → before/after walking a typo-edit-vs-new-migration on `0001` → one-line "the migration history *is* the schema — never edit history, append corrections").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced accounting-ledger + branch-office-photocopies analogies with git log push-and-amend discipline + Postgres WAL + event sourcing). Both Move 1s were missed by the original triage agent.

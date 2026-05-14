@@ -11,9 +11,9 @@
 
 ## Why care
 
-Imagine a kitchen with everything piled into one giant drawer. The chef's knives sit on top of a stack of plates, the spare matches are next to the silverware, the safe-box for the family heirloom rings is tucked behind the tea towels. Need a teaspoon? Empty half the drawer. Need to confirm the rings are still there? Better hope no one moved them in the chaos. Now imagine the same kitchen with five labelled drawers: utensils, pots, dishes, valuables in a locked drawer, and a bulk-storage cupboard for awkward big items. Same stuff; each drawer knows what it's for; nothing has to fight for space.
+Open the AWS console for any non-trivial web app and count the storage services in use: DynamoDB for hot transactional rows, S3 for blobs and backups, Secrets Manager for API keys, RDS for relational queries the app runs on every request, Lambda for stateless compute that doesn't store state at all. Five services, five jobs, no overlap. Stuff everything into DynamoDB and the large blobs blow your row-size limit; stuff everything into S3 and your hot queries take seconds; stuff secrets into RDS and audit gets ugly. Each storage layer earns its place by having a job nothing else does well — the discipline is matching the access pattern to the engine.
 
-The question that kitchen answers is one any system with diverse data has to answer: do you stuff every byte into one store — leading to "the database is slow" problems that are really "we put a hundred-megabyte video into a row meant for kilobyte text" problems — or do you split persistence across stores chosen by the shape of the data? Not one drawer for everything. The answer is *polyglot persistence*: structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, with each layer having one job and a single direction of trust.
+The question polyglot persistence answers is one any system with diverse data has to answer: do you stuff every byte into one store — leading to "the database is slow" problems that are really "we put a hundred-megabyte video into a row meant for kilobyte text" problems — or do you split persistence across stores chosen by the shape of the data? Not one store for everything. The answer is *polyglot persistence*: structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, with each layer having one job and a single direction of trust.
 
 **What depends on getting this right:** whether each piece of data lives where its access pattern wants it to live, and whether one layer's failure mode doesn't compromise another. In this codebase there are five storage layers, each with one job: `loopd.db` (SQLite) holds the 12 canonical tables — every read goes here. `/document/loopd/clips/<date>/<id>.mp4` and `/document/loopd/exports/<date>.mp4` hold the video bytes, with SQLite rows pointing at absolute paths via `clip_uri` or `clips_json`. `expo-secure-store` (Android Keystore-backed) holds the API keys, provider preference, Supabase config, and run-once flags — never the JS bundle, never plain disk. Supabase Postgres is the cloud mirror — written via `pushAll()`, never read directly by the app. Anthropic and OpenAI hold loopd's data only for the duration of one API request — no fine-tunes, no embedding stores, no server-side state the codebase depends on. Each layer's direction of trust is documented; nothing reads from anywhere except SQLite.
 
@@ -24,19 +24,19 @@ Without polyglot persistence (everything in SQLite):
 - A backup of `loopd.db` to an unencrypted cloud sync drags every secret out
 - The "database is slow" complaint is really "the database is doing five jobs and none of them well"
 
-With polyglot persistence (five drawers, one job each):
+With polyglot persistence (five layers, one job each):
 - Clip lives at `/document/loopd/clips/2026-05-10/abc123.mp4`; SQLite holds 200 bytes of path metadata
 - Dashboard query reads kilobytes, not megabytes
 - API key lives in Keystore; uninstall protection differs from the SQLite file's; a stolen `.db` file leaks nothing AI-related
 - Each layer's failure mode is bounded: Supabase down doesn't break the app, Keystore corruption doesn't lose journal entries, clip-file move doesn't take the database with it
 
-Five drawers, each with one job.
+Five storage layers, each with one job — same shape as the AWS DynamoDB / S3 / Secrets Manager / RDS / Lambda split.
 
 ---
 
 ## How it works
 
-Five drawers in a kitchen, each holding a different kind of thing. One drawer for everyday tools you reach for daily (SQLite), one for big bulky items that don't fit anywhere else (filesystem clips), one locked drawer for valuables (SecureStore keys), one mirror across the kitchen wall that reflects what's in the main drawers (Supabase), and one passthrough you hand things to and never see again (LLM APIs). Each drawer has its own access rule and its own role; the architecture's discipline is keeping them straight.
+An AWS app's typical storage stack: DynamoDB for hot rows, S3 for blobs, Secrets Manager for credentials, RDS for relational queries, Lambda for stateless compute. Five services, five jobs, no overlap. loopd ships the same shape: SQLite for hot rows (every UI read), filesystem for video clips (too large for SQLite rows), SecureStore for API keys (Android Keystore-backed), Supabase Postgres for the cloud mirror (cross-device durability), LLM provider APIs for stateless compute the app doesn't store. Each layer has its own access pattern and its own role; the architecture's discipline is keeping them straight.
 
 ### SQLite — the canonical drawer
 
@@ -394,3 +394,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (one-giant-drawer-vs-five-labelled-drawers kitchen scenario → polyglot persistence named as the answer → bolded "what depends on getting this right" with five-layer (SQLite/FS/SecureStore/Supabase/LLM) stakes → before/after walking everything-in-SQLite vs split storage → one-line "five drawers, each with one job").
+
+---
+Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-with-five-drawers analogies with AWS storage stack — DynamoDB hot rows + S3 blobs + Secrets Manager keys + RDS relational + Lambda stateless compute). Both Move 1s were missed by the original triage agent.
