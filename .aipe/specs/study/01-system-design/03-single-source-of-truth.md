@@ -11,9 +11,25 @@
 
 ## Why care
 
-Most data integrity bugs are not about a write going wrong — they're about the same fact being writable in two places, and the two places drifting. Edit a customer's email in the CRM, edit it again in the billing system, and within a week you've got two different emails and no honest answer to "which is real." The cheap fix is to pick one surface as canonical and treat every other copy as a cache you can throw away.
+Imagine an office where two people keep separate copies of the customer phone list. Both copies start identical. One person updates a number on a Tuesday; the other person updates a different number on the Wednesday. Each thinks their copy is current. A month later somebody dials a customer and gets a stranger — and there's no way to know which copy was wrong, because both have been edited, both have been used, and both were trusted as authoritative. The bug isn't that a write went wrong; it's that the same fact was writable in two places.
 
-Single source of truth is the discipline of designating exactly one writable origin for each fact, with all other representations derived from it deterministically. It belongs to the family of "one-way data flow" patterns, alongside event sourcing and unidirectional state stores. You've seen this in Redux (the store is canonical, components render from it), in Git (the commit graph is canonical, the working tree is derived), and in compilers (the source file is canonical, every artifact is reproducible from it). The next block walks the mechanics.
+The question that office has to answer is the same one any system with derived data has to answer: which copy of a fact is allowed to change, and which copies are required to follow it? Not "do we have a database" — that's the storage question. The interesting answer is *single source of truth*: name one writable surface as canonical, treat every other representation as a cache that gets rebuilt from it.
+
+**What depends on getting this right:** whether "the user edited the line and the row updates" is a universal property or a per-feature affordance you have to wire up by hand. In this codebase the canonical surface is `entries.text` — the journal prose, edited by the user. Every typed table downstream — `todo_meta`, `nutrition`, `thread_mentions` — is derived state, rebuilt by scanners (`scanTodosFromText`, `scanNutrition`, `parseTags`) at commit boundaries (focus blur, screen leave). If someone adds a UI button that writes directly to `todo_meta` without a corresponding prose edit, the next scanner pass sees a row whose `todoId` isn't in the prose's `todos_json` array and soft-deletes it on the spot — the derived row vanishes because the rule says only prose can spawn one.
+
+Without the rule (any table is writable):
+- A "quick edit" button updates `todo_meta.text` directly to fix a typo
+- The user later edits the same line in prose; `scanTodos` produces an item whose text no longer matches the row
+- Two-pass matching falls through to line-index; pass 2 happens to claim the right row but only because the user didn't reorder
+- A week later they reorder; the typo-edited row binds to the wrong line; AI classifier results migrate to the wrong todo
+
+With the rule (only prose is canonical):
+- The user edits the line in prose; `entries.text` updates
+- `scanTodos` re-runs at focus blur; the reconciler matches by id, leaves `todo_meta.type` and `expanded_md` alone
+- Every derived row points back at exactly one prose line
+- Bug-search shrinks to "which scanner produced this row?"
+
+The prose is the cabinet; every typed table is a photocopy.
 
 ---
 
@@ -365,3 +381,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-copies-of-the-phone-list office scenario → SSOT pattern named as the answer → bolded "what depends on getting this right" with prose-canonical stakes → before/after walking a direct-write-to-todo_meta bug → one-line "the prose is the cabinet; every typed table is a photocopy").

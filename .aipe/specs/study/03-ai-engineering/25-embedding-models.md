@@ -11,9 +11,25 @@
 
 ## Why care
 
-You evaluated three embedding models on the standard MTEB benchmark, picked the highest-scoring one, shipped it, indexed your whole corpus — and three months later realised that on *your* data, a different model would have scored 15% higher on hit@5. The benchmark didn't lie; it just measured the wrong things. Embedding-model choice is one of those decisions where the published number is necessary but not sufficient.
+A builder picks paint for a new wall using a glossy brochure that shows the colour on a sample card under studio lighting. The card looks right. The wall goes up, the natural light hits it at the angle of *this room* in *this house*, and the colour reads completely different from the card. The brochure didn't lie — it measured the wrong room. Repainting means stripping the wall and starting over, not touching up.
 
-Embedding model choice is the per-project decision that sets cost, latency, dimensionality, language coverage, and quality for every retrieval that ever happens. It's the same shape as choosing a database engine or a font: the choice is mostly invisible after the fact but very expensive to undo. The pattern is the same across providers — OpenAI, Cohere, Google, sentence-transformers all ship models with different price/quality/dimension trade-offs. Here's how to evaluate for *your* corpus instead of for the benchmark.
+The implicit question is whose conditions decide quality — the brochure's, or yours. Not the highest score on the public benchmark, not the most-popular model on Twitter — the model that wins a tiny eval against the prose your corpus actually contains, because re-embedding the whole corpus later is the renovation cost.
+
+**What depends on getting this right:** the future `embed.ts` choice and the shape of the planned `entry_embeddings` table. Loopd's corpus is first-person journaling prose in English — a model trained on conversational data may beat one trained on web SEO content, regardless of MTEB rank. Dimension is a cost knob: 256-dim is 6× cheaper to store and search than 1536-dim with marginal quality loss on most tasks, but you only know which loses what on *your* prose. The day this lands, that decision picks the schema of `entry_embeddings(entry_id, vec[N])` — switching from 1536-dim to 768-dim later means re-embedding every entry and migrating every row. The interview signal `[C2A.4]` (model selection rationale) maps directly to "did you eval against your own prose, or did you pick by reputation?"
+
+Without an eval on your own prose:
+- Pick `text-embedding-3-small` (1536-dim) because it's the default
+- Index 365 entries; ship retrieval; some queries miss obvious matches
+- Three months later realise a 768-dim model on conversational data wins on the same queries
+- Re-embed every entry; alter `entry_embeddings.vec` schema; migrate
+
+With an eval on your own prose:
+- Build 20–30 (query, expected `entry.id`) pairs hand-labelled from real journaling
+- Run candidate models against the eval; measure hit@5
+- Pick by hit@5 + dimension cost; lock the schema once
+- The cost per indexed entry is pennies/year at solo scale — the decision is quality, not money
+
+Eval the paint on your wall, not on the brochure.
 
 ---
 
@@ -284,3 +300,6 @@ Today the curriculum's default is `text-embedding-3-small` at 1536-dim. If you w
 - What table would store the vectors?
 
 Answer: `src/services/ai/embed.ts` (target, not yet created). `entry_embeddings` (target — `[B2A.2]`).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (paint-on-wall-vs-brochure scenario, name the eval-on-your-data question, planned embed.ts model-pick stakes, before/after, single-line metaphor).

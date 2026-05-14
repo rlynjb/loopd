@@ -11,9 +11,23 @@
 
 ## Why care
 
-The model can't actually do anything. It can't read a file, hit an API, query a database, or look up today's weather — it can only produce text. So how do AI products that "search the web" or "run code" or "book a flight" work? They work by having the model output a structured request — "please call the search tool with these arguments" — which the surrounding app code parses, executes, and pastes back into the next call. The model is the brain; your code is the hands.
+A guest calls a hotel concierge and asks for a dinner recommendation near the train station that's open after 11pm. The concierge can't see Google Maps, can't check restaurant hours, can't book a table — only talk. So the concierge puts the guest on hold, picks up a second line to call the restaurant directly, comes back with hours and availability, puts the guest on hold again to book, comes back with the confirmation. Four legs of conversation for one dinner. Every "let me check on that" is another phone call; without somebody standing by to dispatch each request, the concierge is just a polite voice with no way to act.
 
-Tool calling is the pattern that wires a stateless text model to a stateful outside world without giving the model any real capabilities of its own. It belongs to the family of "interpreter loops" — the same shape as a REPL, an event loop, or a virtual machine that decodes opcodes one at a time. You've already seen it in OpenAI's function-calling API, Anthropic's tool-use blocks, LangChain agents, OpenAI Assistants, and every "ChatGPT plugin" or "Claude can browse the web" feature shipped in the last two years. How it works generally is in the next block.
+That's the shape of tool calling — model as the concierge, application code as the dispatcher, every step another round-trip. The pattern is documented here precisely because this codebase doesn't use it. Naming what's *not* in play is the load-bearing distinction; every chain in `src/services/ai/` is single-shot, prompt-in-JSON-out, no orchestrator, no loop.
+
+**What depends on getting this right:** the cost, latency, and debuggability of every AI feature. The codebase pre-fetches everything inline via per-chain `buildContext` (in [03-context-window](./03-context-window.md)) — `expand(todoId)` reads the todo text, the last 3 days of summaries, and the 5 sibling todos from SQLite *before* the prompt is built, calls Claude once, parses ~400 tokens of JSON via `validate.ts`, persists. One round-trip, predictable cost, deterministic shape. The agentic version would have the model say "give me todos from the past week" → orchestrator runs SQL → "give me yesterday's summary" → orchestrator runs SQL → "give me sibling todos" → orchestrator runs SQL → final answer. Four round-trips for the same data; four points the loop can fail, get stuck, or run away. The codebase ships zero agentic chains because zero features today need open-ended queries the prompt builder can't pre-fetch for.
+
+Without one-shot discipline:
+- `expand` says "give me todos from the past week"; orchestrator runs SQL, model decides to ask for more
+- 3-5 iterations per call; 3-5× cost and latency
+- Debugging means "what did the model see at iteration 3?" — buffer replay, not curl replay
+
+With one-shot discipline:
+- `expand` gets todo text + 3 days of summaries + 5 sibling todos in one inline prompt
+- One round-trip, one `validate.ts` pass, one `upsertAISummary`
+- Same prompt twice = same problem twice; replayable via curl, fixable in `prompt.ts`
+
+The cheapest agent is no agent — pre-fetch the data deterministically and let the model do the LLM-shaped work.
 
 ---
 
@@ -378,3 +392,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (telephone-hotline-with-callouts metaphor opening / 3 layered sub-sections — the tool-calling loop, why loopd doesn't, what one-shot gives up — each with frontend bridges and concrete consequences / principle paragraph on "the cheapest agent is no agent").
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (hotel-concierge-on-hold scenario → "model as concierge, app code as dispatcher, every step another round-trip" pattern naming → bolded stakes pivot to `buildContext` pre-fetching for `expand` vs 4-round-trip agentic alternative → before/after bullets on tool-loop vs one-shot → one-line "cheapest agent is no agent" metaphor).

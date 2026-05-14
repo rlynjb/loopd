@@ -11,9 +11,23 @@
 
 ## Why care
 
-"Agent" is the most loaded word in AI engineering. It promises a model that plans, takes actions, observes the result, and adapts — autonomous, capable, intelligent. In practice, an agent is a `while` loop that re-prompts the same model with growing context until it emits a stop token or runs out of budget. Most of the time, for most jobs, that loop adds nothing a single well-designed prompt couldn't do — but it costs five to twenty times as much and fails in ways that are very hard to debug.
+A factory line runs four stations: punch, stamp, paint, pack. Each station does one operation; each output is typed; the line foreman knows what's leaving every minute and what every minute costs. Now picture replacing the line with one wandering worker who walks up and down with a clipboard, deciding at each step which tool to use next, occasionally turning around to redo the previous station, sometimes asking the punch press a clarifying question. The wandering worker is more flexible. The wandering worker is also five to twenty times slower, twenty times more expensive per unit, and impossible to monitor — when something goes wrong, you have to replay the entire walk to figure out which decision was the bad one.
 
-The "no agents" decision is an architectural stance: do the smallest amount of LLM work that solves the problem, and keep the control flow in normal code where it can be read, tested, and instrumented. It belongs to the family of "prefer the boring solution" patterns — choose the deterministic state machine over the autonomous loop, the cron job over the self-scheduling worker, the explicit pipeline over the magic. You've already seen the alternative everywhere: LangChain agents, AutoGPT, BabyAGI, OpenAI's Assistants API, multi-step "researcher" demos. They are dazzling in benchmarks and treacherous in production. Many serious teams quietly rewrite their agents back into chains once the bill arrives. How it works generally is in the next block.
+That wandering worker is what "agent" actually means at runtime: a `while` loop that re-prompts the same model with growing context until it emits a stop token or runs out of budget. The "no agents" stance names which factory this codebase runs — the stationed one, five chains, each with a fixed input and a typed output, no LLM-driven decisions about what to do next.
+
+**What breaks without it:** cost predictability and the ability to diagnose any AI bug after the fact. The codebase ships five chains (`summarize`, `caption`, `classify`, `expand`, `interpret`) under `src/services/ai/` plus `classify` and `expand` under `src/services/todos/`. Each is one call: `buildContext` pre-fetches deterministically, prompt goes out, `validate.ts` checks the response, `database.ts` persists. The patterns surrounding the LLM (`heuristicClassify` in [05](./05-heuristic-before-llm.md), `scheduleClassify` fire-and-forget in [09](./09-async-classification.md), `validate.ts` gate in [08](./08-validation-gate.md), `user_overridden_type` lock in [10](./10-user-overridden-type-lock.md)) are all *typed application code that runs before or after the model* — never instead, never as a result of the model's decision. Replace any one chain with an agent loop and that chain's cost stops being a known constant ($0.001-$0.01 per call) and starts depending on how many tool-calls the model decided to make; latency stops being 600ms-4s and starts being 5-30s; debugging shifts from "this prompt produced wrong output" to "this prompt led to a tool call that led to a re-prompt that produced wrong output."
+
+Without the no-agents stance:
+- `expand(todoId)` becomes an agent: model asks for sibling todos, gets them, asks for recent summaries, gets them, asks again, finally emits
+- 4 round-trips per expansion instead of 1; bill quadruples; latency moves from ~1.5s to ~6s
+- Failure looks like "the agent got confused at iteration 3" — no curl replay, no schema rejection, no fix-in-`prompt.ts`
+
+With the no-agents stance:
+- `expand.ts:buildContext` pre-fetches the 3 days + 5 siblings inline; one Claude call returns ~400 tokens of JSON
+- `validate.ts` accepts or rejects with one retry on malformed; cost per call is a known constant
+- Every chain is replayable: same prompt + same model + same sampler = same problem, fixable in code
+
+The cheapest agent is no agent — the factory line beats the wandering worker until features actually demand otherwise.
 
 ---
 
@@ -422,3 +436,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (factory-line metaphor opening / 4 layered sub-sections — loopd's 5-chain shape, what's NOT here, surrounding patterns as middleware not orchestration, why no-agents is right at this scale — each with frontend bridges and concrete consequences / principle paragraph on "cheapest agent is no agent").
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (factory-line vs wandering-worker-with-clipboard scenario → "agent is a while-loop, the codebase is the stationed factory" pattern naming → bolded stakes pivot to five-chain shape + surrounding patterns as middleware (`heuristicClassify`, `scheduleClassify`, `validate.ts`, `user_overridden_type`) → before/after bullets on agentic-expand vs one-shot expand → one-line "cheapest agent is no agent" metaphor).

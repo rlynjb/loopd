@@ -11,9 +11,24 @@
 
 ## Why care
 
-A user edits an entry. They added a paragraph about a project pivot. The next week, they search for "pivot" — and the entry doesn't show up. The text says "pivot" right there. What happened? You forgot to re-embed when the text changed. The vector still represents what the entry said *before*. The retrieval pipeline is silently drifting.
+A library keeps a card catalog: one paper card per book summarising the contents, filed by topic so readers can browse. A writer pulls a book off the shelf, rewrites three chapters, and slips it back — but no one updates the card. A week later a reader pulls the card for "chemistry," picks the book, and finds it's now a poetry collection. The card is a fingerprint of what the book *used to be*; the shelf moved on.
 
-The stale-embedding problem is the gap between "the text" and "the vector representing the text." Every system that embeds editable content has this problem. The pattern is the same shape as database index staleness, image-thumbnail caching, or pre-computed search snippets — derived state needs an invalidation mechanism. Without one, the derived state slowly diverges from truth and the system silently degrades. Here's how to track and fix it.
+The implicit question is "when the source changes, how does the derived fingerprint know it needs to be recomputed?" The stale-embedding problem is the name for that gap, and the answer is the same shape as every other derived-state invalidation: mark the derived row stale at the moment of write, recompute it on a separate pass. Without an invalidation channel, the vector silently drifts from the text it's supposed to represent.
+
+**What breaks without it:** retrieval quality on every edited entry, slowly and silently. For loopd the planned `entry_embeddings.embedding_stale_at` column carries the invariant: `[B2A.4]` adds a mark-stale hook inside `src/services/database.ts:writeEntry()` and an idle pass `processEmbedRefresh()` in `src/services/ai/embedRefresh.ts`. Forget the mark on even one write path and that path's edits drift forever — a search for "pivot" against an entry that added the word last week returns nothing, and there's no error to surface.
+
+Without the invalidation channel:
+- User adds a paragraph about "pivot" to entry 47 at t=0 → autosave updates `entries.text`, leaves `entry_embeddings.embedding` stale
+- Week later, user searches "pivot" → cosine against the old vector ranks entry 47 at position 23, below entries that never mentioned pivot
+- Quality degrades on every edit; the user sees worse search over time but has no signal it's the embeddings
+
+With mark-stale-on-write + idle re-embed:
+- writeEntry() runs `UPDATE entry_embeddings SET embedding_stale_at = NOW() WHERE source_id = 47` in the same transaction as the text update
+- App foreground triggers `processEmbedRefresh()`; it picks the 5 oldest stale rows, calls the embed provider, writes new vectors, clears the flag
+- Re-mark unconditionally if a fresh edit lands while a re-embed is in flight — the next pass picks it up
+- Staleness window is minutes, not weeks; queries converge on truth
+
+The vector is a fingerprint of one specific text — derived state lies until it's invalidated.
 
 ---
 
@@ -305,3 +320,6 @@ Today the plan is idle-pass refresh. If you were starting today, would you re-em
 - What function would re-embed stale entries?
 
 Answer: `embedding_stale_at` (target — `[B2A.4]`). `processEmbedRefresh()` in `src/services/ai/embedRefresh.ts` (target, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (card-catalog-and-rewritten-book scenario → "when source changes, how does the fingerprint know" pattern naming → bolded "what breaks without it" with `embedding_stale_at` / `writeEntry()` / `processEmbedRefresh()` stakes → without/with bullets walking the "pivot" edit → one-line "vector is a fingerprint; derived state lies until invalidated" metaphor).

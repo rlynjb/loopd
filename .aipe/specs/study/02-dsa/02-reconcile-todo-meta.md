@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've had two lists that were supposed to mirror each other and drifted out of sync — a folder versus an index, a database column versus a sidecar table, a UI state versus the backing store. One side gets a new item, the other doesn't notice. One side deletes, the other holds a ghost. The fix is always the same shape: walk both lists once, decide what's missing on each side, apply the minimum number of writes to make them match again.
+Imagine a coat check at a theatre. One rack holds the coats that came in tonight. A clipboard holds the ticket stubs of people who said they brought a coat. By the end of the night, every coat should have a stub and every stub should have a coat — but somewhere in the rush a coat got hung without a stub, and one stub claims a coat that was never handed over. To fix it, the attendant doesn't re-process every coat from scratch. He builds two quick lookups — coats-by-tag and stubs-by-tag — then walks each side once, asking "do you have a match?" Anything coat-without-stub gets a fresh stub. Anything stub-without-coat gets struck off the clipboard.
 
-That shape is the reconciler pattern, and it shows up everywhere you can't lean on a foreign-key constraint to enforce the relationship for you. Kubernetes controllers reconcile desired state against actual state on every tick. React's virtual DOM reconciles the next tree against the current one. SQL anti-joins (`LEFT JOIN ... WHERE right.id IS NULL`) are the same operation expressed in set algebra. The trick that makes it cheap is the same trick that makes a hash join beat a nested loop: build a lookup structure once, then scan the other side in linear time, asking the structure "do you have this?" instead of re-scanning. Here's how this codebase applies that pattern.
+That is the question this operation answers when one side is a JSON-array column and the other is a SQL table that's supposed to mirror it: how do we keep two parallel lists in 1:1 agreement using the minimum writes, when neither side can be enforced by a foreign-key constraint? Not a full rebuild, not a slow nested scan — just the *reconciler pattern* with two hash structures driving two linear walks.
+
+**What depends on getting this right:** the durability of every classifier result and every user override stored against a todo. In this codebase `entries.todos_json` is the canonical id list (driven by `scanTodos`), and `todo_meta` rows hang off those ids 1:1 — they hold `type`, `priority`, the LLM `confidence` value, and any user-applied corrections. SQLite cannot foreign-key into a JSON-array element, so the reconciler IS the integrity gate. If it skips an insert, the new todo renders with no classification metadata in the UI. If it skips a delete, an orphan meta row lingers, takes up space, and pollutes any future query that joins `todo_meta` without an existence check on `todos_json`. The 1:1 invariant is what makes `todo_meta` a sidecar you can trust.
+
+Without the reconciler (per-write integrity checks):
+- New todo `t-C` is born from `scanTodos` and pushed to `entries.todos_json`
+- No process notices the gap; `todo_meta` has no row for `t-C`
+- UI joins `entries.todos` × `todo_meta` → `t-C` renders with `type=undefined`
+- Classifier never fires because nothing watches for "todo without meta"
+- Six months later, half the todos have no metadata and nobody can say why
+
+With the reconciler:
+- After every commit, `reconcileTodoMetaForEntry(entryId)` runs
+- It builds `byTodoId: Map<id, meta>` from existing rows and `current: Set<id>` from `todos_json`
+- Inserts a meta row for any todo not in `byTodoId` (fires `heuristicClassify` synchronously, `scheduleClassify` async for the residue)
+- Soft-deletes any meta whose `todoId` is not in `current`
+- The 1:1 invariant is restored in O(n+m) and the function reads like the invariant it enforces
+
+Build the index once, walk both sides linearly, write only the diff.
 
 ---
 
@@ -419,3 +437,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (index-cards metaphor + frontend bridge to React reconciler) and Move 3 principle after the Comparison block. Algorithm/trace structure preserved.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coat-check-with-clipboard scenario → naming the reconciler pattern as the answer for 1:1 lists without FK enforcement → bolded "what depends on getting this right" pivot with `todo_meta` integrity stakes → before/after bullets walking a new-todo insertion through the reconciler → one-line summary "build the index once, walk both sides linearly, write only the diff").

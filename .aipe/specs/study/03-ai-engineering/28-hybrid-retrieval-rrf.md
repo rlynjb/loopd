@@ -11,9 +11,24 @@
 
 ## Why care
 
-You shipped dense and sparse retrieval (per [27-dense-vs-sparse](./27-dense-vs-sparse.md)). Now you have two ranked lists for the same query — dense ranks entry #234 first, sparse ranks entry #289 first. Which do you show? Sum the scores? They're on different scales. Weight them? Pick what weights? Average their ranks? You can't average rank 1 with rank 7 across different scorings without losing signal.
+Two judges at a contestant show each write their own top-10 lineup. Judge A scores in points-out-of-ten; Judge B scores in some star system from -1.5 to +1.5. To make a single combined ranking you can't just sum the scores — they're on different scales — and you can't pick "weight A 60%, B 40%" without an argument over who decided that. The simple, defensible move is to throw the scores away and use only the rank positions: rank 1 from each judge counts the same; rank 5 from each counts the same; a contestant who lands top-3 on both lists rises above one who lands top-1 on only one list.
 
-Reciprocal Rank Fusion (RRF) is the standard answer: a near-parameter-free formula that combines any number of ranked lists into one without needing to know the scoring scales. The pattern is the same as ensemble voting in classical ML — many imperfect rankers, combined, beat one perfect-but-narrow ranker. Microsoft's Cormack et al. introduced it in 2009 and a decade-plus of empirical work has shown it's hard to beat without much more complex schemes. Here's how the math works.
+The implicit question is how to combine two lists when their scoring scales aren't comparable. Not normalisation, not learned weights — ranks-only fusion, where a constant smooths how aggressively rank-1 dominates.
+
+**What depends on getting this right:** the fusion step between loopd's two planned retrieval lanes — `hybridRetrieve()` (target, not yet created) combining a dense lane (`cosine(queryVec, entry_embeddings.vec)`) and a sparse lane (FTS5/BM25 on `entries.text`). The day "find my entries about Spice House" ships, the dense lane will hand back one ranked list (entries that mean "Indian restaurant") and the sparse lane will hand back another (entries that contain the literal "Spice House"). Sum the scores and the BM25 magnitudes (0 to ∞) drown the cosine values (-1 to 1) every time; min-max normalise and the score distribution shape breaks the comparison. RRF — `Σ 1/(k+rank)` with k=60 — sidesteps both problems and lands a fused top-k that includes the literal matches and the paraphrase matches in proportion to their rank in each lane.
+
+Without RRF (or any fusion):
+- Pick one lane and discard the other — dense wins on synonyms, loses on proper nouns
+- Or sum scores naively — BM25 magnitudes drown cosine values; sparse always wins
+- Or hand-pick weights ("60% dense, 40% sparse") — works on the queries you tested, breaks on the others
+
+With RRF:
+- Ignore scores entirely; use only rank position
+- `RRF_score(doc) = Σ 1/(60 + rank_in_lane)` across both lanes
+- Doc at rank 1 in both lanes gets ~0.033; doc at rank 1 in one lane only gets ~0.016
+- The fused list elevates docs that show up well in both lanes, not docs that score huge in one
+
+Two judges, two scales, one merged ranking — by position, not by score.
 
 ---
 
@@ -289,3 +304,6 @@ Today RRF treats both rankers equally. If you were starting today, would you wei
 - What file would it live in?
 
 Answer: `rrfMerge()` in `src/services/ai/hybridRetrieve.ts` (target, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-judges-different-scales scenario, name the how-to-combine-incomparable-scores question, planned hybridRetrieve/rrfMerge stakes, before/after, single-line metaphor).

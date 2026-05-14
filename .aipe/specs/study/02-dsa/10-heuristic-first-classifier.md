@@ -11,9 +11,26 @@
 
 ## Why care
 
-If your classifier costs money or milliseconds per call, the cheapest way to make it faster on average is to not call it at all when a regex can answer. Most inputs to most classifiers are easy — they sit in a small handful of obvious patterns — and the expensive model exists only for the hard cases. Routing the easy ones through a cheap gate first and letting the gate abstain (return "I don't know") on anything ambiguous is the single biggest cost lever in any pipeline that mixes deterministic code with a paid model.
+Imagine a doctor's office at 8am. A receptionist sits at the front desk; the doctor is in the back. Twenty patients walk in. Most have obvious things — a flu, a cut finger, a stitches removal — and the receptionist handles those at the desk with a checklist she keeps in her head. The handful with unusual symptoms get escalated to the doctor. The receptionist's job isn't to diagnose everything; her job is to *handle the obvious cases confidently and forward the rest*. She's allowed to say "I don't know" — that's not failure, that's the design.
 
-This is the cascading-classifier pattern, sometimes called early-exit or cheap-first / expensive-second. It's the same shape spam filters use (rule-based score before the ML model), the same shape OCR pipelines use (whitespace detection before character recognition), the same shape every CDN uses (cache check before origin fetch). The family is "build a hierarchy of classifiers ordered by cost, terminate on the first one confident enough to commit." The asymmetry that makes it work is precision-over-recall on the cheap stage: a false positive there is a silent wrong answer, a false negative is just a deferral to the more expensive stage. Bias toward abstention. Here's how this codebase applies that pattern.
+That is the question this operation answers when a pipeline mixes a cheap deterministic step with an expensive paid model: how do you keep the paid model from running on inputs the cheap step could have answered? Not "always call the model," not "trust a regex to handle every case" — just *cascade by cost, bias the cheap stage toward abstention, only commit when confident*.
+
+**What depends on getting this right:** the latency of every new todo, the monthly bill for Anthropic Haiku, and the user's trust that the checkbox in front of them is correct. In this codebase `heuristicClassify` runs synchronously inside `reconcileTodoMetaForEntry` on every new todo extracted from `entries.text`. If it returns `'todo'` confidently, the meta row is inserted with `confidence='heuristic'` and `scheduleClassify` never fires. If it returns `null`, the meta row is inserted with `confidence=null` and `scheduleClassify` enqueues a Haiku call that runs async out of band. The asymmetry of failure modes drives everything: a false positive (`'todo'` when it shouldn't be) commits a wrong checkbox the user has to clear manually; a false negative (`null` when it could've decided) costs ~$0.0004 and ~300ms but the user never sees it. Bias toward `null`.
+
+Without a heuristic gate (always Haiku):
+- Every new `[]` line fires `scheduleClassify` → Haiku call (~300ms, ~$0.0004)
+- 100 todos/day = ~$0.04/day, fine financially at single-user scale
+- But 100 todos/day = 30 seconds of LLM time on the typing path — every new todo briefly waits
+- At multi-user scale (100k todos/day) the bill is ~$15k/year for what regex could decide 60-70% of for free
+
+With heuristic-first gate:
+- Line "call mom" → `IMPERATIVE_VERBS.has("call")` → returns `'todo'` synchronously, <1ms
+- Line "is this still broken?" → `text.endsWith('?')` → returns `null` → defers to Haiku
+- Line "noticed the flicker" → SPECULATIVE_STARTS match → returns `null` → defers to Haiku
+- 60-70% of lines never touch the network; the LLM bill drops to ~$4.5k/year at multi-user
+- The "typing never waits on Haiku" invariant survives every new todo
+
+Cheap-first, expensive-second, abstain on uncertain.
 
 ---
 
@@ -414,3 +431,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (doctor-receptionist metaphor + frontend bridge to useMemo short-circuit) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (doctor-receptionist-at-front-desk scenario → naming the cascading-classifier / cheap-first-expensive-second pattern → bolded "what depends on getting this right" pivot with latency/$ /trust + false-positive-vs-negative asymmetry stakes → before/after bullets comparing always-Haiku vs heuristic-first across three example lines → one-line summary "cheap-first, expensive-second, abstain on uncertain").

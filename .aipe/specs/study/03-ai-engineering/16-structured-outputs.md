@@ -11,9 +11,25 @@
 
 ## Why care
 
-You ask an LLM for a JSON object. Most of the time, you get one back. Sometimes the model wraps it in a ```json fence. Sometimes it adds a friendly "Here's the JSON you asked for:" preamble. Sometimes it returns valid JSON with one field missing, or one field renamed, or one number where you wanted a string. Every one of those breaks downstream code that did `JSON.parse(response)` and trusted the result.
+You hand a courier a printed form to fill out at the customer's door — name, date of birth, signature in the box. Most of the day the forms come back the way you asked. Once in a while one comes back with the date written in the signature box, or a friendly note scrawled across the top ("here's the info you wanted"), or a missing field, or a name written where the system expects a number. The clerk at intake either catches it at the counter or it gets filed and breaks the report three weeks later.
 
-Structured outputs are the contract pattern at the LLM boundary — the same shape as a TypeScript interface at a function boundary, with one extra step in the middle to handle the model's natural-language flakiness. They belong to the family of "untrusted input, typed contract, validation in between" patterns, alongside form validation in web forms, schema validation in REST APIs, and protocol buffers between services. Wherever the producer can't be fully trusted to honour the contract, the consumer enforces it at the boundary — JSON Schema, Zod, Pydantic, Yup, validateSummary. Here's how that actually works in this codebase.
+The implicit question is who's responsible when the producer is unreliable. Not the form's design, not the courier's training — the intake clerk who checks every field against the rules before anything enters the system. Structured outputs are that clerk at the LLM boundary: the prompt tells the model what shape to return, and a validator at intake checks every field, with fallbacks for the predictable drift.
+
+**What depends on getting this right:** every typed value the rest of the app reads from an AI chain. In this codebase `validate.ts:validateSummary` (L12–L137) is the intake clerk for the structured summary — it checks `headline` is a string and slices to 100 chars, narrows `mood` to one of five valid values or defaults to `'ok'`, filters `clipOrder` against the known clip IDs with missing ones appended, clamps every `clipTrims` start/end to the clip's duration. Lose this layer and `upsertAISummary(date, JSON.stringify(summary), ...)` writes a row with the wrong shape, the editor screen reads `summary.mood` and gets `undefined`, and the failure shows up three layers up as a crash on render rather than a clean null at the boundary.
+
+Without structured outputs:
+- Chain returns text → `JSON.parse(response)` throws on a markdown fence preamble
+- Or parses, but `summary.mood` is `'happy'` (not in the five-value enum)
+- Editor reads `summary.mood`, switches on it, falls through every branch
+- Crash three layers from the source
+
+With structured outputs:
+- Chain returns text → regex pulls the outermost `{...}`, `JSON.parse()` in a try/catch
+- `validateSummary()` narrows the parsed object: bad `mood` becomes `'ok'`, missing fields get defaults
+- The chain returns `AISummary | null`
+- Caller sees a typed value or a clean null and decides
+
+The producer is unreliable; the consumer enforces the contract.
 
 ---
 
@@ -452,3 +468,6 @@ Then open `validate.ts` and `interpret.ts` to verify.
 
 ✓ Pass: you named `validate.ts:validateSummary` (L12–L137) and identified `interpret.ts` as the markdown exception.
 ✗ Fail on lines: that's fine. File and function names are what matter.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (courier/intake-clerk scenario, name the unreliable-producer question, validateSummary stakes, before/after, single-line metaphor).

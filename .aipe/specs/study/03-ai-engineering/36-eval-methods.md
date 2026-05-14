@@ -11,9 +11,25 @@
 
 ## Why care
 
-You have eval data. Now you need to score each output. For a classifier with 5 fixed labels, exact match works fine — was the prediction right? For a chain that returns free-form prose, exact match is meaningless — two correct outputs can differ word-for-word. You need a different scoring method depending on what the chain returns.
+A grade-school teacher runs five different kinds of test before lunch. Vocabulary quiz: one right answer per row, mark it correct or not. Spelling: close-enough counts, missing-an-accent doesn't. Math worksheet: each problem has labelled sub-parts, give partial credit per box. Creative-writing prompt: read the essay, score it on a 5-point rubric the school agreed on last September. End-of-year speech contest: line up two speeches, ask the judges which they preferred. Each test fits the shape of what students produced — try grading the essay with the vocabulary scheme and the average drops to zero even when every essay is great.
 
-Eval methods are the family of approaches for comparing an LLM output to a reference. Each method fits a different output shape — discrete labels, structured JSON, free-form prose. Picking the wrong method gives misleading numbers; picking the right one gives signal. The pattern is the same shape as picking a similarity function in clustering — the choice depends on the data, and picking by reputation gives garbage results. Here's how the five common methods differ and where each fits.
+The implicit question is "given what the chain returns, which scoring method actually captures whether the output is good?" Eval methods are the answer: exact match for discrete labels, fuzzy match for whitespace/casing drift, schema match for JSON contracts, rubric LLM-as-judge for free-form prose, pairwise comparison for relative quality. Picking by reputation ("we use F1 because everyone does") forces the wrong method onto outputs it can't measure; picking by output shape gives signal.
+
+**What depends on getting this right:** which numbers can be trusted as signal vs noise, and whether the eval pipeline reports anything meaningful per chain. For loopd the planned `scripts/eval-harness/metrics/` directory holds one function per method (`f1.ts`, `rubricJudge.ts`, `pairwise.ts`), and the chain-to-method mapping is fixed by output shape: classify → exact match + F1, summarize/expand → schema + per-field, caption (4 variants) → rubric + pairwise, interpret → rubric, retrieval → hit@k + MRR. Force classify into rubric and the eval adds 500–2000ms per item plus stochasticity for no gain; force caption into exact match and the score reports ~0% accuracy because two correct captions never match verbatim.
+
+**Method mismatch (numbers lie):**
+- Caption scored by exact match → near-0% accuracy; two correct outputs differ word-for-word; team panics
+- Classify scored by rubric judge → +500–2000ms per item, +$0.001/item, results vary run-to-run; signal drowned in noise
+- Interpret scored by schema match → JSON validator passes; the markdown body is nonsense the validator never read
+
+**Method per output shape (numbers signal):**
+- Classify (5 labels) → exact match, per-class F1; deterministic, free, fast — measures "was the prediction right?"
+- Caption (4 free-form variants) → rubric judge on (mood fit / forbidden patterns / non-repetitive / specific), plus pairwise to control for absolute-scoring weakness; randomise variant order for position bias
+- Interpret (free-form markdown) → rubric judge on (insightful / specific / non-generic); 20 entries per run
+- Retrieval → hit@1, hit@5, MRR against (query, expected-entry-id) pairs from `[B3.5]`
+- Judge model calibrated against humans on ~20 outputs first — agreement ≥80% or the judge isn't trustworthy
+
+The metric must fit the output shape — methods follow data, not reputation.
 
 ---
 
@@ -352,3 +368,6 @@ Today the plan uses Sonnet as both producer and judge for caption. If you were s
 - Which chain uses pairwise comparison?
 
 Answer: `scripts/eval-harness/metrics/` (target, not yet created). Caption (and aipe end-to-end eval `[B3.7]`).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (teacher-running-five-tests scenario → "which scoring method captures whether the output is good" pattern naming → bolded "what depends on getting this right" with `scripts/eval-harness/metrics/` and chain-to-method mapping stakes → method-mismatch/method-per-shape bullets walking each chain → one-line "methods follow data, not reputation" metaphor).

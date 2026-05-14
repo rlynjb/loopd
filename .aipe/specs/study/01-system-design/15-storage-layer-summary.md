@@ -11,9 +11,26 @@
 
 ## Why care
 
-Most "the database is slow" problems are actually "we put the wrong thing in the database" problems. Stuffing a hundred-megabyte video into a row meant for kilobyte text, or putting an API key into a queryable column where any read can leak it, is a category error — the storage shape doesn't match the data's needs. A serious system has more than one place to put a byte, and a rule for which place each kind of byte goes.
+Imagine a kitchen with everything piled into one giant drawer. The chef's knives sit on top of a stack of plates, the spare matches are next to the silverware, the safe-box for the family heirloom rings is tucked behind the tea towels. Need a teaspoon? Empty half the drawer. Need to confirm the rings are still there? Better hope no one moved them in the chaos. Now imagine the same kitchen with five labelled drawers: utensils, pots, dishes, valuables in a locked drawer, and a bulk-storage cupboard for awkward big items. Same stuff; each drawer knows what it's for; nothing has to fight for space.
 
-A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data: structured rows in a relational engine, blobs on a filesystem or object store, secrets in an encrypted keystore, ephemeral caches in memory. It belongs to the family of "polyglot persistence" patterns. You've seen this in any production stack that pairs Postgres with S3 for uploads, Redis for sessions, and an HSM or secrets manager for credentials — each layer does one job well instead of one layer doing all jobs poorly. Here's how that actually works in this codebase.
+The question that kitchen answers is one any system with diverse data has to answer: do you stuff every byte into one store — leading to "the database is slow" problems that are really "we put a hundred-megabyte video into a row meant for kilobyte text" problems — or do you split persistence across stores chosen by the shape of the data? Not one drawer for everything. The answer is *polyglot persistence*: structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, with each layer having one job and a single direction of trust.
+
+**What depends on getting this right:** whether each piece of data lives where its access pattern wants it to live, and whether one layer's failure mode doesn't compromise another. In this codebase there are five storage layers, each with one job: `loopd.db` (SQLite) holds the 12 canonical tables — every read goes here. `/document/loopd/clips/<date>/<id>.mp4` and `/document/loopd/exports/<date>.mp4` hold the video bytes, with SQLite rows pointing at absolute paths via `clip_uri` or `clips_json`. `expo-secure-store` (Android Keystore-backed) holds the API keys, provider preference, Supabase config, and run-once flags — never the JS bundle, never plain disk. Supabase Postgres is the cloud mirror — written via `pushAll()`, never read directly by the app. Anthropic and OpenAI hold loopd's data only for the duration of one API request — no fine-tunes, no embedding stores, no server-side state the codebase depends on. Each layer's direction of trust is documented; nothing reads from anywhere except SQLite.
+
+Without polyglot persistence (everything in SQLite):
+- A 12-second clip is encoded as base64 and stored in `entries.clip_blob` (≈12MB row)
+- Every dashboard query that selects `entries.*` pulls 12MB into memory per row
+- The Anthropic API key is stored in `app_config.api_keys` — readable by any SELECT
+- A backup of `loopd.db` to an unencrypted cloud sync drags every secret out
+- The "database is slow" complaint is really "the database is doing five jobs and none of them well"
+
+With polyglot persistence (five drawers, one job each):
+- Clip lives at `/document/loopd/clips/2026-05-10/abc123.mp4`; SQLite holds 200 bytes of path metadata
+- Dashboard query reads kilobytes, not megabytes
+- API key lives in Keystore; uninstall protection differs from the SQLite file's; a stolen `.db` file leaks nothing AI-related
+- Each layer's failure mode is bounded: Supabase down doesn't break the app, Keystore corruption doesn't lose journal entries, clip-file move doesn't take the database with it
+
+Five drawers, each with one job.
 
 ---
 
@@ -374,3 +391,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (five-kitchen-drawers metaphor opening / 5 layered sub-sections — SQLite canonical, filesystem blobs, SecureStore keys, Supabase mirror, stateless LLMs — each with frontend bridges and concrete consequences / principle paragraph on one-job-per-layer with explicit trust directions).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (one-giant-drawer-vs-five-labelled-drawers kitchen scenario → polyglot persistence named as the answer → bolded "what depends on getting this right" with five-layer (SQLite/FS/SecureStore/Supabase/LLM) stakes → before/after walking everything-in-SQLite vs split storage → one-line "five drawers, each with one job").

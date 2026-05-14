@@ -11,9 +11,26 @@
 
 ## Why care
 
-Two devices have been offline for an hour and they both edit the same row. They reconnect at the same moment and start pushing their changes at the server. What's there afterwards? That's the question any replicated system has to answer before it ships, because "the latest write" is not actually well-defined when "latest" depends on whose clock you trust.
+Imagine two children walking up to the same toy at the same time. One grabbed it ten seconds ago, the other grabbed it five seconds ago. They disagree about who had it first. The supervising adult needs a rule that ends the fight without negotiating, without merging the toy in half, and without leaving them stuck in a stalemate. The rule that's easiest to teach: whoever touched it most recently keeps it. It's brutal — one child walks away every time — but it's deterministic, terminates instantly, and produces the same answer if you ask any adult in the room.
 
-Last-write-wins is the simplest possible answer: attach a timestamp to every row, and on a conflict, keep the row with the bigger timestamp. It belongs to the family of "conflict resolution policies," sitting at the cheap end of a spectrum that runs through vector clocks all the way up to CRDTs and operational transforms. You've seen this in DynamoDB's default reconciliation, in Cassandra, in cookie-based session stores, and in any cache that uses TTL plus a "newer-wins" overwrite rule. It's the right call when concurrent edits are rare and "we kept the most recent one" is an acceptable answer. Here's how that actually works in this codebase.
+The question those children answer is one any replicated store has to answer: when two writes claim the same row and neither side knows the other exists, who wins? Not "merge them" — that requires understanding what merging *means* for the data type, which is expensive. Not "ask the user" — that requires UI that doesn't exist on a background sync. The answer is *last-write-wins*: attach a timestamp to every row, compare on conflict, keep the bigger one.
+
+**What depends on getting this right:** whether the sync layer can resolve a conflict without human intervention, and whether the resolution is the same on every device every time it runs. In this codebase the resolver lives in `src/services/sync/conflict.ts` as `chooseWinner(local, cloud)`. It's a pure function — no DB reads, no `Date.now()`, no side effects — that returns `"local"`, `"cloud"`, or `"tie-cloud-wins"`. The comparison is ISO 8601 string compare (`"2026-05-10T14:32:18.000Z" > "2026-05-10T14:30:00.000Z"`), which is lexicographically sortable and avoids Date.parse cost. Same-second ties go to cloud (biased to converge — prevents ping-pong between two devices that already agree). Malformed timestamps also go to cloud (defensive healing — a corrupt local row gets overwritten by the well-formed cloud copy).
+
+Without LWW (sync errors on conflict):
+- Device A writes `entries.text = "long version"` at 14:32 on the plane
+- Device B writes `entries.text = "short version"` at 14:35 in a cafe
+- Both reconnect; both push; Supabase has one of them (server-side LWW on upsert)
+- Pull on A: the resolver sees a conflict and refuses to act
+- The sync layer needs UI; there is no UI; the row stays unresolved forever
+
+With LWW via `chooseWinner`:
+- Same setup; both push; Supabase ends up with B's row (later timestamp)
+- A's next pull: cloud has `updated_at = 14:35`, local has `14:32`; `chooseWinner` returns `"cloud"`
+- A overwrites local with cloud; the cluster has converged
+- Cost: A's "long version" edits are silently lost; the tradeoff was named at design time
+
+The resolver is a referee that always blows the whistle the same way.
 
 ---
 
@@ -344,3 +361,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-children-one-toy metaphor opening / 4 layered sub-sections — pure chooseWinner, ISO-string compare, same-second cloud bias, malformed-timestamp healing — each with frontend bridges and concrete consequences / principle paragraph on convergent merge under total order).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-children-one-toy adult-rule scenario → LWW pattern named as the deterministic answer → bolded "what depends on getting this right" with pure-function/ISO-compare stakes → before/after walking a plane-vs-cafe concurrent edit → one-line "the resolver is a referee that always blows the whistle the same way").

@@ -11,9 +11,23 @@
 
 ## Why care
 
-Most AI features in a product are invisible to the user — the model output is parsed, validated, written to a database, and rendered later as if it had been there all along. But some AI features are different: the model's output *is* the artifact the user reads. There's no database row, no derived state, no downstream consumer — just text that appears on screen because a human asked for it. That second category needs a completely different posture toward validation, persistence, and trust.
+A person sits down with a therapist after a long week, hands over a notebook full of yesterday's writing, and listens. The therapist reads, looks up, reflects it back — naming the patterns, asking one or two honest questions, leaving the person with a single sentence to carry into tomorrow. The session happens once. The person doesn't take notes; the therapist doesn't file a copy. What was said gets sat with, then closed.
 
-The user-facing generation chain is the pattern where the model's output is the final product, not an intermediate value. It belongs to the family of "render-time" or "ephemeral" AI surfaces — the same shape as ChatGPT's main chat panel, GitHub Copilot Chat's reply pane, Notion AI's "improve writing" popover, and every "ask me anything" sidebar shipped in the last three years. The other category (data-producing chains) is closer to a structured-output API like OpenAI's function calling or LangChain's Pydantic parsers: parse, validate, store. This category is closer to streaming markdown into a renderer and trusting the model to follow formatting cues in the prompt. The next block walks the mechanics.
+That single-session, no-file-cabinet shape is the interpret chain. Not "another data-producing chain that writes a structured row," not "the assistant that classifies your day" — a chain where the model's output *is* the artifact the user reads, rendered once into a modal, never persisted, never validated against a schema, never consumed by anything downstream.
+
+**What depends on getting this right:** the cost, the validation posture, and the prompt's tolerance for emptiness. `interpretEntry(text)` runs through two pre-call guards (`MIN_TEXT_LENGTH = 20` skips entries too short to mirror; `truncateTail(text, MAX_INPUT_CHARS = 2000)` keeps the most recent 2000 chars, not the first 2000 — the tail is where the thinking lands), calls Claude (or GPT-4o) once with a 32-line system prompt that prescribes a structural template (opening blockquote → numbered themes → "healthy side" / "part to watch" / "deeper fear" / "honest interpretation" / "strongest line" / "final thought" sections) AND explicitly says **"skip any section that doesn't fit the user's actual content; do not pad."** The output is run through `cleanMarkdown` (11 lines — strip an outer fence, reject empty as `'malformed'`) and handed to the modal. No `JSON.parse`, no `validate.ts`, no `database.ts` upsert. Drop the ephemerality and the codebase grows an `interpretations` table, a cache-comparison problem (markdown isn't canonically comparable), and a validator that has to encode "did the model produce coherent prose" — none of which the feature needs because the user reads once and moves on.
+
+Without the ephemeral posture:
+- Add `interpretations` table; cache markdown per entry; UI shows stale interpretations
+- Need a "regenerate" button + invalidation logic; cache size grows with every entry
+- Validator has to decide what "good markdown" means; section drift becomes a schema problem
+
+With the ephemeral posture:
+- Re-open the modal → re-fire the chain (~$0.005, ~3-5s); no cache, no comparison, no staleness
+- `cleanMarkdown` is the whole validator; section drift slips through and the user is the integrity check
+- The system prompt's "skip if not fitting" permission is at the prompt layer, not the validator layer
+
+AI features for reading, not for storing — the therapist talks once, you sit with it, close the notebook.
 
 ---
 
@@ -472,3 +486,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (therapist-reading-yesterday metaphor opening / 5 layered sub-sections — trigger and modal, chain structure with markdown output, MIN_TEXT_LENGTH + truncateTail guards, no-persistence design, 32-line system prompt with skip permission — each with frontend bridges and concrete consequences / principle paragraph on AI-for-reading-not-storing).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (one-session-with-a-therapist scenario → "single-session, no-file-cabinet, output is the artifact the user reads" pattern naming → bolded stakes pivot to `interpretEntry` + `MIN_TEXT_LENGTH` + `truncateTail` + 32-line system prompt with skip-section permission + `cleanMarkdown` → before/after bullets on caching vs ephemeral → one-line "AI features for reading, not for storing" metaphor).

@@ -11,9 +11,24 @@
 
 ## Why care
 
-You shipped hybrid retrieval. A user types "knee" and gets a top result of a 2k-word entry that briefly mentions a knee. The user gives up. They actually meant "the day I hurt my knee playing tennis" — but they typed "knee." The query is too short, too underspecified, and embedding-similar to too many things.
+A traveller walks into a foreign-language pharmacy and mumbles "knee" at the pharmacist. The pharmacist has thousands of full-sentence symptom descriptions on her shelves but no card filed under the bare word "knee." She turns to her assistant and says "draft me a plausible complaint that uses that word — three sentences, the way a patient would phrase it." She takes the assistant's sentence to the shelf and finds the right product in seconds.
 
-Query rewriting is the family of techniques that transforms the user's raw query into something more useful for retrieval. HyDE (Hypothetical Document Embeddings) is one specific technique: ask an LLM to generate a *hypothetical answer* to the query, then embed and search using *the answer's* vector instead of the query's. The pattern is the same shape as a database query optimizer rewriting SQL to use a better index — the user's input isn't the optimal input for the lookup. Here's how it works and where it actually pays off.
+The implicit question is "why doesn't the user's typed string look like the things we're searching against, and how do we close that gap before the lookup?" Query rewriting is the family of techniques that answers it — and HyDE (Hypothetical Document Embeddings) is one specific shape: ask an LLM to generate a hypothetical document-shaped answer, embed *that*, and search with its vector instead of the user's. The short query and the long document live in different parts of vector space; the rewrite moves the search point into the documents' neighbourhood.
+
+**What depends on getting this right:** recall on short queries against long-form corpora, the latency budget per retrieval call, and whether the rewrite blurs or sharpens the user's intent. For loopd the planned `src/services/ai/queryRewrite.ts` would feed `[B2A.8]` related-entries (latency-tolerant) before `[B2A.7]` interpret-this-week (already at 3–5 seconds, where +1s pushes past the perceptual threshold). The gating evidence comes from `[B2A.9]`'s eval — recall@5 below ~70% on short queries earns HyDE its slot; above that, the latency tax buys nothing.
+
+Without the rewrite:
+- User types "knee" → embed → vector lands in short-query cluster, far from any real entry
+- Top-5 results are entries that happen to mention "knee" in passing, weighted by other features the model treats as similar to short prose
+- The actual "day I hurt my knee playing tennis" entry sits at rank 12, the user gives up
+
+With HyDE:
+- User types "knee" → Sonnet generates "I hurt my knee yesterday playing tennis. It's been swelling and hurts when I bend it."
+- Embed the hypothetical → vector now sits in the documents cluster
+- Cosine search returns real knee entries; the tennis entry surfaces at rank 1 or 2
+- Cost paid: +500–2000ms per query, ~$0.001–0.003 in tokens, plus the new failure mode of a bad rewrite blurring proper nouns
+
+The user's typed string is one input shape; the documents are another — the rewrite layer is what bridges them.
 
 ---
 
@@ -336,3 +351,6 @@ Today the plan is conditional on eval results. If you were starting today, would
 - What's the latency cost of HyDE per query?
 
 Answer: `src/services/ai/queryRewrite.ts` (target, not yet created). +500-2000ms per query.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (foreign-pharmacy scenario → "why doesn't the user's string look like the corpus" pattern naming → bolded "what depends on getting this right" with `queryRewrite.ts`/`[B2A.7]`/`[B2A.8]`/`[B2A.9]` stakes → without/with bullets walking the "knee" query → one-line "rewrite bridges two input shapes" metaphor).

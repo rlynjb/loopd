@@ -11,9 +11,23 @@
 
 ## Why care
 
-You hand a model 50 pages of company docs and ask it to answer a question. What does it actually "see" when it generates the answer? Not your filesystem, not your database, not your prior conversation — just whatever bytes you stuffed into a single fixed-size buffer before pressing send. Everything competes for that space: instructions, examples, retrieved documents, prior turns, the user's actual question. When the buffer fills up, something has to be cut, and the system that cuts well wins.
+A traveller stands at an airline check-in counter with a single suitcase and a strict 23-kilo limit. On the floor next to them are three duffels, a coat, two pairs of boots, a stack of books, a pile of receipts, and a wrapped gift. The agent points at the scale. Everything goes in or stays behind based on this one weigh-in — there is no second bag, no overflow shelf, no "we'll send the rest later." What flies is decided by what fits.
 
-The context window is the model's entire universe for one call, and managing it is the central engineering discipline of every LLM-powered product. It belongs to the family of "fixed-budget resource allocation" problems — closer to cache management or render budgets than to anything in classical software. You've already seen it whenever a chatbot "forgot" something from earlier in the session, whenever a RAG system retrieved the wrong chunks, whenever GPT or Claude returned "I can't see the file" after you pasted half a repo. Every prompt-engineering trick, every RAG system, every conversation-summarizer in LangChain or LlamaIndex is ultimately a strategy for packing this one buffer well. How it shows up here is in the next block.
+A model's context window is that suitcase. The model only sees what fit into the bag for this one trip — no filesystem, no database, no prior conversation, no memory of yesterday. Not the question, not the documents, not the history — just the single payload assembled for this call. Naming that constraint, and naming what's worth packing per chain, is the whole game.
+
+**What breaks without it:** cost predictability and answer quality, in that order. Each chain in `src/services/ai/` has its own `buildContext` helper that decides what flies. `expand`'s context reads up to 14 days from SQLite and slices via `recentDates.slice(0, 3)` plus `siblingTodos.slice(0, 5)` — capped at ~850 input tokens, ~$0.002 per call. `interpret` uses `truncateTail(text, 2000)` to keep the last 2000 characters because the lede is often stage-setting and the tail is where the thinking lands. Drop those caps and a heavy journaling day with 50 todos and a 14-day backfill lands 5,000+ tokens in one prompt — the bill jumps 10× and the model's attention thins across irrelevant context, making the actual answer worse.
+
+Without explicit per-chain budgets:
+- `buildContext` reads everything SQLite has, then sends it all
+- Heavy days land 5,000+ token prompts; cost-per-call is unpredictable
+- The model's attention thins across noise; `caption` repeats opening lines because the relevant signal got drowned
+
+With explicit per-chain budgets:
+- `expand`'s `buildContext` slices `(0, 3)` days and `(0, 5)` siblings; `interpret` tails to 2000 chars
+- Each chain's bill is bounded; a `.slice()` change is the only place to widen a window
+- The model sees recent, relevant, small — `summary_json.summary` lands sharper because nothing else competed for attention
+
+The model only sees what flies in the suitcase this trip — pack it deliberately.
 
 ---
 
@@ -353,3 +367,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (airport-suitcase metaphor opening / 3 layered sub-sections — per-chain budgets, where the caps live (buildContext), why truncateTail for interpret — each with frontend bridges and concrete consequences / principle paragraph on "prompt is the application").
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (airport-counter weigh-in scenario → "the model only sees what fit in the bag" pattern naming → bolded stakes pivot to `buildContext` caps in `expand` and `truncateTail` for `interpret` → before/after bullets on no-cap vs explicit-slice budgets → one-line "pack the suitcase deliberately" metaphor).

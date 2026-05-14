@@ -11,9 +11,26 @@
 
 ## Why care
 
-You once shipped a drag-to-reorder feature, watched users actually use it for a week, and then looked at the data: most people pinned one item to the top and let the rest fall wherever. The whole apparatus — drag handles, position integers, the bug where two items got the same rank — existed to support a flexibility nobody used. The right move is not to optimize the feature; it's to delete it and ship the simpler thing that captures the same intent.
+Imagine a grocery list with twelve items on it. You could drag each one into its perfect priority order every time you opened the app — milk above bread above eggs above the spare batteries — and the list would always reflect your exact preferences. Or you could just star the milk so it floats to the top, and let everything else fall in the order you added them. The first option is more flexible; the second covers the actual use case (one thing matters today, the rest are background). Most days, you'd never reach for the drag handle. You'd reach for the star.
 
-Replacing manual ordering with a single boolean flag is a specific case of "downgrade the data model to match observed usage." It belongs to the family of "subtractive design" decisions, where the win comes from removing affordances instead of adding them. You've seen this in the way most apps quietly removed "folders" in favor of tags, the way email clients collapsed flagged/important/starred into one star, and the way a typed-language migration from a wide enum to a boolean simplifies every call site at once. Here's how that actually works in this codebase.
+The question that grocery list answers is one every product team eventually has to answer: when usage data shows a flexible affordance is being used in exactly one way, do you keep the flexibility (because someone might use it differently someday) or do you delete it and ship the simpler thing that captures the same intent? Not "add a setting that toggles between drag and star" — that ships both. The answer is *subtractive design*: downgrade the data model and the UI to match what people actually do.
+
+**What depends on getting this right:** whether the codebase carries a `position INTEGER` column plus drag-handle gesture state plus a position-renumber routine plus a race condition between two simultaneous reorders, or whether it carries one boolean and a one-line sort key. In this codebase migration `0005_todo_meta_pinned.sql` added `pinned BOOLEAN NOT NULL DEFAULT false` to `todo_meta`. The old `position INTEGER NULL` column stayed in the schema (dead-but-kept; cloud-sync upserts write NULL into it; Phase B's destructive migration will drop it). The /todos page and the dashboard's `SmartTodoList` both sort `ORDER BY pinned DESC, createdAt DESC`. The pin gesture is a `Pressable` that calls `togglePin(meta_id)` in `database.ts` — `UPDATE todo_meta SET pinned = NOT pinned, updated_at = now()` plus `schedulePush()`. The same commit that added `pinned` deleted ~300 lines of drag-handle UI, the position-renumber logic, the three-stage status filter, and the `react-native-draggable-flatlist` dependency.
+
+Without subtraction (drag-to-reorder kept "for flexibility"):
+- The todo row has a drag handle that fires `onDragEnd` to renumber `position` across affected rows
+- Pinning is a separate `starred` boolean; sort is `ORDER BY starred DESC, position ASC`
+- A user reorders rapidly; two `position` updates race; two rows end up with the same `position`
+- A bug report says "todos lost their order"; the fix is a `position` rebalance routine
+- 300 lines of UI plus a draggable-flatlist dependency plus the rebalance routine carry forever, all to support a flexibility nobody actually exercises
+
+With subtraction (one boolean, chronological):
+- The todo row has a pin icon; tap toggles `pinned`; sort is `ORDER BY pinned DESC, createdAt DESC`
+- No race condition exists — there's no `position` to fight over
+- A user pins five items in succession; all five sit at the top in createdAt order; the user shrugs and moves on
+- The /todos page is 300 lines shorter; the codebase has one less dependency
+
+Find the cheapest version of the same affordance and ship that.
 
 ---
 
@@ -172,7 +189,7 @@ Fine until a credible "I want manual order back" signal arrives. The recovery pa
 
 ### What wasn't actually a tradeoff
 
-Dropping `position` and `stage` from the schema wasn't on the table at ship time. The cost is a destructive Postgres migration that would break older app versions still trying to write the columns; rolling that across user devices means coordinating an app-version cutoff that we don't have machinery for. The "schema squash" path (consolidate migrations 0001-0005 into a new baseline and drop the dead columns at the same time) is the right cleanup window, deferred until the migration log gets long enough to need squashing.
+Dropping `position` and `stage` from the schema wasn't on the table at ship time. The cost is a destructive Postgres migration that would break older app versions still trying to write the columns; rolling that across user devices means coordinating an app-version cutoff that we don't have machinery for. The "schema squash" path (consolidate migrations 0001-0008 into a new baseline and drop the dead columns at the same time) is the right cleanup window, deferred until the migration log gets long enough to need squashing.
 
 ---
 
@@ -290,7 +307,7 @@ If user feedback shows multi-item ordering is needed:
 ### The question candidates always dodge
 Q: You're keeping `position` and `stage` columns on the schema even though no UI reads them. Isn't that just digital debt?
 
-A: Yes, it is. They're dead columns kept on the schema because the cost of dropping them (destructive cloud migration that would break users on older app versions) is higher than the cost of carrying them (a few bytes per row, two extra fields in the cloud-sync mapper). The honest version is: I made the call that schema noise is preferable to a coordinated migration, and I documented both columns as deprecated in `src/types/todoMeta.ts`. The cleanup happens when I do my next "schema squash" — at the time I squash migrations `0001-0005` into a consolidated baseline, I'd drop both columns at the same time. Until then, they sit there. The risk is that a future reader sees `position` and assumes it's live, which is why the type definition has the deprecation comment and why this study guide says it explicitly. That's the cost of keeping legacy schema in tree; I think it's lower than the alternative.
+A: Yes, it is. They're dead columns kept on the schema because the cost of dropping them (destructive cloud migration that would break users on older app versions) is higher than the cost of carrying them (a few bytes per row, two extra fields in the cloud-sync mapper). The honest version is: I made the call that schema noise is preferable to a coordinated migration, and I documented both columns as deprecated in `src/types/todoMeta.ts`. The cleanup happens when I do my next "schema squash" — at the time I squash migrations `0001-0008` into a consolidated baseline, I'd drop both columns at the same time. Until then, they sit there. The risk is that a future reader sees `position` and assumes it's live, which is why the type definition has the deprecation comment and why this study guide says it explicitly. That's the cost of keeping legacy schema in tree; I think it's lower than the alternative.
 
 ```
                   Path taken (deprecate in types,       Suggested (drop columns now via
@@ -391,3 +408,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (grocery-list drag-vs-star scenario → subtractive design named as the answer → bolded "what depends on getting this right" with `pinned`/`position`/300-line-deletion stakes → before/after walking a rapid reorder with vs. without `position` → one-line "find the cheapest version of the same affordance and ship that").

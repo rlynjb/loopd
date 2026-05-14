@@ -11,9 +11,24 @@
 
 ## Why care
 
-You shipped RAG over your corpus. It works fine for "find me entries about X." Now a user asks "what have I been thinking about in the loopd project lately?" — and your vector search returns the *most semantically similar entries* across the whole corpus, missing that "the loopd project" is a *named, structured thing* with explicit memberships, while just half-matching the prose mentions. The user wanted you to traverse a relationship, and you returned a similarity ranking.
+A reference librarian gets two kinds of questions every morning. The first kind comes with a starting point: "show me everything in the cardiology section published since 2020." She walks to a known shelf, reads down the spines, hands over the stack — no judgement calls. The second kind comes with a vibe: "I'm looking for something about the lonely side of long marriages." She walks the fiction floor, thumbs through opening pages, makes a similarity call. The tricky questions blend both: "lonely-side-of-marriage books, but in the Spanish-language section." She runs the structured filter first, then the similarity search inside it.
 
-GraphRAG is the family of patterns that augments vector retrieval with graph traversal — using explicit structure (entities, edges, hierarchies) alongside semantic similarity. The pattern is the same shape as combining a B-tree index with a full-text search: each handles a different access pattern, and using both beats using either alone. For loopd specifically, the `#tag` thread system is *already* a graph — every entry can mention any thread; every thread has a list of mentions; the graph is real and queryable. GraphRAG turns "find entries by tag" + "find similar entries" into one combined operation. Here's how it composes.
+The implicit question is "should the lookup traverse explicit relationships, score by learned similarity, or both?" GraphRAG is the name for the third answer — combine graph traversal with vector retrieval so each stage handles the access pattern it's good at. Three composition shapes: pre-filter by graph then vector-rank, vector-search then expand via graph, or graph as a re-ranker on vector candidates. The architecture is "use both signals because both exist" — throwing away explicit edges to embed everything as text is leaving authoritative information on the table.
+
+**What depends on getting this right:** retrieval precision on questions that mix structured and unstructured intent, and whether existing graphs in the codebase earn their keep. For loopd the planned `src/services/threads/getRelatedEntries.ts` for `[B2A.8]` filters via the existing `thread_mentions` table (graph: entries NOT yet linked to this thread) and ranks the candidates via planned `entry_embeddings` (cosine to the thread's prose). The graph half is already real, maintained by two-pass reconciliation; skip the filter and the "related entries" rail surfaces entries the user has already tagged — useless suggestions dressed as helpful ones.
+
+Without GraphRAG:
+- Thread detail page renders "related entries" by cosine alone → top-5 includes entries already tagged `#loopd`, plus near-duplicates
+- User reads the rail, recognises every suggestion as something they already filed, dismisses the feature
+- Vector-only treats `thread_mentions` as decoration; the ground-truth edge gets approximated, badly, by similarity
+
+With GraphRAG:
+- Graph stage: SQL JOIN excludes entries already in `thread_mentions` for this thread — ~300 candidates remain from 365
+- Vector stage: embed the thread prose (slug + recent mentions), cosine vs candidate embeddings, top-5
+- User sees 5 thematically-related but not-yet-tagged entries; tap to `insertThreadMention()`; graph grows; next query reflects the new edge
+- Breaks the day `thread_mentions` reconciliation drifts — stale graph turns the filter into noise
+
+Graphs say "this IS connected"; vectors say "this might be similar" — use both when both apply.
 
 ---
 
@@ -337,3 +352,6 @@ Today the plan for `[B2A.8]` is graph-filter-first, vector-rank-second. If you w
 - What new table is the vector half?
 
 Answer: `thread_mentions` (already in production). `entry_embeddings` (target — `[B2A.2]`).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (reference-librarian-two-question-types scenario → "graph or vector or both" pattern naming → bolded "what depends on getting this right" with `getRelatedEntries.ts` / `thread_mentions` / `entry_embeddings` / `[B2A.8]` stakes → without/with bullets walking the thread-detail rail → one-line "graphs say IS connected, vectors say might be similar" metaphor).

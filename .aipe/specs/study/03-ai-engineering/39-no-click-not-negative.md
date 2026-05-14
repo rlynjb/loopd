@@ -11,9 +11,25 @@
 
 ## Why care
 
-You shipped a "related entries" rail. You logged which entries users tap and which they don't. You decided to use this implicit signal as training data: tapped = relevant, not-tapped = not relevant. Six months later your model thinks every entry shown is irrelevant — because users tap maybe 1 in 10 even when 8 of 10 are genuinely related. Your "negative" labels are mostly noise.
+A bakery puts ten pastries in the window each morning and counts which ones get sold. By month's end the owner concludes the four loaves on the bottom shelf are unpopular and stops baking them. A customer overhears and says "I never even noticed those — they're at knee height; I was looking at the counter." Half the "unpopular" loaves were never seen; the rest were seen by people who already had bread at home or were in a rush or planned to come back tomorrow. The pretzel count is real; the unpopular-loaf count is mostly the absence of evidence, not evidence of absence.
 
-The "no-click is not a negative label" caveat is a classical IR / recommender-systems trap, and it shows up in LLM systems any time you use user behavior as implicit relevance feedback. The pattern is the same shape as the missing-not-at-random problem in statistics — your missing data is correlated with something you care about. Here's why the trap is so easy to fall into and what to do instead.
+The implicit question is "what does it mean when the user did nothing?" The "no-click is not a negative label" caveat is the answer for any system using implicit interaction as relevance signal — inaction has many causes, only one of which is "I judged it irrelevant." Treating absence as negative creates a structural 90/10 class imbalance, bakes in your current presentation policy, and confuses missing data with disagreement. The mitigation ladder is four rungs: precision-only (eval on tapped items), pair-comparison from clicks (A > B, A > C, nothing about B vs C), explicit feedback affordances ("is this helpful?"), and counterfactual propensity-scored evaluation.
+
+**What depends on getting this right:** whether eval numbers reflect quality or sampling bias, and which features can safely use interaction data. For loopd the planned `[B3.5]` retrieval eval uses hand-curated (query, expected_entry_id) pairs precisely to sidestep this trap — every label is intentional, no inference from absence. When `[B2A.8]` related-entries ships, the rail naturally produces click logs; the eval design must declare upfront that untapped entries are unknown, not negative. A future "AI-suggested todos to expand" feature would face the same choice.
+
+Without the caveat:
+- Log clicks on the related-entries rail; treat tapped as positive, untapped as negative; feed it as training data
+- 90/10 imbalance collapses any classifier toward the majority class; the rail thinks every entry is "irrelevant"
+- Bottom-of-list entries never get seen; treating them as negative trains the model to deprioritise them further; positive feedback loop produces worse rails
+- Small prompt change → eval jumps 8 points because that week's untapped-items happened to differ; ship the prompt; user-visible quality unchanged
+
+With the caveat:
+- `[B3.5]` uses explicit pairs hand-curated by the developer — ~20–30 (query, expected_entry_id) labels; clean signal, no inference
+- `[B2A.8]` ships with documented interpretation: "tapped = saw + decided to act; untapped = unknown"; eval measures precision on tapped only, never claims recall
+- Future explicit affordance ("is this related? yes/no") collects intentional negatives — class balance is real, labels are honest
+- Audit rule: every feature using interaction data writes one paragraph about what no-action means before claiming a quality signal
+
+Implicit feedback is signal AND noise — inaction has many causes, relevance is only one of them.
 
 ---
 
@@ -300,3 +316,6 @@ Today the plan is hand-curated labels for `[B3.5]`. If you were starting today, 
 - What's the cheapest mitigation that extracts signal from clicks?
 
 Answer: hand-curated (query, expected_entry_id) pairs. Pair-comparison from clicks (mitigation 2) — interpret a tap as "this > others shown together with it" without inferring negatives.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bakery-window-bottom-shelf scenario → "what does it mean when the user did nothing" pattern naming → bolded "what depends on getting this right" with `[B3.5]` and `[B2A.8]` eval-design stakes → without/with bullets walking click-as-negative vs explicit-labels → one-line "inaction has many causes, relevance is only one" metaphor).

@@ -11,9 +11,23 @@
 
 ## Why care
 
-You typed "best Indian restaurant" into Google Maps and got "Spice House." The search engine didn't grep for the word "best" in restaurant names. Somehow it knew that *"Indian"* and *"Spice House"* are related — that they live in the same neighbourhood of meaning. That neighbourhood is real. It's a high-dimensional space where every piece of text gets a position, and "related" means "geometrically near."
+A librarian is asked to arrange ten thousand index cards on a very large flat table so that cards about similar topics end up close to each other and cards about different topics end up far apart. There's no alphabetical scheme, no Dewey Decimal — the librarian just looks at each card's content and slides it to a spot. Cards about "morning runs" cluster in one corner; "cooking" cards in another; "cooking after a run" cards land on the line between them. Anyone walking up to the table with a question card can drop it down and the answer is whichever existing card is physically nearest.
 
-Embeddings are how machines store meaning as math. You feed a string into an embedding model and get back a vector — usually 768, 1536, or 3072 floats — that encodes "what this text means" as a point in space. Two texts about the same thing land near each other; two texts about different things land far apart. The pattern shows up everywhere modern systems pretend to understand language: vector search, recommendation engines, RAG pipelines, near-duplicate detection. Here's how the geometry actually works.
+The implicit question is how to make "similar in meaning" mean "near in space." Not a keyword index, not a thesaurus — coordinates assigned by a learned function, so distance becomes the similarity metric.
+
+**What depends on getting this right:** every retrieval feature loopd hasn't built yet but the Phase 2A roadmap schedules. Today the codebase has no `embed.ts`, no `entry_embeddings` table, no vector store — interpret reads the day's entries by date, and expand reads ~3 days plus 5 sibling todos via hand-picked `buildContext` (in `expand.ts`). When the corpus grows past what fits in a single prompt — when interpret wants "all your prior reflect entries that touch this theme" rather than "today's entries" — those features need a coordinate per entry. The planned shape: an `embed(text) → number[1536]` call writing to `entry_embeddings(entry_id, vec)` rows, with `nearestNeighbours(queryVec, k=10)` replacing today's date-filter. Without the geometric intuition, the team picks a model on price alone and ships a system whose worldview doesn't match the user's prose ("running marathons" and "running my mouth" land in the same cluster).
+
+Without geometric embeddings:
+- Retrieval is keyword + date. "Reflect entries about money" misses entries that say "rent" but not "money."
+- `expand.ts:buildContext` keeps growing the context window manually; runs out at the model's ceiling
+- Cross-entry features (recall, theme detection) stay impossible
+
+With geometric embeddings (planned):
+- `embed(entry.text) → vec`; stored in `entry_embeddings` once at write time
+- Retrieval is `cosine(queryVec, allVecs)` → top-k; surface-different prose with similar meaning matches
+- Negation, magnitude, cross-language stay weak spots (the geometry has limits)
+
+Meaning becomes coordinates, and similarity becomes distance.
 
 ---
 
@@ -304,3 +318,6 @@ Today loopd plans to embed at commit time and re-embed on idle. If you were star
 - What table holds the vectors?
 
 Answer: `src/services/ai/embed.ts` (target, not yet created). `entry_embeddings` (target, not yet created — schema in `[B2A.2]`).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-arranging-cards-on-a-table scenario, name the meaning-as-coordinates question, planned embed.ts/entry_embeddings stakes, before/after, single-line metaphor).

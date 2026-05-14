@@ -11,9 +11,27 @@
 
 ## Why care
 
-The obvious way to ignore part of a string while scanning the rest is to strip the ignored part out — but the moment you strip characters, every offset downstream is wrong. The line number a regex match reports no longer corresponds to a line number in the original text. The fix is the move you only see once you've been burned by it: don't delete the masked region, *overwrite* it with neutral characters of the same length. Same byte count, same newline positions, no false matches from inside the masked text. Offsets stay honest.
+Imagine a redaction office processing a stack of pages where certain paragraphs need to be hidden from the reviewer. The clerk could cut the sensitive paragraphs out with scissors — but that shifts every page number, every line citation, every footnote reference downstream. Instead he lays a thick black bar over each sensitive region, same width as the original text. The reviewer can still cite "page 3, line 14" and find the right spot; she just can't read what was there. The geometry of the document — line breaks, page breaks, every offset — survives the redaction.
 
-This is lexical masking with offset preservation — what tokenizers do when they want to skip strings or comments without renumbering everything else, what `sed` does when you use `tr` instead of `s` for a fixed-width substitution, what markdown parsers do internally when they walk fenced regions. The family is "two-phase parsing where phase one neutralises the parts phase two must not see, while preserving the geometry phase two depends on." You've seen this in syntax highlighters (strings and comments are masked before keyword matching) and in linters that skip code blocks inside doc comments. Here's how this codebase applies that pattern.
+That is the question this operation answers when text contains regions a parser must ignore (code fences, inline backticks) but those same regions sit in a larger structure (line numbers) that other code keys on: how do you skip the contents without shifting the indices? Not "delete the code fences and renumber later," not "match everything and post-filter inside-code matches" — just *overwrite each masked region with same-length whitespace, then run the inner parser cleanly*. Lexical masking with offset preservation.
+
+**What depends on getting this right:** the contract between `parseTags` and `reconcileMentions`. In this codebase `parseTags` emits `{ slug, tagText, lineIndex }` for each `#tag` in `entries.text`, and `reconcileMentions` keys `thread_mentions` rows on `(threadId, sourceLine)`. If `maskCode` deleted fence contents instead of overwriting them with spaces, every line after a fenced block would shift up — `#health` that was on line 8 of the original text would arrive at `reconcileMentions` claiming line 5. Pass 1 (exact `(threadId, sourceLine)` match against the existing row at line 8) would miss; Pass 2's ±3 window would maybe rescue it; or the existing row would be deleted and a new one inserted with churn on `schedulePush()`. The space-preserving mask is what keeps the line-index contract intact across the parse boundary.
+
+Without offset preservation (delete fences):
+- User has `#loopd` at line 0, a 4-line code fence from lines 2-5, `#health` at line 7
+- Strip the fence → text is now 4 lines, `#health` is now on line 3
+- `reconcileMentions` already has a row for `#health` keyed to `sourceLine=7`
+- Pass 1 looks for line 3 → miss; Pass 2 fuzzy-matches within ±3 of line 3 → also miss
+- Existing row deleted; new row inserted; cloud sees churn; mention's first-seen timestamp resets
+
+With same-length space mask:
+- Fenced region becomes spaces of equal length, newlines preserved
+- `#health` stays at line 7 in the masked string
+- Per-line regex iteration finds it; emits `lineIndex: 7`
+- `reconcileMentions` Pass 1 hits its existing row by exact line; zero churn
+- The per-line `seen` Set also prevents two `#loopd` on the same line from double-claiming
+
+Overwrite the masked content; preserve the geometry the next stage depends on.
 
 ---
 
@@ -439,3 +457,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (redaction-office metaphor + frontend bridge to masked-input fields) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (redaction-office-with-black-bars scenario → naming lexical-masking-with-offset-preservation → bolded "what depends on getting this right" pivot with `parseTags`/`reconcileMentions` line-index contract stakes → before/after bullets walking a `#health` tag after a 4-line fence with delete vs space-mask → one-line summary "overwrite the masked content; preserve the geometry the next stage depends on").

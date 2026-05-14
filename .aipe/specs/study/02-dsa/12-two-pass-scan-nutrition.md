@@ -11,9 +11,27 @@
 
 ## Why care
 
-The same matching shape that survives prose edits for one kind of line should work for any other kind — once you have the pattern, you re-use it. The risk is in the *cleanup rule*, not the matching. If unmatched existing rows should hang around (because they might be coming back), you keep them. If unmatched existing rows are dead by definition (because every row corresponds to exactly one line in the source, and the line is gone), you delete them. Same matching pass, different end-of-loop policy, completely different lifecycle.
+Imagine running `rsync` from a source folder to a destination folder. The matching phase is the same in both modes: figure out which files in the destination correspond to which files in the source. The behaviour diverges at the end: with `--delete`, files in the destination that aren't in the source get removed; without it, they stick around as orphans. The matcher is shared. The cleanup rule is the domain choice.
 
-This is two-phase matching followed by an explicit "carryover or delete" decision — the same shape as a diff applied as a sync (compute the diff, then choose whether removals propagate). You've seen this in file-sync tools where "mirror" mode deletes destination files missing from the source and "additive" mode does not. You've seen it in database replication where deletes can either replicate or be filtered out. The family is "diff-then-apply with a configurable handling of right-only items." The matching is shared; the apply step is where the domain rules live. The data and the walkthrough are in the next blocks.
+That is the question this operation answers when one type of prose-derived row needs to be a strict 1:1 mirror of the source lines (delete unmatched), while a sibling type wants soft preservation (carryover unmatched): how do you reuse the matching pass but vary the apply step? Not "rewrite the whole algorithm per domain," not "fold the cleanup decision into the comparator" — just *share the two-pass match, parameterise the apply tail, let the domain rule live where it belongs*.
+
+**What depends on getting this right:** the `nutrition` table's invariant that every row corresponds to a live `** food N kcal` line in `entries.text`. In this codebase `scanNutritionForEntry` runs after every entry text change (called from `useEntries.ts:20`). Pass 1 matches scanned lines to existing rows by exact `(name, kcal)`, Pass 2 by `lineIndex` for the in-place-edit case, then the apply step inserts new lines and updates changed ones, and the *delete sweep* removes every existing row whose id isn't in `usedIds`. The delete is what makes nutrition diverge from its todo-scanner sibling: a todo can carry over because deleted-then-restored todos retain meaning, but a nutrition row has no identity outside its prose line. Lose that delete and `nutrition` grows monotonically with edits, cross-day aggregates start counting phantom calories, and sync bandwidth carries rows that no longer match any prose anywhere.
+
+Without the delete sweep (carryover semantics):
+- User logs `** banana 95 kcal` → row `n-B` inserted
+- User deletes the line entirely from `entries.text`
+- Carryover policy keeps `n-B` in the DB with `sourceLine` cleared
+- The dashboard's "daily kcal" sum still includes 95 kcal that no prose claims
+- The user can't reconcile "what's on screen" with "what's in storage" — invariant broken
+
+With the delete-on-unmatch shape:
+- Same edits up to deletion of the banana line
+- `scanNutritionForEntry` runs; Pass 1 and Pass 2 leave `n-B` unclaimed in `usedIds`
+- The delete sweep at the tail runs `deleteNutrition(n-B)`
+- `schedulePush()` sends a soft-delete to Supabase
+- Every reader of `nutrition` sees exactly the rows the current prose still claims
+
+Share the matcher, vary the apply tail; prose is canonical.
 
 ---
 
@@ -477,3 +495,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (fridge-snapshot metaphor + frontend bridge to rsync --delete) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (rsync-mirror-vs-additive-mode scenario → naming the share-matcher-vary-apply-tail pattern → bolded "what depends on getting this right" pivot with `nutrition` 1:1-with-prose invariant stakes → before/after bullets walking a deleted `** banana 95 kcal` line through carryover vs delete-sweep → one-line summary "share the matcher, vary the apply tail; prose is canonical").

@@ -11,9 +11,26 @@
 
 ## Why care
 
-Every clean architectural rule has exactly one or two cases that don't fit, and pretending otherwise is how codebases become liars. The honest move is to keep the rule, name the exception, and write it down in the same place the rule lives — so the next reader sees both and doesn't think they've found a bug. The alternative is to weaken the rule until it accommodates everything, which is the same as having no rule.
+Imagine a house with a strict rule: everyone enters through the front door. Guests, residents, the mail carrier, the gardener — all use the front door, every time, no exceptions. Except there's one service entrance around the back that the cleaning staff use, and the floor plan on the wall has it drawn in the same colour as the front door with a note that says "service only, no public access." The rule survives because the exception is *named, bounded, and visible* — anyone reading the floor plan sees both. The rule doesn't survive if a second back door appears, and a third, each undocumented, because at that point the rule is just "sometimes through the front."
 
-A documented exception is an explicit, narrow carve-out from an architectural invariant, recorded alongside the invariant itself. It belongs to the family of "principle plus enumerated escapes" patterns, the same shape as a strict type system that allows a tightly-scoped escape hatch, or a security policy that lists its exact bypass conditions. You've seen this in coding standards that say "use immutable data, except in these three named places," in API contracts that allow one deprecated field for backward compatibility, and in linter configs with file-scoped disables. How it shows up here is in the next block.
+The question that house answers is one every architecture with an invariant eventually has to answer: there will be one or two cases that don't fit the rule. Do you weaken the rule until it accommodates everything (no rule), or do you keep the rule and document each exception in the same place the rule lives? The answer is a *named carve-out*: keep the principle, enumerate the exception, scope it to one named function, and cap the budget at one.
+
+**What depends on getting this right:** whether Principle 11 ("every prose-derived row points back at prose") stays a load-bearing contract that downstream readers can rely on, or whether it dissolves into "sometimes a row points at prose, sometimes not, check before you join." In this codebase the prose-derived rule says: every row in `thread_mentions` (and `todo_meta`, `nutrition`) has an `entry_id` or `todo_id` pointing back at the line in `entries.text` that produced it. The deviation is `toggleThreadTouchToday` — a 54-line file, one function — that writes a `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`. It exists because tapping a dashboard thread chip is a *soft commitment* with no natural prose representation (synthesising one would pollute the user's journal with content they didn't type). Downstream readers — `computeStaleness`, the 14-day activity strip — read these NULL-keyed rows as identical to prose-derived rows for the activity count; only the journal export distinguishes them (touch rows are excluded, because there's no prose to print).
+
+Without naming the carve-out (a second deviation slips in unnoticed):
+- Someone ships a "quick add nutrition" button that writes to `nutrition` without prose
+- A reviewer says "the manual-touch pattern allows non-prose writes; this is similar"
+- A third deviation follows for "quick add habit"
+- Principle 11 now has 3+ uninstrumented exceptions; downstream code can no longer assume `entry_id` is populated
+- The contract dissolves into per-call defensive checks
+
+With the carve-out named and budgeted at one:
+- The PR for "quick add nutrition" gets the reviewer question: "can the soft commitment be expressed as prose instead?"
+- The answer is yes (`** food 200 kcal` is the existing marker), so the button generates prose, not a direct nutrition write
+- Principle 11 remains "prose canonical with exactly one named exception"; the contract survives
+- The 54 lines of `toggleThreadTouchToday` stay the only place in the codebase where the invariant doesn't hold, documented next to the principle in `docs/spec.md`
+
+The carve-out is a service entrance — drawn on the floor plan in the same colour as the front door.
 
 ---
 
@@ -365,3 +382,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (house front-door + service entrance on the floor plan scenario → named carve-out pattern as the answer → bolded "what depends on getting this right" with Principle-11 contract stakes around `toggleThreadTouchToday` → before/after walking a "quick add nutrition" PR → one-line "drawn on the floor plan in the same colour as the front door").

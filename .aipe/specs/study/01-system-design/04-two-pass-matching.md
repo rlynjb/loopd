@@ -11,9 +11,26 @@
 
 ## Why care
 
-You have a list of items the user wrote yesterday and a fresh list they wrote today. Some are the same, some moved around, some had a typo fixed in place. Which row in today's list is "really" which row from yesterday? If you get it wrong, every piece of metadata you've attached — created-at, tags, AI classifications — points at the wrong line. That's the question this pattern answers.
+Imagine a librarian rebuilding a shelf after someone rearranged the books. She has yesterday's catalogue card — the books in the order they used to sit — and today's actual shelf, with the books in some new order. Some titles are unchanged but moved positions. Some have a penciled correction over the cover. A couple are missing; a couple are new. Her job is to figure out which book on the shelf today is "really" which book from yesterday's card — because every note she's pinned to those books (loan history, classification, sticky tabs) only makes sense if the identity carries across.
 
-Exact-then-fallback matching is a layered reconciliation strategy: try the strict, cheap identifier first, and only fall back to a fuzzier positional one for the leftovers. It belongs to the family of "diff with stable identity" algorithms, the same problem React's reconciler solves with `key` props and Git solves when matching renamed files across commits. You've seen this in any tool that has to align "before" and "after" lists without explicit IDs — `diff`, file synchronizers, even spreadsheet merge tools. Here's how that actually works in this codebase.
+The question she's solving is one any system without stable IDs has to solve: when the source format doesn't carry a primary key, what cheap proxies do you use to recognise "this is the same item as before"? Not a single check — a single check is fragile against either reordering or in-place edits. The answer is a *layered identity match*: try the strict cheap signal first, fall back to a fuzzier positional one for the leftovers only.
+
+**What depends on getting this right:** whether every piece of metadata pinned to a todo — its AI-classified `type`, its 400-word `expanded_md`, its `pinned` flag, its `user_overridden_type` — survives when the user edits a typo or reorders lines, or vanishes the next time they touch the entry. In this codebase the source format is prose: `entries.text` carries `[]`-marked lines that the user reorders and edits like text, with no stable IDs in the prose itself. The matcher in `reconcileTodoMetaForEntry` runs two passes — pass 1 matches scanner output against existing `todo_meta.text` (exact, case-insensitive, whitespace-normalised), pass 2 takes the leftovers and matches by `sourceLine`. The two signals are independent on purpose: text identity survives reordering, position identity survives same-line edits.
+
+Without two passes (text-only match):
+- User has `[] call mom` at line 3 with `type='reflect'` and a 400-word AI expansion
+- They fix a typo: `[] call Mom`
+- Pass 1 fails (text changed); no fallback exists
+- The matcher treats the line as new; inserts a fresh `todo_meta` row with `type='todo'` default
+- The 400-word expansion and the `reflect` classification become orphaned, then soft-deleted on the next reconcile
+
+With two passes (text first, line-index second):
+- User has `[] call mom` at line 3 with `type='reflect'` and the expansion
+- They fix the typo to `[] call Mom`
+- Pass 1 fails; pass 2 finds the previous row at `sourceLine = 3`
+- The row's id is preserved; the matcher updates `text` in place; `type`, `expanded_md`, `pinned` survive untouched
+
+The matcher is just a careful librarian: title first, shelf position second.
 
 ---
 
@@ -384,3 +401,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian rebuilding a rearranged shelf scenario → layered identity match pattern named as the answer → bolded "what depends on getting this right" with metadata-preservation stakes → before/after walking a typo-fix on a classified todo → one-line "title first, shelf position second").

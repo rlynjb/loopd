@@ -11,9 +11,23 @@
 
 ## Why care
 
-You added embedding-based search and confidently retired the old keyword search. A week later a user types "Spice House" — the exact restaurant name in two of their entries — and your fancy semantic search returns three entries about *generic Indian food* instead of the two entries that contain the literal string. The embedding model decided that "Spice House" semantically resembles "Indian restaurant" and ranked the synonyms ahead of the exact match.
+Two librarians work the reference desk. One was hired for her photographic memory of every book's exact title and author — ask for *The Old Man and the Sea* and she walks straight to it; ask for "a book about a fisherman struggling" and she stares at you blankly. The other was hired for her knack with themes — ask for "a book about a fisherman struggling" and she pulls Hemingway, Melville, and a Steinbeck novella; ask for *The Old Man and the Sea* by exact title and she might bring you something close but not the one you wanted. Each librarian fails on the other's strength.
 
-Dense retrieval (embeddings + cosine similarity) is good at *meaning* and bad at *exact identifiers*. Sparse retrieval (BM25 + inverted indexes) is good at *exact identifiers* and bad at *meaning*. The two approaches fail on each other's strengths, which is why production search systems often run both and combine the results. The pattern shows up in every mature retrieval system: Elasticsearch, Vespa, Algolia, Postgres `pg_trgm` + `pgvector`. Here's how the two differ and when to use which.
+The implicit question is which librarian you put on the desk. Not one or the other — both, with a system to reconcile their picks. Sparse retrieval (BM25, exact-token matching) is the photographic-memory librarian; dense retrieval (embeddings, cosine similarity) is the theme librarian.
+
+**What depends on getting this right:** every retrieval feature that has to handle both proper-noun lookups and meaning-based queries. Loopd doesn't index either way today — there's no `embed.ts`, no FTS5 index on `entries.text`, no `entry_embeddings`. The day a "find my entries about Spice House" feature lands, dense-only retrieval will return entries about "Indian restaurant" and miss the literal-string matches; sparse-only will miss entries that say "that new place we ate at" without naming it. The planned shape is hybrid: an FTS5 virtual table over `entries.text` for sparse, an `entry_embeddings` table for dense, and a fusion step (see `28-hybrid-retrieval-rrf.md`) to merge ranked lists. Lose either half and a whole class of queries silently fails — proper nouns and rare technical terms (sparse's strength) or paraphrase and synonymy (dense's strength).
+
+Without both layers (dense-only future):
+- Query "Spice House" → ranked entries about generic Indian food
+- Two entries with the literal string buried at rank 17
+- User concludes "search doesn't work" and stops using it
+
+With both layers (planned hybrid):
+- Dense lane: `cosine(queryVec, entry_embeddings.vec)` → top-k by meaning
+- Sparse lane: FTS5 on `entries.text` → top-k by exact-token match weighted by BM25
+- Fusion (RRF) merges the two rankings; Spice House entries top the list AND paraphrased meal entries appear
+
+One librarian for exact titles, one for themes, both on the desk.
 
 ---
 
@@ -320,3 +334,6 @@ Today the plan is hybrid via RRF. If you were starting today, would you skip BM2
 - What function would do hybrid combination?
 
 Answer: `sqlite-fts5` virtual table over `entries.text` (target — `[B2A.10]`). `hybridRetrieve()` in `src/services/ai/` (target, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-librarians-at-reference-desk scenario, name the which-librarian-on-the-desk question, planned FTS5 + entry_embeddings + hybridRetrieve stakes, before/after, single-line metaphor).

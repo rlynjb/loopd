@@ -11,9 +11,24 @@
 
 ## Why care
 
-You give an LLM the same generation task ten days in a row and by day three every output starts the same way — "Today I worked on…" or "Today was a day of…". The model isn't broken; it's converged. There's a single most-natural opening for the prompt and the model finds it every time. You're staring at the same caption with different content underneath.
+A staff writer at a magazine has the lead piece every issue. By the third month every opening sounds the same — "Today was the day that…" — not because the writer is bad but because the prompt has a single most-natural opening and the writer falls into it every time. The editor walks over, pins the last five openings on the wall, and says: don't open this one like any of those. The writer can still write; they just can't write the way they wrote before.
 
-Anti-repetition prompting is what stops that convergence. It belongs to the family of "make the model see what it already produced" patterns alongside diversity penalties in beam search, the `presence_penalty` parameter on OpenAI's API, and chat-conversation history that gives the model context for what's already been said. Wherever a generator needs to *not sound like itself again*, the fix is the same — let the generator see its prior output and instruct it to drift. The pattern shows up everywhere creative variation matters: image generators with seed-shifting, music generators with style transfer, even web crawlers that randomise their User-Agent. Here's how that actually works in this codebase.
+The implicit question is how to force variance without rewriting the brief. Not a new style guide, not a stricter editor — show the writer their last five openings and forbid them. Anti-repetition by negative example: past output becomes a constraint on future output.
+
+**What depends on getting this right:** four caption variants per day that don't all start with "Today was the day that." In this codebase `caption.ts:buildUserPrompt` (L102–L121) reads the last five cached captions via `getRecentAISummaries(date, 5)` and appends them under "Recent captions (avoid repeating phrasing or formula):" — the system prompt's `UNIVERSAL RULES` block (`caption.ts` L73–L82) lists the absolute forbidden formulas ("never write 'I' / 'you' / 'we'", "No 'today I…' / 'Today was…' framings"). Lose the rotation feed and the four variants converge across days; lose the rule block and they converge within a single day. The user opens the picker and sees four near-identical captions, the feature collapses to "one caption with cosmetic differences."
+
+Without forbidden-patterns rotation:
+- Day 1 caption picker: four variants, four voices
+- Day 3: each variant starts "Today was…"; the wry/grounded/poetic/raw distinction blurs
+- User stops opening the picker — there's nothing to pick between
+
+With forbidden-patterns rotation:
+- The last five days' captions get injected at the bottom of the user message
+- The `UNIVERSAL RULES` block forbids the always-natural openings
+- The four variants drift away from yesterday's shape AND from each other
+- The picker has four genuinely different options each day
+
+Past output becomes the constraint on future output.
 
 ---
 
@@ -451,3 +466,6 @@ Then open `caption.ts` and `summarize.ts` to verify.
 
 ✓ Pass: you named `caption.ts` (L73–L82 for UNIVERSAL RULES, L113–L117 for the rotation injection) and `summarize.ts:buildCaptionInput` (L128–L140) reading from `getRecentAISummaries`.
 ✗ Fail on lines: that's fine. File and function names are what matter.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (magazine-writer-with-pinned-openings scenario, name the force-variance question, caption rotation stakes, before/after, single-line metaphor).

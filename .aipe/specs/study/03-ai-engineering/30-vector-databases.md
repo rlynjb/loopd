@@ -11,9 +11,23 @@
 
 ## Why care
 
-You researched vector databases and got an explosion: Pinecone, Weaviate, Qdrant, Milvus, Chroma, pgvector, sqlite-vec, in-memory FAISS. Every vendor's marketing claims their performance is best; every comparison post is partly an ad. Meanwhile you have 365 vectors and need to ship a feature this week.
+A librarian arranges every book in a 2D map where books on similar topics sit close together. A reader hands her a slip of paper describing a half-remembered idea; she walks the map, picks the ten nearest spines, and hands them over in under a second. The map is a physical artifact — index cards stretched across a wall — and the speed comes from the layout, not from reading each book.
 
-A vector database is the storage layer for embeddings + the search algorithm for nearest-neighbour queries. The choice has three real axes: how many vectors you have, where they need to live, and how fast queries need to be. For most small applications, "in your existing database" is the right answer; for very large scale, a purpose-built ANN service is. Knowing which side of the line you're on is the whole decision. Here's how the trade works.
+The implicit question is "given a query point, what are the nearest neighbours in this space, and how fast can we find them?" A vector database is the name for the storage layer that holds those points plus the index that answers the question without scanning every book. Two real decisions live underneath: which storage engine holds the vectors, and which algorithm (exhaustive vs ANN) the index uses.
+
+**What depends on getting this right:** which databases the codebase has to operate, how retrieval latency scales, and whether vectors stay co-located with the rows they describe. For loopd the planned `entry_embeddings` table lives in `loopd.db` next to `entries`, synced to Supabase via the existing `schedulePush` machinery — picking `sqlite-vec` keeps one canonical store and makes "filter `deleted_at IS NULL` then ORDER BY cosine" a single SQL statement. Pick Pinecone instead and every retrieval becomes a cross-service round-trip, plus a third operational surface, plus a sync mapper between two incompatible vector formats — for 365 entries per user, the new service earns nothing.
+
+Without the right call:
+- Pick Pinecone at 365 vectors → third service to operate, no SQL joins, ~50–200ms network round-trip per query, local-first stance broken
+- Pick JSON TEXT + JS cosine at 1M vectors → linear scan in JS takes ~5000ms per query, app freezes during retrieval
+- Pick `sqlite-vec` at 100× scale with multi-tenant pressure → SQLite's concurrent-read limits start mattering before the algorithm does
+
+With the right call:
+- `entry_embeddings` lives in `loopd.db` alongside `entries`; one PK convention, one sync path, one canonical store
+- HNSW index inside SQLite answers nearest-neighbour in sub-10ms even at 100k vectors
+- Migration to `pgvector`-primary becomes a layer swap, not a re-architecture, the day multi-tenant scale arrives
+
+The vector is data; the index is infrastructure — use the database you already have until it can't.
 
 ---
 
@@ -302,3 +316,6 @@ Today the plan is SQLite + sqlite-vec for the local store. If you were starting 
 - What's the fallback if sqlite-vec doesn't work in Expo?
 
 Answer: `entry_embeddings` (target — `[B2A.2]`). Fallback: JSON TEXT column + JavaScript cosine in retrieval function.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-with-2D-map scenario → nearest-neighbours-without-scanning pattern naming → bolded "what depends on getting this right" with `entry_embeddings`/`schedulePush` stakes → with/without bullets walking storage choices at 365 / 1M / 100× scale → one-line "vector is data; index is infrastructure" metaphor).

@@ -11,9 +11,25 @@
 
 ## Why care
 
-You've shipped an integration with a third-party service and then watched the vendor change their pricing, deprecate an endpoint, or just go down for a day. If the call to that vendor was sprinkled across thirty files, you got to spend a week chasing it down. If it was behind one well-defined seam, you swapped vendors in an afternoon. The difference is not how good either vendor was — it's how prepared the codebase was for the day one of them stopped being the right answer.
+Imagine a kitchen with two stoves — a gas range and an induction cooktop — both wired into the same wall outlet via a switch on the counter. The chef cooks every dish the same way: pick a burner, set the heat, drop the pan, watch the food. What's underneath the pan is different physics (flame vs. magnetic field) but the chef's gesture is the same. The day the gas line gets shut off for maintenance, the chef flips the switch to induction, and the same pan keeps cooking. The reason this is cheap is that the chef never wired the gas line into the recipe.
 
-The strategy pattern is a way to keep the call site stable while letting the implementation behind it change at runtime, chosen by configuration or user preference. It belongs to the family of "decouple consumer from producer" patterns alongside dependency injection and the adapter pattern. You've seen this in payment processing libraries that route to Stripe or Adyen behind one charge() call, in object-storage SDKs that target S3, GCS, or R2 with the same upload, and in logging frameworks where the same log() call ends up in stdout, a file, or a hosted aggregator. The next block walks the mechanics.
+The question that kitchen answers is one any codebase with replaceable backends has to answer: when a vendor changes pricing, deprecates an endpoint, or goes down for a day, how prepared is the call site for a swap? Not "sprinkle the vendor's SDK across every file" — that's a week-long chase to swap providers. Not "wrap everything behind a single interface that both vendors satisfy" — that interface becomes the surface area that breaks when one vendor adds a feature the other doesn't have. The answer is a *thin strategy seam*: pick provider, then branch in each call site, then converge on a shared tail.
+
+**What depends on getting this right:** whether adding or swapping a third-party LLM provider costs an afternoon or a week, and whether each provider's native features (Claude's prompt caching, OpenAI's `response_format: json_object`) can be used without an abstraction smearing them flat. In this codebase `src/services/ai/config.ts` exposes `getProvider()` (returns `'claude'` or `'openai'`) and `getApiKey(provider)`, both reading from `expo-secure-store`. Every AI service file (`summarize.ts`, `classifyTodo.ts`, `expandTodo.ts`, `generateCaption.ts`, `interpret.ts`) starts the same way: read the provider, then `switch (provider)` with two branches — Claude calls `@anthropic-ai/sdk`'s typed `client.messages.create({...})`; OpenAI builds a raw `fetch` to `https://api.openai.com/v1/chat/completions`. Both branches produce a string. The shared tail (parse JSON, validate against a Zod-like schema in `validate.ts`, persist via `database.ts`) runs identically regardless. There's no `AIProvider` interface — the abstraction is at the call-site, not in a shared contract.
+
+Without the seam (Claude SDK called directly in every service file):
+- Anthropic raises prices 3x; team decides to test OpenAI for one chain
+- The `summarize.ts` Claude call is interwoven with prompt-building, retry logic, and response parsing
+- Swapping requires rewriting 5 service files; each rewrite risks regressions in prompt logic
+- The team gives up and eats the cost increase
+
+With the thin seam (`getProvider()` + branch + shared tail):
+- Same price hike; swap one line in `config.ts` to default to `'openai'`
+- Every service file's branch picks up the new provider on the next call
+- Each branch can still use that provider's native features (Claude's prompt caching survived because the abstraction never tried to express it)
+- The swap is one config write plus a smoke test
+
+The seam is a switch on the counter — same pan, different burner.
 
 ---
 
@@ -391,3 +407,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (power-strip-two-outlets metaphor opening / 4 layered sub-sections — config from SecureStore, Claude SDK vs OpenAI raw fetch branch, shared parse-validate-persist tail, why no shared interface — each with frontend bridges and concrete consequences / principle paragraph on thin abstractions over thick differences).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-stoves-one-switch kitchen scenario → thin strategy seam named as the answer → bolded "what depends on getting this right" with getProvider/switch-branch/shared-tail stakes → before/after walking an Anthropic-to-OpenAI swap → one-line "the seam is a switch on the counter — same pan, different burner").

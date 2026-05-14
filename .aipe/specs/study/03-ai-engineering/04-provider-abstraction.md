@@ -11,9 +11,23 @@
 
 ## Why care
 
-You've installed a new database in a side project and realised the SDK is identical to the last one. Same `client.query()`, same `client.connect()` — the implementation behind it is completely different but the call sites don't know that. That's not an accident. It's a pattern with a name, and it's load-bearing in every system that needs to swap one piece for another without rewriting everything that talks to it.
+A coffee shop has two espresso machines on the counter — one Italian, one Japanese. Both take the same beans, both pull a double shot into the same cup, both feed into the same milk-frothing pitcher and the same to-go lid. The barista picks whichever machine isn't in use; the customer never knows which one made the drink. Tomorrow the Italian one breaks and the shop swaps in a Swiss one — the beans, the cup, the lid, the drink order all stay the same. Only the silver box in the middle changed.
 
-Provider abstraction is the layer that lets a caller use one of several interchangeable implementations behind a single interface. It belongs to the family of "decouple the consumer from the producer" patterns, alongside dependency injection and the adapter pattern. You've already seen this in React's renderer abstraction (DOM, native, server — same component tree), in database drivers (Postgres, MySQL, SQLite behind the same query API), and in LLM client wrappers like LangChain or LiteLLM that put one `invoke()` over OpenAI, Anthropic, and a dozen others. Here's how that actually works in this codebase.
+That's the shape behind provider abstraction. Not a unified interface that pretends both machines are identical, not a wrapper class that flattens their quirks — just a thin choice at each call site, with everything upstream (the prompt, the beans) and everything downstream (the cup, the JSON shape, the validator) shared. Naming the pattern this way is what lets a codebase outlive any single vendor's API.
+
+**What depends on getting this right:** the ability to swap providers without rewriting features, and the ability to use each provider's native strengths (Anthropic's tool calling, OpenAI's `response_format: json_object`) without leaking that into the rest of the codebase. `src/services/ai/config.ts:getProvider()` reads `'claude' | 'openai'` from SecureStore on every call. Each chain (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`) has a `switch (provider)` with two branches — Claude via `@anthropic-ai/sdk`'s `client.messages.create`, OpenAI via raw `fetch` to `/v1/chat/completions`. Both return a string. The rest of the chain — `extractJsonFromText`, `validate.ts`, `upsertAISummary` — is shared. Collapse that into a "unified AIProvider class" and the day OpenAI ships JSON-mode or Anthropic ships a new tool-use grammar, you're either rewriting the interface for everyone or hiding the new capability behind a flag the wrapper doesn't expose.
+
+Without provider abstraction at the call site:
+- One `AIProvider` class promises `call(prompt): Promise<string>` and hides the quirks
+- OpenAI ships `response_format: json_object`; the wrapper either ignores it or grows a knob every caller has to know about
+- Caption chain wants the JSON-mode discount; either everyone pays the wrapper-rewrite tax or caption forks the wrapper
+
+With per-call-site abstraction:
+- `caption.ts` has a 15-LOC `switch (provider)` — Claude branch reads `response.content[0].text`; OpenAI branch sets `response_format` and reads `choices[0].message.content`
+- Validators, persistence, prompt templates stay shared; `validate.ts` runs the same regardless
+- Adding a third provider is mechanical — copy the switch arm, normalise to a string, the tail doesn't change
+
+Thin abstractions over thick differences — the contract is stable, the transport varies, the suitcase keeps flying.
 
 ---
 
@@ -425,3 +439,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-faucets-one-drain metaphor opening / 4 layered sub-sections — config from SecureStore, Claude SDK vs OpenAI raw fetch branch, shared parse-validate-persist tail, what stays vs what changes — each with frontend bridges and concrete consequences / principle paragraph on thin abstractions over thick differences).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-espresso-machines-on-the-counter scenario → "thin choice at each call site, everything else shared" pattern naming → bolded stakes pivot to `getProvider()` + per-chain `switch` keeping JSON-mode and tool-calling per-vendor-native → before/after bullets on unified-wrapper vs per-call-site → one-line "thin abstractions over thick differences" metaphor).

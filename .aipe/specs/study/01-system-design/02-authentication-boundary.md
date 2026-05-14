@@ -11,9 +11,23 @@
 
 ## Why care
 
-Every system has a line drawn on the inside of it where "we trust this request" turns into "we don't, and we need to prove who's asking." Most bugs that leak one user's data to another are caused by drawing that line in the wrong place, or by drawing it on paper and forgetting to enforce it in code. The interesting question is never "do we have auth" — it's "where does the trusted zone end, and what stops a request from crossing it without identity."
+Imagine a bank vault with two locks on the door. The outer lock is a deadbolt that only opens for a specific key shape — the wrong key won't even fit the slot. The inner lock is a guard at a desk who asks for your ID and checks it against a list. Most days the deadbolt alone is enough, but on the day someone copies a key, the guard is what stops them. Take either lock away and the vault still looks locked from the street — but only one of them is doing the work that would catch a real attempt.
 
-A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces the seam on every crossing. It belongs to the family of "defense in depth" patterns, where the schema, the middleware, and the application code each independently refuse unauthorized access. You've seen this in Postgres row-level security, in HTTP middleware that rejects requests before they hit a handler, and in the way operating systems separate user-space from kernel-space syscalls. The next block walks the mechanics.
+The question that vault answers is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
+
+**What depends on getting this right:** whether one user's journal becomes readable by anyone holding a copy of the anon key, and whether the cost of activating real auth later is "a one-line config swap" or "rewrite the schema." In this codebase the schema gate is composite `PRIMARY KEY (user_id, id)` on every synced Supabase table — even with bad code, a query for the wrong user's `id` returns no rows because the row's full key includes a `user_id` the caller doesn't know. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but disabled in Phase A; Phase A uses a hardcoded `PHASE_A_USER_ID` UUID in `src/services/sync/client.ts`. The schema was built to accept the runtime gate later without a migration — because the composite PK was correct from day one, Phase B activation is `auth.uid()` replacing the hardcoded UUID plus enabling migration 0002, not a schema rewrite.
+
+Without two gates (only RLS, schema didn't anticipate multi-tenant):
+- A future PR disables RLS by accident
+- Every user's cloud rows become readable by every other user's client
+- The bug is "policy regression," recovery is "restore from backup + audit"
+
+With two gates (composite PK + staged RLS):
+- A future PR disables RLS by accident
+- Queries still return no rows because the row's full composite key isn't visible to the wrong caller
+- The bug is "RLS off," recovery is "re-enable the policy"
+
+The schema is the deadbolt; RLS is the guard at the desk. The vault stays locked even when one mechanism fails.
 
 ---
 
@@ -363,3 +377,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-locked-doors metaphor opening / 4 layered sub-sections — schema gate composite PK, RLS runtime gate, Phase A/B, defense in depth — each with frontend bridges and concrete consequences / principle paragraph on defense in depth).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bank-vault two-locks scenario → defense-in-depth pattern named as the answer → bolded "what depends on getting this right" with composite PK + staged RLS stakes → before/after walking an accidental RLS-disable PR → one-line "schema is the deadbolt; RLS is the guard").

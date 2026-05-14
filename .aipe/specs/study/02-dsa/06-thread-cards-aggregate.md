@@ -11,9 +11,28 @@
 
 ## Why care
 
-You've opened a list page that did one query to fetch the list and then one more query per row to fetch its details — fifty rows, fifty-one queries. The page was slow and you didn't know why until you checked the network panel. The fix is the move every backend engineer learns once and then never unlearns: pull the parent rows in one query, pull all the child rows for those parents in one more query keyed by parent id, then stitch the two together in memory. Two queries for any list length, not N+1.
+Imagine a waiter taking orders at a table of eight. He could walk to the kitchen, place one order, come back, take the next, walk back to the kitchen — eight trips across the room, eight conversations with the chef. Or he writes all eight orders on one pad, walks once, hands the pad to the chef, and waits at the pass. The kitchen does the same amount of cooking either way. The difference is eight walks versus one. The bottleneck was never the cooking — it was crossing the room.
 
-This is the N+1 query problem and its standard remedy — the dataloader / batched-fetch / bulk-then-join pattern. GraphQL's DataLoader exists for exactly this. ORM "eager loading" / `includes` / `select_related` exists for exactly this. The family is "trade per-item round-trips for bulk transfers when the per-item work is dominated by latency, not by transfer size." The in-memory join is cheap (linear scan with a hash map) compared to the cost of an extra TCP round-trip. The same shape shows up in any system where you can choose between many small remote calls and a few large ones — REST endpoint batching, RPC fan-in, cache warming. Here's how this codebase applies that pattern.
+That is the question this operation answers when building a list view whose rows each need supporting data: how do we avoid making N+1 trips to the database when one trip per supporting field would do? Not "fetch each card and its data row-by-row," not "stuff everything into one mega-JOIN" — just *batch each kind of supporting data into one query, then stitch in memory*. The dataloader / bulk-then-join pattern, the same shape GraphQL's DataLoader and ORM eager-loading were invented to express.
+
+**What depends on getting this right:** the perceived speed of the most-loaded screen the app ever had. In this codebase `getThreadCards` was the dashboard's thread-roll-up — for each thread, compute `lastMentionAt` from `thread_mentions`, count `entriesThisWeek` from the same table joined to `entries.date`, gather open todos via `thread_mentions.todo_id` → `todo_meta` → `entries.todos_json`, and rank by pinned + staleness. Done naively, that's 5 SQLite roundtrips per thread × 30 threads = 150 roundtrips at ~2ms each = 300ms blocking the render. Done as 4 batched queries + 2 in-memory joins, it's ~20ms total. The dashboard either feels instant or it doesn't, and the difference is whether the orchestrator batches. Note: `getThreadCards` is currently dormant (threads were dropped from the dashboard in commit 42ee8a6 on 2026-05-08), but the staleness math from the same file is still consumed by `more/threads.tsx`.
+
+Without batching (N+1):
+- Dashboard loads → `getThreads()` returns 30 rows
+- Per-row loop fires 5 SQL queries each → 150 roundtrips
+- Each roundtrip through `expo-sqlite` is ~2ms even on local disk → ~300ms blocking
+- The UI shows a loading spinner; the user feels it
+- A 6th supporting field added later doubles the roundtrip count
+
+With batching (4 queries + 2 in-memory joins):
+- One `getLastMentionByThread()` aggregate returns `{ threadId → lastAt }`
+- One `weekRows` query GROUPs `thread_mentions` by `thread_id` for the week count
+- One `todoLinkRows` query pulls all (thread, todoId) pairs at once
+- One `getAllTodoMetas()` returns every meta; the parent's `getAllEntries` cache already holds todo text
+- JS stitches two `Map<id, ...>` lookups per thread; total ~20ms
+- Adding a 6th field is one more query, not 30 more roundtrips
+
+Round-trips are the cost; row count is the variable.
 
 ---
 
@@ -441,3 +460,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (waiter-bulk-order metaphor + frontend bridge to React Query batching) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (waiter-with-order-pad scenario → naming the dataloader/bulk-then-join pattern → bolded "what depends on getting this right" pivot with dashboard render-latency stakes → before/after bullets comparing N+1 roundtrip costs to 4-query+2-join shape → one-line summary "round-trips are the cost; row count is the variable").

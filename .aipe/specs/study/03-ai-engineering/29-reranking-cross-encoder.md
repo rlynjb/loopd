@@ -11,9 +11,23 @@
 
 ## Why care
 
-You shipped hybrid retrieval. Top-5 hit@5 is 72%. The right answer is in top-20 about 90% of the time — it's just not at the top. Adding more vectors won't help; the model can rank well enough but not precisely. What you need is a smarter scorer for the top candidates, even if it's too slow to run on the whole corpus.
+Picture a hiring pipeline at a small firm. A recruiter scans 500 resumes from a CSV in twenty minutes — fast keyword and shape passes, surfaces a shortlist of fifty. The hiring manager then reads each of those fifty resumes carefully against the actual job description, side by side, and picks the top five. Asking the manager to read all 500 takes a week; asking the recruiter to make the final call misses candidates whose strengths only show in a careful read. Two stages — wide screen first, deep read second — get both speed and precision.
 
-Reranking is the two-stage pattern that solves exactly this: a fast retriever pulls top-50 (or top-100) candidates; a slow but more accurate model re-scores just those candidates and picks the best top-K. The pattern is the same shape as a database query plan: a coarse index scan finds candidate rows, then an expensive filter narrows them. You get the speed of the cheap layer and the accuracy of the expensive one. Here's how the cross-encoder layer works and why it's such an underrated lever.
+The implicit question is whether one model can do both jobs. Not faster embeddings, not bigger context — a fast wide-net first stage and a slow precise second stage, where the second stage only runs on what the first stage surfaced.
+
+**What depends on getting this right:** the quality ceiling on every planned retrieval feature once hybrid is in place. The recruiter stage maps to loopd's planned `hybridRetrieve()` (dense from `entry_embeddings` + sparse from FTS5 on `entries.text`, fused by RRF) — fast enough to run on every entry. The hiring-manager stage maps to a planned `rerank()` call: a cross-encoder model that takes the query and one candidate together per call and returns a precise relevance score. Without rerank, "the right entry is in top-20 about 90% of the time but only top-5 about 72% of the time" stays the plateau; with rerank, the top-5 catches the cases bi-encoders blur (negation: "love coffee" vs "don't love coffee" embed close; magnitudes: "5kg" vs "50kg" embed close). The cost is real: ~50–500ms per (query, doc) pair × 50 candidates is 2.5–25s of user-visible latency added — rerank is a quality lever, not a free one.
+
+Without reranking:
+- `hybridRetrieve()` returns top-20; right answer is in there at rank 7
+- Top-5 surfaces five close-but-not-right entries
+- "I love coffee" matches "I don't love coffee" because the cosine doesn't distinguish
+
+With reranking:
+- `hybridRetrieve()` returns top-50; rerank scores all 50 against the query together
+- Cross-encoder catches the negation; the right answer moves from rank 7 to rank 1
+- Latency budget: +1–5s, parallelised; worth it for the interpret/recall surface
+
+A recruiter for the wide screen, a hiring manager for the final call.
 
 ---
 
@@ -290,3 +304,6 @@ Today rerank is eval-driven (ship on one feature first). If you were starting to
 - What's the typical first-stage candidate count fed to rerank?
 
 Answer: `src/services/ai/rerank.ts` (target, not yet created). Typical: 50–100 candidates from first-stage retrieval.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (recruiter-then-hiring-manager scenario, name the two-stage-fast-then-precise question, planned hybridRetrieve→rerank.ts stakes, before/after, single-line metaphor).

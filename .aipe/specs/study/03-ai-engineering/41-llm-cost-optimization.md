@@ -11,9 +11,25 @@
 
 ## Why care
 
-Your monthly LLM bill is bigger than expected. You consider swapping to a cheaper model. Before you do, look at where the spend goes — most of the time, the highest-impact lever is something else entirely: a chain that's running too often, prompt content that's overlong, or one feature whose architecture defaults to expensive calls when a cheap heuristic would do.
+A household's electric bill spikes three months in a row. The first instinct is to swap the bulbs for cheaper ones — that's the move that feels like effort. Walk through the house with a clamp meter instead: the dryer running half-empty twice a day costs more than every bulb combined, an always-on space heater in the hallway costs more than the dryer, and the dishwasher running before its full load could be skipped altogether by waiting four hours. The bulb swap was the temptation lever; the highest-ROI lever was "stop running the dryer when there's nothing to dry."
 
-LLM cost optimization is the discipline of pulling cost levers in ROI order, not in order-of-temptation. The five most common levers, ranked: heuristic-before-LLM (skip calls entirely), prompt caching (90% off prefixes), semantic caching (free on hits), model routing (cheaper model for cheaper jobs), and prompt compression (fewer tokens). Most teams pull #4 first because "use a cheaper model" feels like the obvious move; the higher-ROI levers stay untouched. Here's the right order.
+The implicit question is "where does the spend actually live, and which lever attacks it at the largest multiplier?" LLM cost optimization is the discipline of pulling levers in ROI order, not order-of-temptation. Five levers ranked: (1) heuristic-before-LLM skips the call entirely, (2) prompt caching saves 90% on stable prefixes, (3) semantic caching saves 100% on identical-input hits, (4) model routing buys ~5× cheaper inference on jobs that don't need premium quality, (5) prompt compression saves 10–30% but risks quality. Most teams pull lever 4 first because "use a cheaper model" feels like the senior-engineer move; the higher-ROI architectural levers stay untouched.
+
+**What depends on getting this right:** total spend per chain, where engineering time goes, and whether quality regressions get shipped along with the savings. For loopd only Lever 1 is implemented today (classify's heuristic gates 60–70% of calls — see `[B1.5]` / `[B1.8]`); `[B5.2]` adds prompt caching across eligible chains, `[B5.8]` adds semantic caching for interpret, `[B5.3]` formalises model routing with eval evidence (likely candidate: expand on Haiku). Lever 2 is silently skipped today because most SYSTEM_PROMPTs sit below Anthropic's cacheable-prefix threshold (~1024 tokens for Sonnet 4.6, ~2048 for Haiku 4.5) — pulling it without checking would be a no-op. The prerequisite for any honest lever-pulling is per-chain token logs from `[B1.2]`; optimising without measurement is guessing where the cost lives.
+
+Wrong order (temptation):
+- Start with Lever 5 (compress prompts) → 10–30% reduction with real quality risk, eval cycles burned re-testing every chain
+- Then Lever 4 (model routing) → ~5× per-chain, ships a subtle quality drop on the chain that needed Sonnet's depth
+- Lever 1 never gets pulled; classify continues paying for every easy case the regex could have handled
+
+Right order (ROI):
+- Lever 1 first: classify heuristic gates 60–70% of calls; expand similar treatment if a heuristic exists for its easy cases
+- Lever 2 next: audit prompt lengths; wrap `cache_control: { type: 'ephemeral' }` on eligible chains' SYSTEM_PROMPTs; cache-creation vs cache-read tokens visible in the `[B1.2]` log
+- Lever 3: `interpret_cache` table for stable-input/stable-output chain; re-tap returns in <50ms with zero cost
+- Lever 4: `[B5.3]` runs a 20-input quality eval of expand-on-Haiku vs expand-on-Sonnet; if rubric delta ≤5%, route; document decision in `docs/spec.md` or `docs/model-routing.md`
+- Lever 5: only pulled if Levers 1–4 are exhausted and a chain's full-priced prefix still dominates spend
+
+Cost is architectural, not configurational — pull levers in ROI order, not in order of temptation.
 
 ---
 
@@ -314,3 +330,6 @@ Today loopd routes classify to Haiku and everything else to Sonnet. If you were 
 - Where is the model routing decision made?
 
 Answer: Lever 1 (heuristic-before-LLM in classify). `getProvider()` and per-chain model selection in `src/services/ai/config.ts`.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (household-clamp-meter-walkthrough scenario → "where does spend live and which lever attacks it at the largest multiplier" pattern naming → bolded "what depends on getting this right" with `[B1.2]` / `[B5.2]` / `[B5.3]` / `[B5.8]` / `interpret_cache` stakes → wrong-order/right-order bullets walking the five levers → one-line "cost is architectural, not configurational" metaphor).

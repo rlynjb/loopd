@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've used an app that "syncs across devices" and watched it stall on a loading spinner because the server was the only place the data really lived. The moment the network blinked, the app was useless. That happens whenever the cloud is treated as the authoritative store and the device is treated as a thin view of it — every read becomes a remote read, every write becomes a remote write, and the user pays for both.
+Imagine two filing cabinets, one in your office and one across town. The office cabinet is the one you actually use — every file you open, every form you sign, every receipt you staple into a folder happens at the office. The across-town cabinet is a copy that a courier updates whenever they run between the two. Most days you forget the across-town cabinet exists. The day your office burns down, it's the only reason you have any records left.
 
-A replica-as-mirror flip reverses the relationship: the device is authoritative, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer. It belongs to the family of "asynchronous replication" patterns, alongside Postgres streaming replicas, CDN origin pulls, and email's store-and-forward model. You've seen this in Dropbox (your local folder is real, the cloud is a backup that catches up), in mobile Mail (the inbox renders from a local cache and reconciles in the background), and in any "offline-capable" SDK that exposes a synchronous local API. The next block walks the mechanics.
+The question that setup answers is one any system with a cloud component has to answer: when there are two copies of every file, which one is authoritative — the one the user reads and writes, or the one that's durable and shareable? Not "the cloud, because it's the database" — that's the answer that makes the app stall on a loading spinner. The answer is a *replica-as-mirror flip*: the device is canonical, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer.
+
+**What depends on getting this right:** whether every screen renders instantly from local data or waits for a network round-trip, and whether the app stays useful when the network is gone. In this codebase the local store is `loopd.db` (SQLite); the mirror is Supabase Postgres. Push and pull are independent flows in `src/services/sync/orchestrator.ts` over the same 10-table `SyncableTable` registry. `pushTable()` selects `WHERE updated_at > synced_at OR synced_at IS NULL`, batches in 50s, upserts via `@supabase/supabase-js` with `onConflict: 'user_id,id'`, then stamps `synced_at = now()` on success. `pullTable()` selects cloud rows where `updated_at > sync_meta[table].last_pull_at`, pages 200 at a time, and runs `chooseWinner` (LWW) per row against the local copy. The dirty filter (`updated_at > synced_at`) is what makes each direction idempotent — a failed push just leaves `synced_at` alone and gets retried on the next pass.
+
+Without the flip (cloud is authoritative, device is a view):
+- Dashboard mounts; fires a HTTPS GET to fetch today's entries
+- Train enters a tunnel; the GET times out
+- Spinner stays on screen; user backs out
+- Every typed keystroke also fires HTTPS; cursor stutters
+- The app is a thin client to a remote DB, useless without bars
+
+With the flip (device canonical, cloud mirror):
+- Dashboard mounts; reads from SQLite in <5ms
+- User types; `database.ts` commits to SQLite in 1ms; `schedulePush()` arms a 5s timer
+- 5s after the last keystroke, `pushAll()` walks the dirty rows and upserts to Supabase
+- Network down? The dirty filter remembers; the next session's push catches up
+- Cloud's job is durability and cross-device transfer; it's never on the user's critical path
+
+The cloud is a sync mirror, not the canonical source.
 
 ---
 
@@ -387,3 +405,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (photocopier-room metaphor opening / 4 layered sub-sections — independent push/pull flows, batched push with on-conflict, cursor-paged pull with LWW, server-time arbitration — each with frontend bridges and concrete consequences / principle paragraph on cloud-as-mirror not authority).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (office cabinet + across-town courier-updated cabinet scenario → replica-as-mirror flip named as the answer → bolded "what depends on getting this right" with push/pull-registry stakes → before/after walking a dashboard open on a train tunnel → one-line "cloud is a sync mirror, not the canonical source").

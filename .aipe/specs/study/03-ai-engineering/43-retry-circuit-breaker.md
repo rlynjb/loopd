@@ -11,9 +11,25 @@
 
 ## Why care
 
-A transient network blip drops one classify call. The user sees the todo stuck at `type='todo'` because nothing retried. The same week, Anthropic has a 30-minute outage; every call from loopd fails; each retry hammers the dying provider; the user's UI freezes intermittently. Two different failure shapes; one retry policy doesn't handle both.
+A house's electrical panel has two protection devices on every circuit. The plug strip in the kitchen has an internal resettable fuse: when the toaster's element flickers for a half-second the fuse trips, the homeowner pushes the button, the toast finishes. Behind the wall, the breaker box has a heavier trip: when something deep in the wiring shorts and the line draws double its rated current for a full second, the breaker snaps to OFF and refuses to reset for a cooling-off period — pushing it back too fast just trips it again and risks the wires. Small flickers reset; sustained faults stay off. Both live on the same circuit and handle opposite scales of failure.
 
-Retry and circuit breaker are the pair of patterns for handling external-call failures. **Retry** recovers from transient errors (one bad network round-trip). **Circuit breaker** detects sustained outages and stops trying for a while — preventing retry storms during real downtime. The pattern is the same shape as production resilience in any distributed system: small failures get retried; big failures get backed off. Here's the version for LLM calls.
+The implicit question is "given that this external call will sometimes fail, which failure scale is this — a transient blip or a sustained outage?" Retry and circuit breaker are the answer pair. Retry with exponential backoff handles small transient failures (3 attempts, 250ms → 500ms → 1000ms with jitter, only on 5xx / 429 / network errors — never on 4xx). Circuit breaker handles sustained outages with a three-state machine (CLOSED → OPEN after N consecutive failures → HALF-OPEN after T seconds → CLOSED on probe success or back to OPEN on probe fail). Retry without a breaker causes retry storms during real outages — every call burns 3× the failed-call volume on the dying provider; breaker without retry leaves transient failures unrecovered.
+
+**What depends on getting this right:** whether transient network jitter surfaces as user-visible failures, whether a 30-minute provider outage triggers retry storms that compound the damage, and whether users see a clear "AI unavailable" banner vs silent broken chains. For loopd both are unimplemented today; the existing `interpret.ts` "one retry on validate-fail" is content-level retry (a different pattern). `[B5.1]` adds the `retryWithBackoff(fn, options)` wrapper inside `src/services/ai/queue.ts`; `[B5.4]` adds a custom circuit breaker in `src/services/ai/circuitBreaker.ts` with per-provider state (Anthropic, OpenAI) and defaults N=5 / T=120s, surfaced in the planned AI ops panel from `[B1.8]`. Both layers live inside the queue from `[B5.1]` — backpressure waits for a slot, breaker checks state, retry wraps the call.
+
+Without retry + circuit breaker:
+- Transient network blip drops one classify call → todo stuck at `type='todo'`, user assumes the classifier is broken
+- Anthropic 30-minute outage → every chain call retries 3× and dies; that's 3× the failed-call volume hitting a recovering provider; UI freezes intermittently as each chain times out; user reads "AI seems broken" and quits
+- 401 auth failure on a bad API key → retry layer (if added without filter) re-fires the bad credential 3 times before giving up; wasted calls, slower error surfacing
+
+With retry + circuit breaker composed:
+- Single blip: attempt 1 fails, attempt 2 (after 250ms + jitter) succeeds, user sees nothing
+- 30-second flap: attempts 1–3 fail, retry exhausts, breaker increments failure count; some chains surface partial errors
+- 30-minute outage: after 5 consecutive failures, breaker OPENS for 2 minutes; subsequent calls return `BreakerOpenError` instantly; users see "AI temporarily unavailable" banner; after 2 minutes one probe is allowed; success → CLOSED, fail → another 2 minutes OPEN
+- 401 / 403 errors: classified as 4xx → never retried, surfaced immediately as auth bug
+- Jitter prevents thundering-herd retries when many concurrent callers all hit attempt-2 at the same moment
+
+Retry small failures; break on big ones — two patterns for two failure scales.
 
 ---
 
@@ -374,3 +390,6 @@ Today the plan is custom retry + custom breaker. If you were starting today, wou
 - What's the breaker's "open" duration default?
 
 Answer: `src/services/ai/queue.ts` + `src/services/ai/circuitBreaker.ts` (target — `[B5.1]` + `[B5.4]`, not yet created). T = 120 seconds (2 minutes).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (house-electrical-panel-fuse-and-breaker scenario → "which failure scale is this, transient blip or sustained outage" pattern naming → bolded "what depends on getting this right" with `retryWithBackoff()` / `circuitBreaker.ts` / `[B5.1]` / `[B5.4]` / `[B1.8]` stakes → without/with bullets walking blip, 30-second flap, 30-minute outage, 401 → one-line "retry small failures, break on big ones" metaphor).

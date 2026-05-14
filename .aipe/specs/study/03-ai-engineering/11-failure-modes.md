@@ -11,9 +11,23 @@
 
 ## Why care
 
-AI calls fail. They fail because the network dropped, because the provider is down, because the model returned malformed JSON, because rate limits hit, because the model refused the prompt, because the user's API key expired. Every one of those failures is going to happen, repeatedly, in production. The question is not "how do I prevent them" — you can't — but "what does the user lose when one of them happens at the wrong moment." If the answer is "their data," the architecture is wrong.
+A small office runs on a paper-based workflow — mail comes in, gets sorted into pigeonholes, gets filed, gets answered. A new AI assistant arrives and starts helping: it summarises mail, drafts replies, tags things by topic. Some days the assistant is brilliant; some days it's slow; some days it's locked out of the building entirely. The office keeps running on every one of those days because the canonical work — sort, file, answer — was never wired through the assistant. The assistant is a layer on top, not a load-bearing wall.
 
-The principle here is graceful degradation: the AI layer is best-effort, and a failure in that layer must never damage the canonical data underneath it. It belongs to the family of "fail-soft" and "isolation" patterns — the same shape as circuit breakers around flaky services, write-ahead logs that survive crashes mid-transaction, and CDN fallbacks that serve stale content when the origin dies. You've already seen it in Stripe SDKs that retry idempotently on network errors, in OpenAI clients that surface a typed error instead of a half-parsed response, and in any production LLM stack that wraps every call in "if this throws, the user's record is unchanged." The next block walks the mechanics.
+That layering — best-effort enrichment on top of a canonical path that never waits — is the failure-modes contract. Not "make AI more reliable," not "retry harder" — name every way the AI layer can fail, and make sure each named failure leaves the prose, the todo, and the entry untouched.
+
+**What depends on getting this right:** whether the user loses data when an AI call fails. The codebase enumerates eight named modes: no API key (return `{ error }`, UI shows banner), network error (`fetch` rejects, return `null`, SQLite row stays in pre-AI state), malformed JSON (`parseJson` returns `null`; `expand` retries once with a stricter prompt, others skip), missing required field (`validate.ts` rejects, row ignored), caption-fails-inside-summarize (wrapped try/catch at `summarize.ts:87`, structured summary still saves), user override (`user_overridden_type` lock, classifier skips), MAX_CONCURRENT exceeded (`expand.ts:25` caps at 3, over-cap returns `{ ok: false, reason: 'in-flight-cap' }`), heuristic uncertain (async LLM scheduled, UI shows placeholder type). Every named mode has a recovery path. Drop the contract and a malformed Claude response on caption corrupts `ai_summaries.summary_json` for the day; the editor crashes on render; the user loses the structured summary alongside the captions — one bug, two losses.
+
+Without named failure modes:
+- Caption fails inside summarize; the whole `summary_json` write rolls back
+- Network error mid-classify writes garbage into `classifier_confidence`; the dashboard renders broken badges
+- "AI is acting weird today" is the only diagnosis available; no replay, no rejection point
+
+With named failure modes:
+- Caption-fails-inside-summarize is mode 5: `summarize.ts:87` try/catch keeps `summary_json.summary` intact, `variants` stays empty
+- Network error is mode 2: caller catches, returns `null`, the row stays in pre-AI state; next save retries
+- Eight modes, eight recovery paths; the worst outcome is "no AI annotation this time," never "lost data"
+
+Graceful degradation — the office sorts the mail even when the assistant is offline.
 
 ---
 
@@ -265,7 +279,7 @@ Key points to remember:
 ```
 
 [senior] Q: Why one retry on malformed JSON in `expand.ts` and zero retries in caption/summarize/classify?
-         A: Because expand's expected output is high-information per call (a typed JSON object filling 4-6 required fields like `observed`, `expected`, `suspectedCause`, `reproSteps[]` for 'bug') and the user explicitly fired the expand action. Failing silently after one network call would be a bad UX — the user pressed "expand", saw nothing happen, doesn't know why. The retry with a stricter prompt ("Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object…") rescues the borderline cases. Caption, summarize, and classify run automatically — no user intent — and they have other recovery paths (caption skipped means structured summary still saves; summarize surfaces error in `ai_summaries.error`; classify stays at heuristic-or-null). The retry budget tracks user intent, not technical possibility.
+         A: Because expand's expected output is high-information per call (a typed JSON object filling 3-5 required fields like `topic`, `prompt`, `earlyInsight` for 'reflect', or `what`, `firstStep`, … for 'idea') and the user explicitly fired the expand action. Failing silently after one network call would be a bad UX — the user pressed "expand", saw nothing happen, doesn't know why. The retry with a stricter prompt ("Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object…") rescues the borderline cases. Caption, summarize, and classify run automatically — no user intent — and they have other recovery paths (caption skipped means structured summary still saves; summarize surfaces error in `ai_summaries.error`; classify stays at heuristic-or-null). The retry budget tracks user intent, not technical possibility.
 
 ```
                   Path taken (retry tracks user intent)  Alternative (retry everything)
@@ -425,3 +439,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (office-without-AI-assistant metaphor opening / 4 layered sub-sections — canonical path never waits on AI, the 8 named failure modes, skip vs retry-once split, MAX_CONCURRENT cap — each with frontend bridges and concrete consequences / principle paragraph on graceful degradation for non-critical paths).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-office-with-AI-assistant-going-offline scenario → "best-effort layer on top of a canonical path that never waits" pattern naming → bolded stakes pivot to all 8 named modes anchored to `summarize.ts:87` try/catch, `parseJson`, `validate.ts`, `MAX_CONCURRENT`, `user_overridden_type` → before/after bullets on unnamed-failures vs eight-mode contract → one-line "office sorts the mail even when the assistant is offline" metaphor).

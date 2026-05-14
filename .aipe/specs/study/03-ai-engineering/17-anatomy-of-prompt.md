@@ -11,9 +11,25 @@
 
 ## Why care
 
-You write a prompt that works the first time, then iterate on it ten times, and by the fifth iteration you can't tell which paragraph is doing the heavy lifting. The prompt grew into a paragraph that mixes "here's who you are" with "here's what I want" with "don't ever do this" with "return JSON only." Every time you tweak one part, another part drifts because the boundaries are mushy.
+A new hire walks into a temp job and you hand them a single sheet of paper with everything jammed together: who they are, what to do, what never to do, and how to format the output, all in one paragraph. They start, but two hours in they're asking the same question twice — "wait, am I supposed to never write 'I,' or just prefer third-person?" — because the rules are mushed in with the tone notes and the formatting guide. You tweak one line and three other behaviours drift. The page is doing four jobs and you can't tell which one is broken.
 
-A production prompt has a structure — system role, task description, constraints, output format — and every section has exactly one job. It belongs to the family of "separation of concerns" patterns alongside MVC, the layered HTTP request handler, and the actor model — wherever a single object has too many responsibilities, splitting them into named sections makes the system more debuggable. The same idea shows up in any system where untyped configuration becomes typed: protobuf message definitions, the four sections of a Kubernetes manifest, the parts of an HTTP request (method line, headers, body). Here's how that actually works in this codebase.
+The implicit question is whether each instruction has a home. Not a longer page, not a stricter tone — a briefing with four numbered sections so the rule about hashtags lives in constraints, the JSON shape lives in output, and changing one section doesn't ripple. A production prompt has that shape: role, task, constraints, output.
+
+**What depends on getting this right:** every chain's behaviour stays editable without regressions. In this codebase `summarize.ts:prompt.ts` (L4 role, L17–L27 output spec), `caption.ts` (L24 role, L73–L82 `UNIVERSAL RULES` constraints), `classify.ts` (L12 role + five-mode task), and `interpret.ts` (L19 role, L21 voice constraints, L38–L46 `Voice rules`) all follow the same four-section shape. Lose the structure and a tweak to caption's tone bleeds into the JSON output spec; a contributor adding a new constraint puts it in the role section by accident; the validator catches the malformed output but you can't tell from the prompt diff what changed.
+
+Without the four-section shape:
+- A wall-of-text system prompt mixing role / task / constraints / output
+- Edit "tone is wry" and the JSON shape lines drift along with it
+- Contributors add new rules at random positions; the prompt grows without structure
+- Output drift shows up in production; the prompt diff doesn't point at a cause
+
+With the four-section shape:
+- Role at the top (one line), task in the middle, constraints as a `RULES` block, output spec at the bottom
+- Edit caption.ts L75 (`UNIVERSAL RULES`) and you know exactly what surface changed
+- New rule? It goes in the constraints block. New output field? Output section.
+- Prompt diffs map to behaviour changes one-to-one
+
+A briefing document, not a wall of notes.
 
 ---
 
@@ -427,3 +443,6 @@ Then open `prompt.ts`, `caption.ts`, and `interpret.ts` to verify.
 
 ✓ Pass: you named `prompt.ts` (summarize), the `UNIVERSAL RULES` block in caption.ts, and `interpret.ts` as the markdown chain.
 ✗ Fail: that's a sign this concept hasn't fully landed yet — re-read the "How it works" section.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (new-hire briefing scenario, name the each-rule-has-a-home question, four-section stakes across chains, before/after, single-line metaphor).

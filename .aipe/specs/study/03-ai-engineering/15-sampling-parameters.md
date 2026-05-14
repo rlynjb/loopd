@@ -11,9 +11,23 @@
 
 ## Why care
 
-You ask an LLM the same question twice and get two different answers. Not because the model changed — because of a single number on the request that decides how greedy the model is when picking the next token. Most people don't know that number exists; the ones who do call it `temperature`.
+A radio sits on a kitchen counter with a single tuning dial. At one end the receiver is locked to one station — the loudest, clearest signal in range, every time, no surprises. At the other end the dial is wide open and the receiver picks up whatever's strongest in a band of nearby frequencies, drifting between three or four stations as the wind shifts. Same radio, same antenna, same broadcast towers — but the dial decides which voice comes out of the speaker on any given moment.
 
-Sampling parameters control the gap between "this prompt is deterministic" and "this prompt is creative." Temperature, top-p, and top-k are the three knobs every provider exposes; they belong to the family of "how much variance can the consumer of this function tolerate?" questions, alongside floating-point seeds in graphics, retry jitter in network code, and the `random_state` argument on every scikit-learn estimator. The same knob shows up wherever the system needs to balance reproducibility against diversity — Stable Diffusion's CFG scale, the temperature parameter in TensorFlow's `tf.random.categorical`, even the `RANDOM_SEED` in your test suite. Here's how that actually works in this codebase.
+That dial is what sampling parameters are. Not a knob on the model — a knob on the *sampling step* that runs in front of the model's output, deciding how greedy the next-token pick is. Naming the dial separately from the model is what makes "two identical prompts returned different answers" a tractable fact rather than a mystery.
+
+**What depends on getting this right:** the reproducibility of every chain, especially the ones that should be deterministic. Both Anthropic and OpenAI default to `temperature=1` if no value is passed. Four of the five chains in `src/services/ai/` pass no `temperature`, so `summarize`, `caption`, `classify`, and `expand` all run at the silent default of 1. Only `interpret.ts` L14 declares `const TEMPERATURE = 0.7` and passes it to both Claude and OpenAI — the conventional "creative but coherent" setting for a chain whose output is the artifact the user reads. The gap is `classify` — the chain that picks 1 of 5 modes (`todo/idea/knowledge/study/reflect`) for `todo_meta.type`. At `temperature=1`, the same ambiguous todo text can plausibly return `idea` one run and `knowledge` the next; nothing in the codebase notices because `classifier_confidence='haiku'` doesn't track which label was picked first. The fix is two lines per branch (`temperature: 0` in the Claude SDK call and the OpenAI fetch body) — no schema change, no migration, no contract change.
+
+Without explicit sampling control:
+- `classify` runs at `temperature=1`; the same `[] thinking about onboarding` returns `idea` Monday and `knowledge` Tuesday
+- "AI is inconsistent" is the only diagnosis available; replay shows the same prompt produced different labels
+- Caption variance (which is the feature) and classifier variance (which is the bug) are conflated under one silent default
+
+With explicit sampling control:
+- `classify.ts` and `summarize.ts` pass `temperature: 0` — deterministic 5-mode pick, deterministic JSON shape
+- `caption.ts` passes `temperature: 0.7` — tonal variance across the four variants is the feature, not a bug
+- `interpret.ts` keeps its existing `TEMPERATURE = 0.7` (creative but coherent for the markdown reflection)
+
+Sampling is half the LLM function — same model, same prompt, different dial, different output.
 
 ---
 
@@ -392,3 +406,6 @@ Then open `interpret.ts` and verify.
 
 ✓ Pass: you named `interpret.ts`, value `0.7`, and identified that others run at the provider default (=1).
 ✗ Fail: that's a sign this concept hasn't fully landed yet — re-read the "Default temperatures" sub-section.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (kitchen-counter-radio-with-tuning-dial scenario → "the dial is the sampling step in front of the output" pattern naming → bolded stakes pivot to four chains running silent provider default `temperature=1`, only `interpret.ts` L14 setting `TEMPERATURE = 0.7`, and `classify` as the temp=0 gap → before/after bullets on silent-default vs explicit-per-chain → one-line "sampling is half the LLM function" metaphor).

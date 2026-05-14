@@ -11,9 +11,26 @@
 
 ## Why care
 
-A user reports "the classifier got my todo wrong." You look at the entry text. You can't tell what prompt was sent, what the model returned, what the parsing did, or why the validator accepted it. You ship a fix. The user reports a similar bug a week later. You still can't reproduce.
+An air-traffic controller's job at the end of a long shift is reconstructing one specific plane's path: where did it enter the sector, which beacons did it cross, what altitude did it hold at each, what radio exchanges took place, and at exactly what timestamp did it leave. The control tower keeps a synchronized log of every radar ping, every voice transmission, every altitude change, all stamped against a shared flight-ID. Reading the tape, the controller rebuilds the flight in evidence. Without the log she remembers the plane's call sign and nothing else.
 
-LLM observability is the discipline of recording enough about each LLM call that you can reconstruct what happened weeks later. Token counts (see [23-token-economics](./23-token-economics.md)) are one slice; full traces with prompts, responses, latencies, model versions, and downstream parsing are the bigger picture. The pattern is the same shape as distributed-system tracing (OpenTelemetry, Jaeger) — every operation gets a trace ID, every sub-operation gets a span, and queries against the trace store answer "what happened" with evidence. Here's the version for LLM calls.
+The implicit question is "after the fact, can the team reconstruct what happened during this LLM call, with evidence rather than memory?" LLM observability is the answer — every chain invocation gets a trace_id, every sub-step (prompt build, provider call, JSON parse, validator) gets a span, every span carries timestamp + duration + input + output + model + tokens + error. The shape borrows from distributed tracing (OpenTelemetry, Jaeger); the LLM-specific additions are prompt/response capture and model-version tagging.
+
+**What depends on getting this right:** the ability to answer "the classifier got my todo wrong — show me the trace" with a SQL query instead of a guess, plus regression detection ("which calls produced null in the last 24h?") and post-eval replay. For loopd the planned `ai_trace` table (per `[B3.11]`) and the `traceCall(name, parentSpanId, fn)` wrapper in `src/services/ai/trace.ts` make every span queryable; `[B3.14]` evaluates Langfuse as the team-scale upgrade; `[B3.15]` documents the first regression caught — receipt, not a claim. Skip observability and every user-reported issue becomes a fresh investigation with no chain of custody.
+
+Without observability:
+- User reports "classifier got my todo wrong" → you read the entry text but can't see the prompt that was sent, the response, or the validator path
+- Ship a fix → user reports a similar bug a week later → still can't reproduce
+- "Show me all calls where the output was null in the last 24h" → no answer; you grep `console.log` and guess
+- Fire-and-forget async `scheduleClassify` orphans every trace — the async call has no link back to the entry-commit that scheduled it
+
+With observability:
+- Every `classify()` call writes a trace tree: heuristic (5ms), buildPrompt (2ms, 450 tokens), provider_call to Haiku 4.5 (1180ms, in=450 / out=12), parseClassifyJson (5ms), validator (1ms)
+- "Show me trace where output.type='X' AND human-correct='Y'" becomes one SQL query against `ai_trace`
+- Async trace propagation: `scheduleClassify(todo, trace_id)` carries the parent span; the eventual async classify writes spans with `parent_span_id` linked to the entry-commit context
+- `[B3.15]` receipt: one named regression with the query that found it — moves "I built observability" from claim to evidence
+- Cost paid: ~150 LOC for the wrapper + table, ~30KB/day at solo scale; truncate to metadata-only after 30 days once at 10× users; PII / access controls become mandatory at multi-user scale
+
+Print statements show the moment something went wrong; traces give the full timeline — logs alone aren't enough.
 
 ---
 
@@ -350,3 +367,6 @@ Today the plan is local SQLite. If you were starting today, would you skip the l
 - What function wraps each chain call to emit a span?
 
 Answer: `ai_trace` (target — `[B3.11]`). `traceCall(name, parentSpanId, fn)` in `src/services/ai/trace.ts` (target, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (air-traffic-controller-shift-log scenario → "can the team reconstruct what happened, with evidence rather than memory" pattern naming → bolded "what depends on getting this right" with `ai_trace` / `traceCall()` / `[B3.11]` / `[B3.14]` / `[B3.15]` stakes → without/with bullets walking the classify trace tree and async propagation → one-line "print statements show the moment, traces give the timeline" metaphor).

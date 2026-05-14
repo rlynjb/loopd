@@ -11,9 +11,23 @@
 
 ## Why care
 
-You corrected the AI's guess yesterday — flipped a category from "task" to "note" because the model got it wrong. Today you open the app and it's back to "task." The next batch run silently undid your correction, the model is wrong in the same way again, and you have to fix it a second time. Multiply by a month and the user concludes the AI doesn't listen. The right behaviour is for a human edit to outrank any future automated edit, forever, until the user explicitly clears it.
+A library has a shelving robot that moves returned books back to their assigned spots overnight. On one shelf, a patron sticks a hand-written note to a single book: "Hold this here — patron preference." The next night the robot rolls past, scans the note, and skips the book. The book stays where the patron put it. Pull the note off and the robot resumes moving it; until then, the robot reads-then-defers, every pass, every night.
 
-This is the "sticky override" pattern — a flag that marks a field as "manually set, hands off." It belongs to the family of "human-in-the-loop" and "authoritative source" patterns, alongside the way email clients respect a manual "not spam" forever, the way version control respects a manual merge resolution over automatic re-merges, and the way recommender systems mark a "don't recommend this" flag as permanent. You've already seen it any time a product gave you the option to "always trust this sender" or "lock this value." Every AI feature that writes back to a field a user can also write to needs some version of this rule. The next block walks the mechanics.
+That hold-this-here note is the sticky override. Not "the robot is smarter," not "the robot defers to the latest edit" — a single flag, set when the patron acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
+
+**What breaks without it:** trust in the AI surface. The codebase puts `user_overridden_type BOOLEAN` on `todo_meta`, default `false`. When the user picks a type from the picker, the handler writes `updateTodoMeta(id, { type: 'idea', user_overridden_type: true })` — both columns set in one SQL statement so an async classifier landing between two writes can't sneak in. Every AI write path then consults the flag: `scheduleClassify`'s success handler reads the meta before writing and skips when `user_overridden_type=true` (the Haiku call still ran, the result is discarded); the catch-up classifier that fills `classifier_confidence IS NULL` rows reads the flag and skips locked rows. Drop the flag and the user's Monday correction of `loopd` from `todo` to `idea` gets silently reverted by Tuesday's reclassify sweep — the user fixes it twice, then concludes the AI doesn't listen, then stops using the type picker.
+
+Without the override lock:
+- User picks `idea` for `[] loopd architecture`; meta row now has `type='idea'` `classifier_confidence='user'`
+- Wednesday's catch-up classifier re-runs Haiku, gets `study`, overwrites the row
+- User opens dashboard; the type is back to a model guess; the user fixes it again, then loses trust
+
+With the override lock:
+- User picks `idea`; row updates `type='idea'` `user_overridden_type=true` atomically
+- Every future AI path reads the flag and skips; the row survives every sweep
+- The user's signal beats the model's signal, every time, until the user clears the flag
+
+User override is sticky — the patron's note keeps the robot's hands off.
 
 ---
 
@@ -384,3 +398,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (do-not-reshelve metaphor opening / 4 layered sub-sections — the flag column, atomic single-write, every AI path consults the flag, why flag separate from confidence — each with frontend bridges and concrete consequences / principle paragraph on user-override-is-sticky).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (library-shelving-robot-and-hand-written-note scenario → "sticky override flag, read by every automated path before any write" pattern naming → bolded stakes pivot to `user_overridden_type` atomic write + `scheduleClassify` consult + catch-up classifier consult → before/after bullets on unlocked vs locked → one-line "patron's note keeps robot's hands off" metaphor).

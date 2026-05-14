@@ -11,9 +11,25 @@
 
 ## Why care
 
-You've wired up a "save on every keystroke" autosave and watched your network tab fill up with one request per character. The user is typing fast, you're firing eighty requests in ten seconds, and the server is doing the same work eighty times to settle on a final state that one request could have produced. The naive fix is to save less often; the real fix is to save once at the end of the burst.
+Imagine a waiter at a busy cafe. The customer keeps putting plates on the table — saucers, cups, side dishes, one after another in a burst. If the waiter clears each item the moment it lands, he walks a hundred trips to the kitchen for one meal. If he waits until the customer has stopped placing things for a few seconds, then makes one trip, the table still gets cleared but the kitchen sees one round instead of a hundred. Same work; fewer trips; same final state.
 
-Debouncing collapses a stream of rapid events into a single fire at the end of a quiet window. It belongs to the family of "write coalescing" patterns, alongside the kernel's page-cache flush, database group commit, and the way log-structured merge trees batch writes before pushing to disk. You've also seen it in autocomplete UIs that wait for the user to stop typing before hitting the search API, in resize handlers, and in any pub/sub system that batches events before fan-out. Here's how that actually works in this codebase.
+The question that waiter answers is one any system with bursty input has to answer: when a single user action produces dozens of small events that all want to trigger the same expensive work, how do you collapse them into one fire without losing any of the input? Not "skip every other event" — that drops state. The answer is *debouncing*: every new event resets a timer; the work runs once when the timer expires after a quiet window.
+
+**What depends on getting this right:** whether the cloud sync layer sends one HTTPS upsert per typing burst or one per keystroke, and whether a write that hit SQLite at t=4.9s gets shipped or lost on app kill at t=5s. In this codebase every synced write in `database.ts` calls `schedulePush()` (`src/services/sync/schedulePush.ts` L14–L21). The body is one line of state plus one setTimeout: `clearTimeout(timer); timer = setTimeout(fire, PUSH_DEBOUNCE_MS)` where `PUSH_DEBOUNCE_MS = 5_000`. When `fire()` finally runs, it checks an in-flight `pushing` boolean — if a previous push is still uploading, it re-arms instead of racing — and then calls `pushAll()` to walk the 10-table `SyncableTable` registry. The local write is always synchronous; only the cloud publish gets batched.
+
+Without debounce (push on every write):
+- User types `[] call mom write spec book dentist` — 30 characters, 30 autosaves
+- 30 HTTPS upserts fire, one per keystroke
+- Cellular data and battery burn; Supabase rate limits trip after a sustained burst
+- Final state is identical to one upsert at the end
+
+With debounce (5s quiet window):
+- Same 30 keystrokes; 30 SQLite writes; 30 calls to `schedulePush()` each resetting the timer
+- 5s after the last keystroke, `fire()` runs `pushAll()` once
+- One HTTPS upsert carries the final state
+- App kill at t=4.9s: the writes are still in SQLite; the next launch's `pushAll()` picks them up via the dirty filter
+
+The waiter clears once, after the burst is over.
 
 ---
 
@@ -364,3 +380,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (busy-cafe waiter-clearing-once scenario → debounce named as the answer → bolded "what depends on getting this right" with schedulePush/PUSH_DEBOUNCE_MS stakes → before/after walking a 30-keystroke typing burst → one-line "the waiter clears once, after the burst is over").

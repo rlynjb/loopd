@@ -11,9 +11,26 @@
 
 ## Why care
 
-You've renamed a file in your editor and watched git track it as a rename instead of a delete-plus-add — the same words landed in a different place and the tool figured out it was the same file. That's the question this operation answers for a list of items inside prose: when the user retypes a line with one word changed, is that the same row with an edit, or a brand-new row that replaced the old one? The naive answer loses identity every time the text shifts; the right answer survives reorderings and in-place edits without asking the user to declare which is which.
+Imagine a teacher arriving at school with yesterday's seating chart and a fresh class roster for today. Most students sat in the same seats, but a few swapped chairs, one student's nickname has changed, and one chair is empty. The teacher wants to mark attendance against the SAME students — not redo the chart from scratch — so she calls names first (the strong evidence) and only checks seat numbers for the leftovers (the weak evidence). Two passes, strongest signal first.
 
-This is the two-pass match — a stripped-down cousin of Myers diff, which is what git diff, every IDE's "rename detection," and React's keyed-list reconciliation all use under the hood. The family is "match items across two snapshots by strongest-evidence-first, fall back to weaker evidence for the remainder." You've seen the same shape in source-control merge tools (exact-line match before fuzzy hunk match), in spreadsheet diffs (cell value before cell position), and in any system that has to decide whether two records from different points in time refer to the same thing. Here's how this codebase applies that pattern.
+That is the question this operation answers when the source is a paragraph of prose instead of a roster: given a new list of items typed into text and an old list with identities already assigned, which new items inherit which old identities? Not "diff the strings," not "rebuild from scratch" — just *match by strongest evidence, fall back to weaker evidence for the residue*. That two-pass match is the family Myers diff, git rename detection, and React's keyed-list reconciler all belong to.
+
+**What depends on getting this right:** the stability of every downstream record keyed to a todo's `id`. In this codebase the `[]` lines in `entries.text` are the canonical source for `entries.todos_json`, and each todo's `id` is the foreign key that `todo_meta` rows hang off (one meta row per todo, holding `type`, `priority`, classifier output). If the scan produces a fresh `id` every time the user retypes a line with one word changed, the matching `todo_meta` row gets orphaned and `reconcileMeta()` has to throw away a classifier result that cost an Anthropic call. Identity must survive prose edits — that invariant is what makes `todo_meta` durable.
+
+Without two-pass match (naive one-loop):
+- User types `[] call mom` on Monday → todo `t-A` born, classified as `type=personal`
+- Tuesday user retypes the same line, lowercase only: `[] call Mom`
+- Naive matcher sees a "new string" → mints `t-X`, drops `t-A`
+- `todo_meta` row for `t-A` is now orphaned; classifier re-runs on `t-X`
+- Anthropic burns another call to learn `type=personal` again
+
+With two-pass match:
+- Pass 1 normalises case, exact-matches `"call mom"` → claims `t-A`
+- `id`, `createdAt`, and `todo_meta` link all survive
+- Pass 2 has nothing to do for that line; classifier call is saved
+- `reconcileMeta()` sees a clean 1:1 invariant and noops
+
+Strongest evidence first, weakest evidence cleans up the rest.
 
 ---
 
@@ -440,3 +457,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (teacher-attendance metaphor + frontend bridge to React keyed lists); added Move 3 principle paragraph after the Comparison block. Algorithm/trace structure preserved.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (teacher-with-seating-chart scenario → naming the pattern as strongest-evidence-first matching → bolded "what depends on getting this right" pivot with `todo_meta` 1:1 invariant stakes → before/after bullets walking a `[] call mom` re-edit → one-line summary "strongest evidence first, weakest evidence cleans up the rest").

@@ -11,9 +11,23 @@
 
 ## Why care
 
-The cheapest LLM call still costs money, takes 300+ milliseconds, and can fail. If your product runs an AI on every keystroke or every new row, you'll burn through a budget that buys you nothing for inputs a regex could have answered. The fix is to ask "do I actually need a model for this?" before every call — and most of the time, on the easy inputs, the answer is no.
+A clinic has a triage nurse at the front desk and a specialist down the hall. Most arrivals are easy — a scraped knee, a sore throat, someone needing a prescription refill. The nurse handles those in two minutes from a clipboard checklist. Anything ambiguous — chest pain, an unfamiliar rash, a symptom the checklist doesn't cover — gets routed to the specialist who has more time, more diagnostic tools, and a higher hourly rate. Run every walk-in straight to the specialist and the waiting room overflows; skip the nurse entirely and the cheap obvious cases pay specialist prices.
 
-The heuristic-first pattern is a two-stage classifier: a cheap deterministic check decides whether the input is easy enough to handle without the model, and only the residual uncertain cases pay for inference. It belongs to the family of "cascade" or "early-exit" classifiers — the same shape as spam filters that rule out obvious junk before the ML model, content moderation pipelines that block known-bad hashes before vision models, and CPU branch predictors that take the fast path when the prediction is confident. You've already seen this in production LLM stacks where a regex or BM25 layer sits in front of a vector DB, and in routing layers (LangChain routers, LiteLLM fallbacks) that send small inputs to small cheap models and only escalate when they have to. Here's how that actually works in this codebase.
+Two stages, asymmetric cost — that's the shape of heuristic-before-LLM. Not "use rules instead of AI," not "always use AI" — a cheap deterministic gate that returns a confident answer or abstains, and an expensive intelligent fallback that only fires when abstention happens. Naming the cascade this way is what keeps both the bill and the keystroke path honest.
+
+**What breaks without it:** the keystroke latency budget and the monthly AI bill, simultaneously. Every new `[]` line in a journal entry calls `heuristicClassify(text)` first — a synchronous regex pass that returns `'todo'` (high confidence) or `null` (don't know). On `null`, the codebase inserts the `todo_meta` row with `type='todo'` `classifier_confidence=null` and fires `scheduleClassify(todoId, text)` async — a Haiku 4.5 call that returns ~600ms later and updates `type` + `classifier_confidence='haiku'`. Drop the heuristic and every `[]` line pays for inference whether or not it needs to; a user adding three todos in five seconds sees the cursor stutter through three 300-800ms round-trips. The cost win is real ($0.0004 per Haiku call × 100 todos/day × 30 days ≈ $1.20/month avoided) but the UX win is bigger — typing never waits on a network.
+
+Without heuristic-before-LLM:
+- Every `[]` line calls Haiku synchronously
+- Three todos in five seconds = three 300-800ms cursor stutters
+- Bill scales linearly with journaling volume; offline mode degrades to "AI features unavailable"
+
+With heuristic-before-LLM:
+- `[] call mom` hits the imperative regex; `classifier_confidence='heuristic'`, no network
+- `[] thinking about onboarding redesign` returns `null`; row lands with default `type='todo'`, async Haiku updates it ~600ms later
+- The dashboard renders at typing speed; `scheduleClassify` trickles updates in over the next few seconds
+
+Cascade by cost — the doorman waves through the regulars, the manager handles the ambiguous arrivals.
 
 ---
 
@@ -377,3 +391,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: added `## How it works` heading with three moves (doorman-at-club metaphor opening / 3 layered sub-sections — cheap-path heuristic, async LLM fallback, why typing never waits — each with frontend bridges and concrete consequences / principle paragraph on cascade-by-cost).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (clinic-with-triage-nurse-and-specialist scenario → "two-stage cascade, asymmetric cost" pattern naming → bolded stakes pivot to `heuristicClassify` + `scheduleClassify` + `classifier_confidence` keeping keystroke latency and bill honest → before/after bullets on inline-Haiku vs heuristic-first → one-line "cascade by cost" metaphor).

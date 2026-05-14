@@ -11,9 +11,27 @@
 
 ## Why care
 
-The instinct on a new feature called "first-time setup" is to write a second code path: a dedicated bulk-loader that knows it's the first run, with its own pagination, its own error handling, its own everything. That code path is then untested in production until someone gets a new device — i.e., months later, with no observability. The better move is to notice that "first run" is just the degenerate case of "incremental run" with the cursor pinned to the beginning of time. Reset the watermark to null, call the regular sync, done. One code path. One set of bugs.
+Imagine a subway turnstile that treats your first ride the same as every other ride. There's no separate "first-rider gate" with its own swipe motion, its own fare table, its own animation — there's one turnstile, one swipe, and "first ride" is just the case where your prior balance was zero. The machine doesn't fork on "have you been here before?"; it asks "is your balance ≥ fare?" and the answer happens to be derivable from a single read. New riders and frequent riders flow through the same hardware. The hardware gets debugged by every rider every day.
 
-This is the "special case is a parameter, not a fork" principle — the same instinct behind null-object pattern, behind "epoch zero" timestamps that make `WHERE updated_at > 0` cover all rows, behind sentinel rows in databases that make "first" and "subsequent" use the same INSERT. The family is "reduce the surface area by making the rare path a configuration of the common path." Initial replication in CDC systems works this way. Cold-cache fills in CDNs work this way. The cost is one extra pass at install time that re-pages through everything; the benefit is that the install-time code path was exercised on every normal sync for months before it ever ran in anger. The data and the mechanics are in the next blocks.
+That is the question this operation answers when a fresh device attaches to an existing cloud account and must restore the user's full data: do you write a separate bulk-loader code path, or do you reuse the incremental sync by pointing its cursor at the beginning of time? Not "dedicated bootstrap with its own pagination and error handling," not "one giant `SELECT * FROM <table>` per table" — just *reset the cursor to NULL and call the regular `pullAll()`*. Special case is a parameter, not a fork.
+
+**What depends on getting this right:** the testing surface of the install-time code path. In this codebase `firstPullAll` in `src/services/sync/firstPull.ts` is 30 lines: walk the 10-table `SYNCED_TABLES`, UPSERT each `sync_meta.last_pull_at` to NULL, then delegate to `pullAll()`. The `cursor = last_pull_at ?? '1970-01-01...'` line in `pullTable` is what makes "NULL = pull from epoch" work without a code branch. The alternative — a dedicated full-table loader — would be ~200 LOC of pagination, retry, and progress reporting that runs only on fresh-device attach, which is rare in production, so bugs in it would live in the codebase for months before anyone exercised them in anger. The reuse-via-cursor-reset path runs the same code that every normal sync exercises, so bootstrap-relevant bugs surface in week-one usage. The 200-row paginated reuse also survives Supabase's REST request-size limit (a single `SELECT * FROM entries` with text blobs would 413 past 50MB); paginated calls don't.
+
+Without cursor-reset reuse (dedicated bulk loader):
+- `bulkLoadTable('entries')` fires `SELECT * FROM entries` — at 10k rows that's a 5MB payload
+- At 100k rows the request hits the 413 Request Entity Too Large boundary and fails
+- No resumability: a network drop mid-bulk-load forces a full restart
+- The code runs only on fresh-device attach → untested by every other sync run
+- A bug introduced six months ago surfaces the day someone gets a new phone
+
+With cursor-reset reuse:
+- `firstPullAll` writes NULL to all 10 `sync_meta.last_pull_at` rows
+- Delegates to `pullAll()` — the same function every normal sync calls
+- `pullTable` reads `last_pull_at ?? '1970-01-01...'`, fetches 200-row pages over `updated_at ASC`
+- Each page stamps progress; a mid-bootstrap network drop is resumable on the next call
+- The bootstrap path has been exercised by every incremental pull since install; bugs there are caught by ordinary usage
+
+Special case is a parameter; the common path subsumes the rare one.
 
 ---
 
@@ -487,3 +505,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (subway-turnstile metaphor + frontend bridge to useEffect with empty deps) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (subway-turnstile-no-first-rider-gate scenario → naming the "special-case-is-a-parameter-not-a-fork" principle for initial replication → bolded "what depends on getting this right" pivot with `firstPullAll` install-time-code-path testing-surface stakes → before/after bullets comparing dedicated bulk-loader vs cursor-reset reuse for 10k/100k row attach → one-line summary "special case is a parameter; the common path subsumes the rare one").

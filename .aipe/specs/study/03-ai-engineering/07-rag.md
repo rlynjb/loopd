@@ -11,9 +11,23 @@
 
 ## Why care
 
-A model was trained on the public internet two years ago. You want it to answer questions about your company's internal docs, your customer's order history, or yesterday's Slack thread — none of which it has ever seen. Fine-tuning is slow and expensive; stuffing all your data into the prompt doesn't fit. So what's left? Retrieve only the few chunks that are actually relevant to the question, paste them into the prompt, and let the model answer from the documents in front of it instead of from memory.
+A small office has a single filing cabinet with about 50 folders, organised by date. When someone asks for "last quarter's expense report," the office manager walks to the cabinet, opens the third drawer, pulls three folders, and is back at the desk in twenty seconds. Now picture the same office moved into a city library: 50,000 folders, no dates on the spines, no labels the manager recognises. The manager can't walk to the right drawer anymore — they need a librarian with a topic catalogue who can say "the three folders closest in meaning to your question are these." Different scale, different retrieval shape.
 
-Retrieval-augmented generation is the pattern that lets a generic model answer specific questions about data it wasn't trained on, by treating retrieval and generation as two separate steps. It belongs to the family of "lookup before compute" patterns — the same shape as database query planners, search engines that rank before they snippet, and recommender systems that retrieve candidates before scoring. You've already seen it in every "chat with your PDF" product, in ChatGPT's enterprise connectors, in LangChain and LlamaIndex RAG pipelines, and in vector databases like Pinecone, Weaviate, and pgvector that exist almost entirely to serve this pattern. Not every app needs the full RAG stack — small datasets are often better served by hand-picked retrieval. How it works generally is in the next block.
+RAG is the librarian-with-topic-catalogue. Embed every folder's contents into a vector, store the vectors in an index, embed the question the same way, return the top-k folders closest in meaning, paste them into the prompt. The pattern is documented here precisely because this codebase doesn't use it — the corpus is still a small filing cabinet, organised by date, and the chains know exactly which drawer to open.
+
+**What depends on getting this right:** whether the AI bill includes an embedding pipeline and a vector DB or doesn't. The codebase's chains pre-fetch by deterministic SQL — `caption.ts` always pulls the last 5 captions for anti-repetition; `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3` plus `siblingTodos.slice(0, 5)`. Microseconds, zero dollars, no separate ML pipeline. The user's journal is small (a heavy month is ~50 entries; a year is ~365 × 200 words ≈ 75K tokens — the entire corpus fits in Claude's context window twice over). RAG's value scales with corpus size; at this scale, similarity search doesn't outperform "give me the last 5 by date." Add RAG today and the bill grows by an embedding model + a vector DB + a top-k tuning loop, for the same `ai_summaries.summary_json` outputs the date-shaped retrieval already produces. The threshold to revisit is "the day a chain needs query-time relevance over a corpus too large to stuff."
+
+Without hand-picked retrieval:
+- Every chain embeds every entry on write; vectors live in pgvector or Pinecone
+- `expand.ts:buildContext` becomes an embed-question-then-top-k call; ~150ms added, $0.0001 per call extra
+- Relevance quality depends on the embedding model's notion of similarity — wrong top-k = unhelpful context
+
+With hand-picked retrieval:
+- `caption.ts` calls `getRecentAISummaries(date, 5)`; `expand.ts` calls `recentDates.slice(0, 3)`
+- Microseconds, zero dollars, deterministic — the chain knows what it wants
+- The day the corpus crosses ~50K entries or a chain needs query-time relevance, RAG becomes load-bearing; until then, the small filing cabinet works
+
+RAG is a tradeoff, not a requirement — the corpus shape decides.
 
 ---
 
@@ -421,3 +435,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (librarian-with-meaning-catalogue metaphor opening / 3 layered sub-sections — the RAG pipeline, what loopd does instead, why loopd can skip RAG — each with frontend bridges and concrete consequences / principle paragraph on RAG-as-tradeoff-not-requirement).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-filing-cabinet vs city-library scenario → "RAG is the librarian-with-topic-catalogue" pattern naming → bolded stakes pivot to date-shaped `getRecentAISummaries` and `buildContext` slicing at the current corpus scale → before/after bullets on embed-pipeline vs hand-picked → one-line "corpus shape decides" metaphor).

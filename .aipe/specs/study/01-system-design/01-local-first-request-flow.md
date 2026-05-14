@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've opened a notes app on the subway, typed a sentence, and watched the cursor lag because the app was busy round-tripping every keystroke to a server it couldn't reach. The lag is the network leaking into the request path. The underlying problem is that the user's writes and the publish-to-the-world step are two different operations, and most apps weld them together.
+You're on the subway, no signal, and you want to jot down a thought before you forget it. You open the notes app, type a sentence, and the cursor freezes between every keystroke because the app is trying to reach a server through tunnel walls. You give up, switch to Apple Notes, and the cursor moves at the speed of your thumb. By the time you surface above ground the thought is gone.
 
-Local-first architecture splits them apart: writes commit to an on-device store synchronously, and a background process races to mirror them somewhere durable later. It belongs to the family of "decouple availability from durability" patterns, alongside write-behind caches and outbox-style replication. You've seen this in Git (commits are local, push is later), in your OS file system (the page cache acknowledges before the disk does), and in modern collaborative editors that work on a plane. Here's how that actually works in this codebase.
+What decided which app felt usable is where the write actually lands. Apple Notes wrote to your phone's disk and acknowledged immediately; the other app tried to write to a server first and asked the disk to wait. Local-first is the name for the first shape — the user's write commits to an on-device store synchronously, and a background process races to mirror it somewhere durable later. Not "fast enough to feel local" — actually local.
+
+**What depends on getting this right:** the perceived speed of every keystroke, and whether the user's writes survive when the network doesn't. In this codebase a journal entry's text is autosaved to `entries.text` on every keystroke; `[]` markers in that text get scanned into `todo_meta` rows at commit; the dashboard reads from SQLite, never from Supabase. If a keystroke had to wait for HTTPS, the cursor would stutter on the train and the autosave invariant ("the row is in SQLite by the next render") would collapse — every prose-derived feature (`scanTodos`, `scanThreads`, `scanNutrition`) depends on that invariant. Lose it and the editor stops feeling like an editor.
+
+Without local-first:
+- User types `[] call mom` at t=0
+- App fires HTTPS POST to Supabase; cellular RTT is 400ms on the train
+- Cursor freezes 400ms; next keystroke queues
+- Network times out; the write is dropped or the user backs out of the screen
+- Reopen: the todo isn't there
+
+With local-first:
+- User types `[] call mom` at t=0
+- `database.ts` writes to SQLite at t=1ms; `scheduleClassify` fires in the background
+- Cursor moves at the speed of typing
+- 5 seconds after the last keystroke, `pushAll()` upserts dirty rows to Supabase
+- Reopen at any point: the todo is there, sync or no sync
+
+The user's writes go to the device; the cloud catches up later.
 
 ---
 
@@ -383,3 +401,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (bank-teller metaphor opening / 4 layered sub-sections with frontend bridges — single funnel, synchronous local write, debounced push, offline reconciliation / principle paragraph on decoupling availability from durability).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (subway scenario → "what decides which app felt usable" pattern naming → bolded "what depends on getting this right" pivot with the autosave-invariant stakes → before/after bullets walking a `[] call mom` keystroke → one-line metaphor "writes to the device, cloud catches up later").

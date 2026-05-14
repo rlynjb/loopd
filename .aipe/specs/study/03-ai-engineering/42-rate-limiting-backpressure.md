@@ -11,9 +11,26 @@
 
 ## Why care
 
-A sync-pull from cloud brings 50 entries down. Each entry triggers a `scheduleClassify` async call. All 50 fire at once. The provider's per-minute rate limit kicks in; 40 of them get 429 responses; your retry logic re-fires them; the provider's burst-protection blocks the retries too. The user's "fresh install" experience is broken because there's no queue between your code and the API.
+A coffee shop at peak rush has one espresso machine and four baristas. If all four try to pull shots at once the machine sputters and ruins every cup. The shop manager doesn't ask the machine to be faster — she puts down a rope line and a numbered ticket dispenser. Customers can queue ten deep; the baristas can only pull two shots at a time; the machine never sees more pressure than it can handle. The rope is the manager's lever; the machine's internal limit is not.
 
-Rate limiting and backpressure are the pair of patterns that bound how fast you talk to external services. Rate limits are *external* — set by the provider. Backpressure is *internal* — your code respecting the limit and queueing work that would exceed it. The pattern is the same shape as any producer/consumer system with a slow consumer: a queue mediates between the fast producer (your app) and the slow consumer (the provider). Here's the version for LLM calls.
+The implicit question is "what stands between the burst of work and the slow external service that can't absorb it?" Rate limiting and backpressure are the pair: the provider sets external limits (RPM, TPM — 429 when exceeded, sometimes with a `Retry-After` header), and your code's queue is the internal mechanism that respects them. The queue is the rate limiter you actually control; size it conservatively and you never trigger the provider's. Three flavours: concurrency cap (never more than N in-flight, cheapest), token bucket (earn tokens at rate R, spend per call), adaptive backoff (slow down on 429s, speed up otherwise).
+
+**What depends on getting this right:** burst tolerance during sync-pull / batch-expand / multi-entry operations, whether 429 storms reach users as visible failures, and whether per-chain caps aggregate correctly against the provider's global ceiling. For loopd the partial pattern lives in `src/services/ai/expand.ts:25` as `MAX_CONCURRENT = 3` — per-call-site backpressure that works for expand alone but doesn't coordinate with other chains. `[B5.1]` lifts the pattern into a centralized `src/services/ai/queue.ts` with per-chain caps (classify=6, summarize=1, caption=1, expand=3, interpret=1) plus an optional global per-provider budget. Every chain migrates from direct provider calls to `aiQueue.enqueue(chainName, callFn, options)`; queue depth is visible in the planned AI ops panel.
+
+Without centralized backpressure:
+- Sync-pull brings 50 entries → 50 `scheduleClassify` async calls fire simultaneously
+- Provider: 10 succeed, 40 return 429; retry logic re-fires all 40; burst-protection blocks the retries too
+- User experience: "first launch is broken"
+- Cross-chain interference: expand's `MAX_CONCURRENT=3` holds, but classify fans out unrestricted; total concurrent calls = 3 + N can exceed Anthropic's per-account limit even when each chain individually is under cap
+
+With centralized queue + concurrency caps:
+- 50 entries → 50 instant enqueues; queue drains at cap of 6 concurrent classify calls
+- 50 succeed over ~10 seconds; the provider never sees a burst it can't absorb
+- User experience: "indexing in background; results appear over 10s"
+- `Retry-After` header respected on the rare 429 that still occurs; queue depth observable per chain
+- Cost paid: ~100 LOC for the shared module, plus one-line migration in each chain — versus scattered per-chain conventions that don't aggregate
+
+The queue is the rate limiter you actually control — size it conservatively and the provider's never trips.
 
 ---
 
@@ -304,3 +321,6 @@ Today the plan is in-app queue. If you were starting today at 100× scale, would
 - What's the target centralized queue location?
 
 Answer: `src/services/ai/expand.ts:25`. `src/services/ai/queue.ts` (target — `[B5.1]`, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coffee-shop-rope-line-and-espresso-machine scenario → "what stands between the burst of work and the slow external service" pattern naming → bolded "what depends on getting this right" with `expand.ts:25` / `MAX_CONCURRENT=3` / `aiQueue.enqueue()` / `[B5.1]` stakes → without/with bullets walking the 50-entry sync-pull burst → one-line "queue is the rate limiter you actually control" metaphor).

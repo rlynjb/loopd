@@ -11,9 +11,25 @@
 
 ## Why care
 
-You built an eval set of 50 representative inputs, watched your numbers tick upward week-over-week, then shipped a prompt change that — according to the eval — was a slight improvement. The next day a user reported that their classifier output went from sensible to nonsense. Your eval missed it. Why? Because your eval set was all *typical* cases. The change you made degraded the *edge* cases. You had a golden set; you didn't have an adversarial set.
+A driving examiner runs every applicant through three different routes before signing the licence. Route one is the suburban loop everyone practices on — parallel park, three-point turn, four-way stop. Route two is the awkward intersections the examiner picked specifically because student drivers tend to flunk them — a blind merge, a hairpin under a freight bridge, a cyclist crossing. Route three is the bug list — every mistake any applicant has ever made, distilled into a sequence of moves the examiner watches for. An applicant who only practiced route one passes the easy test, fails the second, regresses on the third.
 
-There are three kinds of eval data, and each catches a different category of bug. Golden sets show you *typical-case quality*; adversarial sets show you *worst-case resistance*; regression sets show you *whether you broke something that used to work*. Most teams ship with only golden sets because that's what tutorials show. The pattern is the same shape as unit tests vs integration tests vs property tests in software — each does work the others can't. Here's how the three differ and why you need all three.
+The implicit question is "what category of failure does this evaluation actually detect?" Eval set types are the answer: golden sets measure typical-case quality, adversarial sets measure worst-case resistance, regression sets measure whether past wins are still holding. Picking only golden — the tutorial default — surfaces "average went up" while hiding "edge case broke" and "old bug reappeared." Three sets, three bugs, three different cadences.
+
+**What depends on getting this right:** which prompt changes are safe to ship, which categories of failure surface from users instead of from CI, and whether the eval system can be trusted as a ship gate. For loopd the planned `scripts/eval-harness/datasets/` directory (per `[B3.1]`) sub-divides into golden / adversarial / regression per chain — classify, caption, compose, interpret. Without the split, a prompt tweak to caption could improve typical inputs, regress a known borderline (mis-classified todo "thinking about whether to learn rust"), and silently re-break a user-reported issue from three months ago — all while the single average ticks up.
+
+Without the three-set split:
+- One ~50-item golden set → ship a prompt change; numbers go up 2 points; ship it
+- Edge case "thinking about whether to learn rust" now classifies as todo instead of reflect — never in the eval, never caught
+- User reports it; you fix the prompt; you don't add the case to a regression set because no such set exists
+- Next prompt change re-breaks the same case six months later; you discover this when a user complains again
+
+With the three-set split:
+- Golden (~50): F1, accuracy, rubric average — drifts up week-over-week as prompts improve
+- Adversarial (~20): pass rate on hand-crafted borderlines; refresh quarterly as new failure modes emerge
+- Regression (continuous): every fixed bug becomes a row; must hold at 100% to ship — never sample, never skip
+- Combined dashboard: golden 87% (up), adversarial 70% (up), regression 98% (down — block ship, investigate)
+
+Three sets, three bugs — the eval is a system, not a number.
 
 ---
 
@@ -317,3 +333,6 @@ Today the plan is three sets per chain. If you were starting today with limited 
 - What's the regression-set ship gate condition?
 
 Answer: `scripts/eval-harness/datasets/` (target, not yet created). Regression set must score 100% before any prompt change ships.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (driving-examiner-three-routes scenario → "what category of failure does this eval detect" pattern naming → bolded "what depends on getting this right" with `scripts/eval-harness/datasets/` and `[B3.1]` stakes → without/with bullets walking the prompt-change lifecycle → one-line "eval is a system, not a number" metaphor).

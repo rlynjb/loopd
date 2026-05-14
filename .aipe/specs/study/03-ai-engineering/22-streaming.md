@@ -11,9 +11,23 @@
 
 ## Why care
 
-The first time you watched ChatGPT type a response one word at a time, you probably didn't think "that's a UX trick." It is. The model generates tokens autoregressively — one at a time, each one conditioning the next — and showing them as they arrive turns "thinking" (a 10-second wait) into "talking" (10 seconds of visible progress). The same bytes arrive whether you stream or wait, but the perceived latency collapses.
+A stenographer is sitting beside a witness in a courtroom, typing every word as it lands. The lawyers don't wait for the witness to finish a five-minute answer before they hear anything; they're reading the transcript scroll in real time on a side monitor. The witness still talks at the same speed; the lawyers just don't have to wait for a "done" to start listening. If the same testimony were delivered as a finished printed statement, every minute of speaking would be a minute of silence on the other side.
 
-Streaming is the pattern where the API sends partial output as tokens are generated, instead of waiting for the full completion. It's the same pattern as Server-Sent Events on the web (one HTTP connection, many events over time) and the same pattern as `tail -f` on a log file (read as data appears). The trade is that streaming makes the UI feel snappy but makes downstream code harder — you can't validate JSON until the stream completes, and any error mid-stream is a partial output you have to clean up. Here's why loopd doesn't stream, and what would change if it did.
+The implicit question is whether the consumer reads the output as it lands or only when it's complete. Not a faster model, not a smaller response — incremental delivery, so the perceived wait collapses even though the total bytes are unchanged.
+
+**What depends on getting this right:** whether a 10-second wait on `interpret.ts`'s markdown essay feels like 10 seconds of nothing or 10 seconds of reading. In this codebase no chain streams today — every JSON chain (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`) runs a hard validator (`validate.ts:validateSummary` L12–L137, `caption.ts:parseAndValidate` L169–L199) that needs the complete object, and `interpret.ts` calls `cleanMarkdown` (L98–L108) on the whole response. If streaming were added, the natural first candidate is `interpret.ts` — the only chain whose output the user reads directly. The validators would have to either wait for stream-complete (giving up the UX win) or move to a streaming JSON parser (more complexity); the persistence layer would have to decide what to do with a partial output on a dropped connection.
+
+Without streaming (loopd today):
+- User opens interpret modal; sees a spinner for 10 seconds; gets the full essay at once
+- All five chains share the same shape: call → wait → validate → render
+- One code path; one retry semantics ("call failed → call again")
+
+With streaming (the hypothetical for `interpret`):
+- User opens interpret modal; first paragraph appears in 200ms; essay grows on screen
+- Validator question: validate at stream-complete, or use partial-JSON parser?
+- Three new failure modes: partial completion, mid-stream validation, retry-after-partial
+
+A stenographer typing for an audience who reads in real time, not a printer waiting to finish the page.
 
 ---
 
@@ -288,3 +302,6 @@ Today, four chains do not stream because their output is JSON consumed by valida
 - Why is `validate.ts` an obstacle to streaming the structured chains?
 
 Answer: `src/services/ai/interpret.ts` (markdown output, no validator gate). `validate.ts` requires whole-output JSON; streaming would force a partial-tree parser to coexist with the existing whole-object validator.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (courtroom-stenographer scenario, name the incremental-vs-complete question, interpret.ts streaming candidate stakes, before/after, single-line metaphor).

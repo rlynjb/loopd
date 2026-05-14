@@ -11,9 +11,27 @@
 
 ## Why care
 
-When you need a model to produce several related outputs about the same thing — four headline variants, three captions, five summary styles — the obvious approach is to call the model four times in parallel and pick the best one. The non-obvious approach, and the right one when the outputs must agree on facts, is to ask for all of them in a single call with a structured output schema. Four parallel calls produce four independent stories about the same day; one call producing four variants produces four voices of the same story. Same facts, same nouns, four tones.
+Imagine a photographer hired to deliver four shots of the same scene — wide, medium, close, detail. She could set up the camera four times in four different sessions, but the light would shift, the subject would move, the four images would tell four slightly different stories. Instead she sets up once, mounts the camera, and swaps lenses. Same vantage point, same moment, same light. The four images are guaranteed to be of the *same scene* because they share the take.
 
-This is multi-output structured prompting — a specific application of the broader "ask for all the related stuff at once and validate the whole shape or reject it" discipline. The family is "constrained generation with all-or-nothing validation," and it's the same shape OpenAI's function-calling, JSON schema modes, and tool-use APIs all encourage. Adjacent patterns: chain-of-thought wrapped in a structured envelope, multi-question quiz generation, code-with-tests emitted together. The trade-off is bimodal — one good output or no output at all, no partial credit — and that's a feature, not a bug, when consistency between the parts is what makes the whole useful. Here's the data and the mechanics.
+That is the question this operation answers when an LLM must produce several related outputs about the same thing: how do you guarantee they describe the same facts, the same mood, the same nouns? Not "fire four parallel calls and merge," not "loop the same prompt four times with a tone parameter" — just *one structured call with a JSON schema covering all outputs, validated all-or-nothing*. The same discipline as OpenAI function-calling, JSON-mode generation, and tool-use APIs.
+
+**What depends on getting this right:** the editor's "four voices of today" feature and the integrity of the `variants` field on `ai_summaries.summary_json`. In this codebase `generateCaption` in `src/services/ai/caption.ts` is called from `summarize.ts` L87–L96 after the structured summary completes. One system prompt specifies four tonal voices (`clean | smoother | reflective | punchy`) plus a `detectedTheme` from a 6-way categorical; one Claude Sonnet 4.6 call returns a single JSON object; `parseAndValidate` checks every variant key and normalises each to three lines. If `generateCaption` made four parallel calls instead, each call would see the same `rawLog` but interpret it independently — one variant might say "the morning workout," another "the gym session," another "exercise." The user toggling between voices in the editor would see four different stories rather than four voices of one story. The strict-shape validation (any malformed variant invalidates the whole output) is the price paid for that coherence — when the picker promises "four voices of today," three voices is a different product.
+
+Without single-call shared context (parallel per-variant calls):
+- Four `Promise.all` calls to Claude, one per tone
+- Each call carries the full ~600-token system prompt → 4× the prompt cost (~$0.056 vs ~$0.012)
+- Each call interprets `rawLog` independently → nouns drift between variants
+- Per-variant pass/fail produces a picker with "unavailable" tiles when one tone fails
+- Theme detection is a fifth separate call, adding latency and cost
+
+With single structured call:
+- One Sonnet call, one system prompt, one `max_tokens=768` budget for the JSON
+- Shared context → "morning workout" appears in all four voices
+- `parseAndValidate` enforces strict shape: missing key or empty variant → `null`, editor falls back to `summary.summary`
+- `detectedTheme` rides the same call (the LLM has the full rawLog and can pick a theme the variant text doesn't even contain literally)
+- 365 days/year of summarize: ~$4.4 instead of ~$20.4
+
+One context, many outputs; coherence beats parallelism when the outputs must agree.
 
 ---
 
@@ -487,3 +505,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (photographer-with-four-lenses metaphor + frontend bridge to single useQuery with derived projections) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (photographer-with-four-lenses-one-take scenario → naming multi-output-structured-prompting / constrained-generation-with-all-or-nothing-validation → bolded "what depends on getting this right" pivot with `ai_summaries.summary_json.variants` four-voices-of-today coherence stakes → before/after bullets comparing parallel per-variant calls vs single shared-context call → one-line summary "one context, many outputs; coherence beats parallelism when the outputs must agree").

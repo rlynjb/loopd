@@ -11,9 +11,26 @@
 
 ## Why care
 
-Not every relationship between two pieces of data can be expressed with a foreign key. The moment one side lives inside a JSON column, inside a document, or inside a remote system, the database engine can't help you keep them in sync — there's no constraint to violate at write time. The integrity guarantee has to move out of the schema and into your code, and most teams discover that the hard way after their first orphan row leaks into production.
+Imagine two filing cabinets in the same office. The first cabinet holds folders for every active project. The second cabinet holds a single metadata card for each project — billing contact, last review date, classification. The rule is "every folder in cabinet A has exactly one card in cabinet B; no orphans on either side." Nobody chained the two cabinets together physically; the discipline is enforced by a clerk who walks past both at the end of every shift, notes mismatches, and patches them. If the clerk skips a shift, an orphaned card sits in cabinet B for a project that no longer exists in cabinet A — and someone reading the card has no way to know it points at nothing.
 
-An application-enforced invariant is a rule that the database can't check, kept honest by a reconciler that periodically walks both sides and patches the diff. It belongs to the family of "eventual consistency between coupled stores" patterns — the same problem solved by Kubernetes controllers reconciling desired vs. actual state, by search indexes catching up to their source-of-truth tables, and by cache-invalidation workers. The trick is always: pick one side as authoritative, accept brief drift, and make the patch step idempotent. Here's how that actually works in this codebase.
+The question that office answers is one any system with split-but-coupled state has to answer: when a database engine can't enforce referential integrity between two stores — because one side is a JSON array element, or a document field, or a row in a different database — what keeps them in sync? Not a foreign key (the syntax doesn't exist for these targets). The answer is an *application-enforced invariant*: a rule the schema can't check, kept honest by a reconciler that walks both sides and patches the diff.
+
+**What depends on getting this right:** whether deleting a todo from prose silently leaves orphaned `todo_meta` rows that the dashboard reads as ghosts, or whether the 1:1 contract holds tight enough that every `todo_meta` row points back at a live `TodoItem` in `entries.todos_json`. In this codebase `entries.todos_json` is a JSON column containing an array of `TodoItem` objects each with its own UUID; `todo_meta` is a separate SQLite table keyed by `todoId`. SQLite has no syntax for `FOREIGN KEY (todoId) REFERENCES entries.todos_json[*].id` — JSON array elements aren't FK targets. So `reconcileTodoMetaForEntry(entry_id, items)` in `src/services/todos/reconcileMeta.ts` is the *only* enforcement layer: it diffs the scanned `items[]` against the existing `todo_meta` rows, inserts what's new, soft-deletes what's missing, and leaves matched rows alone. If the reconciler has a bug, drift is real and visible on the next read.
+
+Without the reconciler (only the JSON column is updated):
+- User deletes `[] call mom` from prose; `scanTodos` produces an items array without that id
+- `entries.todos_json` is rewritten with 2 items instead of 3
+- `todo_meta` still has 3 rows; the orphan with the deleted id sits there
+- The dashboard's `SmartTodoList` joins on `todoId` and renders the orphan with no parent prose line
+- User sees a phantom todo they can't edit or delete
+
+With the reconciler (1:1 invariant enforced every commit):
+- User deletes `[] call mom`; `scanTodos` returns 2 items
+- `reconcileTodoMetaForEntry` builds a `Map<todoId, row>` of existing metadata, walks the 2 items, finds 1 row whose id isn't in the scanned set
+- That row gets `deleted_at` stamped; the dashboard joins return 2 todos
+- The orphan was caught at the next commit boundary, not at the next bug report
+
+The reconciler is the clerk — without it the invariant is just a wish.
 
 ---
 
@@ -364,3 +381,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-filing-cabinets metaphor opening / 4 layered sub-sections — the 1:1 contract, the reconciler, why matched rows are left alone, why no FK — each with frontend bridges and concrete consequences / principle paragraph on application-side referential integrity).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-filing-cabinets-with-clerk scenario → application-enforced invariant named as the answer → bolded "what depends on getting this right" with JSON-array-no-FK stakes → before/after walking a prose-delete that orphans a `todo_meta` row → one-line "the reconciler is the clerk; without it the invariant is just a wish").

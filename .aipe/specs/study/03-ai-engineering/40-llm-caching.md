@@ -11,9 +11,23 @@
 
 ## Why care
 
-You ran the same interpret query twice on the same unchanged entry and paid full price both times. Same prompt, same model, same output — but you paid for re-generating it from scratch. Most LLM apps treat each call as fresh; production apps cache aggressively because the savings are real.
+A coffee shop runs two saving habits side by side. One: the espresso machine keeps the morning milk frothed in a small jug so each cappuccino doesn't restart from cold milk — the prep stays warm between drinks, you pay full price for the first jug then a fraction for each refill from it. Two: when the regular orders a flat white at 9am every day, the barista remembers the spec, sometimes pre-pulls the shot when she sees him park outside, and hands it across without reprocessing. Two completely different savings — one shared across many drinks at the machine, one specific to the regular's identical order.
 
-LLM caching has two distinct layers. **Prompt caching** is provider-side: the same prefix tokens get cheaper on the second call (Anthropic's `cache_control`, OpenAI's automatic caching). **Semantic caching** is application-side: identical or near-identical inputs return previously-computed outputs. The pattern is the same shape as HTTP caching — there are server-side caches (CDN), client-side caches (browser), and they save different costs. Here's how the two cache layers compose in loopd.
+The implicit question is "at which layer is the work being repeated, and what kind of cache catches it?" LLM caching is the answer split into two: prompt caching is provider-side (KV-cache reuse on a stable prefix — Anthropic `cache_control`, OpenAI automatic; 90% discount on cached input tokens, threshold ~1024 for Sonnet 4.6 / ~2048 for Haiku), and semantic caching is application-side (store input → output keyed on a hash; on identical input, skip the model entirely). They save different costs and apply to different chains — stable prompts across diverse inputs vs identical inputs across the same prompt.
+
+**What depends on getting this right:** which chains pay full price for repeat work and which don't, and which chains stay variable when variability is the feature. For loopd `[B5.2]` adds Anthropic `cache_control` to eligible chains' SYSTEM_PROMPTs (audit length first — caption's ~600-token prompt is *below* Sonnet 4.6's cacheable threshold today, so caching is silently skipped; interpret's prompt qualifies). `[B5.8]` adds a local `interpret_cache` table keyed on (entry_id, entry_text_hash, chain_version) — re-tapping interpret on an unchanged entry returns in <50ms with no provider call. Caption is the explicit anti-fit for semantic caching — variability is the feature, anti-repetition history depends on `recentCaptions`, the cache would freeze the user on yesterday's caption forever.
+
+Without either cache:
+- User taps interpret on an unchanged entry → full $0.01–0.03 + 2–5 seconds; tap again ten seconds later → full $0.01–0.03 + 2–5 seconds again
+- Every chain's static SYSTEM_PROMPT pays full input-token price across thousands of calls
+- Solo scale loses pennies; multi-tenant at 100k users loses ~90% of input-side spend (~$5–10/mo and up)
+
+With both caches layered:
+- Prompt cache (provider-side): wrap eligible SYSTEM_PROMPTs with `cache_control: { type: 'ephemeral' }`; first call pays full price + creates the cache, subsequent calls pay ~10% on the cached prefix; visible in the `[B1.2]` token log as cache-creation vs cache-read tokens
+- Semantic cache (application-side): `interpret_cache` row created on miss; next read with the same (entry_text_hash, chain_version) returns instant, free; edit invalidates by hash mismatch; sync columns ride the existing `schedulePush` pattern
+- Caption: prompt cache eligible (once prompt grows past threshold), semantic cache wrong — re-roll must produce different variants; the anti-repetition state depends on `recentCaptions` outside the cache key
+
+The semantic cache saves all the cost on hits; the prompt cache saves 90% on prefixes when the semantic cache misses — two layers, two wins, two different chains earn each.
 
 ---
 
@@ -340,3 +354,6 @@ Today the plan is `[B5.8]` for interpret only. If you were starting today, would
 - What flag enables prompt caching on Anthropic?
 
 Answer: `interpret_cache` (target — `[B5.8]`). `cache_control: { type: 'ephemeral' }` on the system block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coffee-shop-frothed-milk-and-regular's-order scenario → "which layer is the work being repeated" pattern naming → bolded "what depends on getting this right" with `[B5.2]` / `[B5.8]` / `interpret_cache` / `cache_control` stakes → without/with bullets walking interpret vs caption fit → one-line "two layers, two wins, two different chains earn each" metaphor).

@@ -11,9 +11,26 @@
 
 ## Why care
 
-You've watched a long-running upload fail at 80% and had to start the whole thing over from zero. The annoyance isn't the failure — networks fail — it's that the unit of failure was the whole job instead of the chunk you were on. The fix is to slice the job into batches small enough that a retry is cheap, write idempotent operations so re-sending a chunk is safe, and track progress at the chunk level so a successful chunk never gets re-sent. Lose one batch, retry one batch.
+Imagine loading a moving truck with 137 numbered boxes that have to make it to a warehouse across town. You could carry one box at a time — 137 trips, 137 chances for the truck to break down mid-route. Or you stack boxes into pallets of 50, drive each pallet across, and after each pallet lands safely the warehouse manager crosses those box numbers off the master manifest. If the truck breaks down halfway through pallet 2, only those 50 boxes need to be reloaded — the warehouse already has pallet 1 and won't re-receive what's already there.
 
-This is the batched-upsert pattern with checkpoint-per-batch progress — the same shape as bulk-load utilities in every database (`COPY` with commit intervals, `INSERT ... ON CONFLICT`), the same shape as resumable file uploads (S3 multipart, tus protocol), the same shape as message-queue consumers committing offsets per batch. The family is "amortise per-call overhead by batching, but keep batches small enough that a failure isn't catastrophic." Idempotency on the receiver (upsert-on-conflict, not insert) is what makes retry safe; the sender doesn't need to track which rows it already sent — it just resends whatever still looks unsynced. Here's how this codebase applies that pattern.
+That is the question this operation answers when an on-device store has to push a backlog of edits to a remote database over an unreliable mobile network: how big should each shipment be, and how do you avoid re-sending what's already arrived? Not "one row per HTTPS round-trip," not "one giant payload of everything at once" — just *batched upserts where the batch size amortises per-trip latency, idempotency on the receiver makes retries safe, and a local cursor column doubles as the retry queue*.
+
+**What depends on getting this right:** the wall-clock duration of a sync, and the resilience of every dirty row to a flaky network. In this codebase the cursor is `synced_at` on each of the 10 synced SQLite tables, and the predicate `WHERE updated_at > synced_at` defines the dirty set. `pushTable` slices that set into batches of 50, upserts each batch to Supabase with `onConflict: 'user_id,id'`, and stamps `synced_at` on the local rows only when the upsert returns OK. If batch 2 of 3 fails on a 502, batches 1 and 3 still get stamped, and the next `schedulePush()` fires `localQueryDirty()` again — it re-selects exactly the 50 rows whose `synced_at` is still stale and retries them. There's no separate failure log, no exponential backoff structure, no in-flight-vs-queued state machine — the SQL predicate IS the retry queue.
+
+Without batching + idempotency (one row per HTTPS call):
+- 137 dirty rows × 200ms mobile latency = ~27 seconds of pushing per user typing burst
+- A 502 on row 73 either drops that row silently or aborts the loop
+- The device's HTTP connection pool gets exhausted halfway through
+- The next debounce window can't fire because the previous push is still running
+
+With batched-upsert + `synced_at` retry queue:
+- 137 dirty rows in ⌈137/50⌉ = 3 batches × ~200ms = ~600ms total
+- Batch 2 fails → only batch 2's 50 rows stay dirty; batch 1 and 3 are stamped
+- Next `schedulePush()` fires; `localQueryDirty()` re-selects those 50 rows
+- The upsert with `onConflict + LWW` makes re-sending an already-applied batch a server-side no-op
+- The user's experience: a successful sync after a momentary blip; no manual retry, no support ticket
+
+Round-trips are the cost; the cursor column IS the retry queue.
 
 ---
 
@@ -411,3 +428,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (mover-with-manifest metaphor + frontend bridge to React Query mutation queue) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (moving-truck-with-pallets scenario → naming the batched-upsert-with-idempotent-retry pattern → bolded "what depends on getting this right" pivot with `synced_at` cursor-as-retry-queue stakes → before/after bullets comparing per-row vs batched push of 137 dirty rows → one-line summary "round-trips are the cost; the cursor column IS the retry queue").

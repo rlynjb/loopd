@@ -11,9 +11,26 @@
 
 ## Why care
 
-Every "pull what's new since I last checked" feature you've ever used has the same hidden trap: which clock do you trust? If the client picks the cursor from its own clock, a phone that's two minutes fast will skip rows; a phone that's two minutes slow will re-pull the same rows forever. The right answer is to ask the server what time it thinks it is, anchor the cursor to that, and never use the local clock for the watermark. Clock skew between devices is the bug, and stamping with the server's clock is the fix.
+Imagine two friends keeping a shared journal, except they don't meet in person — they leave entries in a drop box at the library. Whenever one of them stops by, she wants to read only the entries written since her last visit. She could read the whole journal cover-to-cover every time (slow, wasteful), or she could write the date of her last visit on the cover and skip ahead to entries dated after that. The hidden trap: whose clock does "the date of her last visit" use? If she stamps the cover with her own wristwatch and her watch runs fast, she'll skip entries her friend just wrote. If she stamps it from the library clock above the drop box, both friends agree on the watermark.
 
-This is cursor-based incremental pull — the same shape as RSS feed readers (`Last-Modified` / `If-Modified-Since`), the same shape as event-sourced replication, the same shape as the `WHERE updated_at > ?` pattern in every CDC (change-data-capture) pipeline. The family is "monotonic-cursor sync" — the cursor only moves forward, the predicate is `> cursor`, and pagination is just slicing the result by size. The detail that separates the working version from the broken version is twofold: the cursor must come from a clock both sides agree on (server time, or a logical timestamp), and the per-page write must stamp the row so the next pull doesn't re-flag it as outgoing-dirty. Here's how this codebase applies that pattern.
+That is the question this operation answers when a device wants to fetch only the rows on a remote database that have changed since the last successful sync: how do you express "what's new since last time" in a way that's safe under concurrent writes and immune to device clock skew? Not "fetch everything every time," not "trust the device's `Date.now()` for the cursor" — just *cursor-based incremental pull, anchored to server time, paginated by ascending `updated_at`*.
+
+**What depends on getting this right:** the proportion of work per pull and the survival of offline-only local edits. In this codebase `pullTable` selects from each table where `updated_at > last_pull_at`, pages by 200 in `updated_at ASC`, runs `chooseWinner(local, cloud)` per row to defend any unpushed local edit, and stamps `synced_at = serverTime` so the pulled row stops looking dirty to the next push. The cursor `last_pull_at` is anchored to Postgres's `get_server_time()` RPC, not `Date.now()` — a device clock that's 30s behind would re-pull the same window forever, a device 30s ahead would silently skip rows the cloud hasn't written yet. The per-row gate is the read counterpart of the LWW write semantics: if the user typed offline and the cloud has an older copy, the local edit survives.
+
+Without cursor + server time (full-table pull with local clock):
+- Each pull does `SELECT * FROM entries` — at 10k cloud rows that's a 5MB payload
+- Device clock drift means `last_pull_at` either skips rows or re-pulls them forever
+- No per-row conflict gate → an incoming cloud row clobbers the typing-burst the user just made offline
+- The user's offline edits silently disappear when they reconnect
+
+With monotonic cursor + server-time + per-row chooseWinner:
+- `serverTime = await get_server_time()` anchors the cursor to Postgres's clock
+- `WHERE updated_at > last_pull_at` returns only the 350 actually-new rows, ordered ASC
+- Paginated 200 at a time → bounded memory, bounded round-trip cost
+- Per-row `chooseWinner(local, cloud)` — if local `updated_at` is newer, skip; the next push sends it
+- Apply, stamp `synced_at = serverTime`, advance cursor, recurse until page is short
+
+Cost scales with what changed, not what exists; the cursor lives on a clock both sides agree on.
 
 ---
 
@@ -430,3 +447,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (newspaper-delivery metaphor + frontend bridge to React Query pagination + staleTime) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (shared-journal-drop-box-with-library-clock scenario → naming the cursor-based-pull-anchored-to-server-time pattern → bolded "what depends on getting this right" pivot with `last_pull_at` clock-skew + offline-edits-survival stakes → before/after bullets comparing full-table-with-local-clock vs cursor+serverTime+chooseWinner → one-line summary "cost scales with what changed, not what exists; the cursor lives on a clock both sides agree on").

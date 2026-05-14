@@ -11,9 +11,26 @@
 
 ## Why care
 
-A user installs your app on a new phone. There might be a year of their data sitting in the cloud, or nothing. There might also be data on the device from a previous use, or nothing. Four combinations, and each one demands a different first move: pull from cloud, push to cloud, do nothing, or stop and ask. Pick wrong on first launch and you either lose their existing work or replace it with a stale snapshot. What's the right move? That's the question this decision tree answers.
+Imagine standing at an airport baggage claim watching two suitcases come down the belt, both yours-looking, both identical from across the room. Before you walk off with either, you check the tag. There are four possible states: neither tag matches you (walk away — not yours), one tag matches and one doesn't (take the matching one), the other tag matches (take that one instead), or both match (now you have a real problem — call an attendant). The rule isn't "always grab the first bag" or "always grab the second"; it's "look at what's actually on each tag, then route."
 
-A first-run decision tree is a one-shot classifier that runs at cold start, inspects the state of both stores, and routes to exactly one initialization path before normal incremental sync takes over. It belongs to the family of "boot-time reconciliation" patterns, alongside container init scripts, package manager first-install hooks, and the way a fresh Git clone decides whether to pull from origin or set itself up empty. The two-by-two of "local has data" times "remote has data" is the same matrix every backup tool, every dotfile manager, and every multi-device sync product has had to navigate. The next block walks the mechanics.
+The question that baggage check answers is one any app with both a local and a cloud store has to answer on first launch: there might be data on the device from a previous install, or nothing. There might be data in the cloud from a previous session on another phone, or nothing. Four combinations, each demanding a different first move. Not "always pull cloud" — that overwrites the user's recent local work. Not "always push local" — that overwrites cloud data that's already converged. The answer is a *first-run decision tree*: a one-shot classifier that inspects both sides at cold start, picks one of four branches, then sets a flag so it never runs again.
+
+**What depends on getting this right:** whether a user's existing work survives the first sync, or whether one side silently overwrites the other. In this codebase `bootstrap()` runs in `app/_layout.tsx` on cold start. Two SecureStore reads gate it: `isCloudConfigured()` checks for `supabase_url` + `supabase_anon_key`, and `cloud_initial_push_done` is the post-decision flag. When neither short-circuits, `bootstrap()` queries both sides cheaply: `localHasData = SELECT COUNT(*) > 0 FROM entries` plus a HEAD-style probe against one canonical cloud table. The two booleans pick a branch: `(no, no)` → no-op, `(yes, no)` → `initial-push` walks every syncable table and pushes everything, `(no, yes)` → `firstPull()` pulls every cloud row in pages, `(yes, yes)` → the awkward case, where Phase A treats local as canonical and logs a warning (Phase B's plan is a UI dialog). The flag prevents re-running because the `(yes, yes)` branch isn't idempotent — running it twice would re-push local over any cloud-side edits since the last boot.
+
+Without an explicit decision tree (initializers scattered, no flag):
+- A user installs cloud config after typing locally for a week (`(yes, yes)` state)
+- One initializer pulls cloud first, overwriting the week's local writes
+- Another initializer pushes local after the pull — sending now-stale data back
+- The user opens the app and their week is gone; the cloud is a snapshot from before they typed
+- No log line names what happened because there was no decision; the bug was emergent
+
+With the decision tree + flag:
+- Same `(yes, yes)` first boot; `bootstrap()` sees both have data, takes the local-canonical branch with warning
+- Local week pushes up; cloud's prior state gets LWW-resolved on the next normal pull
+- `cloud_initial_push_done` is set; bootstrap exits in <1ms on every subsequent boot
+- Normal incremental sync (push + pull with LWW) runs from then on; the cold-start path is invisible
+
+The flag is the airport's stamp: once it's on your boarding pass, the gate stops asking.
 
 ---
 
@@ -375,3 +392,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (suitcase-at-baggage-claim metaphor opening / 4 layered sub-sections — SecureStore gates, four-quadrant query, the four branches + awkward (yes,yes) case, why the flag is essential — each with frontend bridges and concrete consequences / principle paragraph on cold-start as explicit decision tree).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (baggage-claim two-suitcases-check-the-tag scenario → first-run decision tree named as the answer → bolded "what depends on getting this right" with bootstrap()/SecureStore-flag stakes → before/after walking a `(yes, yes)` first boot → one-line "the flag is the airport's stamp; once it's on your pass, the gate stops asking").

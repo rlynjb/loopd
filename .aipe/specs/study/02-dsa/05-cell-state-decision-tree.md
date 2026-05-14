@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've watched a calendar grid flicker on every render because each cell did its own database lookup to figure out what colour it should be. The right shape is the inverse: gather the data your view needs once, hand the gathered structure down to the cell renderer, and let each cell compute its own state in pure code with zero I/O. The decision becomes a function of its inputs and nothing else — no awaits, no `useState`, no race conditions. The cell can re-render a thousand times per second and the cost stays flat.
+Imagine a stadium turnstile checking tickets. The attendant doesn't phone the box office for each fan to ask if their ticket is valid — that would create a queue down the block. Instead the box office prints a list at the start of the night ("here are tonight's valid ticket numbers"), hands the list to the turnstile, and the turnstile does an O(1) lookup against the list for each fan. The expensive step (gather every valid ticket) happens once. The cheap step (decide for this fan) happens thousands of times.
 
-This is a pure decision function — sometimes called a finite-state classifier or a lookup table when the input space is small enough to enumerate. It's the same pattern as CSS rule resolution (compute the matched class from element state, do not query anything), the same pattern as React's `useMemo` selectors, the same pattern as Redux derived state. The family is "split the expensive side (gathering) from the cheap side (deciding) so the cheap side can run hot without dragging the expensive side along." The handoff is that the parent owns the gather, the child owns the decide, and the contract between them is a plain data structure. Here's how this codebase applies that pattern.
+That is the question this operation answers when a calendar grid has to render hundreds of cells per frame: how does each cell compute its own state without doing its own I/O? Not a database read per cell, not a `useState` per cell — just a *pure decision function* that takes the gathered context as arguments and returns one of a small enumerated set of states. The expensive side (gathering) runs once at the parent; the cheap side (deciding) runs hot in the leaves.
+
+**What depends on getting this right:** the render performance and visual stability of `DailyScheduleGrid`. In this codebase the grid renders 7 days × N habits worth of cells on every habit toggle, every week change, and every live-now tick. Each cell needs to map `(habit, dateStr, todayStr, checkedDates)` to one of `done | off-day | pending | upcoming | missed`. If that decision were impure — say each cell awaited a `getCheckIns(habitId, dateStr)` call into `src/services/database.ts` — every cell would flash placeholder state mid-render, React's reconciler would re-render twice per cycle, and the grid would bloom into existence each time the user scrubbed weeks. The parent `DailyScheduleGrid.tsx` materialises `checkedDatesByHabit: Map<string, Set<string>>` once per render so `cellStateFor` can stay O(1) and pure. Lose that contract and the grid stops being a grid.
+
+Without pure split (per-cell I/O):
+- Each cell calls `getCheckIns(habit.id, dateStr)` on render
+- Call returns a Promise → cell renders placeholder, then re-renders with real state
+- At 30 habits × 7 days = 210 cells, the grid commits twice per frame
+- Scrubbing weeks triggers 210 awaits; the grid visibly blooms each time
+- React can't skip cells because the inputs technically changed between renders
+
+With pure decision (gather once at parent):
+- Parent calls `loadCheckInsForRange()` once, builds `checkedDatesByHabit` via `useMemo`
+- Each cell calls `cellStateFor(habit, dateStr, todayStr, checkedDates)` — synchronous, O(1)
+- The `Set<string>.has(dateStr)` short-circuits the `done` branch before any date parsing
+- React reconciles cells by referential equality of inputs; unchanged cells skip
+- The grid renders flat — 210 ops, one commit, zero blooms
+
+Split the expensive gather from the cheap decide; keep the leaves pure.
 
 ---
 
@@ -396,3 +414,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (traffic-light metaphor + frontend bridge to useMemo selectors) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (stadium-turnstile-with-ticket-list scenario → naming the pure-decision-function pattern → bolded "what depends on getting this right" pivot with `DailyScheduleGrid` render-stability stakes → before/after bullets comparing per-cell I/O vs parent-gather-then-decide → one-line summary "split the expensive gather from the cheap decide; keep the leaves pure").

@@ -11,9 +11,26 @@
 
 ## Why care
 
-Most "sort by X, then Y, then Z" code in real apps is written as three passes — sort by Z, then stable-sort by Y, then stable-sort by X — because the author didn't realise a single comparator can express the whole rule at once. One comparator that returns a non-zero result on the first key that differs is both faster and easier to read than three chained sorts, and it composes: adding a new tiebreak is one extra line, not another whole pass over the array.
+Imagine a librarian sorting a returns cart. Hardcovers go on top, paperbacks below — but within each format, fiction before non-fiction, and within each genre, oldest publication date first. She doesn't make three separate passes through the cart. She picks up two books, compares their format; if same, compares their genre; if same, compares the year. The first comparison that disagrees is the answer; the rest don't matter for that pair. One pass, three keys, lexicographic order.
 
-This is the multi-key comparator pattern, and it's the same shape as SQL's `ORDER BY a DESC, b ASC, c DESC`, the same shape as a Python `sorted(items, key=lambda x: (x.a, x.b, x.c))` tuple-key, the same shape every spreadsheet uses for its "sort by primary column, then secondary" dialog. The family is "lexicographic ordering" — compare on the most significant key, only break the tie when it's actually a tie. The trick that makes it correct is that the final sort must be stable (rows that compare equal keep their relative order from the input), so any pre-existing structure in the input shows through where the comparator is silent. Here's how this codebase applies that pattern.
+That is the question this operation answers when an app has to display a flat list of items with a layered ranking rule: how do you express "sort by A, then B, then C" without writing three chained sorts? Not a triple-pass over the array, not a hand-rolled selection sort — just a *single multi-key comparator* with fall-through, the same shape as SQL `ORDER BY a, b, c` and Python's `sorted(items, key=lambda x: (a, b, c))`.
+
+**What depends on getting this right:** the predictability of any flat ranked list the app surfaces. In this codebase `rankTodos` was the layered policy for `/todos` — `done` last, source tier (`carried` > `ai` > `journal`) second, `createdAt` ascending third. The comparator IS the policy: each clause encodes one product decision (don't let yesterday's unfinished todos drown under today's new ones), and the order of clauses encodes their priority. If the clauses are written as three separate `.sort()` calls instead of one fall-through comparator, every product change (add a new tier, flip an axis) becomes a multi-pass shuffle rather than a one-line edit, and stability across renders becomes a thing the developer has to keep in their head. Note that `rankTodos` is currently dormant — `app/todos.tsx` uses pinned-first sort now — but the live `formatRelativeTime` export from `src/services/todos/rank.ts` keeps the file in the bundle.
+
+Without one comparator (chained `.sort()` calls):
+- Pass 1: sort by `createdAt` ascending
+- Pass 2: stable-sort by source tier
+- Pass 3: stable-sort by `done`
+- Adding a 4th tier (e.g. classifier confidence) means another sort pass and another stability worry
+- Reading the file means following three separate sorts to understand the policy
+
+With one comparator:
+- `flat.sort((a, b) => doneCheck(a, b) || tierCheck(a, b) || createdAtCheck(a, b))`
+- The comparator reads top-to-bottom as a policy list
+- Adding a tier is one extra fall-through line
+- TimSort is stable by ES2019 spec — equal items keep input order without effort
+
+Compare on the most significant key, fall through to the next when it's a tie.
 
 ---
 
@@ -442,3 +459,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (dictionary-comparator metaphor + frontend bridge to Array.sort tuple comparators) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-sorting-returns-cart scenario → naming the multi-key fall-through comparator → bolded "what depends on getting this right" pivot with `rankTodos` policy/dormant-status stakes → before/after bullets comparing chained sorts vs one comparator → one-line summary "compare on the most significant key, fall through to the next when it's a tie").

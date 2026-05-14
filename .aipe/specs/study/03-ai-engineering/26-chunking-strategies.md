@@ -11,9 +11,23 @@
 
 ## Why care
 
-You embedded every entry as a single 1500-word vector. Then a user asked "what did I say about my knee?" and the retrieval surfaced an entry where they wrote 200 words about their cat, then 50 words about a knee twinge, then 800 words about a movie. The vector averaged all three topics and ranked closer to "cat" than to "knee" — so the right entry got buried at rank 17.
+A long letter arrives — five pages, single envelope. The mail room has a slot that fits A4-sized envelopes but not a folded five-page wad. The clerk's options: stuff the whole letter into one large envelope and hope the slot accepts the bulge; cut it cleanly between paragraphs into five smaller envelopes that fit; or chop it sentence-by-sentence into thirty tiny envelopes. The clerk that sends one bulky envelope loses some pages at the slot; the clerk sending thirty tiny envelopes loses the thread between sentences ("It was great" — what was great?). Same letter, three deliveries, three different things received on the other side.
 
-Chunking is the decision about how to slice your documents before embedding them. The pattern is the same as page-level vs paragraph-level indexing in a search engine, or function-level vs file-level in code search: small chunks improve precision (you find the right *paragraph*) at the cost of recall (you might miss the *theme*). Get it wrong and the same corpus that should be findable is unfindable. Here's how to think about the trade.
+The implicit question is what size piece you cut the document into before sending it through a fixed-size opening. Not "how do I embed the entry," but "how much of the entry per vector." A single vector per long entry averages every idea into a centroid that points at none of them; one vector per sentence shatters the antecedents; somewhere in between is the right cut.
+
+**What depends on getting this right:** every retrieval feature in the Phase 2A roadmap that touches long entries. Today loopd doesn't chunk — `interpret.ts` and `expand.ts` work at the whole-entry granularity (`buildContext` in `expand.ts` ships ~3 days of entry context as-is). When `[B2A.7]` interpret-this-week or any "find what I said about my knee" feature lands, the planned `embed.ts` will face the call: one vector per `entries.text` row (whole-entry, simplest), one per sentence (highest precision, 5–20× storage in `entry_embeddings`), or one per paragraph (middle). Pick wrong and the right entry gets buried at rank 17 behind cat-topic centroids, or — at the other extreme — "it was great" lands in a chunk with no antecedent. The decision affects `entry_embeddings` storage cost, search latency, and recall, and re-chunking later means re-embedding every entry.
+
+Without chunking (whole-entry vectors):
+- One vector per `entries.text` row. Simplest. Smallest table.
+- Long entries with many topics produce centroid vectors near no single topic
+- "What did I say about my knee?" misses the entry that's 90% about a cat
+
+With sentence-window chunking:
+- ~10× rows in `entry_embeddings`; per-sentence precision
+- "It was great" sentence has no antecedent in its own vector → meaningless match
+- Higher recall on multi-topic entries; lower precision on context-dependent sentences
+
+A long letter cut into envelopes that fit the slot — not so big it jams, not so small the sentences lose each other.
 
 ---
 
@@ -311,3 +325,6 @@ Today the plan is whole-entry first, sentence-window if eval fails. If you were 
 - What table holds the resulting vectors?
 
 Answer: `chunkEntry()` in `src/services/ai/embed.ts` (target, not yet created). `entry_embeddings` (target, `[B2A.2]`).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (long-letter-through-mail-slot scenario, name the how-much-per-vector question, planned chunkEntry/entry_embeddings stakes, before/after, single-line metaphor).

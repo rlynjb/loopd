@@ -11,9 +11,28 @@
 
 ## Why care
 
-You've added two new lines at the top of a document and watched every line-number-anchored thing below shift down by exactly two — comments in a code review, bookmarks in an editor, breakpoints in a debugger. The intuition is obvious to a human: same comment, just lower. The naive algorithm sees a comment at line 47 and looks for line 47 in the new file; it's not there, so the comment dies. Tolerance for small shifts is the difference between annotations that survive editing and annotations that have to be redrawn from scratch every time.
+Imagine a notebook with a yellow sticky note stuck to page 12. Tomorrow you add two fresh pages to the front of the notebook. The thing the sticky note refers to is now physically on page 14 — but the sticky note hasn't moved with it. A human filing assistant looks at the note, glances at page 12, sees the topic isn't there, and sweeps a few pages forward and back looking for the original topic before declaring the note an orphan. Same identity, small shift in position, soft tolerance.
 
-This is fuzzy match with a displacement window — strongest evidence first (exact position), weaker evidence second (same content within a small distance). Source-control "blame" tracks lines this way across commits. PDF annotation tools do it across reflowed pages. IDE breakpoints in many editors do a version of this when the underlying file changes outside the editor. The pattern is "anchor on identity, allow a bounded slip on position" — the window is small enough that wrong matches stay rare, large enough that ordinary edits don't burn identity. Here's how this codebase applies that pattern.
+That is the question this operation answers when prose with embedded `#tag` markers is re-scanned after the user has typed paragraphs above existing tags: when the line numbers shift by one or two, do we keep the mention rows or burn their identity? Not strict line-number equality, not full text-similarity rebuild — just *fuzzy match with a bounded displacement window*, the same family as `git apply --3way`, git blame line tracking, and PDF annotations across reflowed pages.
+
+**What depends on getting this right:** the durability of `thread_mentions` row ids across ordinary editing. In this codebase `thread_mentions` rows hang off `entries.text` by `(threadId, sourceLine, tagText)`, and any future per-row attribute (mention recency, user-applied weights, sync state in the `synced_at` ledger) is keyed to that id. If `reconcileMentions` deletes the old row and inserts a new one every time the user adds a paragraph above a `#health` tag, `schedulePush()` fires a delete-plus-insert pair to Supabase instead of nothing, the cloud sees churn, and any downstream aggregate built on mention age resets. The ±3 line tolerance is how the algorithm avoids burning identity on the most common edit shape (adding context above a tag).
+
+Without the displacement window (strict line-index Pass 2):
+- User has `#health` tag at line 8; `thread_mentions` row `m2` records `sourceLine=8`
+- User adds 3 lines of prose at top of entry; the tag is now at line 11
+- Pass 1 (exact line 11) misses; Pass 2 (exact line 8) misses
+- `m2` gets deleted; a fresh row is inserted with new id and `sourceLine=11`
+- `schedulePush()` sends a delete + insert to Supabase for what is logically the same mention
+- Any downstream "first seen" timestamp on the mention resets
+
+With the ±3 window:
+- Pass 1 (exact line 11) misses
+- Pass 2 sweeps `(threadId=health, tagText="health")` within ±3 lines of 11
+- Finds `m2` at line 8; `|8 - 11| = 3 ≤ 3` ✓
+- `updateMentionSourceLine(m2, 11)` — same row, new line number
+- `schedulePush()` sends one update; cloud sees a single field change; first-seen survives
+
+Anchor on identity, allow a bounded slip on position.
 
 ---
 
@@ -424,3 +443,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (sticky-note metaphor + frontend bridge to react-window scroll restoration) and Move 3 principle after the Comparison block. Algorithm/trace structure preserved.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (notebook-sticky-note-shifted-pages scenario → naming the fuzzy-match-with-displacement-window pattern → bolded "what depends on getting this right" pivot with `thread_mentions` durability stakes → before/after bullets walking a `#health` tag shifted by 3 lines → one-line summary "anchor on identity, allow a bounded slip on position").

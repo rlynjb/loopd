@@ -11,9 +11,23 @@
 
 ## Why care
 
-"We added AI" is a sentence with no information in it. The real question is which features in the product call a model, what does each one read, what does each one return, and what does the app do with that return value. Every interesting decision in an AI-powered product is buried in those four columns, and most teams can't answer them off the top of their head — they describe the product instead of the AI inside it.
+A small kitchen runs a five-recipe binder. Each recipe has its own ingredients, its own oven setting, its own expected dish, its own serving instructions. The cook flips to the recipe the order calls for, follows it, plates it, moves on. Walk in and ask "what does the kitchen serve?" and the cook hands you the binder — you can see the soup is leek-and-potato, the pasta is carbonara, the bread is sourdough. None of that information is hidden inside the cook's head; it's named on the page.
 
-A per-feature pattern map is a catalogue: one row per AI-touching feature, listing prompt shape, input, output contract, and downstream behaviour. It belongs to the family of "system inventory" documents — closer to an API spec, an event catalogue, or a feature flag registry than to a tutorial. You've already seen this shape in OpenAPI specs that enumerate every endpoint, in event-sourcing systems that document every event type, and in any LLM evals harness that has to know exactly which prompts produce which structured outputs. Without this table, you can't reason about cost, latency, blast radius, or which features will break when you change a model version. Here's how the features land in this codebase.
+A per-feature AI catalogue is that binder. Not "we added AI" — five named recipes, each with a prompt template, a model choice, an output contract, and a place in the UI. Naming each feature this way is what makes cost, latency, blast radius, and provider-swap decisions tractable.
+
+**What depends on getting this right:** the ability to reason about any single AI feature without re-deriving the whole product. The codebase ships five chains: `summarize.ts` (Sonnet/GPT-4o, structured editor JSON + freeform summary into `ai_summaries.summary_json`), `caption.ts` (Sonnet/GPT-4o, 4 tonal variants `clean/smoother/reflective/punchy` into `summary_json.variants`), `classify.ts` (Haiku/GPT-4o-mini, 1-of-5 mode label into `todo_meta.type` + `classifier_confidence='haiku'`), `expand.ts` (Sonnet/GPT-4o, per-type typed JSON for `idea/knowledge/study/reflect` into `todo_meta.expanded_md`), `interpret.ts` (Sonnet/GPT-4o, long-form markdown into a modal, NOT persisted). The two-tier model split (Sonnet for content, Haiku for labels) keeps classify at ~$0.0004 instead of ~$0.01 per call — 25× the cost ratio that tracks 25× the output-token-count difference. Drop the catalogue and "we added AI" becomes the only available description; cost analysis, model-version migration, and "which feature breaks if Anthropic deprecates Sonnet 4.6?" all become re-discovery exercises every time they're asked.
+
+Without the per-feature map:
+- "How much does AI cost per active day?" → "let me trace the chains" → 30-minute archaeology
+- Switching `classify` from Haiku to GPT-4o-mini means opening five files to find the one that needs the model flip
+- A new contributor doesn't know whether `interpret` persists or is ephemeral until they grep `database.ts`
+
+With the per-feature map:
+- Five named recipes, each ~150-300 LOC, each owning prompt + parser + persister
+- Persisted four (`summary_json`, `type`, `expanded_md`) feed downstream UI; `interpret` is ephemeral by design
+- Model split (Sonnet for content, Haiku for labels) is one line in `config.ts:getProvider()`-adjacent code per chain
+
+Five recipes, one binder — every AI feature in this codebase has a named page.
 
 ---
 
@@ -466,3 +480,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: renamed `## Features overview` to `## How it works`; added Move 1 mental-model opening (recipe-binder metaphor with frontend bridge to typed useMutation hooks); added 2 layered sub-sections — persisted vs ephemeral split, two-tier Sonnet/Haiku model split — each with frontend bridges and concrete consequences; closed with principle paragraph on naming AI features and one-pattern-per-feature.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-kitchen-five-recipe-binder scenario → "five named recipes, each with prompt+model+contract+UI place" pattern naming → bolded stakes pivot to all five chains anchored to `summary_json.variants`, `todo_meta.type`, `todo_meta.expanded_md`, `classifier_confidence`, and the Sonnet/Haiku tier split → before/after bullets on undocumented vs catalogued → one-line "every AI feature has a named page" metaphor).

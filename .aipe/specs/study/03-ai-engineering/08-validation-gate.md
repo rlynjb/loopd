@@ -11,9 +11,23 @@
 
 ## Why care
 
-A model will return malformed JSON, invent a field you didn't ask for, drop a required field, or quietly switch from an array to an object — and it will do all of this on a prompt that worked yesterday. Every system that writes LLM output to a database without checking it first eventually has a row that crashes a render two weeks later, and nobody can figure out why. The model is producing text; the only thing standing between that text and your storage layer is a parse + a check.
+A traveller hands their passport across a border-control desk. The officer doesn't ask the traveller whether their paperwork is in order — they check, page by page. Name on the form, photo matches, dates valid, visa in the right column. If the paperwork passes, the stamp goes in and the traveller walks into the country. If something is wrong — a misspelled name, a missing entry stamp, a visa for the wrong category — the traveller goes back across the line. The check happens at the boundary, every time, with no exceptions for travellers who looked trustworthy yesterday.
 
-The validation gate treats every model output as untrusted input — the same way you'd treat a JSON payload from a public API. It belongs to the family of "parse, don't validate" patterns: convert the raw output into a strongly-typed value at the boundary, reject anything that doesn't conform, and never let unchecked data into the core of the system. You've already seen this shape in Zod or Pydantic schemas at HTTP boundaries, in JSON Schema validators on webhooks, in OpenAI's "structured outputs" mode that constrains the model to a schema at decode time, and in Instructor / Outlines / LangChain output parsers that retry on validation failure. The next block walks the mechanics.
+That stamp-or-reject step is the validation gate. Not a sanity check, not a logging hook — a load-bearing boundary where untrusted input either becomes typed data or gets rejected. Naming the model as "untrusted input" (not "an assistant whose output we'll lightly check") is what makes the rest of the codebase safe to trust.
+
+**What breaks without it:** the integrity of every row written from an AI chain. The codebase runs `parseJson` to extract the first `{...}` substring and `JSON.parse` it, then runs a per-chain schema check — `validateSummary` cross-checks every `clipId` in `clipOrder` against the input clips; `parseAndValidate` for caption checks all four variants (clean/smoother/reflective/punchy) are present; `validateExpansion` checks the per-type required fields match the discriminated union. Failures route per-chain: `caption` skips and leaves `ai_summaries.summary_json.variants` at its previous value; `expand` retries once with a stricter system prompt ("Re-emit ONLY a single JSON object that exactly matches the schema") and gives up to `{ ok: false, reason: 'malformed' }` on second failure; `summarize` skips and surfaces `ai_summaries.error`. Drop the gate and a model that quietly drops `summary_json.clipOrder[2]` writes a corrupt row that crashes the editor render two weeks later — and the bug looks like an editor bug, not an AI bug.
+
+Without a validation gate:
+- `caption.ts` writes whatever Claude returned; one day `variants.clean` is missing, the editor screen renders `undefined.split(...)` and crashes
+- "Why did the dashboard break?" → "the model felt different today" — no replay, no rejection point
+- Bad data spreads silently through `ai_summaries.summary_json` until a downstream consumer trips
+
+With a validation gate:
+- `parseJson` returns `null` → chain skips persistence loudly; previous row stays intact
+- `validateSummary` rejects unknown `clipId` → `ai_summaries.error` populated, UI shows previous summary
+- `expand.ts` retries once with the stricter prompt; second failure is `{ ok: false, reason: 'malformed' }`, surfaced cleanly
+
+Treat the model as an untrusted client — parse, validate, reject, every call.
 
 ---
 
@@ -379,3 +393,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (border-officer metaphor opening / 4 layered sub-sections — parseJson extract, per-feature validators, per-chain failure policy, interpret exception — each with frontend bridges and concrete consequences / principle paragraph on treating the model as an untrusted client).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (border-control-stamp scenario → "load-bearing boundary, untrusted input becomes typed data or gets rejected" pattern naming → bolded stakes pivot to `parseJson` + `validateSummary` + `validateExpansion` + per-chain failure policy → before/after bullets on no-gate vs gated → one-line "treat the model as untrusted client" metaphor).

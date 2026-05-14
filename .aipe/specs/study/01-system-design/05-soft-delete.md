@@ -11,9 +11,26 @@
 
 ## Why care
 
-You've deleted a row on one device and watched it come back, like a vampire, the next time the app synced from a backup. A hard `DELETE` removes the row, but it doesn't leave any trace that says "this thing used to exist and the user got rid of it." So any replica that still has the row treats it as new and dutifully restores it. That's how a delete becomes an un-delete.
+Imagine a graveyard with two kinds of plots: ones where the body and the headstone are both gone, and ones where the body is removed but the headstone stays. Walk past an empty plot of the first kind and you'd never know anything used to be there — there's no record. Walk past a headstone with no body and you know exactly when the person died, that they're not coming back, and that nobody needs to dig where the marker stands. Now imagine you copied the second cemetery to a sister town: the sister cemetery's records still show the headstones, so nobody there tries to "restore" the person by re-burying them.
 
-A tombstone is a row that's marked as gone instead of physically removed, with a timestamp recording when it died. It belongs to the family of "logical deletion" patterns and is how every replicated system avoids the resurrection problem: Cassandra writes tombstones, Dynamo writes tombstones, distributed file systems do the same. You've also seen this in any "trash" folder UI — the file isn't gone, it's flagged, so undo is cheap and the system has a paper trail. The next block walks the mechanics.
+The question that scenario answers is one any replicated store has to answer: how do you propagate the *absence* of a row when "the row isn't there anymore" looks identical to "the row never existed here"? Not a hard `DELETE` — that erases evidence. The answer is a *tombstone*: keep the row, stamp the time of death on it, and trust every reader to walk past.
+
+**What depends on getting this right:** whether a delete on one device stays deleted after sync, or whether the cloud (or a second device) cheerfully resurrects the row the next time it pulls. In this codebase every synced table has a `deleted_at TEXT` column. Deletes write `UPDATE entries SET deleted_at = now, updated_at = now WHERE id = ?`, never `DELETE FROM`. Reads filter `WHERE deleted_at IS NULL` everywhere — UI, scanners, exports. The sync layer treats a tombstoned row as an ordinary "updated" row: `pushAll()` selects it via `updated_at > synced_at` and upserts the `deleted_at` value to Supabase; `pullAll()` brings tombstoned rows back to other devices and their read filter hides them. The "deletion" propagated without a special channel — just like an edit, only the edit was "this row is gone now."
+
+Without tombstones (hard DELETE on every side):
+- User deletes entry e123 on the phone at 14:32; row vanishes from SQLite
+- Push runs at 14:37; the row isn't in the dirty-row select (it's not in the table at all)
+- The cloud copy of e123 still exists
+- Tomorrow the user opens the tablet; pull brings e123 back as if it were new
+- The user's experience: "I deleted this yesterday and it came back"
+
+With tombstones (UPDATE deleted_at):
+- User deletes entry e123 at 14:32; `UPDATE entries SET deleted_at='2026-05-10T14:32', updated_at='2026-05-10T14:32'`
+- Push at 14:37 picks the row up via the dirty filter; Supabase stores it with `deleted_at` set
+- Tablet pulls; receives the row with `deleted_at` populated; local read filter hides it
+- The deletion converged everywhere; no special "delete protocol" was needed
+
+The tombstone is just an edit that says "I'm not here anymore."
 
 ---
 
@@ -350,3 +367,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (gravestone metaphor opening / 4 layered sub-sections — UPDATE not DELETE, the read filter, why sync needs the tombstone, the deferred 30-day vacuum — each with frontend bridges and concrete consequences / principle paragraph on deletes-as-ordinary-edits).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (graveyard with-and-without-headstones scenario → tombstone pattern named as the answer → bolded "what depends on getting this right" with sync-resurrection stakes → before/after walking a delete-then-pull on a tablet → one-line "tombstone is an edit that says 'I'm not here anymore'").

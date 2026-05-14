@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've used an email inbox where starred messages sit on top and everything else stays in time order underneath. You've used a chat app where pinned conversations float above the rolling list of recent threads. The user model is the same in both: pinning is a sticky modifier, recency is the default order, and the two compose without fighting each other. A list that doesn't separate "what's important" from "what's recent" forces the user to do one of those jobs in their head every time they scan it.
+Imagine a fridge magnet board with a stack of paper notes pinned to it. Some notes have a yellow star sticker — those float to the top no matter when they were written. The unstickered notes hang below in the order you wrote them, newest on top. When you walk up to the board, your eye scans the starred ones first; everything else is "what did I think about lately." Two rules, no fighting: the sticker says what's important, the date says what's fresh.
 
-This is sort with priority partition — a two-key lexicographic comparator where the first key is a boolean (pinned vs not), the second key is a timestamp. It's the same shape as a priority queue with timestamps as the tiebreak, the same shape SQL expresses as `ORDER BY pinned DESC, created_at DESC`, the same shape every "favourite folders first" file manager uses. The family is "stable lexicographic sort" — the comparator returns on the first key that differs, ties fall through to the next key, and equal-on-all-keys rows preserve their input order thanks to stability. The pinned flag is just a 0-or-1 column dressed up as a feature. Here's how this codebase applies that pattern.
+That is the question this operation answers when a UI list has to show "important AND recent" without forcing the user to maintain a manual position for every row: how do you compose a sticky modifier with a default time order? Not a drag-to-reorder UI with integer ranks, not a multi-pass sort of pinned-then-rest — just a *two-key stable comparator: boolean first, timestamp second*.
+
+**What depends on getting this right:** the predictability of the `/todos` list every time it renders. In this codebase the comparator is inlined in `app/todos.tsx` L187–L194 and reads `pinned` first (true before false), then `createdAt DESC`. The write path is `updateTodoMeta(row.id, { pinned: !row.meta.pinned })` — one boolean toggle, one column write, one `schedulePush()` debounce. If the comparator tried to express ordering with a single composite number, the policy would be implicit and a sign flip would silently invert the list. Worse, if the app used a drag-to-reorder `position` integer, every reorder would rewrite up to N rows and every reorder would fight the LWW resolver across devices. The boolean+timestamp shape is the cheapest correct expression of the product intent — and it's already in the schema; `todo_meta.pinned` is a one-bit column. Note: `src/components/home/SmartTodoList.tsx` L41–L67 still runs the legacy position-based sort; the dashboard hasn't been migrated, which is a flagged content-drift issue.
+
+Without boolean+timestamp (drag-to-reorder with `position` integer):
+- User drops a row between two others → app computes a new `position` between neighbours
+- Periodically rebalances `position` across all rows to avoid integer drift
+- Each reorder writes N rows → `schedulePush()` sends N rows to Supabase
+- Two devices reordering concurrently → LWW can't sensibly merge — silent loss
+- The UI carries a `Swipeable` drag handler per row, plus the rebalancer
+
+With boolean+timestamp comparator:
+- Pin/unpin is one boolean toggle on `todo_meta.pinned`
+- The comparator returns on the first key that differs: `aPin !== bPin` decides; otherwise fall through to `bTime - aTime`
+- TimSort runs O(n log n) in-place over a list of a few hundred rows; sub-millisecond at journaling scale
+- Adding a 3-tier priority later is a one-line edit (`aPin = a.meta.priority`)
+- One column write per pin action; sync sends one row
+
+Two keys, lexicographic fall-through; the policy IS the comparator.
 
 ---
 
@@ -415,3 +433,6 @@ Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (ind
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (starred-grocery metaphor + frontend bridge to Array.sort comparators) and Move 3 principle after the Comparison block.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (fridge-magnet-with-star-stickers scenario → naming the two-key stable comparator with priority partition → bolded "what depends on getting this right" pivot with `todo_meta.pinned` write-path simplicity and `SmartTodoList` drift stakes → before/after bullets comparing drag-to-reorder `position` vs boolean+timestamp comparator → one-line summary "two keys, lexicographic fall-through; the policy IS the comparator").

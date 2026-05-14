@@ -11,9 +11,23 @@
 
 ## Why care
 
-You hit "save" and the app freezes for four seconds while an LLM thinks about your input. The interaction was instant the day before AI was added, and now it's slow on every save. The fix isn't a faster model — the fix is to stop waiting. Commit a sensible placeholder synchronously, kick off the model call in the background, and update the row when the answer comes back. The user feels nothing.
+A barista at a busy café takes an order, writes the customer's name on a paper cup, hands over a receipt, and says "I'll call your name when it's ready." The customer walks away — sits down, opens a phone, talks to a friend. Two minutes later someone calls the name and the customer walks back to pick up the drink. The transaction completed in two phases: the receipt was instant, the drink wasn't. If the barista had insisted the customer stand at the counter watching the espresso machine for two minutes, the queue behind them would be out the door.
 
-Fire-and-forget classification belongs to the family of "asynchronous job" patterns — the same shape as message queues, optimistic UI updates, eventual consistency in databases, and every "we sent you an email" flow that doesn't make the user wait for SMTP. You've already seen this in background workers (Celery, Sidekiq, BullMQ), in webhook-driven AI pipelines where a job queue feeds the model and a callback writes back, and in modern AI products that stream a placeholder reply while computing the real one. Here's how that actually works in this codebase.
+That two-phase shape — instant acknowledgement, eventual delivery — is fire-and-forget classification. Not "make the AI faster," not "skip the AI step" — commit a safe default synchronously, kick off the model call without awaiting, update the row when the result arrives, emit an event so any mounted listener re-renders.
+
+**What depends on getting this right:** keystroke latency on every entry that contains a new `[]` line. `reconcileTodoMetaForEntry` walks the new todos: `heuristicClassify(todo.text)` runs sync (microseconds), inserts a `todo_meta` row with `type='todo'` + `classifier_confidence='heuristic'` (or `confidence=null` on abstain), and moves on. When the heuristic abstained, it additionally calls `scheduleClassify(todoId, todo.text)` — without `await`. The Haiku call eventually returns; `updateTodoMeta` writes the resolved `type` + `classifier_confidence='haiku'`; a `CLASSIFY_PROGRESS_EVENT` fires; the `/todos` screen re-fetches and re-renders. Drop the async dispatch and every focus-blur with three new todos costs three 300-800ms LLM round-trips serially — the cursor stutters, the dashboard waits, the user feels every call. The acknowledged-unknown state (`type='todo'`, `confidence=null`) is what makes this safe; if the default were unusable, the UI would render broken cards during the async window.
+
+Without fire-and-forget:
+- Reconciler awaits Haiku per ambiguous todo; three new todos = ~2 seconds of cursor freeze
+- "Save" feels slow on every entry that contains an ambiguous line
+- Offline use breaks — Haiku unreachable means the save itself fails
+
+With fire-and-forget:
+- Reconciler inserts 3 meta rows in ~10ms; dashboard renders before Haiku is even contacted
+- Each `scheduleClassify` returns ~600ms later; `CLASSIFY_PROGRESS_EVENT` triggers a per-row re-render
+- Offline keystrokes still commit; the type badges stay at default-todo until network returns
+
+Optimistic UI with eventual reconciliation — the receipt is instant, the drink follows.
 
 ---
 
@@ -406,3 +420,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (café-order-pickup metaphor opening / 4 layered sub-sections — synchronous commit, async scheduleClassify, the event channel, no-retry-loop rationale — each with frontend bridges and concrete consequences / principle paragraph on optimistic UI with eventual reconciliation).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (café-receipt-then-name-called scenario → "two-phase: instant acknowledgement, eventual delivery" pattern naming → bolded stakes pivot to `reconcileTodoMetaForEntry` + `scheduleClassify` + `classifier_confidence` + `CLASSIFY_PROGRESS_EVENT` → before/after bullets on await-Haiku vs fire-and-forget → one-line "receipt is instant, drink follows" metaphor).

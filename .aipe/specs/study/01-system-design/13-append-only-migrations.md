@@ -11,9 +11,27 @@
 
 ## Why care
 
-You've edited a migration that already ran on production, deployed the change, and watched the next environment go up cleanly while the previous one stayed silently broken — because the migration runner thought the work was done and never re-ran the patched file. The pain isn't the bug; it's that there's no way to detect it without diffing schemas across environments. The root cause is treating a migration as code you can revise, instead of as a transaction log entry that's already been committed.
+Imagine an old-fashioned accounting ledger in a bound book. Every entry is dated, numbered, and inked in permanently. Yesterday's page has a typo — someone wrote $1,520 instead of $1,250. The accountant doesn't erase yesterday's entry; the page has already been photocopied for three branch offices, and erasing it would leave those copies disagreeing with the master. Instead she writes a correction on today's page that references the bad entry and adjusts the running balance. Anyone reading the ledger from page 1 forward sees the same sequence of events, in the same order, and ends up at the same final number.
 
-Forward-only schema migrations are an append-only ledger: once a migration has been applied anywhere, it is frozen, and any correction ships as a new migration that fixes the previous one. It belongs to the family of "immutable history" patterns, the same shape as event sourcing, Git commits, blockchain blocks, and write-ahead logs. You've seen this in every serious migration tool — Rails, Flyway, Liquibase, Alembic — and in the way append-only logs are how distributed systems agree on what happened. Here's how that actually works in this codebase.
+The question that ledger answers is one any system whose state is "the result of applying a sequence of changes" has to answer: when a past change turns out to be wrong, do you edit it (and risk divergence between anyone who already applied it and anyone who didn't) or do you write a correction forward? Not "edit in place" — that breaks every copy that's already past the bad entry. The answer is *append-only history*: once a change is committed and applied anywhere, it is frozen; corrections ship as new entries that reference the old ones.
+
+**What depends on getting this right:** whether a fresh Supabase clone (production, staging, a new contributor's local instance) converges on the same schema as production, or whether environments silently diverge by the size of a typo. In this codebase every schema change is `supabase/migrations/NNNN_<description>.sql`, where `NNNN` is a zero-padded sequence number. The runner is `scripts/db-migrate.mjs`: it reads a `_migrations` ledger table for the list of already-applied filenames and runs every file in `supabase/migrations/` that isn't in the ledger, in numeric order, then records the filename. A fresh project replays `0001` through whatever's latest; an existing one runs only what's new. The rule: once `0001` is in any environment's `_migrations` table, you don't edit it — you ship `0006_fix_the_typo.sql` with an `ALTER TABLE`.
+
+Without append-only (edit-in-place is allowed):
+- Developer notices `0001` declared `entries.text TEXT` but should have been `TEXT NOT NULL`
+- They edit `0001` directly, commit, push, and re-run the migration runner locally
+- Their local sees `0001` already in `_migrations` and skips it — but the file on disk now says `NOT NULL`
+- Production was already past `0001`, so its `entries.text` stays nullable
+- A new contributor's fresh clone applies the *new* `0001` with `NOT NULL`
+- Two environments now have schemas that differ by a NULL/NOT NULL constraint that no one can see in the file tree
+
+With append-only (corrections ship as new files):
+- Same typo discovery; developer writes `0006_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL`
+- Fresh clones run `0001` (nullable) → `0006` (not nullable); existing projects run only `0006`
+- Both converge on the same final schema
+- The ledger entries match the file tree on every environment; "works on my machine" doesn't happen
+
+The migration history *is* the schema — never edit history, append corrections.
 
 ---
 
@@ -363,3 +381,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (accounting-ledger metaphor opening / 4 layered sub-sections — numbered file convention, the runner + _migrations ledger, append-only discipline, why every environment converges — each with frontend bridges and concrete consequences / principle paragraph on schemas as event-sourced logs).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bound-ledger correction-on-today's-page scenario → append-only history named as the answer → bolded "what depends on getting this right" with NNNN-file/_migrations-ledger stakes → before/after walking a typo-edit-vs-new-migration on `0001` → one-line "the migration history *is* the schema — never edit history, append corrections").

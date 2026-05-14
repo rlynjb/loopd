@@ -11,9 +11,25 @@
 
 ## Why care
 
-You write a prompt that needs to do two things at once: produce a structured object AND a human-feeling sentence about the same input. The model can do both, but neither comes out as cleanly as when you ask for one. The structured output drifts toward chatty; the chatty output drifts toward bullet-pointy. The prompt that tried to be two prompts becomes one mediocre prompt.
+A two-station kitchen line takes a meal from raw ingredients to plated dish. Station one chops and weighs — diced onion, 200g pasta, measured oil — and slides a tray to station two. Station two takes the tray and turns it into the finished plate: the dish that lands on the table. If you ask one cook to do both at once, the chopping gets sloppy because they're thinking about plating, and the plating gets rushed because they're still weighing. Two jobs in the same head, each one worse than it would be alone.
 
-Prompt chaining splits a multi-job task across two or more LLM calls, each with one job. It belongs to the family of "compose small things rather than build one big thing" patterns alongside pipe in shell, the middleware chain in Express, function composition in functional programming — wherever a single transformation grows too complex, decomposing it into sequential stages makes each stage debuggable. The same pattern shows up in image-to-image pipelines (segment → mask → fill), in compiler stages (lex → parse → optimize → emit), in ETL (extract → transform → load). Here's how that actually works in this codebase.
+The implicit question is whether two jobs share one prompt or two. Not a longer prompt, not a more capable model — two focused calls, where the output of the first is the input of the second.
+
+**What depends on getting this right:** the structured editor data being correct AND the four caption variants sounding right, on the same day, without either degrading the other. In this codebase `summarize.ts:summarize()` (L42–L105) is station one — it produces the `AISummary` (mood, clipOrder, clipTrims, textOverlays, filterPreset) the editor needs to start composing the video. `caption.ts:generateCaption()` (L201–L223), called inside summarize at L87–L96, is station two — it takes the day's log plus `summary.mood` from station one (via `buildCaptionInput` at `summarize.ts` L111–L163) and writes four tonal variants. Bundle them into one prompt and the system prompt balloons past 150 lines, the JSON-shape rules and the four-voice rules compete for the model's attention, and both outputs drift. Split them and each call is debuggable on its own.
+
+Without prompt chaining:
+- One mega-prompt: structured JSON shape + 4 voice descriptions + rotation rules + forbidden patterns
+- System prompt 150+ lines; model's attention split across competing constraints
+- Structured fields drift chatty; captions drift bullet-pointy
+- Caption broken? You debug 150 lines of intertwined rules
+
+With prompt chaining:
+- `summarize.ts:prompt.ts` (23 lines): JSON shape + tone rules, one job
+- `caption.ts` (77-line system prompt L24–L100): four variant voices + forbidden patterns, one job
+- Mood handed from step 1 to step 2 via `buildCaptionInput` — step 2 doesn't re-derive it
+- Caption broken? Check `caption.ts` only. Structured data wrong? Check `prompt.ts` only.
+
+Two stations, one dish.
 
 ---
 
@@ -439,3 +455,6 @@ Then open `summarize.ts` to verify.
 
 ✓ Pass: you named `summarize.ts` (orchestrator), `buildCaptionInput` (hand-off), and `mood` (inherited field).
 ✗ Fail: that's a sign this concept hasn't fully landed yet — re-read the "Stage 2 inherits the mood" sub-section.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-station kitchen-line scenario, name the one-prompt-vs-two question, summarize→caption hand-off stakes, before/after, single-line metaphor).

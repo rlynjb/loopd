@@ -11,9 +11,23 @@
 
 ## Why care
 
-You've pasted a code block into ChatGPT and watched it count as more tokens than you expected — then you've pasted a paragraph of plain English and it counted as fewer. That mismatch isn't arbitrary. The model never sees text; it sees a sequence of integers from a fixed vocabulary, and the way text gets *cut* into those integers determines both the cost of the call and how the model perceives the input.
+Picture a clerk at a sorting desk with a 50,000-line phrasebook in front of them. A handwritten letter comes in. The clerk runs through the letter and chops it into the fewest phrasebook entries possible — sometimes a whole word matches one line (`the`), sometimes only a fragment matches (`ization` is one line; `a8f3b2c1` has to be broken into eight single-character lines because no phrase matches). Every chop costs one line-number. A page of plain English fits in 250 chops; a page of UUIDs costs 800 chops. Same number of bytes, three times the cost.
 
-Tokenization is the deterministic process that turns a string of bytes into that sequence of integer IDs (and back). Every LLM has a tokenizer; every cost calculation, every context-window number, every "maximum output" limit is denominated in those tokens. The pattern shows up everywhere: BPE is also how machine-translation systems segment words, and SentencePiece is what Whisper uses on audio transcripts before it even gets to language modelling. Here's how it actually works.
+The implicit question is what unit the bill is denominated in. Not characters, not words — the phrasebook entries chosen by the cutting algorithm, where common English maps cheaply and rare strings shatter.
+
+**What depends on getting this right:** every cost estimate, every context-window budget, every "why did that prompt suddenly get expensive" mystery in this codebase. `interpret.ts` already caps input at `MAX_INPUT_CHARS = 2000` (L17), which is a character cap standing in for a token cap. The summary prompt at `prompt.ts` L4–L27, the four-voice caption prompt at `caption.ts` L24–L100, and the rotation block at `caption.ts` L102–L121 all get billed in tokens — when the day's `rawLog` is long, or when the prior captions feed has rare technical phrasing, the token count balloons in ways the character count doesn't predict. Lose this mental model and you misjudge which prompt edits cost real money — a 50-line addition of plain prose is cheaper than a 5-line addition of base64 tokens, and the cost-per-call diff hides until the bill arrives.
+
+Without the tokenization mental model:
+- Add a 200-char block of UUIDs to a prompt; expect ~50 tokens
+- Actual cost: ~200 tokens (one per char on rare strings)
+- Multiply by 4 caption variants × 30 days = 24,000 tokens nobody budgeted
+
+With the tokenization mental model:
+- Add a 200-char block of UUIDs to a prompt; expect 1 char ≈ 1 token on rare strings
+- 1k chars of English ≈ 250 tokens; 1k chars of UUID/code ≈ 600+ tokens
+- The cost-per-character is not constant; rare-string cost is the surprise budget
+
+Tokens are the line-numbers in the phrasebook your text gets cut into.
 
 ---
 
@@ -278,3 +292,6 @@ Today loopd has no client-side tokenizer. If you were starting today, would you 
 - What function logs the token count today?
 
 Answer: tokenization itself is not implemented in loopd; the `usage` count is consumed by `[B1.2]`'s planned `ai_call_log` table — no implementation yet.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (clerk-with-phrasebook scenario, name the what-is-the-bill-unit question, MAX_INPUT_CHARS/prompt-cost stakes, before/after, single-line metaphor).

@@ -11,9 +11,23 @@
 
 ## Why care
 
-The instinct when you start building with an LLM is to chain prompts together — "first summarize, then critique the summary, then rewrite based on the critique, then format." That instinct produces systems where a single bad token three calls deep poisons everything downstream, costs five times as much as it needs to, and is impossible to debug because you can't tell which step actually failed. The fix is older than LLMs: give each call exactly one job, validate the output, move on.
+A diner orders a steak with béarnaise, mashed potatoes, and a side salad. In the kitchen there are five stations: prep, grill, sauce, plate, garnish. Each cook does one thing. The sauce cook never touches the grill; the grill cook never plates. When the béarnaise breaks, the steak still leaves the grill on time, the salad goes out, and the line cook reworks one sauce — the rest of the plate doesn't go in the bin.
 
-Single-purpose chains belong to the same family as Unix pipes, microservices, and pure functions — small components with one responsibility, composed by code that owns the orchestration rather than baked into the components themselves. You've already seen this shape in LangChain's `LLMChain` (one prompt, one parser, one output type), in OpenAI's function-calling endpoints (one schema per call), and in every production system that picked "five small prompts I can monitor" over "one heroic mega-prompt." The next block walks the mechanics.
+Now picture one cook doing all five jobs in one motion, stirring sauce with one hand while flipping steak with the other and tossing greens with an elbow. When the sauce splits halfway through, the whole plate is contaminated and there's no way to tell which motion went wrong. That second kitchen is what "one heroic mega-prompt" looks like at runtime. The first kitchen is the pattern named here — single-purpose chains, one job per call, validated and persisted before the next station starts.
+
+**What breaks without it:** the ability to diagnose, retry, and contain failure on any AI surface. The codebase ships five chains under `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`) — each owns one prompt, one contract, one persist step. When OpenAI returned a malformed `variants` object on 2026-05-08, `caption.ts` threw alone; the editor still loaded with `ai_summaries.summary_json.summary` populated from the cached summarize result. The user saw "AI captions unavailable," not "AI features unavailable." Collapse that into one mega-chain and a single bad token in the caption block would poison the structured editor data alongside it; `validate.ts` rejection becomes "the whole thing failed" instead of "this one chain failed."
+
+Without single-purpose chains:
+- One prompt produces editor data + 4 caption variants + a classify label + a markdown reflection
+- A malformed `clean` variant fails JSON parse for the whole response; editor data is also lost
+- Switching `caption` to Anthropic while `summarize` stays on OpenAI is a rewrite, not a config change
+
+With single-purpose chains:
+- 5 files, 5 contracts; `caption.ts` failure surfaces a "couldn't generate captions, retry" toast while the editor still renders
+- Each chain's `validate.ts` rejection is local; one-retry in `expand.ts` doesn't have to worry about partial state across the others
+- Provider swap is per-chain via `config.ts:getProvider()` — `caption` on Anthropic, `expand` on OpenAI, no shared blast radius
+
+One chain, one contract, one persist — failures stay where they happen.
 
 ---
 
@@ -247,8 +261,8 @@ Key points to remember:
 
 ### Likely questions
 
-[mid] Q: Walk me through what happens when `expand.ts` is called for a todo of type 'bug'. Where exactly does the chain shape live?
-      A: `expand.ts` reads the meta to get the type, then calls `getSystemPrompt('bug')` from `expandPrompts.ts` — that returns the bug-specific schema instruction. It builds a user prompt via `buildContext()`, fires one call (Sonnet or 4o depending on provider), then runs `validateExpansion` against the bug-required fields (`observed`, `expected`, `suspectedCause`, `reproSteps`). If validation fails it retries once with a stricter system prompt; if that fails it returns `{ ok: false, reason: 'malformed' }`. One file owns one job — the type just selects the template.
+[mid] Q: Walk me through what happens when `expand.ts` is called for a todo of type 'reflect'. Where exactly does the chain shape live?
+      A: `expand.ts` reads the meta to get the type, then calls `getSystemPrompt('reflect')` from `expandPrompts.ts` — that returns the reflect-specific system prompt ("hold space for honest reflection — calm, observant, never diagnostic") plus the reflect schema instruction. It builds a user prompt via `buildContext()`, fires one call (Sonnet or 4o depending on provider), then runs `validateExpansion` against the reflect-required fields (`topic`, `prompt`, `earlyInsight`). If validation fails it retries once with a stricter system prompt; if that fails it returns `{ ok: false, reason: 'malformed' }`. One file owns one job — the type just selects the template (one of four: `idea`, `knowledge`, `study`, `reflect`; `'todo'` is non-expandable).
 
 ```
 [expand chain flow — type selects template, one call shape]
@@ -404,3 +418,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (five-kitchen-stations metaphor opening / 3 layered sub-sections — the five chains and their contracts, why split for local failures, the interpret carve-out — each with frontend bridges and concrete consequences / principle paragraph on one-chain-one-contract).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (five-station-kitchen scenario contrasted with the one-cook-doing-all-jobs failure case → "single-purpose chains, one job per call" pattern naming → bolded stakes pivot to the 2026-05-08 caption failure that left editor data intact → before/after bullets on mega-chain vs five-files → one-line "one chain, one contract, one persist" metaphor).

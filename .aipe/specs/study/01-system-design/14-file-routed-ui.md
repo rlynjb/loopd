@@ -11,9 +11,27 @@
 
 ## Why care
 
-For a long time, routing was a config file: a giant lookup table that mapped URL patterns to handlers, lived in one place, and was the first thing to get out of sync with reality. Then a few frameworks noticed that the directory tree on disk already encodes the same hierarchy, and that you could just let the filesystem be the router. Adding a screen becomes "create a file." Removing one becomes "delete a file." The config file evaporates.
+Imagine a library where the shelves *are* the catalogue. There's no index card system telling you which book sits in which row — the row a book sits in IS its address, and walking the shelves IS reading the catalogue. Want to add a new book? You put it on a shelf. Want to know where a book lives? You read the spine and you know. Compare this to a library where every book has a number in a card catalogue that may or may not match where the book actually is — the catalogue and the shelves are two systems that have to be kept in sync by hand, and one of them is always slightly wrong.
 
-File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly. It belongs to the family of "convention over configuration" patterns, the same idea behind Rails' folder-based controllers and the way a static site generator turns Markdown files into URLs. You've seen this in Next.js, Nuxt, SvelteKit, Astro, and Remix — the pattern crossed frameworks because the ergonomic win is large and the loss is small. The next block walks the mechanics.
+The question that library answers is one every app with more than a handful of screens has to answer: should there be a config file that maps URL patterns to components, or should the directory tree on disk be the map? Not a giant `routes.ts` lookup table — that's the first thing to drift from reality. The answer is *file-based routing*: a directory layout with naming rules for dynamic segments and shared layouts that defines the URL space directly.
+
+**What depends on getting this right:** whether adding a screen is "create a file" or "create a file, edit the route table, register the import, restart the dev server," and whether removing a screen always also removes the route. In this codebase the `app/` directory tree IS the route map. `app/index.tsx` renders `/`. `app/journal/[date].tsx` renders `/journal/:date` with `date` as a dynamic param read via `useLocalSearchParams<{ date: string }>()`. `_layout.tsx` files at any level wrap their children — the root `app/_layout.tsx` runs `useDatabase()`, `bootstrap()`, theme providers, and font loading before any screen mounts. Navigation is `useRouter().push('/journal/2026-05-10')` — the path is the file path under `app/` minus the extension. Hardware back pops the navigation stack automatically. There is no `routes.ts`.
+
+Without file-based routing (manual route table):
+- Developer creates `screens/threads/ThreadDetail.tsx`
+- Adds an entry to `routes.ts` mapping `/threads/:id` to the component
+- Registers an import; restarts the dev server; updates the navigation typedef
+- Forgets to update the typedef; runtime navigation works but TypeScript errors
+- A week later removes the screen; deletes the file; forgets to remove the route entry
+- A deep link to the now-dead route 404s in production
+
+With expo-router file convention:
+- Developer creates `app/threads/[id].tsx`
+- Next dev-server reload picks it up; `/threads/<id>` is live
+- Removes the file; the route ceases to exist; no orphan registration to clean up
+- The file tree on disk IS the source of truth — there's no second map to drift
+
+The filesystem is the router.
 
 ---
 
@@ -361,3 +379,6 @@ Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tra
 
 ---
 Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (library-shelves-as-catalogue metaphor opening / 4 layered sub-sections — file path equals URL, _layout.tsx wrapping, dynamic params, useRouter + hardware back — each with frontend bridges and concrete consequences / principle paragraph on convention-over-configuration routing).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (library-where-shelves-are-the-catalogue scenario → file-based routing named as the answer → bolded "what depends on getting this right" with `app/`-tree + `[date]` + `_layout.tsx` stakes → before/after walking add-and-remove-a-screen with a manual route table → one-line "the filesystem is the router").

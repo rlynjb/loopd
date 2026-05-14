@@ -11,9 +11,23 @@
 
 ## Why care
 
-You ran an LLM-powered feature in dev for a week, hit your "anthropic console" tab, and saw $4.27 in spend. You shrugged — but you weren't paying attention to *which* chain accounts for $3.50 of that. The expensive thing in an LLM app is almost never what you'd guess. The provider-side billing dashboard tells you total spend; it doesn't tell you per-chain, per-call, per-user. That gap is where cost surprises live.
+A small café gets a single utility bill at the end of the month: $312. The owner pays it and shrugs. The next month it's $487 and the owner still doesn't know why — the bill aggregates the espresso machine, the lights, the walk-in freezer, the music speakers, into one number. To find out the freezer's seal failed and is running 24/7, the owner has to walk around with a clamp meter, room by room, and measure. Until those per-circuit numbers exist, every "make the bill smaller" plan is a guess.
 
-Token economics is the discipline of measuring and budgeting LLM cost at call-site granularity — so you can answer "which chain spends the most?", "is the heuristic actually saving money?", "what would a 10× user increase cost?". The pattern is the same as you'd use for any external API spend (Stripe, Twilio, SendGrid): log every call, attribute it to a feature, surface the cost in a dashboard. The two LLM-specific twists are that *both* input and output are billed and that they're billed at different rates, often by 5× or more. Here's how it works in production and what's missing from loopd today.
+The implicit question is where the spend is going, not how much it is. Not a single monthly total, not "feels cheap" intuition — per-chain, per-call, per-user numbers that let you point at the freezer.
+
+**What depends on getting this right:** answering "which of the five chains in `src/services/ai/` accounts for most of the spend, and is the heuristic gate on `classify` actually saving money?" In this codebase nothing currently logs token usage — the planned `ai_call_log` table (referenced by exercise `[B1.2]` in this file and `21-tokenization.md`) would write one row per call with `chain_name`, `input_tokens`, `output_tokens`, `model`, `timestamp`. The Anthropic response's `usage.input_tokens` / `usage.output_tokens` and OpenAI's `prompt_tokens` / `completion_tokens` are already in every response — they just aren't read. Without that table, three cost surprises stay hidden: the cheap-but-frequent chain (classify firing on every new todo when the heuristic skip-rate drops), the chain whose context quietly grew (`expand.ts` shipping ~3 days of entry context), and the chain whose output doubled (output is 5× input per token on Sonnet, so verbose output is the early-warning signal).
+
+Without per-chain token logging:
+- Monthly Anthropic console total: $42
+- "Is summarize or interpret the expensive one?" — you don't know
+- A user-volume 10× would cost $420, but you can't tell which chain scales which way
+
+With per-chain token logging (planned `ai_call_log`):
+- Row per call: `summarize | 1234 in / 567 out | sonnet-4.6 | 2026-05-13T10:14`
+- Aggregate by `chain_name` → "interpret is 60% of spend, summarize is 25%, classify is 5%"
+- Heuristic skip-rate visible; output-token p95 visible; optimisation targets visible
+
+A clamp meter on every circuit, not one monthly bill.
 
 ---
 
@@ -313,3 +327,6 @@ Today `ai_call_log` is local-only. If you were starting today with multi-user fr
 - Where is the `usage` field consumed today?
 
 Answer: `ai_call_log` (target, not yet created). `usage` is *received* on every API response but currently *discarded* — no code consumes it.
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (café-with-one-utility-bill scenario, name the per-circuit-attribution question, planned ai_call_log stakes for the five chains, before/after, single-line metaphor).

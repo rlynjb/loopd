@@ -11,9 +11,23 @@
 
 ## Why care
 
-You shipped your RAG pipeline. Users started writing. Six months in, you realised you'd been embedding entries *one at a time on commit* the whole time — no batch job, no nightly rebuild, no maintenance window. And it just worked. That's incremental indexing — the version where the index is always up-to-date and the cost is amortised across the writes that produce it.
+A neighbourhood bookstore re-shelves every evening: the owner closes shop, gathers the day's new arrivals, and spends an hour walking them to the right sections. Meanwhile the staff at the bookstore across the street tuck each new arrival into its section the moment they unpack it — no closing, no nightly catch-up, just constant small motions during the workday. By month's end the second store opens earlier, closes later, and has fewer wrong-shelf surprises because the cost of indexing rode along with the arrival of each book.
 
-Incremental indexing is the pattern of updating the index *as data changes* rather than rebuilding it periodically. The alternative — full rebuild on a schedule — works for static corpora but breaks for editable ones. Search engines, recommendation systems, full-text indexes, vector indexes all live or die by their incremental-update story. Here's how it works and why it's almost always the right shape.
+The implicit question is "should the index update on a clock or in response to writes?" Incremental indexing is the name for the second pattern — the index follows the data, three lifecycle paths (insert, update, delete) keep it current, and a one-time backfill seeds the index when the feature first ships. The full-rebuild pattern is a hold-over from indexes that couldn't be updated online; for editable corpora, it loses on freshness, cost, and write-architecture fit.
+
+**What depends on getting this right:** index freshness for every query, total embed-API spend, and whether the architecture composes with loopd's existing write paths. For loopd the planned `scheduleEmbed()` hook in `src/services/database.ts:writeEntry()` and the `processEmbedRefresh()` idle pass in `src/services/ai/embedRefresh.ts` mirror the existing `schedulePush` / `scheduleClassify` shape — `[B2A.4]` adds three hooks (insert, update via stale, delete via cascade) plus a first-launch backfill. Miss any one hook and that operation's entries silently fall out of retrieval; ship them all and the index stays at most minutes behind the writes.
+
+Without incremental indexing:
+- Pick "rebuild nightly" → 365 embed calls per user per night at solo scale (~$0.005/year), 36.5M calls at 100k users (~$500/year); index up to 24h stale; users edit and immediately search and see yesterday's vectors
+- Pick "embed on query" → 365 entries × 500ms = three minutes per query, fatal
+
+With incremental indexing:
+- Insert: writeEntry() fires `scheduleEmbed(entry.id)` (analogous to `scheduleClassify`); idle pass picks it up, creates the `entry_embeddings` row
+- Update: mark `embedding_stale_at = NOW()` inside the same transaction as the text update; idle pass re-embeds
+- Delete: soft-delete cascades — `UPDATE entry_embeddings SET deleted_at = NOW()`; retrieval filters `deleted_at IS NULL`
+- First launch: `processEmbedRefresh()` walks every `entries` row without a corresponding embedding and queues it; subsequent runs only process the deltas
+
+The index follows the data, not the clock — three hooks plus one backfill, then forever incremental.
 
 ---
 
@@ -317,3 +331,6 @@ Today the plan is per-write hooks. If you were starting today, would you skip th
 - What file holds the idle pass logic?
 
 Answer: `scheduleEmbed(entry.id)` (target — analogous to existing `scheduleClassify`). `src/services/ai/embedRefresh.ts` (target, not yet created).
+
+---
+Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-bookstores reshelving scenario → "clock or write-driven" pattern naming → bolded "what depends on getting this right" with `scheduleEmbed()` / `processEmbedRefresh()` / `[B2A.4]` stakes → without/with bullets walking the three lifecycle paths → one-line "index follows the data, not the clock" metaphor).
