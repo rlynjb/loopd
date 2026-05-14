@@ -11,9 +11,9 @@
 
 ## Why care
 
-A person sits down with a therapist after a long week, hands over a notebook full of yesterday's writing, and listens. The therapist reads, looks up, reflects it back — naming the patterns, asking one or two honest questions, leaving the person with a single sentence to carry into tomorrow. The session happens once. The person doesn't take notes; the therapist doesn't file a copy. What was said gets sat with, then closed.
+Open ChatGPT, paste a week's worth of journal entries, ask "reflect on what I've been thinking about this week — don't give me advice, don't motivate me, just name the patterns." ChatGPT writes a paragraph or two of warm prose, asks one or two honest questions, ends with a sentence to carry forward. You read it once, close the tab, don't bookmark it, don't ask the app to save it. The output IS the artifact — not a structured row the app uses, not a label the UI renders, just prose the user reads and moves on from. Notion AI's "summarise this page" button does the same thing on documents; Claude's `claude.ai` artifact pane does it on attached files.
 
-That single-session, no-file-cabinet shape is the interpret chain. Not "another data-producing chain that writes a structured row," not "the assistant that classifies your day" — a chain where the model's output *is* the artifact the user reads, rendered once into a modal, never persisted, never validated against a schema, never consumed by anything downstream.
+That single-session, no-database shape is the interpret chain. Not "another data-producing chain that writes a structured row," not "the assistant that classifies your day" — a chain where the model's output *is* the artifact the user reads, rendered once into a modal, never persisted, never validated against a schema, never consumed by anything downstream.
 
 **What depends on getting this right:** the cost, the validation posture, and the prompt's tolerance for emptiness. `interpretEntry(text)` runs through two pre-call guards (`MIN_TEXT_LENGTH = 20` skips entries too short to mirror; `truncateTail(text, MAX_INPUT_CHARS = 2000)` keeps the most recent 2000 chars, not the first 2000 — the tail is where the thinking lands), calls Claude (or GPT-4o) once with a 32-line system prompt that prescribes a structural template (opening blockquote → numbered themes → "healthy side" / "part to watch" / "deeper fear" / "honest interpretation" / "strongest line" / "final thought" sections) AND explicitly says **"skip any section that doesn't fit the user's actual content; do not pad."** The output is run through `cleanMarkdown` (11 lines — strip an outer fence, reject empty as `'malformed'`) and handed to the modal. No `JSON.parse`, no `validate.ts`, no `database.ts` upsert. Drop the ephemerality and the codebase grows an `interpretations` table, a cache-comparison problem (markdown isn't canonically comparable), and a validator that has to encode "did the model produce coherent prose" — none of which the feature needs because the user reads once and moves on.
 
@@ -33,7 +33,7 @@ AI features for reading, not for storing — the therapist talks once, you sit w
 
 ## How it works
 
-A therapist who reads what you wrote yesterday and reflects it back to you — not analytically, but warmly, naming the patterns, asking the questions, leaving you with one honest sentence to take into tomorrow. The session happens once: you read what the therapist said, sit with it, close the notebook, and don't re-read it. Interpret is the same shape — a single LLM call that produces a markdown essay the user reads once, and the output is never persisted.
+ChatGPT's "summarise what I've been thinking about this week" prompt produces a paragraph or two of warm prose — naming patterns, asking one or two honest questions, ending with a sentence the user carries forward. You read it once, close the tab, don't save it. Notion AI's per-page summary button does the same: prose the user reads inline, not a structured field the app stores. Interpret is the same shape — a single LLM call that produces a markdown essay the user reads once, and the output is never persisted.
 
 ### The trigger — user-initiated, modal-rendered
 
@@ -489,3 +489,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (one-session-with-a-therapist scenario → "single-session, no-file-cabinet, output is the artifact the user reads" pattern naming → bolded stakes pivot to `interpretEntry` + `MIN_TEXT_LENGTH` + `truncateTail` + 32-line system prompt with skip-section permission + `cleanMarkdown` → before/after bullets on caching vs ephemeral → one-line "AI features for reading, not for storing" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced therapist + therapist-reading-notebook analogies with ChatGPT reflection prompt, Notion AI summarise-this-page, Claude.ai artifact pane).

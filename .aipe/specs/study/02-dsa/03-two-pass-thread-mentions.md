@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a notebook with a yellow sticky note stuck to page 12. Tomorrow you add two fresh pages to the front of the notebook. The thing the sticky note refers to is now physically on page 14 — but the sticky note hasn't moved with it. A human filing assistant looks at the note, glances at page 12, sees the topic isn't there, and sweeps a few pages forward and back looking for the original topic before declaring the note an orphan. Same identity, small shift in position, soft tolerance.
+Run `git blame` on a file you've been editing for months. The line that originally said `const PORT = 3000` still traces back to a commit from six months ago, even though you've added thirty lines above it and it now sits at row 47 instead of row 17. Blame doesn't lose identity because the file shifted — it follows the line through diffs, tolerating bounded movement before declaring the line "new." `git apply --3way` does the same for patches: try the original line number first, then sweep nearby for context lines that still match before giving up. Identity anchors on content; position is allowed to slip a bounded amount.
 
 That is the question this operation answers when prose with embedded `#tag` markers is re-scanned after the user has typed paragraphs above existing tags: when the line numbers shift by one or two, do we keep the mention rows or burn their identity? Not strict line-number equality, not full text-similarity rebuild — just *fuzzy match with a bounded displacement window*, the same family as `git apply --3way`, git blame line tracking, and PDF annotations across reflowed pages.
 
@@ -38,7 +38,7 @@ Anchor on identity, allow a bounded slip on position.
 
 ## How it works
 
-A sticky note stuck to page 12 of a notebook. Tomorrow the user adds two new pages at the front; what was on page 12 is now on page 14, but the sticky note still belongs there. The librarian's rule: first check the original page number; if nothing matches the note's text, sweep three pages above and below and see if the note's text appears there. If yes, the note slides to the new page; if no, the note belongs to the trash. If you're coming from frontend, this is the same idea as react-window's "scroll-restoration" — when the underlying list changes, the framework first tries the exact prior index, then expands a small window of nearby indices before giving up. Two ordered checks, exact first, tolerance second, with a hard cap on how far identity can drift before being abandoned.
+`git blame --follow` tracks a line through commits by checking the original line number first, then sweeping nearby lines for matching content if the exact position no longer hits. The sweep window is bounded — too wide and the algorithm starts confusing unrelated code for the original line. If you're coming from frontend, this is the same shape as `react-window`'s scroll restoration when a virtualized list resizes: try the exact prior scroll position first, then expand a small window of nearby indices before giving up and snapping to the top. Two ordered checks, exact first, tolerance second, with a hard cap on how far identity can drift before being abandoned.
 
 **Real operation:** `reconcileMentions` in `src/services/threads/scanThreads.ts`.
 
@@ -446,3 +446,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (notebook-sticky-note-shifted-pages scenario → naming the fuzzy-match-with-displacement-window pattern → bolded "what depends on getting this right" pivot with `thread_mentions` durability stakes → before/after bullets walking a `#health` tag shifted by 3 lines → one-line summary "anchor on identity, allow a bounded slip on position").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced notebook-with-sticky-note analogy with `git blame --follow` line tracking and react-window scroll restoration).

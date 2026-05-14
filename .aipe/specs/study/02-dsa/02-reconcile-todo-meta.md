@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a coat check at a theatre. One rack holds the coats that came in tonight. A clipboard holds the ticket stubs of people who said they brought a coat. By the end of the night, every coat should have a stub and every stub should have a coat — but somewhere in the rush a coat got hung without a stub, and one stub claims a coat that was never handed over. To fix it, the attendant doesn't re-process every coat from scratch. He builds two quick lookups — coats-by-tag and stubs-by-tag — then walks each side once, asking "do you have a match?" Anything coat-without-stub gets a fresh stub. Anything stub-without-coat gets struck off the clipboard.
+Kubernetes runs a reconciler on every tick. It reads the Deployment spec (what should exist), it reads the current Pods (what does exist), it computes the diff, and it emits the minimum set of operations to close the gap. No foreign key ties a Deployment row to its Pod rows — the reconciler IS the integrity gate. It pre-indexes both sides into hash structures, walks each side once asking "is your counterpart on the other side?", and applies inserts and deletes only where the answer is no. The same shape shows up in React's renderer diffing virtual DOM trees, in `rsync` matching files between filesystems, in Postgres logical replication keeping a subscriber in step with a publisher.
 
 That is the question this operation answers when one side is a JSON-array column and the other is a SQL table that's supposed to mirror it: how do we keep two parallel lists in 1:1 agreement using the minimum writes, when neither side can be enforced by a foreign-key constraint? Not a full rebuild, not a slow nested scan — just the *reconciler pattern* with two hash structures driving two linear walks.
 
@@ -37,7 +37,7 @@ Build the index once, walk both sides linearly, write only the diff.
 
 ## How it works
 
-Two stacks of index cards — one fresh from today's scan, one pulled from the filing cabinet. You want every card in stack A to have a matching card in stack B, no extras on either side. Walk stack A once; for each card, peek into a hash of stack B's ids and either skip (already matched) or mark "needs an insert." Walk stack B once with the same hash built from A; anything not in A's hash gets a soft-delete. If you're coming from React, this is exactly how the reconciler decides what to mount and unmount between two virtual DOM trees — except here the "trees" are flat arrays of ids and the operations are SQL inserts and soft-deletes instead of DOM mutations.
+React's reconciler diffs two virtual DOM trees and emits the minimum mount/unmount operations to make the live tree match the next render. The shape generalises: whenever two parallel collections are supposed to mirror each other but no FK enforces the relationship, you pre-index both sides, walk each side once asking "is your counterpart on the other side?", and apply only the diff. If you're coming from React, this is exactly how the keyed-list reconciler decides what to mount and unmount — except here the "trees" are flat arrays of ids and the operations are SQL inserts and soft-deletes instead of DOM mutations.
 
 **Real operation:** `reconcileTodoMetaForEntry` in `src/services/todos/reconcileMeta.ts`. Runs after `scanTodos` produces final `todos_json`.
 
@@ -440,3 +440,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coat-check-with-clipboard scenario → naming the reconciler pattern as the answer for 1:1 lists without FK enforcement → bolded "what depends on getting this right" pivot with `todo_meta` integrity stakes → before/after bullets walking a new-todo insertion through the reconciler → one-line summary "build the index once, walk both sides linearly, write only the diff").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced coat-check + filing-cabinet analogies with Kubernetes controller reconciliation, rsync, Postgres logical replication, and React's virtual-DOM reconciler).

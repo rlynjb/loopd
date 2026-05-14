@@ -11,9 +11,9 @@
 
 ## Why care
 
-A library has a shelving robot that moves returned books back to their assigned spots overnight. On one shelf, a patron sticks a hand-written note to a single book: "Hold this here — patron preference." The next night the robot rolls past, scans the note, and skips the book. The book stays where the patron put it. Pull the note off and the robot resumes moving it; until then, the robot reads-then-defers, every pass, every night.
+Open GitHub's branch-protection settings on a repo with "Restrict who can push to matching branches" enabled. Now any merge attempt that bypasses code review gets blocked — by an admin, by automation, by a script that doesn't know the rule exists. The flag isn't on the commit ("this commit is protected"); it's on the branch ("this branch refuses certain writes"). Pull the restriction off and writes resume; until then, the rule is read by every automated path before any write. Same shape as a React controlled input that ignores upstream `defaultValue` changes once the user has typed — the framework asks "has the user touched this?" before writing.
 
-That hold-this-here note is the sticky override. Not "the robot is smarter," not "the robot defers to the latest edit" — a single flag, set when the patron acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
+That branch-protection flag is the sticky override. Not "the system is smarter," not "the latest edit always wins" — a single flag, set when the user acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
 
 **What breaks without it:** trust in the AI surface. The codebase puts `user_overridden_type BOOLEAN` on `todo_meta`, default `false`. When the user picks a type from the picker, the handler writes `updateTodoMeta(id, { type: 'idea', user_overridden_type: true })` — both columns set in one SQL statement so an async classifier landing between two writes can't sneak in. Every AI write path then consults the flag: `scheduleClassify`'s success handler reads the meta before writing and skips when `user_overridden_type=true` (the Haiku call still ran, the result is discarded); the catch-up classifier that fills `classifier_confidence IS NULL` rows reads the flag and skips locked rows. Drop the flag and the user's Monday correction of `loopd` from `todo` to `idea` gets silently reverted by Tuesday's reclassify sweep — the user fixes it twice, then concludes the AI doesn't listen, then stops using the type picker.
 
@@ -33,7 +33,7 @@ User override is sticky — the patron's note keeps the robot's hands off.
 
 ## How it works
 
-A library book with a sticker that says "DO NOT RESHELVE — patron preference." The librarian's automated shelving robot reads the sticker every time it tries to move the book; if the sticker's there, the robot skips this book and moves on. The robot doesn't fight the user; the user's choice is sticky. If you're coming from React, this is the same shape as a controlled input that ignores upstream prop changes once the user has typed — the user's intent wins over the framework's default.
+A React controlled input that ignores upstream `defaultValue` changes once the user has typed. The component holds two pieces of state: the current value AND a flag that says "the user has touched this." When the framework wants to reset the value (a `defaultValue` prop change, a form reset), it reads the flag first — if `userHasTouched` is `true`, the reset is skipped and the user's edit stands. The framework doesn't fight the user; the user's choice is sticky. If you're coming from React, this is exactly that pattern, except the flag lives as a SQLite column and the framework writing back is the AI classifier instead of the form library. The flag IS the user's signal; the value IS what they chose; both move together.
 
 ### The flag — `user_overridden_type` BOOLEAN on `todo_meta`
 
@@ -401,3 +401,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (library-shelving-robot-and-hand-written-note scenario → "sticky override flag, read by every automated path before any write" pattern naming → bolded stakes pivot to `user_overridden_type` atomic write + `scheduleClassify` consult + catch-up classifier consult → before/after bullets on unlocked vs locked → one-line "patron's note keeps robot's hands off" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced library/shelving-robot + library-book-sticker analogies with GitHub branch protection rules and the React controlled-input userHasTouched pattern).

@@ -11,7 +11,7 @@
 
 ## Why care
 
-A librarian is asked to arrange ten thousand index cards on a very large flat table so that cards about similar topics end up close to each other and cards about different topics end up far apart. There's no alphabetical scheme, no Dewey Decimal — the librarian just looks at each card's content and slides it to a spot. Cards about "morning runs" cluster in one corner; "cooking" cards in another; "cooking after a run" cards land on the line between them. Anyone walking up to the table with a question card can drop it down and the answer is whichever existing card is physically nearest.
+Open the TensorFlow Embedding Projector at `projector.tensorflow.org` and load any prebuilt model. The visualisation shows thousands of words as dots in 3D space; `morning` and `evening` cluster together; `morning` and `antimatter` sit far apart. Pinecone's console shows the same view for any indexed namespace. OpenAI's embeddings documentation page renders a cosine-similarity heatmap on a small text corpus. Drop a query token onto any of these plots and you can see — geometrically — which tokens live near it. Same idea drives YouTube's "videos similar to this one" rail and Spotify's "users who liked X also liked Y."
 
 The implicit question is how to make "similar in meaning" mean "near in space." Not a keyword index, not a thesaurus — coordinates assigned by a learned function, so distance becomes the similarity metric.
 
@@ -321,3 +321,6 @@ Answer: `src/services/ai/embed.ts` (target, not yet created). `entry_embeddings`
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-arranging-cards-on-a-table scenario, name the meaning-as-coordinates question, planned embed.ts/entry_embeddings stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced librarian-arranging-index-cards-on-a-flat-table analogy with TensorFlow Embedding Projector, Pinecone console, OpenAI embeddings docs heatmap, YouTube/Spotify similarity rails). How it works Move 1 left as-is (coordinate-space framing, not a physical-world anchor).

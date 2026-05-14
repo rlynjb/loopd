@@ -11,9 +11,9 @@
 
 ## Why care
 
-Two librarians work the reference desk. One was hired for her photographic memory of every book's exact title and author — ask for *The Old Man and the Sea* and she walks straight to it; ask for "a book about a fisherman struggling" and she stares at you blankly. The other was hired for her knack with themes — ask for "a book about a fisherman struggling" and she pulls Hemingway, Melville, and a Steinbeck novella; ask for *The Old Man and the Sea* by exact title and she might bring you something close but not the one you wanted. Each librarian fails on the other's strength.
+Run two searches on GitHub's code search. First, `repo:vercel/next.js "useRouter"` — an exact-string query. Every file containing that token comes back; no near-misses, no paraphrases. Second, switch to the natural-language search ("navigation hook") — files about navigation come back, including ones that never use the exact word "useRouter" but cover the same concept. The exact-string lane misses the paraphrases; the natural-language lane misses the proper-noun lookups. Sourcegraph runs both side-by-side; Algolia's API exposes both as `query` (semantic-style) plus `restrictSearchableAttributes` (exact-string) for the same reason — neither alone gets you the full set.
 
-The implicit question is which librarian you put on the desk. Not one or the other — both, with a system to reconcile their picks. Sparse retrieval (BM25, exact-token matching) is the photographic-memory librarian; dense retrieval (embeddings, cosine similarity) is the theme librarian.
+The implicit question is which lane you put on the search bar. Not one or the other — both, with a system to reconcile their picks. Sparse retrieval (BM25, exact-token matching) is the exact-string lane; dense retrieval (embeddings, cosine similarity) is the semantic lane.
 
 **What depends on getting this right:** every retrieval feature that has to handle both proper-noun lookups and meaning-based queries. Loopd doesn't index either way today — there's no `embed.ts`, no FTS5 index on `entries.text`, no `entry_embeddings`. The day a "find my entries about Spice House" feature lands, dense-only retrieval will return entries about "Indian restaurant" and miss the literal-string matches; sparse-only will miss entries that say "that new place we ate at" without naming it. The planned shape is hybrid: an FTS5 virtual table over `entries.text` for sparse, an `entry_embeddings` table for dense, and a fusion step (see `28-hybrid-retrieval-rrf.md`) to merge ranked lists. Lose either half and a whole class of queries silently fails — proper nouns and rare technical terms (sparse's strength) or paraphrase and synonymy (dense's strength).
 
@@ -337,3 +337,6 @@ Answer: `sqlite-fts5` virtual table over `entries.text` (target — `[B2A.10]`).
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-librarians-at-reference-desk scenario, name the which-librarian-on-the-desk question, planned FTS5 + entry_embeddings + hybridRetrieve stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced two-librarians-reference-desk analogy with GitHub code search exact-string vs natural-language modes, Sourcegraph, Algolia synonyms API).

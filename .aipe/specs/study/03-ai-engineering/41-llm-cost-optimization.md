@@ -11,7 +11,7 @@
 
 ## Why care
 
-A household's electric bill spikes three months in a row. The first instinct is to swap the bulbs for cheaper ones — that's the move that feels like effort. Walk through the house with a clamp meter instead: the dryer running half-empty twice a day costs more than every bulb combined, an always-on space heater in the hallway costs more than the dryer, and the dishwasher running before its full load could be skipped altogether by waiting four hours. The bulb swap was the temptation lever; the highest-ROI lever was "stop running the dryer when there's nothing to dry."
+Your Vercel usage dashboard shows the bill spiked three months in a row. The first instinct is to swap a heavy npm dependency for a smaller one — that's the move that feels like effort. Open the actual usage panel instead: one unbatched Postgres query runs on every page render and costs more than any bundle bloat; a misconfigured Image Optimization API hits the source on every miss; a serverless function with 1GB memory allocated when it needs 256MB silently costs 4× per invocation. The dependency swap was the temptation lever; the highest-ROI lever was "batch the database query before render." The same shape shows up in the OpenAI dashboard's usage tab and AWS Cost Explorer — the savings live where the bill actually is, not where the engineer's eye lands first.
 
 The implicit question is "where does the spend actually live, and which lever attacks it at the largest multiplier?" LLM cost optimization is the discipline of pulling levers in ROI order, not order-of-temptation. Five levers ranked: (1) heuristic-before-LLM skips the call entirely, (2) prompt caching saves 90% on stable prefixes, (3) semantic caching saves 100% on identical-input hits, (4) model routing buys ~5× cheaper inference on jobs that don't need premium quality, (5) prompt compression saves 10–30% but risks quality. Most teams pull lever 4 first because "use a cheaper model" feels like the senior-engineer move; the higher-ROI architectural levers stay untouched.
 
@@ -333,3 +333,6 @@ Answer: Lever 1 (heuristic-before-LLM in classify). `getProvider()` and per-chai
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (household-clamp-meter-walkthrough scenario → "where does spend live and which lever attacks it at the largest multiplier" pattern naming → bolded "what depends on getting this right" with `[B1.2]` / `[B5.2]` / `[B5.3]` / `[B5.8]` / `interpret_cache` stakes → wrong-order/right-order bullets walking the five levers → one-line "cost is architectural, not configurational" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced household-electric-bill-clamp-meter analogy with the Vercel usage dashboard, OpenAI dashboard usage tab, AWS Cost Explorer).

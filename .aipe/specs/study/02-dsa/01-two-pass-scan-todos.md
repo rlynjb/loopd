@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a teacher arriving at school with yesterday's seating chart and a fresh class roster for today. Most students sat in the same seats, but a few swapped chairs, one student's nickname has changed, and one chair is empty. The teacher wants to mark attendance against the SAME students — not redo the chart from scratch — so she calls names first (the strong evidence) and only checks seat numbers for the leftovers (the weak evidence). Two passes, strongest signal first.
+Open React DevTools and drag-reorder an item in any keyed list. The reconciler doesn't tear down every `<li>` and rebuild — it walks each new entry, matches against the previous render by `key` prop first, and only falls back to positional matching for whatever didn't match. That's why React warns you when you forget `key` on a list: without the strong signal, only position is left, and edits get misattributed to the neighbours on either side. The reconciler is running two passes — strong evidence first (the key), weaker evidence (position) for the residue.
 
 That is the question this operation answers when the source is a paragraph of prose instead of a roster: given a new list of items typed into text and an old list with identities already assigned, which new items inherit which old identities? Not "diff the strings," not "rebuild from scratch" — just *match by strongest evidence, fall back to weaker evidence for the residue*. That two-pass match is the family Myers diff, git rename detection, and React's keyed-list reconciler all belong to.
 
@@ -36,7 +36,7 @@ Strongest evidence first, weakest evidence cleans up the rest.
 
 ## How it works
 
-Imagine a teacher taking attendance against yesterday's seating chart. She first calls each name from today's list and looks for it on yesterday's chart — most students sat in the same seat, name matches, easy. For the leftover names she didn't find by roll-call, she falls back to the seat number — "whoever's in seat 5 today is whoever was in seat 5 yesterday." If you're coming from React, this is the same pattern as keyed-list reconciliation: try the strict identifier first (`key` prop / line text), fall back to positional matching for the leftovers. The two passes work because the signals are independent — name survives reseating, seat survives in-place edits.
+React's keyed-list reconciler walks two snapshots of a list and matches each new entry to an old one by `key` first — the strong identifier — then falls back to position for anything unmatched. That's why the DevTools console warns when you omit `key`: without the strong signal, only position is left, and an insert at the top reassigns every row below to the wrong piece of state. The same two-signal shape powers this scanner: strong identifier (line text) first, weaker fallback (line index) for the leftovers. Two passes, two independent signals — text survives reordering, position survives in-place edits.
 
 **Real operation:** `scanTodosFromText` in `src/services/todos/scanTodos.ts`. Runs at every commit (focus blur, screen leave) on `entries.text`.
 
@@ -460,3 +460,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (teacher-with-seating-chart scenario → naming the pattern as strongest-evidence-first matching → bolded "what depends on getting this right" pivot with `todo_meta` 1:1 invariant stakes → before/after bullets walking a `[] call mom` re-edit → one-line summary "strongest evidence first, weakest evidence cleans up the rest").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced teacher/seating-chart analogy with React's keyed-list reconciler and DevTools-warning behaviour).

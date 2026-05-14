@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a fridge magnet board with a stack of paper notes pinned to it. Some notes have a yellow star sticker — those float to the top no matter when they were written. The unstickered notes hang below in the order you wrote them, newest on top. When you walk up to the board, your eye scans the starred ones first; everything else is "what did I think about lately." Two rules, no fighting: the sticker says what's important, the date says what's fresh.
+Open Gmail. Starred messages float in a sticky band at the top; everything else hangs in chronological order, newest on top. Open Slack — pinned messages in a channel sit above the recent feed. Open GitHub — pinned repositories on your profile show above the activity-sorted ones. Two rules across every one of these UIs, never fighting: the star/pin says what's important, the date says what's fresh. Server-side it's `ORDER BY pinned DESC, created_at DESC` — two keys, lexicographic.
 
 That is the question this operation answers when a UI list has to show "important AND recent" without forcing the user to maintain a manual position for every row: how do you compose a sticky modifier with a default time order? Not a drag-to-reorder UI with integer ranks, not a multi-pass sort of pinned-then-rest — just a *two-key stable comparator: boolean first, timestamp second*.
 
@@ -37,7 +37,7 @@ Two keys, lexicographic fall-through; the policy IS the comparator.
 
 ## How it works
 
-A grocery list where the milk has a star next to it. Whatever you starred floats to the top; everything else sorts by when you wrote it down. Two keys: starred-first, then recency. If you're coming from frontend, this is `[...items].sort((a, b) => Number(b.starred) - Number(a.starred) || new Date(b.createdAt) - new Date(a.createdAt))` — one comparator, one line, evaluated lazily so the recency comparison only runs when both items share the same pinned state. The win is that "pinned" is a single boolean column and "recency" is already there; the sort is free.
+Gmail's `starred + created_at DESC` ordering is exactly this comparator: starred first, recency as the tiebreak. The sort runs as `[...items].sort((a, b) => Number(b.starred) - Number(a.starred) || new Date(b.createdAt) - new Date(a.createdAt))` — one comparator, one line, evaluated lazily so the recency comparison only runs when both items share the same starred state. If you're coming from frontend, you've written this exact two-key comparator a dozen times: it's the shape of every Linear issue list, every Notion database sorted by "important + recent." The win is that "pinned" is a single boolean column and "recency" is already there; the sort is free.
 
 **Real operation:** the inline `out.sort(...)` in `app/todos.tsx` (lines ~187-194) and `src/components/home/SmartTodoList.tsx`.
 
@@ -436,3 +436,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (fridge-magnet-with-star-stickers scenario → naming the two-key stable comparator with priority partition → bolded "what depends on getting this right" pivot with `todo_meta.pinned` write-path simplicity and `SmartTodoList` drift stakes → before/after bullets comparing drag-to-reorder `position` vs boolean+timestamp comparator → one-line summary "two keys, lexicographic fall-through; the policy IS the comparator").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced fridge-magnet-board + starred-grocery-list analogies with Gmail starred + Slack pinned + GitHub pinned-repos + Linear/Notion sort patterns). Why care WC1 was missed by the original triage; included in this pass.

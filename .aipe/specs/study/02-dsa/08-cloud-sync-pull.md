@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine two friends keeping a shared journal, except they don't meet in person — they leave entries in a drop box at the library. Whenever one of them stops by, she wants to read only the entries written since her last visit. She could read the whole journal cover-to-cover every time (slow, wasteful), or she could write the date of her last visit on the cover and skip ahead to entries dated after that. The hidden trap: whose clock does "the date of her last visit" use? If she stamps the cover with her own wristwatch and her watch runs fast, she'll skip entries her friend just wrote. If she stamps it from the library clock above the drop box, both friends agree on the watermark.
+Edit a Notion page on your laptop, then open the same page on your phone. The phone doesn't refetch the entire document — it asks "what's changed since I last synced?" and pulls only the diff. The trap is whose clock the cursor uses: if the phone trusted its own `Date.now()` and that clock ran 30 seconds slow, it would re-fetch the same window forever; if it ran 30 seconds fast, it would silently skip rows the server hasn't fanned out yet. Notion, Linear, Figma all anchor the cursor to the server's clock, never the device's. Same shape as an RSS reader sending `If-Modified-Since` against the server's `Last-Modified` — agree on the watermark, agree on whose clock owns it.
 
 That is the question this operation answers when a device wants to fetch only the rows on a remote database that have changed since the last successful sync: how do you express "what's new since last time" in a way that's safe under concurrent writes and immune to device clock skew? Not "fetch everything every time," not "trust the device's `Date.now()` for the cursor" — just *cursor-based incremental pull, anchored to server time, paginated by ascending `updated_at`*.
 
@@ -36,7 +36,7 @@ Cost scales with what changed, not what exists; the cursor lives on a clock both
 
 ## How it works
 
-A newspaper delivery service that drops off only the editions printed after your last delivery — the carrier reads the last-delivered date stamp from your mailbox, fetches everything dated after that, and stamps your mailbox with today's edition date when done. If you're coming from frontend, this is the same shape as React Query's pagination cursors plus `staleTime` — pull pages of new data anchored to a cursor, advance the cursor only after the page lands. Three moves: ask the server what time it is, page through cloud rows newer than the cursor, write each row with conflict resolution and stamp `synced_at` from the server's clock.
+GitHub's REST API takes a `since` parameter so you can pull only the events that landed after your last sync: you pass a server-emitted timestamp, the server returns everything newer, and you stamp your local watermark with the response's fresh server time for next time. Postgres logical replication does the same with LSN cursors. If you're coming from frontend, this is the same shape as React Query's `useInfiniteQuery` with a server-provided `nextCursor` — pull pages of new data anchored to a cursor, advance the cursor only after the page lands, and never compute the cursor on the client. Three moves: ask the server what time it is, page through cloud rows newer than the cursor, write each row with conflict resolution and stamp `synced_at` from the server's clock.
 
 **Real operation:** `pullTable` in `src/services/sync/pull.ts`.
 
@@ -450,3 +450,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (shared-journal-drop-box-with-library-clock scenario → naming the cursor-based-pull-anchored-to-server-time pattern → bolded "what depends on getting this right" pivot with `last_pull_at` clock-skew + offline-edits-survival stakes → before/after bullets comparing full-table-with-local-clock vs cursor+serverTime+chooseWinner → one-line summary "cost scales with what changed, not what exists; the cursor lives on a clock both sides agree on").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-friends-with-drop-box + newspaper-delivery analogies with Notion's two-device sync, GitHub's `since` cursor API, RSS `If-Modified-Since`, and React Query's `useInfiniteQuery` with server-provided `nextCursor`). Why care WC1 was missed by the original triage; included in this pass.

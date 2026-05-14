@@ -11,9 +11,9 @@
 
 ## Why care
 
-A coffee shop has two espresso machines on the counter — one Italian, one Japanese. Both take the same beans, both pull a double shot into the same cup, both feed into the same milk-frothing pitcher and the same to-go lid. The barista picks whichever machine isn't in use; the customer never knows which one made the drink. Tomorrow the Italian one breaks and the shop swaps in a Swiss one — the beans, the cup, the lid, the drink order all stay the same. Only the silver box in the middle changed.
+Stripe's `PaymentIntent` API takes a `payment_method_types` parameter — you list which methods the customer can use (`card`, `apple_pay`, `us_bank_account`), and the same upstream call (amount, currency, customer) and the same downstream parse (succeeded, requires_action, failed) handle every one. Stripe doesn't hide the differences behind a fake unified "payment_method" type; it lets the caller pick the method per request and shares everything else. Same shape as React Native's platform-specific module pattern (`Foo.ios.ts` / `Foo.android.ts`) — two thin per-platform implementations behind one import path — or Vercel's adapter pattern letting the same Next.js app target Edge or Node runtimes with a different deploy adapter.
 
-That's the shape behind provider abstraction. Not a unified interface that pretends both machines are identical, not a wrapper class that flattens their quirks — just a thin choice at each call site, with everything upstream (the prompt, the beans) and everything downstream (the cup, the JSON shape, the validator) shared. Naming the pattern this way is what lets a codebase outlive any single vendor's API.
+Provider abstraction in this codebase is the same shape. Not a unified interface that pretends both vendors are identical, not a wrapper class that flattens their quirks — just a thin choice at each call site, with everything upstream (the prompt) and everything downstream (the JSON shape, the validator) shared. Naming the pattern this way is what lets a codebase outlive any single vendor's API.
 
 **What depends on getting this right:** the ability to swap providers without rewriting features, and the ability to use each provider's native strengths (Anthropic's tool calling, OpenAI's `response_format: json_object`) without leaking that into the rest of the codebase. `src/services/ai/config.ts:getProvider()` reads `'claude' | 'openai'` from SecureStore on every call. Each chain (`summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts`) has a `switch (provider)` with two branches — Claude via `@anthropic-ai/sdk`'s `client.messages.create`, OpenAI via raw `fetch` to `/v1/chat/completions`. Both return a string. The rest of the chain — `extractJsonFromText`, `validate.ts`, `upsertAISummary` — is shared. Collapse that into a "unified AIProvider class" and the day OpenAI ships JSON-mode or Anthropic ships a new tool-use grammar, you're either rewriting the interface for everyone or hiding the new capability behind a flag the wrapper doesn't expose.
 
@@ -33,7 +33,7 @@ Thin abstractions over thick differences — the contract is stable, the transpo
 
 ## How it works
 
-Two faucets in the same sink — hot and cold. They feed the same drain through the same basin; only the source upstream of the spigot changes. If the city water gets contaminated tomorrow, you switch to the bottled-water tank under the counter and the drain doesn't notice. Provider abstraction is that switch: pick the source per call, share everything downstream.
+Stripe's `PaymentIntent` accepts `payment_method_types: ['card', 'apple_pay']` and the same `confirm` call works against either method — the upstream API surface stays one shape, the downstream success/failure parse stays one shape, only the method picked at request time changes. Provider abstraction in this codebase is the same idea: pick the source (Claude SDK vs raw fetch to OpenAI) per call, share everything upstream (the prompt builder) and downstream (the validator, the SQLite persist).
 
 ### The config — `getProvider()` + per-provider keys from SecureStore
 
@@ -442,3 +442,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-espresso-machines-on-the-counter scenario → "thin choice at each call site, everything else shared" pattern naming → bolded stakes pivot to `getProvider()` + per-chain `switch` keeping JSON-mode and tool-calling per-vendor-native → before/after bullets on unified-wrapper vs per-call-site → one-line "thin abstractions over thick differences" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-espresso-machines + two-faucets analogies with Stripe's `PaymentIntent` `payment_method_types` + React Native's `.ios.ts` / `.android.ts` platform-specific module pattern + Vercel adapter pattern). How it works HIW1 was missed by the original triage; included in this pass.

@@ -11,7 +11,7 @@
 
 ## Why care
 
-A two-station kitchen line takes a meal from raw ingredients to plated dish. Station one chops and weighs — diced onion, 200g pasta, measured oil — and slides a tray to station two. Station two takes the tray and turns it into the finished plate: the dish that lands on the table. If you ask one cook to do both at once, the chopping gets sloppy because they're thinking about plating, and the plating gets rushed because they're still weighing. Two jobs in the same head, each one worse than it would be alone.
+Open any Next.js app's middleware → route-handler flow. Middleware runs first — auth check, header parsing, attaching `req.user` to the request. The route handler runs second, on the already-shaped request. Or open a GitHub Actions workflow with `jobs.build.needs: jobs.lint` — lint runs first, build runs only on lint-passed code. If you ask a single function to do both at once, the auth logic gets entangled with business logic and the business logic gets thinned out by the auth concerns. Two jobs in one function, each one worse than it would be alone.
 
 The implicit question is whether two jobs share one prompt or two. Not a longer prompt, not a more capable model — two focused calls, where the output of the first is the input of the second.
 
@@ -35,7 +35,7 @@ Two stations, one dish.
 
 ## How it works
 
-A two-station kitchen line. Station one chops the vegetables and weighs the ingredients; station two takes those measured ingredients and turns them into a finished plate. Each station has one job; each plate is the same dish whether it goes through both stations or one. Two operations welded together in a single prompt (extract structure AND write voice) split apart into two stations with one job each.
+Next.js's middleware → route-handler chain runs in two stages. Middleware shapes the request — parses cookies, attaches `req.user`, validates origin — and passes a transformed object forward. The route handler runs second on the already-shaped input and writes the response. Each stage has one job; each request flows through both. Two operations welded together in a single big handler (auth AND business logic) split apart into two functions with one job each. Same shape as a GitHub Actions `needs:` graph or a tRPC procedure where `input(zodSchema)` is the parse stage and the handler is the business stage.
 
 ### Step 1 — `summarize()` produces structured editor data
 
@@ -458,3 +458,6 @@ Then open `summarize.ts` to verify.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-station kitchen-line scenario, name the one-prompt-vs-two question, summarize→caption hand-off stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-station-kitchen analogies with the Next.js middleware → route-handler flow, GitHub Actions job dependency graph, tRPC input parsing).

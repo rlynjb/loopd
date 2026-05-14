@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a librarian sorting a returns cart. Hardcovers go on top, paperbacks below — but within each format, fiction before non-fiction, and within each genre, oldest publication date first. She doesn't make three separate passes through the cart. She picks up two books, compares their format; if same, compares their genre; if same, compares the year. The first comparison that disagrees is the answer; the rest don't matter for that pair. One pass, three keys, lexicographic order.
+Open a Postgres terminal and run `SELECT * FROM issues ORDER BY priority DESC, due_date ASC, created_at ASC`. Postgres doesn't sort three times — it runs a single pass where each pair of rows pays for at most one comparison per key. The first comparator that returns non-zero is the answer; the rest don't matter for that pair. Python's `sorted(items, key=lambda x: (a, b, c))` does the same with a tuple-key. Every spreadsheet's multi-column sort dialog does it too. One pass, multiple keys, lexicographic order.
 
 That is the question this operation answers when an app has to display a flat list of items with a layered ranking rule: how do you express "sort by A, then B, then C" without writing three chained sorts? Not a triple-pass over the array, not a hand-rolled selection sort — just a *single multi-key comparator* with fall-through, the same shape as SQL `ORDER BY a, b, c` and Python's `sorted(items, key=lambda x: (a, b, c))`.
 
@@ -462,3 +462,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-sorting-returns-cart scenario → naming the multi-key fall-through comparator → bolded "what depends on getting this right" pivot with `rankTodos` policy/dormant-status stakes → before/after bullets comparing chained sorts vs one comparator → one-line summary "compare on the most significant key, fall through to the next when it's a tie").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced librarian-sorting-cart analogy with Postgres `ORDER BY a, b, c`, Python's `sorted(key=lambda x: (a, b, c))`, and spreadsheet multi-column sort dialogs).

@@ -11,7 +11,7 @@
 
 ## Why care
 
-A traveller walks into a foreign-language pharmacy and mumbles "knee" at the pharmacist. The pharmacist has thousands of full-sentence symptom descriptions on her shelves but no card filed under the bare word "knee." She turns to her assistant and says "draft me a plausible complaint that uses that word — three sentences, the way a patient would phrase it." She takes the assistant's sentence to the shelf and finds the right product in seconds.
+Type "knee" into GitHub's code search and you get an avalanche of token matches — README mentions, irrelevant CSS classes, every test fixture using the word. Now type "knee injury physical therapy" and the result set narrows dramatically — completely different ranking, more focused. The Algolia API exposes this gap explicitly: `query` is what the user typed, `queryLanguages` is the rewrite layer that can expand or reshape the input before retrieval fires. Google Search runs the rewrite implicitly under the hood every time you type a fragment. The user's typed string and the corpus the search runs against live in different vocabularies; the rewrite bridges them.
 
 The implicit question is "why doesn't the user's typed string look like the things we're searching against, and how do we close that gap before the lookup?" Query rewriting is the family of techniques that answers it — and HyDE (Hypothetical Document Embeddings) is one specific shape: ask an LLM to generate a hypothetical document-shaped answer, embed *that*, and search with its vector instead of the user's. The short query and the long document live in different parts of vector space; the rewrite moves the search point into the documents' neighbourhood.
 
@@ -354,3 +354,6 @@ Answer: `src/services/ai/queryRewrite.ts` (target, not yet created). +500-2000ms
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (foreign-pharmacy scenario → "why doesn't the user's string look like the corpus" pattern naming → bolded "what depends on getting this right" with `queryRewrite.ts`/`[B2A.7]`/`[B2A.8]`/`[B2A.9]` stakes → without/with bullets walking the "knee" query → one-line "rewrite bridges two input shapes" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced traveller-mumbling-at-pharmacy analogy with GitHub code search query refinement and the Algolia queryLanguages rewrite layer).

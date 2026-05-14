@@ -11,7 +11,7 @@
 
 ## Why care
 
-A reference librarian gets two kinds of questions every morning. The first kind comes with a starting point: "show me everything in the cardiology section published since 2020." She walks to a known shelf, reads down the spines, hands over the stack — no judgement calls. The second kind comes with a vibe: "I'm looking for something about the lonely side of long marriages." She walks the fiction floor, thumbs through opening pages, makes a similarity call. The tricky questions blend both: "lonely-side-of-marriage books, but in the Spanish-language section." She runs the structured filter first, then the similarity search inside it.
+Open the GitHub GraphQL API and run two queries. First, "all issues in this repo since 2026-01-01" — a structured filter against an explicit relationship, returns a deterministic set in one round-trip. Second, GitHub Copilot's "find related issues" feature — runs a vector similarity step under the hood, returns a fuzzy ranked list. Now compose the tricky one: "issues semantically similar to this one, in repo X, opened since 2026-01-01." GitHub's query layer doesn't make you choose between graph traversal and similarity — it composes them in order: structured filter first to narrow the candidate set, similarity rank second to order what remains. Linear's API exposes the same composition via `filter` + `searchableContent`.
 
 The implicit question is "should the lookup traverse explicit relationships, score by learned similarity, or both?" GraphRAG is the name for the third answer — combine graph traversal with vector retrieval so each stage handles the access pattern it's good at. Three composition shapes: pre-filter by graph then vector-rank, vector-search then expand via graph, or graph as a re-ranker on vector candidates. The architecture is "use both signals because both exist" — throwing away explicit edges to embed everything as text is leaving authoritative information on the table.
 
@@ -355,3 +355,6 @@ Answer: `thread_mentions` (already in production). `entry_embeddings` (target �
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (reference-librarian-two-question-types scenario → "graph or vector or both" pattern naming → bolded "what depends on getting this right" with `getRelatedEntries.ts` / `thread_mentions` / `entry_embeddings` / `[B2A.8]` stakes → without/with bullets walking the thread-detail rail → one-line "graphs say IS connected, vectors say might be similar" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced reference-librarian-structured-and-vibe-questions analogy with GitHub GraphQL filter + Copilot find-related-issues composition, Linear API filter + searchableContent).

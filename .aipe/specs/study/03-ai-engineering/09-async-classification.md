@@ -11,7 +11,7 @@
 
 ## Why care
 
-A barista at a busy café takes an order, writes the customer's name on a paper cup, hands over a receipt, and says "I'll call your name when it's ready." The customer walks away — sits down, opens a phone, talks to a friend. Two minutes later someone calls the name and the customer walks back to pick up the drink. The transaction completed in two phases: the receipt was instant, the drink wasn't. If the barista had insisted the customer stand at the counter watching the espresso machine for two minutes, the queue behind them would be out the door.
+Hit send in Gmail. The message vanishes from compose into the sent folder in under 16ms — the UI never waited for the SMTP handshake. Gmail kicked off the network call in the background; if your wifi cuts out mid-flight the message stays queued and retries when the connection comes back. You moved on the moment the UI confirmed; the delivery completed independently. Linear does the same when you check an issue off: optimistic checkmark in 16ms, server confirmation lands later, the checkmark only rolls back if the network actually fails.
 
 That two-phase shape — instant acknowledgement, eventual delivery — is fire-and-forget classification. Not "make the AI faster," not "skip the AI step" — commit a safe default synchronously, kick off the model call without awaiting, update the row when the result arrives, emit an event so any mounted listener re-renders.
 
@@ -33,7 +33,7 @@ Optimistic UI with eventual reconciliation — the receipt is instant, the drink
 
 ## How it works
 
-You buy a coffee at a busy café. The barista takes your order, writes your name on the cup, hands you a receipt, and tells you "I'll call your name when it's ready." You move on — go sit down, check your phone, talk to a friend. When the drink's done, someone calls your name and you walk over to pick it up. The transaction completes in two phases: instant acknowledgement, eventual delivery. If you're coming from frontend, this is the same shape as React's optimistic UI — commit local state immediately, fire the network call in the background, update again when the response lands. The user never waits on the network; the system catches up.
+Open Linear and check off an issue. The checkmark appears in 16ms — far before any server has confirmed the change. The UI committed locally, fired the API call in the background, and trusted that the network would either confirm or roll back. If you're coming from frontend, this is exactly React's optimistic UI pattern — commit local state immediately, fire the network call in the background, update again when the response lands. Same shape as Gmail's send-and-move-on, same shape as a React Query `mutation.mutate()` with `optimisticData`. The user never waits on the network; the system catches up.
 
 ### The synchronous commit — meta row lands instantly
 
@@ -423,3 +423,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (café-receipt-then-name-called scenario → "two-phase: instant acknowledgement, eventual delivery" pattern naming → bolded stakes pivot to `reconcileTodoMetaForEntry` + `scheduleClassify` + `classifier_confidence` + `CLASSIFY_PROGRESS_EVENT` → before/after bullets on await-Haiku vs fire-and-forget → one-line "receipt is instant, drink follows" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced barista/café analogies with Gmail optimistic send, Linear optimistic checkmark, React Query optimistic UI). Why care WC1 was missed by the original triage; included in this pass.

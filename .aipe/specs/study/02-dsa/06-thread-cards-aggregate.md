@@ -11,7 +11,7 @@
 
 ## Why care
 
-Imagine a waiter taking orders at a table of eight. He could walk to the kitchen, place one order, come back, take the next, walk back to the kitchen — eight trips across the room, eight conversations with the chef. Or he writes all eight orders on one pad, walks once, hands the pad to the chef, and waits at the pass. The kitchen does the same amount of cooking either way. The difference is eight walks versus one. The bottleneck was never the cooking — it was crossing the room.
+Open the Network tab in your browser DevTools and load a list view in any app you use daily — Linear, Notion, GitHub. A well-built list fires one request to fetch the parent rows, then one more to fetch all the children in bulk; a poorly-built one fires N+1 requests, one per parent. The waterfall makes the cost visible: the time the user waits is dominated by the number of round-trips, not by the query work on the server. GraphQL's DataLoader, Prisma's `include`, Rails' `eager_load` — every modern data layer ships a primitive for this because every junior shipper writes the N+1 version first.
 
 That is the question this operation answers when building a list view whose rows each need supporting data: how do we avoid making N+1 trips to the database when one trip per supporting field would do? Not "fetch each card and its data row-by-row," not "stuff everything into one mega-JOIN" — just *batch each kind of supporting data into one query, then stitch in memory*. The dataloader / bulk-then-join pattern, the same shape GraphQL's DataLoader and ORM eager-loading were invented to express.
 
@@ -38,7 +38,7 @@ Round-trips are the cost; row count is the variable.
 
 ## How it works
 
-A waiter who takes everyone's order before walking back to the kitchen instead of running one ticket at a time. The cost of crossing the room (the round-trip) is the bottleneck, not the cost of writing down four orders versus one. The bulk-then-join pattern is exactly this: pull the parent rows once, pull all the children once keyed by parent-id, then assemble the cards in memory. If you're coming from frontend, this is the same shape as React Query's batched-`useQueries` or GraphQL's DataLoader — defer per-row fetches, hoist them to a single bulk query, stitch results client-side. The in-memory join is microseconds; the SQLite round-trip is the part you can't afford to repeat.
+GraphQL's DataLoader defers per-row child fetches during a resolver cycle, hoists them into one bulk query keyed by parent-id, and stitches the results back into the resolver tree. The cost it eliminates is the round-trip, not the work — the server runs roughly the same SQL either way; the network latency is the part that scales. The bulk-then-join pattern in this codebase is exactly that shape: pull the parent rows once, pull all the children for those parents in one more query keyed by parent-id, then assemble the cards in memory. If you're coming from frontend, this is the same shape as React Query's batched `useQueries` or Prisma's `include` — defer per-row fetches, hoist them to a single bulk query, stitch results client-side. The in-memory join is microseconds; the SQLite round-trip is the part you can't afford to repeat.
 
 **Real operation:** `getThreadCards` in `src/services/threads/getThreadCards.ts`.
 
@@ -463,3 +463,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (waiter-with-order-pad scenario → naming the dataloader/bulk-then-join pattern → bolded "what depends on getting this right" pivot with dashboard render-latency stakes → before/after bullets comparing N+1 roundtrip costs to 4-query+2-join shape → one-line summary "round-trips are the cost; row count is the variable").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced waiter/kitchen analogy with DevTools Network tab, GraphQL DataLoader, Prisma `include`, and React Query's batched `useQueries`).

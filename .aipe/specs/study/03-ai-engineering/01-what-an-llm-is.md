@@ -11,7 +11,7 @@
 
 ## Why care
 
-A friend walks up to a translator at a conference, asks a question in French, gets a fluent answer in English, walks away, and comes back two minutes later. The translator has no recollection of the previous exchange — no name, no topic, no thread. The booth resets between sentences; everything the translator "remembers" has to be repeated out loud, in the question itself, every time.
+Open the Anthropic Console's Playground, type a question, hit run. Open a fresh playground tab two seconds later and type a follow-up — the new session has zero memory of the first. Same when you `curl` the API directly: each request is independent, the model carries no state between calls, and the only "history" the model sees is whatever your code stuffed back into the next `messages` array. ChatGPT looks like it remembers because the surrounding app concatenates prior turns into every prompt; the model underneath is the same stateless function.
 
 What the friend keeps mistaking for a person with a memory is a function with a microphone. Not a brain, not an assistant — just a transformation from one block of text to another. That shape is what a language model actually is, and naming it that way is the only frame under which every other AI choice in this codebase makes sense.
 
@@ -33,7 +33,7 @@ Tokens in, tokens out — every appearance of memory is code on the outside asse
 
 ## How it works
 
-A vending machine with no memory between customers. You drop in coins, push a button, get a snack. The machine doesn't remember you, doesn't know what time it is, doesn't know what season — it just runs the same coin-in-snack-out logic every time someone uses it. A language model is the same: stateless input → stateless output, with the smarts baked into the machine itself rather than the conversation.
+AWS Lambda's invocation model is the same shape: a request arrives, the handler runs, a response leaves, and the function gets no guaranteed memory of the previous invocation. Each call is independent — what looks like "session" from the outside is the caller assembling state and re-passing it on every request. A language model is the same: stateless input → stateless output, with the smarts baked into the model weights rather than the conversation. The only thing that varies is whose code you're invoking.
 
 ### The mechanic — next-token prediction in a loop
 
@@ -347,3 +347,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (translator-at-a-conference scenario → "function with a microphone, not a brain" pattern naming → bolded stakes pivot to anti-repetition memory via `getRecentAISummaries` → before/after bullets on repetitive captions → one-line "tokens in, tokens out, memory is code on the outside" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced conference-translator + vending-machine analogies with the Anthropic Console Playground's per-session-no-memory behaviour and AWS Lambda's invocation model). Why care WC1 was missed by the original triage; included in this pass.

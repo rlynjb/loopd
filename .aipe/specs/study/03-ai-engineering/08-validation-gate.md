@@ -11,9 +11,9 @@
 
 ## Why care
 
-A traveller hands their passport across a border-control desk. The officer doesn't ask the traveller whether their paperwork is in order — they check, page by page. Name on the form, photo matches, dates valid, visa in the right column. If the paperwork passes, the stamp goes in and the traveller walks into the country. If something is wrong — a misspelled name, a missing entry stamp, a visa for the wrong category — the traveller goes back across the line. The check happens at the boundary, every time, with no exceptions for travellers who looked trustworthy yesterday.
+Open the Vercel dashboard after pushing a PR. Before the build deploys, Vercel runs its own validation — does `package.json` parse, does TypeScript compile, are the required environment variables present, did the build emit the expected output directory? The deploy doesn't trust you; it checks. If validation fails, the build is marked failed and the deploy is rejected. If validation passes, the deploy goes live. Same shape as `zod.parse(body)` at a tRPC boundary or Stripe's webhook signature check — the request either becomes typed data or gets rejected at the boundary, every time, with no exceptions for callers that succeeded yesterday.
 
-That stamp-or-reject step is the validation gate. Not a sanity check, not a logging hook — a load-bearing boundary where untrusted input either becomes typed data or gets rejected. Naming the model as "untrusted input" (not "an assistant whose output we'll lightly check") is what makes the rest of the codebase safe to trust.
+That parse-or-reject step is the validation gate. Not a sanity check, not a logging hook — a load-bearing boundary where untrusted input either becomes typed data or gets rejected. Naming the model as "untrusted input" (not "an assistant whose output we'll lightly check") is what makes the rest of the codebase safe to trust.
 
 **What breaks without it:** the integrity of every row written from an AI chain. The codebase runs `parseJson` to extract the first `{...}` substring and `JSON.parse` it, then runs a per-chain schema check — `validateSummary` cross-checks every `clipId` in `clipOrder` against the input clips; `parseAndValidate` for caption checks all four variants (clean/smoother/reflective/punchy) are present; `validateExpansion` checks the per-type required fields match the discriminated union. Failures route per-chain: `caption` skips and leaves `ai_summaries.summary_json.variants` at its previous value; `expand` retries once with a stricter system prompt ("Re-emit ONLY a single JSON object that exactly matches the schema") and gives up to `{ ok: false, reason: 'malformed' }` on second failure; `summarize` skips and surfaces `ai_summaries.error`. Drop the gate and a model that quietly drops `summary_json.clipOrder[2]` writes a corrupt row that crashes the editor render two weeks later — and the bug looks like an editor bug, not an AI bug.
 
@@ -33,7 +33,7 @@ Treat the model as an untrusted client — parse, validate, reject, every call.
 
 ## How it works
 
-A border-control officer who stamps passports. Whatever the traveller says, the officer checks the paperwork against the rules — name on the form, photo matches, dates valid, visa in the right column. If the paperwork passes, the traveller comes in; if not, the traveller is sent back. The model is the traveller, the validators are the officer, and the persistence layer is the country. Untrusted input never gets stamped without the officer's check. If you're coming from frontend, this is the same shape as treating LLM output like user-submitted form data — never paste it into your application state without parsing and validating it first, exactly the way you wouldn't paste a `<form>` POST body into your DB.
+A Zod schema parsing an API request body. `schema.parse(body)` either returns the typed value or throws — whatever the client claims they sent, the schema checks the actual JSON against the rules: required fields, correct types, valid enums, cross-field invariants. If parse succeeds, the typed value flows downstream; if it throws, the request is rejected at the boundary and no untyped data ever reaches the rest of the handler. The model is the client, the validators are `schema.parse`, and SQLite is the rest of the handler. Untrusted input never gets persisted without the parse step. If you're coming from frontend, this is the same shape as treating LLM output like a server-side form POST — never paste it into your application state without parsing and validating it first, exactly the way you wouldn't paste a `<form>` POST body into your DB.
 
 ### Step 1 — `parseJson`: extract the JSON, fail closed if malformed
 
@@ -396,3 +396,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (border-control-stamp scenario → "load-bearing boundary, untrusted input becomes typed data or gets rejected" pattern naming → bolded stakes pivot to `parseJson` + `validateSummary` + `validateExpansion` + per-chain failure policy → before/after bullets on no-gate vs gated → one-line "treat the model as untrusted client" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced traveller/border-control + officer-stamping analogies with Vercel deploy validation, Zod schema.parse, tRPC input boundary, Stripe webhook signature checks). Why care WC1 was missed by the original triage; included in this pass.

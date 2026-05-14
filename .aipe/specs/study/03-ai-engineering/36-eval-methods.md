@@ -11,7 +11,7 @@
 
 ## Why care
 
-A grade-school teacher runs five different kinds of test before lunch. Vocabulary quiz: one right answer per row, mark it correct or not. Spelling: close-enough counts, missing-an-accent doesn't. Math worksheet: each problem has labelled sub-parts, give partial credit per box. Creative-writing prompt: read the essay, score it on a 5-point rubric the school agreed on last September. End-of-year speech contest: line up two speeches, ask the judges which they preferred. Each test fits the shape of what students produced — try grading the essay with the vocabulary scheme and the average drops to zero even when every essay is great.
+Open any repo with a Vitest or Jest suite and look at the test types being run. `expect(x).toBe(y)` is exact match — discrete, deterministic, returns boolean. `expect(s).toMatch(/foo/)` is fuzzy match — pattern-tolerant, returns boolean. `expect(zodSchema.parse(obj)).not.toThrow()` is structural match — checks shape per field. `expect(component).toMatchSnapshot()` is rubric-shaped — a stored standard the new output is judged against. Visual regression tools (Chromatic, Percy) run pairwise — old screenshot vs new, "did anything visibly change?" Each test type fits a different shape of output. Force `.toBe` on a React snapshot and the suite fails on every render-order shuffle; force snapshot diffs on a numeric utility and the test catches no bugs.
 
 The implicit question is "given what the chain returns, which scoring method actually captures whether the output is good?" Eval methods are the answer: exact match for discrete labels, fuzzy match for whitespace/casing drift, schema match for JSON contracts, rubric LLM-as-judge for free-form prose, pairwise comparison for relative quality. Picking by reputation ("we use F1 because everyone does") forces the wrong method onto outputs it can't measure; picking by output shape gives signal.
 
@@ -371,3 +371,6 @@ Answer: `scripts/eval-harness/metrics/` (target, not yet created). Caption (and 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (teacher-running-five-tests scenario → "which scoring method captures whether the output is good" pattern naming → bolded "what depends on getting this right" with `scripts/eval-harness/metrics/` and chain-to-method mapping stakes → method-mismatch/method-per-shape bullets walking each chain → one-line "methods follow data, not reputation" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced grade-school-teacher-five-tests analogy with Vitest/Jest test types — toBe / toMatch / zod.parse / toMatchSnapshot / Chromatic visual diff).

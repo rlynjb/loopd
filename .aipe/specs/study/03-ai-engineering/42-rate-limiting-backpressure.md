@@ -11,7 +11,7 @@
 
 ## Why care
 
-A coffee shop at peak rush has one espresso machine and four baristas. If all four try to pull shots at once the machine sputters and ruins every cup. The shop manager doesn't ask the machine to be faster — she puts down a rope line and a numbered ticket dispenser. Customers can queue ten deep; the baristas can only pull two shots at a time; the machine never sees more pressure than it can handle. The rope is the manager's lever; the machine's internal limit is not.
+Make a fast burst of requests to the GitHub API and the response headers tell you exactly what's happening: `X-RateLimit-Remaining: 4` then `3` then `2`, and the moment it hits 0 the next call returns 429 with `Retry-After: 47`. Stripe ships `X-Stripe-Rate-Limit-Remaining` headers for the same reason. AWS API Gateway exposes throttling as a configurable limit per route. None of these services trust their clients to be polite — they expose limits explicitly and well-behaved SDKs (Octokit, the GitHub CLI, the Stripe SDK) read the headers and queue work to stay under the cap. The client's queue is the rate limiter the developer actually controls; the provider's hard limit is the one the developer is trying to never hit.
 
 The implicit question is "what stands between the burst of work and the slow external service that can't absorb it?" Rate limiting and backpressure are the pair: the provider sets external limits (RPM, TPM — 429 when exceeded, sometimes with a `Retry-After` header), and your code's queue is the internal mechanism that respects them. The queue is the rate limiter you actually control; size it conservatively and you never trigger the provider's. Three flavours: concurrency cap (never more than N in-flight, cheapest), token bucket (earn tokens at rate R, spend per call), adaptive backoff (slow down on 429s, speed up otherwise).
 
@@ -324,3 +324,6 @@ Answer: `src/services/ai/expand.ts:25`. `src/services/ai/queue.ts` (target — `
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coffee-shop-rope-line-and-espresso-machine scenario → "what stands between the burst of work and the slow external service" pattern naming → bolded "what depends on getting this right" with `expand.ts:25` / `MAX_CONCURRENT=3` / `aiQueue.enqueue()` / `[B5.1]` stakes → without/with bullets walking the 50-entry sync-pull burst → one-line "queue is the rate limiter you actually control" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced coffee-shop-rope-line analogy with npm install rate-limits, GitHub X-RateLimit-Remaining header, Stripe API throttling, AWS API Gateway throttling).

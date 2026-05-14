@@ -11,9 +11,9 @@
 
 ## Why care
 
-A diner orders a steak with béarnaise, mashed potatoes, and a side salad. In the kitchen there are five stations: prep, grill, sauce, plate, garnish. Each cook does one thing. The sauce cook never touches the grill; the grill cook never plates. When the béarnaise breaks, the steak still leaves the grill on time, the salad goes out, and the line cook reworks one sauce — the rest of the plate doesn't go in the bin.
+Open any GitHub Actions workflow that has five separate jobs — `lint`, `test`, `build`, `deploy-staging`, `deploy-production` — each with its own steps and its own failure handling. When `lint` fails, the others don't run, but you know exactly which job broke and you can re-run just that one from the UI. Now picture the same workflow collapsed into one giant `run:` script that does everything in sequence: when step 3 fails, the entire workflow goes red and you've lost visibility into whether the build actually succeeded or whether deploy would have failed anyway.
 
-Now picture one cook doing all five jobs in one motion, stirring sauce with one hand while flipping steak with the other and tossing greens with an elbow. When the sauce splits halfway through, the whole plate is contaminated and there's no way to tell which motion went wrong. That second kitchen is what "one heroic mega-prompt" looks like at runtime. The first kitchen is the pattern named here — single-purpose chains, one job per call, validated and persisted before the next station starts.
+That second workflow is what "one heroic mega-prompt" looks like at runtime. The first one is the pattern named here — single-purpose chains, one job per call, validated and persisted before the next chain starts. Same shape as Stripe's separate `PaymentIntent` / `SetupIntent` / `Refund` endpoints (one API call, one job, one failure mode each) or React's `useMutation` per side-effect — localise the failure, name the contract.
 
 **What breaks without it:** the ability to diagnose, retry, and contain failure on any AI surface. The codebase ships five chains under `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`) — each owns one prompt, one contract, one persist step. When OpenAI returned a malformed `variants` object on 2026-05-08, `caption.ts` threw alone; the editor still loaded with `ai_summaries.summary_json.summary` populated from the cached summarize result. The user saw "AI captions unavailable," not "AI features unavailable." Collapse that into one mega-chain and a single bad token in the caption block would poison the structured editor data alongside it; `validate.ts` rejection becomes "the whole thing failed" instead of "this one chain failed."
 
@@ -33,7 +33,7 @@ One chain, one contract, one persist — failures stay where they happen.
 
 ## How it works
 
-A kitchen with five stations, each doing one thing well: prep, sauce, grill, plate, garnish. Nobody tries to do two jobs in one motion. If the sauce burns, the grill keeps going; if the garnish runs late, the plates still leave. Failures stay local. If you're coming from frontend, this is the same shape as splitting a giant `useEffect` with five side-effects into five focused `useEffect`s — when one of them throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of the one effect.
+GitHub Actions runs each `job` independently — `lint` fails, `test` still completes, `build` still runs against the unbroken code, and the failure surfaces as one named job in the UI. Five jobs, five status badges, five places to rerun. AWS Lambda deploys each function the same way: one handler, one role, one error path, one CloudWatch log stream. The shape is "many small things over one big thing" — each failure is named, each is rerunnable, each owns its blast radius. If you're coming from frontend, this is the same shape as splitting a giant `useEffect` with five side-effects into five focused `useEffect`s — when one throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of one effect.
 
 ### The five chains — one prompt, one shape, one persist
 
@@ -421,3 +421,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (five-station-kitchen scenario contrasted with the one-cook-doing-all-jobs failure case → "single-purpose chains, one job per call" pattern naming → bolded stakes pivot to the 2026-05-08 caption failure that left editor data intact → before/after bullets on mega-chain vs five-files → one-line "one chain, one contract, one persist" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced five-station-kitchen + diner-rework analogies with GitHub Actions independent jobs + AWS Lambda per-function deployments + Stripe's PaymentIntent / SetupIntent / Refund split + React `useMutation` per side-effect).

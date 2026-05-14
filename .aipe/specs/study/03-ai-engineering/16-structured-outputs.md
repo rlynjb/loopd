@@ -11,9 +11,9 @@
 
 ## Why care
 
-You hand a courier a printed form to fill out at the customer's door — name, date of birth, signature in the box. Most of the day the forms come back the way you asked. Once in a while one comes back with the date written in the signature box, or a friendly note scrawled across the top ("here's the info you wanted"), or a missing field, or a name written where the system expects a number. The clerk at intake either catches it at the counter or it gets filed and breaks the report three weeks later.
+Open the GitHub webhook delivery inspector on any repo and walk through the last 20 deliveries. Most events come back exactly the way the schema documents — `pull_request.opened`, `push`, `issue_comment.created`, fields all present, values inside the documented enums. Once in a while one drifts: an event type added in a newer GitHub release the consumer doesn't recognise, a field the docs say is required arriving as `null`, a string value not in any published enum. Stripe webhooks have the same shape — well-documented, well-versioned, and still occasionally drift past the schema in production. The intake handler either catches it at the boundary or persists garbage that breaks a report three weeks later.
 
-The implicit question is who's responsible when the producer is unreliable. Not the form's design, not the courier's training — the intake clerk who checks every field against the rules before anything enters the system. Structured outputs are that clerk at the LLM boundary: the prompt tells the model what shape to return, and a validator at intake checks every field, with fallbacks for the predictable drift.
+The implicit question is who's responsible when the producer is unreliable. Not the schema's design, not the producer's documentation — the intake handler that checks every field against the rules before anything enters the system. Structured outputs are that handler at the LLM boundary: the prompt tells the model what shape to return, and a validator at intake checks every field, with fallbacks for the predictable drift.
 
 **What depends on getting this right:** every typed value the rest of the app reads from an AI chain. In this codebase `validate.ts:validateSummary` (L12–L137) is the intake clerk for the structured summary — it checks `headline` is a string and slices to 100 chars, narrows `mood` to one of five valid values or defaults to `'ok'`, filters `clipOrder` against the known clip IDs with missing ones appended, clamps every `clipTrims` start/end to the clip's duration. Lose this layer and `upsertAISummary(date, JSON.stringify(summary), ...)` writes a row with the wrong shape, the editor screen reads `summary.mood` and gets `undefined`, and the failure shows up three layers up as a crash on render rather than a clean null at the boundary.
 
@@ -35,7 +35,7 @@ The producer is unreliable; the consumer enforces the contract.
 
 ## How it works
 
-A passport-control desk between two countries. The traveller (the LLM) hands over a document; the officer (your validation function) checks each field against the rules; documents that don't match get rejected at the border, not after they're already in the country. Two operations welded together in the naive picture (LLM returns text → you trust it) split apart into three independent operations: ask for structured output, parse what you got, validate against the contract.
+Zod's `schema.parse(unknown)` is the canonical shape. The producer hands over an unknown value; the schema checks each field against the rules; values that don't match are rejected at the parse step, not after they've been used downstream. Two operations welded together in the naive picture (LLM returns text → you trust it) split apart into three independent operations: ask for structured output, parse what you got, validate against the contract. Same shape as a tRPC procedure's `input(zodSchema)` boundary or a Hono handler's `c.req.valid('json')` — untyped data becomes typed at the door, or it doesn't enter.
 
 ### The contract — a typed shape the chain promises to return
 
@@ -471,3 +471,6 @@ Then open `validate.ts` and `interpret.ts` to verify.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (courier/intake-clerk scenario, name the unreliable-producer question, validateSummary stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced courier-printed-form + passport-control analogies with GitHub webhook delivery inspector, Stripe webhook schema drift, Zod schema.parse, tRPC input, Hono c.req.valid). Why care WC1 was missed by the original triage; included in this pass.

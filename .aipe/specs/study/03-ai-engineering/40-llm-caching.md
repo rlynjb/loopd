@@ -11,7 +11,7 @@
 
 ## Why care
 
-A coffee shop runs two saving habits side by side. One: the espresso machine keeps the morning milk frothed in a small jug so each cappuccino doesn't restart from cold milk — the prep stays warm between drinks, you pay full price for the first jug then a fraction for each refill from it. Two: when the regular orders a flat white at 9am every day, the barista remembers the spec, sometimes pre-pulls the shot when she sees him park outside, and hands it across without reprocessing. Two completely different savings — one shared across many drinks at the machine, one specific to the regular's identical order.
+A modern web app runs two cache layers side by side. One: Cloudflare's edge cache holds the stable parts of every response — CSS, JS bundles, immutable assets — keyed by URL, shared across every visitor who hits the same route. Two: the React Query cache on the client holds the user-specific data the logged-in user just fetched — their profile, their issues — keyed by `(queryKey, userId)`, specific to this user's repeat reads. Two completely different savings: one shared across many visitors at the edge layer, one specific to this user's identical inputs. The Anthropic Console's prompt-cache stats panel exposes the same split for LLM calls — `cache_creation_input_tokens` vs `cache_read_input_tokens` per call.
 
 The implicit question is "at which layer is the work being repeated, and what kind of cache catches it?" LLM caching is the answer split into two: prompt caching is provider-side (KV-cache reuse on a stable prefix — Anthropic `cache_control`, OpenAI automatic; 90% discount on cached input tokens, threshold ~1024 for Sonnet 4.6 / ~2048 for Haiku), and semantic caching is application-side (store input → output keyed on a hash; on identical input, skip the model entirely). They save different costs and apply to different chains — stable prompts across diverse inputs vs identical inputs across the same prompt.
 
@@ -357,3 +357,6 @@ Answer: `interpret_cache` (target — `[B5.8]`). `cache_control: { type: 'epheme
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (coffee-shop-frothed-milk-and-regular's-order scenario → "which layer is the work being repeated" pattern naming → bolded "what depends on getting this right" with `[B5.2]` / `[B5.8]` / `interpret_cache` / `cache_control` stakes → without/with bullets walking interpret vs caption fit → one-line "two layers, two wins, two different chains earn each" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced coffee-shop-two-savings analogy with the Cloudflare edge cache + React Query cache split, plus the Anthropic Console prompt-cache stats panel).

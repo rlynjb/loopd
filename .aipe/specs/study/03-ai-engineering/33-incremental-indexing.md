@@ -11,7 +11,7 @@
 
 ## Why care
 
-A neighbourhood bookstore re-shelves every evening: the owner closes shop, gathers the day's new arrivals, and spends an hour walking them to the right sections. Meanwhile the staff at the bookstore across the street tuck each new arrival into its section the moment they unpack it — no closing, no nightly catch-up, just constant small motions during the workday. By month's end the second store opens earlier, closes later, and has fewer wrong-shelf surprises because the cost of indexing rode along with the arrival of each book.
+Open Vercel's Incremental Static Regeneration (ISR) docs and watch the flow. The first request to a page hits the origin, the response gets cached at the edge, and subsequent requests serve from cache until the page's `revalidate` window expires — at which point only the affected page rebuilds, not the whole site. Algolia exposes the same shape via `partialUpdateObject`: change one record, the index re-shards that record alone. Postgres's B-tree index does it on every `INSERT` / `UPDATE` / `DELETE` — the index follows the data, not a nightly rebuild clock. The cost of re-indexing rides along with the write, not against a separate timer.
 
 The implicit question is "should the index update on a clock or in response to writes?" Incremental indexing is the name for the second pattern — the index follows the data, three lifecycle paths (insert, update, delete) keep it current, and a one-time backfill seeds the index when the feature first ships. The full-rebuild pattern is a hold-over from indexes that couldn't be updated online; for editable corpora, it loses on freshness, cost, and write-architecture fit.
 
@@ -334,3 +334,6 @@ Answer: `scheduleEmbed(entry.id)` (target — analogous to existing `scheduleCla
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-bookstores reshelving scenario → "clock or write-driven" pattern naming → bolded "what depends on getting this right" with `scheduleEmbed()` / `processEmbedRefresh()` / `[B2A.4]` stakes → without/with bullets walking the three lifecycle paths → one-line "index follows the data, not the clock" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced bookstore-evening-reshelving analogy with Vercel ISR, Algolia partialUpdateObject, Postgres B-tree incremental updates).

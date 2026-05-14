@@ -11,9 +11,9 @@
 
 ## Why care
 
-A traveller stands at an airline check-in counter with a single suitcase and a strict 23-kilo limit. On the floor next to them are three duffels, a coat, two pairs of boots, a stack of books, a pile of receipts, and a wrapped gift. The agent points at the scale. Everything goes in or stays behind based on this one weigh-in — there is no second bag, no overflow shelf, no "we'll send the rest later." What flies is decided by what fits.
+Try to deploy an AWS Lambda function with a 200 MB zipped payload. The console rejects it — the deployment package limit is hard. Same for an HTTP POST body through most API gateways (a few MB), same for a single Slack message (40k chars), same for a single Git push to GitHub (2 GB before warnings start). Every interface that crosses a network or process boundary has a budget for what fits in *this* request; what doesn't fit doesn't go.
 
-A model's context window is that suitcase. The model only sees what fit into the bag for this one trip — no filesystem, no database, no prior conversation, no memory of yesterday. Not the question, not the documents, not the history — just the single payload assembled for this call. Naming that constraint, and naming what's worth packing per chain, is the whole game.
+A model's context window is the same constraint, applied to the prompt that crosses the boundary into the model. The model only sees what fit into the prompt for this one call — no filesystem, no database, no prior conversation, no memory of yesterday. Not the question, not the documents, not the history — just the single payload assembled for this call. Naming that constraint, and naming what's worth packing per chain, is the whole game.
 
 **What breaks without it:** cost predictability and answer quality, in that order. Each chain in `src/services/ai/` has its own `buildContext` helper that decides what flies. `expand`'s context reads up to 14 days from SQLite and slices via `recentDates.slice(0, 3)` plus `siblingTodos.slice(0, 5)` — capped at ~850 input tokens, ~$0.002 per call. `interpret` uses `truncateTail(text, 2000)` to keep the last 2000 characters because the lede is often stage-setting and the tail is where the thinking lands. Drop those caps and a heavy journaling day with 50 todos and a 14-day backfill lands 5,000+ tokens in one prompt — the bill jumps 10× and the model's attention thins across irrelevant context, making the actual answer worse.
 
@@ -33,7 +33,7 @@ The model only sees what flies in the suitcase this trip — pack it deliberatel
 
 ## How it works
 
-A suitcase with a strict weight limit at the airport check-in counter. You can't take everything — you pick what's worth carrying for each trip and leave the rest behind. The context window is the same constraint: every LLM call has a fixed token budget, and the codebase's job is to decide what gets to fly each time. Spread across five chains, the codebase carries different things for different jobs, never the kitchen sink.
+An AWS Lambda function's deployment package has a hard size cap — you decide what code goes into the zip for each function and leave the rest in shared layers or S3. The context window is the same shape: every LLM call has a fixed token budget, and the codebase's job is to decide what gets to ride in *this* prompt. Spread across five chains, the codebase carries different things for different jobs — never one giant payload that tries to do everything.
 
 ### Per-chain context budgets — what each call brings
 
@@ -370,3 +370,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (airport-counter weigh-in scenario → "the model only sees what fit in the bag" pattern naming → bolded stakes pivot to `buildContext` caps in `expand` and `truncateTail` for `interpret` → before/after bullets on no-cap vs explicit-slice budgets → one-line "pack the suitcase deliberately" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced airline-suitcase + airport-check-in analogies with AWS Lambda deployment-package size cap, API gateway POST-body limits, Slack message char cap, and Git push size limits).

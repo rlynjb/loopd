@@ -11,9 +11,9 @@
 
 ## Why care
 
-A librarian arranges every book in a 2D map where books on similar topics sit close together. A reader hands her a slip of paper describing a half-remembered idea; she walks the map, picks the ten nearest spines, and hands them over in under a second. The map is a physical artifact — index cards stretched across a wall — and the speed comes from the layout, not from reading each book.
+Open Pinecone's console on any indexed namespace. Paste a query text into the sample-query form, hit search, and get the top-10 nearest vectors back in under 100ms — regardless of whether the index holds a thousand vectors or a million. The speed comes from the HNSW (Hierarchical Navigable Small World) index Pinecone runs underneath. SQLite's `sqlite-vec` extension exposes the same shape via `CREATE VIRTUAL TABLE entry_vec USING vec0(...)`; Postgres's `pgvector` exposes it via `CREATE INDEX ON entries USING hnsw (embedding vector_cosine_ops)`. Same query shape, three storage engines, one underlying algorithm.
 
-The implicit question is "given a query point, what are the nearest neighbours in this space, and how fast can we find them?" A vector database is the name for the storage layer that holds those points plus the index that answers the question without scanning every book. Two real decisions live underneath: which storage engine holds the vectors, and which algorithm (exhaustive vs ANN) the index uses.
+The implicit question is "given a query point, what are the nearest neighbours in this space, and how fast can we find them?" A vector database is the name for the storage layer that holds those points plus the index that answers the question without scanning every row. Two real decisions live underneath: which storage engine holds the vectors, and which algorithm (exhaustive vs ANN) the index uses.
 
 **What depends on getting this right:** which databases the codebase has to operate, how retrieval latency scales, and whether vectors stay co-located with the rows they describe. For loopd the planned `entry_embeddings` table lives in `loopd.db` next to `entries`, synced to Supabase via the existing `schedulePush` machinery — picking `sqlite-vec` keeps one canonical store and makes "filter `deleted_at IS NULL` then ORDER BY cosine" a single SQL statement. Pick Pinecone instead and every retrieval becomes a cross-service round-trip, plus a third operational surface, plus a sync mapper between two incompatible vector formats — for 365 entries per user, the new service earns nothing.
 
@@ -319,3 +319,6 @@ Answer: `entry_embeddings` (target — `[B2A.2]`). Fallback: JSON TEXT column + 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian-with-2D-map scenario → nearest-neighbours-without-scanning pattern naming → bolded "what depends on getting this right" with `entry_embeddings`/`schedulePush` stakes → with/without bullets walking storage choices at 365 / 1M / 100× scale → one-line "vector is data; index is infrastructure" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced librarian-2D-book-map analogy with the Pinecone console UI, sqlite-vec CREATE VIRTUAL TABLE, pgvector HNSW index).

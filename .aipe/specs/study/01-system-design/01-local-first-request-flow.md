@@ -37,7 +37,7 @@ The user's writes go to the device; the cloud catches up later.
 
 ## How it works
 
-A bank teller who hands you the cash from the till the moment you ask, then writes the ledger entry that gets reconciled with head office later. The "money is in your pocket" event happens at the speed of the local till; the "head office knows about it" event happens on the next courier run. Two operations that most apps weld together — writes and publish — split apart so the user never waits on the network.
+Git's `commit` and `push` are two different operations split apart for the same reason. The commit lands instantly in the local repo at disk-I/O speed, and the push runs whenever the network agrees to cooperate. Gmail does a consumer-facing version of the same shape: hit send and the message vanishes from compose to the sent folder immediately, while the actual SMTP handoff finishes in the background; flaky wifi just queues the retry. Two operations that most apps weld together — writes and publish — split apart so the user never waits on the network.
 
 ### The single funnel — every write goes through `database.ts`
 
@@ -404,3 +404,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (subway scenario → "what decides which app felt usable" pattern naming → bolded "what depends on getting this right" pivot with the autosave-invariant stakes → before/after bullets walking a `[] call mom` keystroke → one-line metaphor "writes to the device, cloud catches up later").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of How it works to anchor on real software (replaced bank-teller-with-ledger analogy with Git's `commit` / `push` split + Gmail's optimistic send + background SMTP retry).

@@ -11,9 +11,9 @@
 
 ## Why care
 
-A small office has a single filing cabinet with about 50 folders, organised by date. When someone asks for "last quarter's expense report," the office manager walks to the cabinet, opens the third drawer, pulls three folders, and is back at the desk in twenty seconds. Now picture the same office moved into a city library: 50,000 folders, no dates on the spines, no labels the manager recognises. The manager can't walk to the right drawer anymore — they need a librarian with a topic catalogue who can say "the three folders closest in meaning to your question are these." Different scale, different retrieval shape.
+Open `grep -r "auth" .` in a small repo with 50 files — done in 20 milliseconds, every match shown by file and line. Run the same grep against a 50,000-file monorepo and you'd wait minutes, hit terminal output limits, and still not know which match is most *relevant* to the bug you're hunting. Different scale, different retrieval shape. The big repo is where you reach for Sourcegraph's semantic code search or GitHub Copilot's "ask about this codebase" — embeddings over every function, top-k closest in meaning to your query, not a brute-force string match.
 
-RAG is the librarian-with-topic-catalogue. Embed every folder's contents into a vector, store the vectors in an index, embed the question the same way, return the top-k folders closest in meaning, paste them into the prompt. The pattern is documented here precisely because this codebase doesn't use it — the corpus is still a small filing cabinet, organised by date, and the chains know exactly which drawer to open.
+RAG generalises that semantic-search step beyond code. Embed every chunk of your corpus into a vector, store the vectors in an index, embed the question the same way, return the top-k chunks closest in meaning, paste them into the prompt. The pattern is documented here precisely because this codebase doesn't use it — the corpus is still small enough that the chains know exactly which rows to read by date, not by meaning.
 
 **What depends on getting this right:** whether the AI bill includes an embedding pipeline and a vector DB or doesn't. The codebase's chains pre-fetch by deterministic SQL — `caption.ts` always pulls the last 5 captions for anti-repetition; `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3` plus `siblingTodos.slice(0, 5)`. Microseconds, zero dollars, no separate ML pipeline. The user's journal is small (a heavy month is ~50 entries; a year is ~365 × 200 words ≈ 75K tokens — the entire corpus fits in Claude's context window twice over). RAG's value scales with corpus size; at this scale, similarity search doesn't outperform "give me the last 5 by date." Add RAG today and the bill grows by an embedding model + a vector DB + a top-k tuning loop, for the same `ai_summaries.summary_json` outputs the date-shaped retrieval already produces. The threshold to revisit is "the day a chain needs query-time relevance over a corpus too large to stuff."
 
@@ -33,7 +33,7 @@ RAG is a tradeoff, not a requirement — the corpus shape decides.
 
 ## How it works
 
-A library where you don't know what book you want, you only know what you want to read about. RAG is the librarian who runs your topic through a "meaning catalogue" (an index of book-themes, not titles), pulls the top-5 books closest in meaning, and hands them to you to read. Loopd doesn't have that librarian because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
+Sourcegraph's semantic code search and ChatGPT's "ask your codebase" both run the same step under the hood: take a natural-language query ("how does auth work?"), embed it into the same vector space as the indexed corpus, return the top-k chunks closest in meaning — not the top-k by filename match, not the top-k by `grep`. RAG generalises that pattern across any corpus, not just code. Loopd doesn't have that retrieval step because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
 
 ### The RAG pipeline — embed, index, query, stuff, answer
 
@@ -438,3 +438,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-filing-cabinet vs city-library scenario → "RAG is the librarian-with-topic-catalogue" pattern naming → bolded stakes pivot to date-shaped `getRecentAISummaries` and `buildContext` slicing at the current corpus scale → before/after bullets on embed-pipeline vs hand-picked → one-line "corpus shape decides" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced filing-cabinet + library-meaning-catalogue analogies with grep at small vs large scale, Sourcegraph semantic code search, ChatGPT "ask your codebase").

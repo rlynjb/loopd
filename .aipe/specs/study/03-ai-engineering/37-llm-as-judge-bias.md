@@ -11,7 +11,7 @@
 
 ## Why care
 
-A piano competition uses one judge for the morning round. By lunch the staff notice three patterns: she keeps marking the first performer in each pair higher even when the second was clearly better; she rewards long flashy pieces over short precise ones; and she rates students from her own conservatory a notch higher than equally-skilled outsiders. None of it is corrupt — those are just her preferences leaking into the marks. The festival's options are: keep one judge and ship the preferences, or run each pair twice with the order swapped, add a "tasteful brevity" line to the rubric, and bring in a guest judge from a rival school.
+Open Vercel's A/B test framework and look at how it controls for position bias. If variant A is always shown first and variant B second, the click-through rate on A overstates A's real lift by 5–15% — users default to the first option presented. Vercel's framework randomises variant order per session, then averages results across the two orderings. GitHub Copilot Chat's "rate this completion" UI faces the same trap and addresses it the same way. PostHog's experiment system ships position-randomisation by default for the same reason. None of these biases are corrupt — they're systematic preferences that leak into ratings whenever the rater (human or LLM) sees options in a fixed order, and the production fix is always order-swap-plus-averaging.
 
 The implicit question is "what systematic preferences does the judging instrument bring that aren't actually about quality?" LLM-as-judge biases are the answer: position bias (favours whichever output appears first, 5–15%), verbosity bias (favours longer outputs even when filler, 10–20%), self-preference bias (favours outputs from its own model family, 5–10%). Production eval pipelines name them and apply controls; lazy pipelines treat the judge as ground truth and ship the bias as a quality regression.
 
@@ -337,3 +337,6 @@ Answer: `scripts/eval-harness/metrics/rubricJudge.ts` (target, not yet created).
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (piano-competition-single-judge scenario → "what systematic preferences does the judging instrument bring" pattern naming → bolded "what depends on getting this right" with `rubricJudge.ts` / `pairwise.ts` / `getProvider()` / `[B3.3]` / `[B3.7]` stakes → without/with bullets walking position swap, concise rubric, cross-model judging → one-line "judge is a measurement instrument with its own preferences" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced piano-competition-one-judge analogy with Vercel A/B test framework position randomization, GitHub Copilot Chat rating UI, PostHog experiment randomization). Why care WC1 was missed by the original triage (only HIW1 was flagged, and HIW1 turned out to be a direct technical opening with no analogy); WC1 was the actual violation.

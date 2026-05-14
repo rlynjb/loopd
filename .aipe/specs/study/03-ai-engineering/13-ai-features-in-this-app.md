@@ -11,9 +11,9 @@
 
 ## Why care
 
-A small kitchen runs a five-recipe binder. Each recipe has its own ingredients, its own oven setting, its own expected dish, its own serving instructions. The cook flips to the recipe the order calls for, follows it, plates it, moves on. Walk in and ask "what does the kitchen serve?" and the cook hands you the binder — you can see the soup is leek-and-potato, the pasta is carbonara, the bread is sourdough. None of that information is hidden inside the cook's head; it's named on the page.
+Open the Vercel dashboard for a project. Each route in `app/` has its own deploy log, its own performance metrics, its own error tracking, its own cost line item. Click any route and you see exactly what code lives there, what it serves, how often it fails. Walk into Vercel and ask "what does this project do?" and the dashboard answers route by route — none of that information lives in someone's head; it's named on the page. GitHub's `Actions` tab does the same for workflows; the OpenAI usage dashboard does it for model calls.
 
-A per-feature AI catalogue is that binder. Not "we added AI" — five named recipes, each with a prompt template, a model choice, an output contract, and a place in the UI. Naming each feature this way is what makes cost, latency, blast radius, and provider-swap decisions tractable.
+A per-feature AI catalogue is the same shape: a named route table, not a heroic monolith. Five named recipes, each with a prompt template, a model choice, an output contract, and a place in the UI. Naming each feature this way is what makes cost, latency, blast radius, and provider-swap decisions tractable.
 
 **What depends on getting this right:** the ability to reason about any single AI feature without re-deriving the whole product. The codebase ships five chains: `summarize.ts` (Sonnet/GPT-4o, structured editor JSON + freeform summary into `ai_summaries.summary_json`), `caption.ts` (Sonnet/GPT-4o, 4 tonal variants `clean/smoother/reflective/punchy` into `summary_json.variants`), `classify.ts` (Haiku/GPT-4o-mini, 1-of-5 mode label into `todo_meta.type` + `classifier_confidence='haiku'`), `expand.ts` (Sonnet/GPT-4o, per-type typed JSON for `idea/knowledge/study/reflect` into `todo_meta.expanded_md`), `interpret.ts` (Sonnet/GPT-4o, long-form markdown into a modal, NOT persisted). The two-tier model split (Sonnet for content, Haiku for labels) keeps classify at ~$0.0004 instead of ~$0.01 per call — 25× the cost ratio that tracks 25× the output-token-count difference. Drop the catalogue and "we added AI" becomes the only available description; cost analysis, model-version migration, and "which feature breaks if Anthropic deprecates Sonnet 4.6?" all become re-discovery exercises every time they're asked.
 
@@ -33,7 +33,7 @@ Five recipes, one binder — every AI feature in this codebase has a named page.
 
 ## How it works
 
-A small recipe binder with five named recipes — one for each AI feature. Each recipe has its own ingredients (prompt template), oven setting (model choice), expected dish (output shape), and serving instructions (where it lands in the UI). The cook (the codebase) doesn't improvise — every dinner is one of the five recipes, made exactly the way the binder says. If you're coming from frontend, this is the same shape as a typed set of `useMutation` hooks, one per server action — each has its mutation function, its onSuccess, its inputs, and they don't cross-call each other.
+A Vercel deploy log breaks a build into named jobs — `install`, `build`, `route(/)`, `route(/api/x)`, `route(/api/y)`. Each job has its own status, its own logs, its own retry button. The platform doesn't try to do all the work in one undifferentiated step; it names each piece, runs it against its own contract, and surfaces what each one did. AWS Lambda's CloudWatch view does the same — one log group per function, one set of metrics per function, one place to find a stack trace. If you're coming from frontend, this is the same shape as a typed set of `useMutation` hooks, one per server action — each has its mutation function, its onSuccess, its inputs, and they don't cross-call each other.
 
 ### The five recipes — what each AI feature does and why
 
@@ -483,3 +483,6 @@ Updated: 2026-05-10 — v1.24.0 pass: renamed `## Features overview` to `## How 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-kitchen-five-recipe-binder scenario → "five named recipes, each with prompt+model+contract+UI place" pattern naming → bolded stakes pivot to all five chains anchored to `summary_json.variants`, `todo_meta.type`, `todo_meta.expanded_md`, `classifier_confidence`, and the Sonnet/Haiku tier split → before/after bullets on undocumented vs catalogued → one-line "every AI feature has a named page" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced small-kitchen-recipe-binder analogies with Vercel dashboard per-route deploy logs, GitHub Actions jobs, AWS Lambda CloudWatch).

@@ -11,9 +11,9 @@
 
 ## Why care
 
-A radio sits on a kitchen counter with a single tuning dial. At one end the receiver is locked to one station — the loudest, clearest signal in range, every time, no surprises. At the other end the dial is wide open and the receiver picks up whatever's strongest in a band of nearby frequencies, drifting between three or four stations as the wind shifts. Same radio, same antenna, same broadcast towers — but the dial decides which voice comes out of the speaker on any given moment.
+Open the OpenAI Playground in your browser and look at the right-hand panel. There's a `temperature` slider going from 0 to 2. At 0, the model produces the same answer every time you hit "Submit" on the same prompt — deterministic, reproducible, boring. Slide it to 1 and the answer shifts each run — sometimes the same opening, sometimes a different framing. Slide it to 2 and the output drifts into nonsense after a sentence or two. Same model, same prompt, same weights — but the slider decides which response comes out of the API on any given moment. The Anthropic Workbench has the same slider in the same place.
 
-That dial is what sampling parameters are. Not a knob on the model — a knob on the *sampling step* that runs in front of the model's output, deciding how greedy the next-token pick is. Naming the dial separately from the model is what makes "two identical prompts returned different answers" a tractable fact rather than a mystery.
+That slider is what sampling parameters are. Not a knob on the model — a knob on the *sampling step* that runs in front of the model's output, deciding how greedy the next-token pick is. Naming the dial separately from the model is what makes "two identical prompts returned different answers" a tractable fact rather than a mystery.
 
 **What depends on getting this right:** the reproducibility of every chain, especially the ones that should be deterministic. Both Anthropic and OpenAI default to `temperature=1` if no value is passed. Four of the five chains in `src/services/ai/` pass no `temperature`, so `summarize`, `caption`, `classify`, and `expand` all run at the silent default of 1. Only `interpret.ts` L14 declares `const TEMPERATURE = 0.7` and passes it to both Claude and OpenAI — the conventional "creative but coherent" setting for a chain whose output is the artifact the user reads. The gap is `classify` — the chain that picks 1 of 5 modes (`todo/idea/knowledge/study/reflect`) for `todo_meta.type`. At `temperature=1`, the same ambiguous todo text can plausibly return `idea` one run and `knowledge` the next; nothing in the codebase notices because `classifier_confidence='haiku'` doesn't track which label was picked first. The fix is two lines per branch (`temperature: 0` in the Claude SDK call and the OpenAI fetch body) — no schema change, no migration, no contract change.
 
@@ -33,7 +33,7 @@ Sampling is half the LLM function — same model, same prompt, different dial, d
 
 ## How it works
 
-A radio dial between two stations. At one end the model is locked to the single most-likely next token at every step; at the other end it's drawing from a wide pool and sometimes picking the long shot. The "function" feels different at each end — same model, same prompt, same weights, but the sampling step in front of the output changes what comes out. Two operations welded together in the LLM-as-function picture (predict probabilities → emit one token) split apart into two independent decisions: the model produces a distribution, sampling picks from it.
+The OpenAI Playground's temperature slider sits next to the chat input. At 0, the model is locked to the single most-likely next token at every step; at 2 it's drawing from a much wider pool and sometimes picking the long shot. The model's behaviour feels different at each setting — same prompt, same weights, but the sampling step in front of the output changes what comes out. Two operations welded together in the LLM-as-function picture (predict probabilities → emit one token) split apart into two independent decisions: the model produces a distribution, sampling picks from it.
 
 ### Temperature — the variance dial
 
@@ -409,3 +409,6 @@ Then open `interpret.ts` and verify.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (kitchen-counter-radio-with-tuning-dial scenario → "the dial is the sampling step in front of the output" pattern naming → bolded stakes pivot to four chains running silent provider default `temperature=1`, only `interpret.ts` L14 setting `TEMPERATURE = 0.7`, and `classify` as the temp=0 gap → before/after bullets on silent-default vs explicit-per-chain → one-line "sampling is half the LLM function" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-counter-radio + radio-dial analogies with the OpenAI Playground temperature slider and Anthropic Workbench).

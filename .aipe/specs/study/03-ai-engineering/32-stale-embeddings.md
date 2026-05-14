@@ -11,7 +11,7 @@
 
 ## Why care
 
-A library keeps a card catalog: one paper card per book summarising the contents, filed by topic so readers can browse. A writer pulls a book off the shelf, rewrites three chapters, and slips it back — but no one updates the card. A week later a reader pulls the card for "chemistry," picks the book, and finds it's now a poetry collection. The card is a fingerprint of what the book *used to be*; the shelf moved on.
+Open React Query DevTools and watch what happens when you mutate data. The cache marks the affected queries stale; the next read triggers a refetch; the UI eventually shows fresh data. Next.js ships `revalidatePath` for the server side — mark a route's cached page as stale, and the next request rebuilds it. The HTTP version is `ETag`: server says "you have an old version, refetch." Postgres materialised views are the SQL version — stale until `REFRESH MATERIALIZED VIEW` runs after upstream changes. Different storage layers, same problem: derived state lies until it's invalidated.
 
 The implicit question is "when the source changes, how does the derived fingerprint know it needs to be recomputed?" The stale-embedding problem is the name for that gap, and the answer is the same shape as every other derived-state invalidation: mark the derived row stale at the moment of write, recompute it on a separate pass. Without an invalidation channel, the vector silently drifts from the text it's supposed to represent.
 
@@ -323,3 +323,6 @@ Answer: `embedding_stale_at` (target — `[B2A.4]`). `processEmbedRefresh()` in 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (card-catalog-and-rewritten-book scenario → "when source changes, how does the fingerprint know" pattern naming → bolded "what breaks without it" with `embedding_stale_at` / `writeEntry()` / `processEmbedRefresh()` stakes → without/with bullets walking the "pivot" edit → one-line "vector is a fingerprint; derived state lies until invalidated" metaphor).
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced library-card-catalog-vs-rewritten-book analogy with React Query DevTools stale invalidation, Next.js revalidatePath, ETag headers, Postgres materialised views).

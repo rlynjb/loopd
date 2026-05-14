@@ -37,7 +37,7 @@ Share the matcher, vary the apply tail; prose is canonical.
 
 ## How it works
 
-Two snapshots of the same fridge a day apart. You compare the lists, decide which items moved shelves (same item, different position), which items were renamed (same shelf, different label), and which items are simply gone. For todos, "gone from prose" means "kept around but marked carryover" — the user might bring the line back tomorrow. For nutrition, "gone from prose" means "hard-deleted" — every food log corresponds to exactly one prose line, and if the line's gone the row is meaningless. Same matching algorithm, opposite cleanup rules. If you're coming from frontend, this is the same shape as `rsync` modes: `--delete` mirrors the source exactly, while no-flag preserves destination-only files. The matcher is shared; the apply step is where the domain rule lives.
+`git status` compares two snapshots of the same set of files — the index and the working tree — and emits the diff. The matching algorithm is shared with every other git operation, but the cleanup options diverge: `git restore` keeps unmatched files, `git clean -fd` removes them. Same matcher, opposite policy. `rsync` lives on the same fork — `--delete` mirrors the source exactly, while no-flag preserves destination-only files. For todos here, "gone from prose" means "kept as carryover" because the user might restore the line tomorrow. For nutrition, "gone from prose" means "hard-deleted" because every food log corresponds to exactly one prose line. Same matching algorithm, opposite cleanup rules. If you're coming from frontend, this is the same shape as the `git status` / `git clean` split or rsync's `--delete` flag — the matcher is shared; the apply step is where the domain rule lives.
 
 **Real operation:** `scanNutritionForEntry` in `src/services/nutrition/scanNutrition.ts`. Runs after every entry text change via `useEntries.ts:20`.
 
@@ -498,3 +498,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (rsync-mirror-vs-additive-mode scenario → naming the share-matcher-vary-apply-tail pattern → bolded "what depends on getting this right" pivot with `nutrition` 1:1-with-prose invariant stakes → before/after bullets walking a deleted `** banana 95 kcal` line through carryover vs delete-sweep → one-line summary "share the matcher, vary the apply tail; prose is canonical").
+
+---
+Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of How it works to anchor on real software (replaced fridge-snapshots analogy with `git status` vs `git clean -fd` and rsync's `--delete` flag — same matcher, opposite cleanup policy). Why care Move 1 already used `rsync` and was left untouched.
