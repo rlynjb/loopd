@@ -11,9 +11,9 @@
 
 ## Why care
 
-A small office runs on a paper-based workflow — mail comes in, gets sorted into pigeonholes, gets filed, gets answered. A new AI assistant arrives and starts helping: it summarises mail, drafts replies, tags things by topic. Some days the assistant is brilliant; some days it's slow; some days it's locked out of the building entirely. The office keeps running on every one of those days because the canonical work — sort, file, answer — was never wired through the assistant. The assistant is a layer on top, not a load-bearing wall.
+You're writing a React component that fetches data from `/api/recommendations` and shows the results next to a `<UserProfile>` section. The fetch can fail (network, 500, malformed payload). Option one: the fetch is awaited inline, and if it throws, the whole component throws and the user sees a blank page with the profile gone too. Option two: the fetch lives inside an `<ErrorBoundary>` with a fallback like `<p>Recommendations unavailable</p>` — the boundary catches the throw, renders the fallback, and the `<UserProfile>` next door keeps rendering unaffected. The boundary defines the failure perimeter: anything inside it gets caught and routed to a named fallback; everything outside it keeps working. Same shape as a `try/catch` around an awaited LLM call where the catch branch logs the error and returns `null`, letting the caller render with whatever local state it already has.
 
-That layering — best-effort enrichment on top of a canonical path that never waits — is the failure-modes contract. Not "make AI more reliable," not "retry harder" — name every way the AI layer can fail, and make sure each named failure leaves the prose, the todo, and the entry untouched.
+That layering — named fallback inside a failure perimeter, canonical path running outside — is the failure-modes contract. Not "make AI more reliable," not "retry harder" — name every way the AI layer can fail, and make sure each named failure leaves the prose, the todo, and the entry untouched.
 
 **What depends on getting this right:** whether the user loses data when an AI call fails. The codebase enumerates eight named modes: no API key (return `{ error }`, UI shows banner), network error (`fetch` rejects, return `null`, SQLite row stays in pre-AI state), malformed JSON (`parseJson` returns `null`; `expand` retries once with a stricter prompt, others skip), missing required field (`validate.ts` rejects, row ignored), caption-fails-inside-summarize (wrapped try/catch at `summarize.ts:87`, structured summary still saves), user override (`user_overridden_type` lock, classifier skips), MAX_CONCURRENT exceeded (`expand.ts:25` caps at 3, over-cap returns `{ ok: false, reason: 'in-flight-cap' }`), heuristic uncertain (async LLM scheduled, UI shows placeholder type). Every named mode has a recovery path. Drop the contract and a malformed Claude response on caption corrupts `ai_summaries.summary_json` for the day; the editor crashes on render; the user loses the structured summary alongside the captions — one bug, two losses.
 
@@ -27,17 +27,71 @@ With named failure modes:
 - Network error is mode 2: caller catches, returns `null`, the row stays in pre-AI state; next save retries
 - Eight modes, eight recovery paths; the worst outcome is "no AI annotation this time," never "lost data"
 
-Graceful degradation — the office sorts the mail even when the assistant is offline.
+Graceful degradation — the canonical path keeps running when the AI layer fails. Same shape as an `<ErrorBoundary>` wrapping a side effect.
 
 ---
 
 ## How it works
 
-An office where the regular workflow (sort the mail, file it, send replies) keeps running even when the new AI assistant is offline. The assistant can be helpful, slow, or completely down — the mail still gets sorted. Every named failure mode has a named recovery path; the canonical data path (prose → SQLite) is never blocked by AI failures. If you're coming from frontend, this is the same shape as treating the LLM call as a non-critical async dependency — like a feature-flag service that the app gracefully degrades around when unreachable.
+A `try/catch` around an awaited LLM call, plus a `<ErrorBoundary>` wrapping the part of the UI that needs the AI output — that's the failure perimeter at both layers. The canonical path (prose → SQLite) runs outside the perimeter and never throws. Every AI call has a named error path that routes back to a known recovery; nothing inside the perimeter can crash the canonical store. If you're coming from frontend, this is the same shape as treating the LLM call as a non-critical async dependency — like a feature-flag service that the app gracefully degrades around when unreachable.
+
+The two-layer perimeter in one picture:
+
+```
+   ┌─ Canonical path (never blocked by AI) ──────────────────┐
+   │  user types prose                                         │
+   │    → autosave to entries.text (1ms SQLite write)          │
+   │    → scanners produce todos_json, nutrition, thread_      │
+   │      mentions                                             │
+   │    → reconciler enforces 1:1 on todo_meta                 │
+   │                                                            │
+   │  ↓ enrichment layer (best-effort) ↓                       │
+   │  ┌─ AI failure perimeter ────────────────────────────┐   │
+   │  │  scheduleClassify(todoId, text)                    │   │
+   │  │    try { … LLM call … }                            │   │
+   │  │    catch (err) {                                    │   │
+   │  │      switch (err.mode) {                            │   │
+   │  │        case 'no-api-key':       UI banner          │   │
+   │  │        case 'network':          skip, retry-later  │   │
+   │  │        case 'malformed':        retry-once or skip │   │
+   │  │        case 'validate':         skip               │   │
+   │  │        case 'in-flight-cap':    queue              │   │
+   │  │        case 'overridden':       skip silently      │   │
+   │  │      }                                              │   │
+   │  │    }                                                │   │
+   │  └─────────────────────────────────────────────────┘   │
+   │                                                            │
+   │  AI failure → SQLite unchanged → user keeps working       │
+   └──────────────────────────────────────────────────────────┘
+```
+
+The four sub-sections below trace the canonical-path principle, the eight named failure modes, the skip-vs-retry split, and the concurrency cap.
 
 ### The principle — the canonical path never waits on AI
 
 The user types prose into `entries.text`. The autosave commits to SQLite synchronously. The scanners produce `todos_json`, `nutrition`, `thread_mentions`. The reconciler enforces 1:1 on `todo_meta`. None of this requires an LLM call to succeed. If you've worked with optimistic-UI mutations that have a "the network is gravy" mental model, this is the same — local commit is the contract; AI enrichment is the optional later step. Concrete consequence: a user with no API key configured types journal entries for 30 days. SQLite fills with prose, todos, nutrition, threads. Zero AI features run. The journal works. The day they configure a key, the AI features start running on new entries; old entries can be backfilled via the catch-up classifier. Boundary: features that *require* AI output (caption variants for vlog export, expand for todo detail) gracefully degrade — the export still runs without captions, the todo detail shows raw text without expansion.
+
+What runs with vs without AI configured:
+
+```
+   feature                           no AI key configured     AI key configured
+   ─────────────────────────         ──────────────────       ─────────────────
+   prose autosave                    works                    works
+   scanTodos / scanNutrition         works                    works
+   reconcileTodoMetaForEntry         works                    works
+   /todos list                       renders rows             renders + AI-classified
+                                                              type badges
+   /journal[date] view               renders prose            renders + AI summary
+   editor caption variants            empty (skipped)          4 tonal variants
+   todo expansion modal              empty state              ~400-word markdown
+   vlog export                        works (no caption)       works (with caption)
+
+   30 days with no key, then key configured:
+     - old entries: backfilled via catch-up classifier
+     - new entries: AI runs from this point forward
+```
+
+The line is clear: AI features degrade individually; canonical features never do.
 
 ### The eight named failure modes
 
@@ -54,13 +108,79 @@ Each failure has a defined recovery path. Naming them is the discipline; the cod
 
 Think of it like an enumerated error union in a typed React Query mutation — each failure case has its own UI affordance, each has its own retry policy, none of them silently corrupt downstream state. Concrete consequence: a user with intermittent network gets the same row through cases 2 (network error → skip) and 3 (malformed JSON → expand retries once). The row never lands in a corrupt state; the UI either shows the previous value or a placeholder. Boundary: the eight modes are exhaustive at today's surface area. A new AI feature with a new failure shape (e.g., rate-limit headers requiring backoff) needs to add a ninth named mode rather than swallow the failure under an existing one.
 
+The eight modes as an enumerated union with one recovery path each:
+
+```
+   type FailureMode =
+     | { kind: 'no-api-key';     recover: 'return early + UI banner' }
+     | { kind: 'network';        recover: 'return null + row stays pre-AI' }
+     | { kind: 'malformed-json'; recover: 'expand retries once; others skip' }
+     | { kind: 'missing-field';  recover: 'validator returns errors; row ignored' }
+     | { kind: 'caption-fail-   recover: 'try/catch at summarize.ts:87;       '
+              inside-summarize';          summary saves; variants empty' }
+     | { kind: 'user-           recover: 'classifier reads user_overridden_type, '
+              overridden';                skips' }
+     | { kind: 'in-flight-cap'; recover: 'expand returns { ok:false }; UI queues' }
+     | { kind: 'heuristic-      recover: 'async LLM scheduled; UI shows         '
+              uncertain';                placeholder type=todo' }
+
+   the discipline: no anonymous catch(err) { /* skip */ } in the codebase.
+   every catch names the mode + the recovery path; new failure shapes
+   add a ninth variant, not a silent swallow.
+```
+
+Eight modes, eight recovery paths, one rule: no anonymous catches.
+
 ### The split between "skip" and "retry once"
 
 The codebase distinguishes two recovery strategies. **Skip** means "the operation failed; the row stays at its prior state; the next event gets another shot." **Retry once** means "the operation failed once; try one more time with a stricter prompt; if that fails, return failure to the caller." Only `expand` uses retry-once; the others all skip. The reason: `expand` is user-triggered (the user tapped a todo to see its expansion), so a visible failure-state matters; the others are background (typing → autosave → classify), so the user never sees a failure UI. If you've worked with TanStack Query's `retry` option, this is the same shape — per-mutation policy, not a global default. Concrete consequence: user taps an idea todo to see its expansion. Claude returns malformed JSON. `expand` retries with `"Your previous output was not valid JSON for the schema. Re-emit ONLY a single JSON object that exactly matches the schema."` and succeeds. The user sees the expansion ~1.5s later (one extra round-trip) instead of an error. Boundary: too many retries inflate cost; one retry on `expand` is the empirical sweet spot, calibrated against observed malformed-output rates.
 
+The split decision matrix:
+
+```
+   chain          trigger                 user sees fail UI?    policy
+   ──────────     ─────────────────       ───────────────       ──────────────
+   summarize      background              no (silent)            skip
+                  (focus blur)
+   caption        background              no (silent)            skip
+                  (focus blur)
+   classify       background              no (silent)            skip
+                  (focus blur)
+   expand         user-triggered          YES — empty modal      retry once
+                  (tap on todo)           with "couldn't load"    with stricter
+                                          message                 prompt; then
+                                                                   return failure
+   interpret      user-triggered          YES — error toast       skip
+                  (tap "interpret")
+```
+
+User-triggered + visible failure UI = retry-once policy. Background + silent = skip policy. The rule is "match the policy to what the user can see."
+
 ### The cap on concurrency — `MAX_CONCURRENT = 3`
 
 `expand.ts` caps concurrent expansions at 3. A 4th simultaneous request returns `{ok: false, reason: 'in-flight-cap'}`; the UI shows a "wait a moment" affordance. The cap exists because expansions can chain (user expands one, scrolls, expands another) and uncapped concurrency would let a runaway user pile up 20 in-flight requests, each costing money. If you've worked with `useQueries` and a max-parallel option, this is the same pattern at the application layer instead of the library layer. Concrete consequence: a user power-clicks through 6 todos in two seconds. The first 3 fire normally; the next 3 return `in-flight-cap`. The UI shows a "wait" badge on the over-cap ones; as the first 3 land, the queued ones run. Total cost: 6 expansion calls, none parallel beyond 3. Boundary: the cap is an application-side guardrail, not a server-side rate limit. If Anthropic's actual rate limit is lower, the codebase would still hit it under sustained traffic; the cap is a politeness measure, not a fallback.
+
+Walking 6 rapid expand requests through the cap:
+
+```
+   Time     Action                          inFlight  Result
+   ─────    ───────────────────────────     ────────  ────────────────────────
+   0.0s     user taps todo 1                1         expand fires
+   0.1s     user taps todo 2                2         expand fires
+   0.2s     user taps todo 3                3         expand fires
+   0.3s     user taps todo 4                3         { ok:false,
+                                                       reason:'in-flight-cap' }
+                                                      UI shows "wait" badge
+   0.4s     user taps todo 5                3         { ok:false, … }
+   0.5s     user taps todo 6                3         { ok:false, … }
+   ...
+   0.8s     todo 1 expand completes         2         queued todos can resume
+                                                      (UI re-tries the wait-
+                                                       badged ones)
+   ...
+```
+
+App-side cap, not a server-side rate limit — the codebase is being polite to Anthropic + courteous to the user's wallet.
 
 This is what people mean by "graceful degradation for non-critical paths." Every AI feature in the codebase has an answer to "what happens if this fails?" and the answer is never "the user is stuck." The discipline is naming the failure modes — when you've named them, you've designed for them; the unnamed ones are the ones that surprise you in production. Every system that has ever shipped a critical dependency on a flaky service has learned the same lesson: the canonical path stays cheap and local, the enriching paths fail open. The full picture is below.
 
@@ -442,3 +562,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-office-with-AI-assistant-going-offline scenario → "best-effort layer on top of a canonical path that never waits" pattern naming → bolded stakes pivot to all 8 named modes anchored to `summarize.ts:87` try/catch, `parseJson`, `validate.ts`, `MAX_CONCURRENT`, `user_overridden_type` → before/after bullets on unnamed-failures vs eight-mode contract → one-line "office sorts the mail even when the assistant is offline" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from the small-office-with-AI-assistant physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitives (React `<ErrorBoundary>` perimeter; `try/catch` around an awaited LLM call routing to named recovery paths). Same swap on Why care Move 5 ("canonical path keeps running" instead of "office sorts the mail"). Added Move 1 mnemonic diagram (two-layer perimeter: canonical-path outside, AI failure-modes inside try/catch with switch on err.mode) + 4 Move 2 sub-section diagrams: feature-availability matrix with-vs-without-AI-key, 8-mode TypeScript union type, skip-vs-retry decision matrix, 6-rapid-expand walked through the cap. Total: 5 new diagrams.

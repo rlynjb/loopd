@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open the Vercel dashboard after pushing a PR. Before the build deploys, Vercel runs its own validation — does `package.json` parse, does TypeScript compile, are the required environment variables present, did the build emit the expected output directory? The deploy doesn't trust you; it checks. If validation fails, the build is marked failed and the deploy is rejected. If validation passes, the deploy goes live. Same shape as `zod.parse(body)` at a tRPC boundary or Stripe's webhook signature check — the request either becomes typed data or gets rejected at the boundary, every time, with no exceptions for callers that succeeded yesterday.
+You've written a backend handler that takes a JSON request body. The first line of the handler is `const data = schema.parse(req.body)` — a Zod call (or any equivalent runtime type checker). If the body matches the schema, you get a typed `data` value back. If it doesn't, the parser throws and the handler returns a 400 — no untyped value ever reaches the rest of the handler, no downstream `data.userId.toLowerCase()` ever fires on an `undefined`. The parse step is the boundary; everything past it is typed; everything before it is untrusted input. Same shape as `JSON.parse` wrapped in a `try/catch` for an untrusted webhook body — the request either becomes typed data or gets rejected at the boundary, every time, with no exceptions for callers that succeeded yesterday.
 
 That parse-or-reject step is the validation gate. Not a sanity check, not a logging hook — a load-bearing boundary where untrusted input either becomes typed data or gets rejected. Naming the model as "untrusted input" (not "an assistant whose output we'll lightly check") is what makes the rest of the codebase safe to trust.
 
@@ -35,13 +33,81 @@ Treat the model as an untrusted client — parse, validate, reject, every call.
 
 A Zod schema parsing an API request body. `schema.parse(body)` either returns the typed value or throws — whatever the client claims they sent, the schema checks the actual JSON against the rules: required fields, correct types, valid enums, cross-field invariants. If parse succeeds, the typed value flows downstream; if it throws, the request is rejected at the boundary and no untyped data ever reaches the rest of the handler. The model is the client, the validators are `schema.parse`, and SQLite is the rest of the handler. Untrusted input never gets persisted without the parse step. If you're coming from frontend, this is the same shape as treating LLM output like a server-side form POST — never paste it into your application state without parsing and validating it first, exactly the way you wouldn't paste a `<form>` POST body into your DB.
 
+The two-stage gate in one picture:
+
+```
+   LLM raw output (string)
+              │
+              ▼
+   ┌──────────────────────────────────────┐
+   │ stage 1: parseJson(text)              │
+   │   regex { … } substring                │   on null:
+   │   JSON.parse the substring             │ ──── chain skips,
+   │   returns parsed object | null         │      previous data
+   └──────────────────┬───────────────────┘      intact
+                      │
+                      ▼  parsed object
+   ┌──────────────────────────────────────┐
+   │ stage 2: per-chain validator          │
+   │   validateSummary / parseAndValidate / │   on reject:
+   │   validateExpansion                    │ ──── per-chain policy
+   │   check shape + cross-field invariants │      (skip / retry-once /
+   └──────────────────┬───────────────────┘       give up cleanly)
+                      │
+                      ▼  typed, validated
+   ┌──────────────────────────────────────┐
+   │ persist: database.ts upsert            │
+   └──────────────────────────────────────┘
+```
+
+The four sub-sections below trace the two stages, the per-chain failure policy, and the one chain (interpret) whose output can't be schema-validated.
+
 ### Step 1 — `parseJson`: extract the JSON, fail closed if malformed
 
 Every chain that returns JSON runs `parseJson(text)` first. The function regex-matches the first `{…}` substring (in case the model wrapped the JSON in a prose preamble like `"Sure! Here's the JSON: { ... }"`), then runs `JSON.parse` on the substring. If either step fails, it returns `null` — the chain treats that as a parse failure and short-circuits. Think of it like a typed form's `parse()` step that returns `Either<Error, T>` — the parse outcome is the contract; downstream code only sees the success branch. Concrete consequence: Claude returns `"Here are the variants: {\"clean\": \"...\", \"smoother\": ...}"`. `parseJson` regexes the substring `{...}`, parses it, returns the typed object. If Claude had returned `"I can't generate captions today."`, the regex finds no JSON, returns `null`, the chain skips and the UI shows the previous variants (or an empty state). Boundary: the regex is greedy — if the model emits nested JSON or unbalanced braces, the extract may grab the wrong substring. The parser then throws and the chain fails closed.
 
+Walking parseJson on three sample model outputs:
+
+```
+   raw output                                                   parseJson returns
+   ─────────────────────────────────────────────────────────    ─────────────────
+   '{"clean": "Today felt …", "smoother": "Today was …"}'        the parsed object
+   'Here are the variants: {"clean": "Today …"}'                 the parsed object
+                            └── regex finds the substring ──┘    (preamble stripped)
+   'I can\'t generate captions today.'                            null
+                                                                 (no JSON found)
+   '{"clean": "Today felt …", "smoother": INVALID}'              null
+                                                                 (JSON.parse throws)
+```
+
+The contract is `Either<null, ParsedObject>` — downstream code only sees the success branch.
+
 ### Step 2 — per-feature schema validators
 
 After `parseJson`, each chain runs its own validator: `validateSummary` checks every `clipId` in `clipOrder` exists in the input; `validateExpansion` checks the per-type required fields match the discriminated union; `parseAndValidate` for caption checks all 4 variants are present. The validators are hand-written (not Zod, not Ajv) — small enough that a library wouldn't add value. Think of it like the same shape as a typed React form's per-field check before submit — "is this field present, is it the right shape, does it cross-reference correctly to other inputs." Concrete consequence: `summarize.ts` gets back a JSON object claiming `clipOrder: ["c1", "c2", "c3"]`, but the input only had clips `c1` and `c2`. `validateSummary` catches the unknown id `c3`, returns failure. The chain skips persistence; the UI shows the previous summary or an error state. Boundary: the validators trust the JSON parser to have produced typed data — if a future migration changes the schema, validators have to be updated in lockstep, or the safety net silently widens.
+
+The validator inventory and what each checks:
+
+```
+   chain          validator                  checks
+   ──────────     ─────────────────────      ─────────────────────────────────
+   summarize      validateSummary            every clipId in clipOrder ∈ input clips
+                                              + filter ∈ allowed enum
+                                              + mood is one of 7 strings
+   caption        parseAndValidate           all 4 variants present + non-empty
+                                              + variantsTheme is a valid label
+   classify       validateClassification     type ∈ 5 thinking modes
+                                              + confidence ∈ {haiku, gpt-4o-mini}
+   expand         validateExpansion          per-type discriminated union check
+                                              (idea/knowledge/study/reflect
+                                               each have different required fields)
+   interpret      cleanMarkdown              strip outer triple-backtick fence
+                                              + reject if empty/whitespace
+                                              (markdown can't be schema-checked
+                                               — see sub-section 4)
+```
+
+Hand-written validators — small enough that a library wouldn't add value.
 
 ### The per-feature failure policy
 
@@ -54,9 +120,56 @@ The behaviour on a validation failure depends on the chain — there's no one-si
 
 If you've worked with React Query mutations that have different `retry` strategies per mutation, this is the same shape — the retry policy is part of each chain's design, not a global default. Concrete consequence: a user with intermittent malformed expand outputs gets one automatic retry per failed call (the model often succeeds on the second try with the stricter prompt); a user with malformed caption outputs sees the variants stay stale until the next successful run. Both outcomes are deliberate. Boundary: too many retries inflate cost and latency; too few retries make the chain fragile. One retry on expand is the empirical sweet spot for this codebase.
 
+The failure policies side by side:
+
+```
+   chain          on validation failure                    why
+   ──────────     ─────────────────────────────────────   ──────────────────────
+   caption        skip; variants column stays at          structured summary
+                  previous value (or empty)               still saved separately;
+                                                          variants are nice-to-have
+   expand         retry once with stricter prompt:        users often succeed on
+                  "Your previous output was not valid     2nd try with the stricter
+                   JSON. Re-emit ONLY a single JSON       prompt; 2 retries inflate
+                   object."                               cost without much gain
+                  on second failure:
+                    return { ok: false,
+                            reason: 'malformed' }
+   summarize      skip; surface error in                  the editor falls back to
+                  ai_summaries.error column               the previous valid summary
+   classify       skip; meta row stays at                 heuristic + null is a
+                  heuristic-or-null type                  safe acknowledged-unknown
+                                                          state
+```
+
+No global retry policy — each chain picks based on what the failure costs the user.
+
 ### The interpret exception — markdown can't be schema-validated
 
 `interpret` returns markdown, not JSON. Its validator is `cleanMarkdown` (11 lines): strip an outer triple-backtick fence if present, reject empty/whitespace-only output as `'malformed'`. There's no schema, no JSON parse, no per-field check. The model is trusted to follow the prompt's structural suggestions (e.g. "produce four sections: Observations, Patterns, Questions, A Next Step"), but tone or section drift slips through. The user is the integrity check — they see the modal output and dismiss it if wrong. If you're coming from frontend, this is the same shape as a textarea input that doesn't enforce structure — you can validate length and presence, but you can't validate "the user made a coherent argument." Concrete consequence: a malformed interpret output (missing sections, wrong tone) reaches the UI; the user reads it, decides it's not useful, closes the modal. There's no cached row to corrupt. Boundary: this works because interpret's output is ephemeral — there's no downstream consumer that would break on a malformed reflection. A future feature that *caches* interpret outputs would need a stronger validator.
+
+What `cleanMarkdown` actually checks vs what it doesn't:
+
+```
+   ┌─ cleanMarkdown CAN check ───────┐   ┌─ cleanMarkdown CANNOT check ──┐
+   │ • output is non-empty            │   │ • the four required sections   │
+   │ • not just whitespace            │   │   are present                  │
+   │ • outer ```…``` fence stripped   │   │ • the tone matches the prompt   │
+   │ • valid UTF-8                    │   │ • the reasoning is coherent    │
+   │                                  │   │ • the conclusion follows from  │
+   │                                  │   │   the premise                   │
+   └────────────────────────────────┘   └──────────────────────────────┘
+
+   the user is the integrity check for the un-checkable parts:
+   they read the modal output and dismiss it if wrong.
+   no cached row to corrupt.
+
+   this works because interpret is EPHEMERAL — no downstream
+   consumer reads from it. a future feature that caches
+   interpret outputs would need a stronger validator.
+```
+
+The validator's strength matches the consumer's brittleness — interpret's consumer (a human reading once) tolerates more than `summarize`'s consumer (an editor parsing `clipOrder`).
 
 This is what people mean by "treat the model as an untrusted client." Every LLM application that has ever shipped a feature without this discipline has eventually had the model return something that broke the consumer — a missing field, a numeric value as a string, a list with the wrong cardinality. The validation gate is what keeps the model's stochasticity from leaking into the application's invariants. Every form-handling backend ever written has the same discipline at the boundary; the only thing new here is recognising that "the model" is just another untrusted source. The full picture is below.
 
@@ -399,3 +512,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced traveller/border-control + officer-stamping analogies with Vercel deploy validation, Zod schema.parse, tRPC input boundary, Stripe webhook signature checks). Why care WC1 was missed by the original triage; included in this pass.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped Vercel deploy + Stripe webhook (level-5 whole-products) from Why care Move 1; led with `schema.parse(req.body)` + try/catch on `JSON.parse` (level-1 primitives). Kept How it works Move 1 anchored on Zod schema parsing. Added Move 1 mnemonic diagram (two-stage gate flow) + 4 Move 2 sub-section diagrams: parseJson on 4 sample outputs, per-chain validator inventory, per-chain failure policy side-by-side, what cleanMarkdown can vs can't check. Total: 5 new diagrams.

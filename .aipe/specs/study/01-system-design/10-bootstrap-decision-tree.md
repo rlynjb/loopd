@@ -38,13 +38,90 @@ The flag is the Service Worker install-event semantics: once registered, the boo
 
 React Query's hydration check is the same shape. On app boot, the client checks whether the persisted cache exists, whether its version matches the current schema, whether the user's auth state is still valid — and routes the boot flow accordingly: hydrate from cache, refetch on stale match, prompt for re-auth, or run first-time setup. After the check, the boot flag goes down and the app never re-runs the decision until next cold start. The Service Worker install event has the same shape: four states decided once, never re-asked, until you clear site data and force a fresh boot.
 
+The cold-start decision flow in one picture:
+
+```
+   cold start
+        │
+        ▼
+   ┌──────────────────────────────┐
+   │ check flags first            │  ◄── early-exit gates
+   │   isCloudConfigured()?       │     (cheap SecureStore reads)
+   │   cloud_initial_push_done?   │
+   └──────────────┬───────────────┘
+                  │  both flags pass through
+                  ▼
+   ┌──────────────────────────────┐
+   │ inspect both stores          │
+   │   localHasData?              │  ◄── cheap COUNT + HEAD
+   │   cloudHasData?              │
+   └──────────────┬───────────────┘
+                  │  4 quadrants
+                  ▼
+   ┌──────────────────────────────┐
+   │ pick one branch              │  ◄── one-time decision
+   │ set cloud_initial_push_done  │
+   │ normal sync takes over       │
+   └──────────────────────────────┘
+```
+
+Three reads, one branch, one flag — that's the whole boot-time machine. The four sub-sections below trace each layer.
+
 ### The gating reads — SecureStore decides whether to ask at all
 
 `bootstrap()` runs on cold start in `app/_layout.tsx`. Before the decision tree fires, two SecureStore keys gate it: `isCloudConfigured()` checks for `supabase_url` and `supabase_anon_key`; if either is absent, sync is off entirely and bootstrap returns immediately. `cloud_initial_push_done` is the post-decision flag; if `true`, normal incremental sync takes over and bootstrap is skipped. If you're coming from frontend, this is the same shape as a feature flag plus a "have-I-onboarded" boolean in `localStorage` — the flags skip the expensive setup path once the user is past it. Concrete consequence: a user opens the app for the second time on the same device. `isCloudConfigured()` returns true (URL + key cached); `cloud_initial_push_done` returns true (set on the first boot). Bootstrap exits in <1ms; the normal push/pull cycle runs. Boundary: if SecureStore is wiped (uninstall + reinstall, or a corrupt keystore), the flags reset and bootstrap re-runs as if the device were fresh.
 
+The two gates in code-flow form:
+
+```
+   bootstrap()  // app/_layout.tsx on cold start
+        │
+        ▼
+   ┌────────────────────────────────────┐
+   │ if (!isCloudConfigured()) {         │  ◄── no supabase_url
+   │   return; // sync off entirely      │     or no anon_key
+   │ }                                    │
+   ├────────────────────────────────────┤
+   │ if (cloud_initial_push_done) {      │  ◄── already decided
+   │   return; // normal sync runs       │     in a previous boot
+   │ }                                    │
+   └─────────────────┬───────────────────┘
+                     │  neither short-circuited
+                     ▼
+                4-quadrant query runs
+```
+
+On the second boot the flag short-circuits in microseconds; the expensive path runs at most once per install.
+
 ### The four-quadrant query — local × cloud has-data
 
 When neither flag short-circuits, bootstrap queries both sides cheaply: `localHasData = SELECT COUNT(*) > 0 FROM entries` (cross the syncable tables; one match is enough), and `cloudHasData = HEAD against one canonical cloud table`. The two booleans produce four states: (no, no), (yes, no), (no, yes), (yes, yes). Think of it like a `useEffect` dependency-array boolean tuple that switches between "do nothing," "push," "pull," and "ambiguous — decide carefully" branches. Concrete consequence: a user installs the app on a fresh device, types 4 entries before realising they should enable cloud sync, then sets up Supabase. Next boot: `isCloudConfigured` true, `cloud_initial_push_done` false. Bootstrap runs. `localHasData = true` (4 entries), `cloudHasData = false` (empty project). Branch: `initial-push`. The 4 entries plus their derived `todo_meta`/`thread_mentions` get walked through `pushAll()` once, then the flag is set. Boundary: this assumes the HEAD-style cloud probe is reliable; a network blip during the probe would mis-detect cloud as empty.
+
+The four quadrants laid out:
+
+```
+   localHasData = SELECT COUNT(*) > 0 FROM entries
+   cloudHasData = HEAD against one canonical cloud table
+                            │
+                            ▼
+   ┌─────────────────────────────────────────────────────┐
+   │                       localHasData                   │
+   │                  ──────────────────                  │
+   │                     no            yes                │
+   │              ┌────────────┬─────────────┐            │
+   │ cloud   no   │ (no, no)   │ (yes, no)   │            │
+   │  Has         │  no-op     │ initial-    │            │
+   │  Data        │            │  push       │            │
+   │              ├────────────┼─────────────┤            │
+   │         yes  │ (no, yes)  │ (yes, yes)  │  ◄── the   │
+   │              │ first-pull │  awkward    │     hard   │
+   │              │            │  case;      │     one    │
+   │              │            │  local wins │            │
+   │              └────────────┴─────────────┘            │
+   └─────────────────────────────────────────────────────┘
+```
+
+Two booleans, four code paths, exactly one runs.
 
 ### The branches — `initial-push`, `first-pull`, `no-op`, and the awkward case
 
@@ -55,9 +132,61 @@ When neither flag short-circuits, bootstrap queries both sides cheaply: `localHa
 
 If you're coming from frontend, the awkward case is the same shape as a merge conflict in Git when both branches have committed changes — there's no "correct" answer the tool can pick; it needs human input. The codebase makes a deliberate choice (local wins) under Phase A constraints and explicitly defers the UX. Concrete consequence: a developer installs cloud config after typing locally for a week. Bootstrap sees (yes, yes), pushes local entries, sets the flag. The cloud's prior contents (if any — usually empty in this case) get LWW-resolved when the next normal pull runs. Boundary: this is wrong if the user actually meant "discard local and pull cloud as canonical" — a real-world scenario the prompt would catch.
 
+Each branch in detail, with the awkward case called out:
+
+```
+   (no, no)    ─▶ no-op                  → set flag, exit
+                   nothing to sync; first-ever install on a
+                   fresh device with a fresh project
+
+   (yes, no)   ─▶ initial-push           → walk every syncable
+                   table, push all rows; set flag
+                   (user typed locally, then enabled cloud)
+
+   (no, yes)   ─▶ firstPull()            → pull every cloud row
+                   in pages (200/page); no conflict resolution
+                   needed (local was empty); set flag
+                   (new device, existing cloud account)
+
+   (yes, yes)  ─▶ AWKWARD — local-wins branch
+                   - log warning
+                   - push local up (most likely cause:
+                     "user installed cloud config later than
+                      they thought")
+                   - set flag
+                   - cloud's prior state gets LWW-resolved
+                     on the next normal pull
+                   Phase B (planned): UI dialog asks
+                     "merge or replace?"
+```
+
+The awkward case is the only one with a Phase B follow-up; the other three branches are terminal decisions.
+
 ### Why the flag matters — bootstrap is not idempotent on (yes, yes)
 
 If bootstrap ran on every cold start without the flag, the (yes, yes) branch would push local every time, potentially clobbering cloud-side edits that arrived from another device since the last boot. The flag's job is to make bootstrap a one-time decision — once the device has decided how to reconcile its initial state, normal incremental sync (push + pull with LWW) takes over for every subsequent edit. Think of it like a React class component's `componentDidMount` semantic — fire once, then unmount-mount cycle takes over. Concrete consequence: a user with (yes, yes) on first boot has their local pushed. On second boot, the flag is set; bootstrap returns immediately. The normal pull notices any cloud-side edits and runs `chooseWinner` per row, which is the correct conflict-resolution path for the steady state. Boundary: a manual unset of the flag (e.g. by a developer flag-stripper or a dev-actions reset) would re-trigger bootstrap and re-push local, with the same risks as the first run.
+
+Without the flag vs with the flag, on a multi-device timeline:
+
+```
+        Without flag (re-runs each boot)         With flag (one-time decision)
+   ┌─────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ boot 1: (yes, yes) → push local      │    │ boot 1: (yes, yes) → push local       │
+   │                                      │    │          set cloud_initial_push_done │
+   │ (other device pushes its edits to    │    │                                       │
+   │  cloud in between)                   │    │ (other device pushes its edits)      │
+   │                                      │    │                                       │
+   │ boot 2: bootstrap re-runs            │    │ boot 2: flag = true → bootstrap       │
+   │         → still (yes, yes)           │    │          skipped in <1ms              │
+   │         → push local AGAIN,          │    │          normal incremental sync runs │
+   │           clobbering other device's  │    │          LWW resolves cross-device    │
+   │           edits                      │    │          edits correctly              │
+   │                                      │    │                                       │
+   │ data loss every cold start           │    │ cold-start path is idempotent         │
+   └─────────────────────────────────────┘    └──────────────────────────────────────┘
+```
+
+The flag is the boundary between "we made a one-time decision" and "we're in steady-state sync" — without it, the (yes, yes) branch is a data-loss machine.
 
 This is what people mean by "design the cold-start path as an explicit decision tree." Most apps treat "first run" as a special case scattered across initializers, and you get bugs when one initializer assumes another already ran. Naming the four states, choosing branches per state, and gating the whole thing behind a one-time flag turns "what should happen on first boot?" into a decision the architecture can defend rather than a behaviour that emerges from race conditions. The full picture is below.
 
@@ -398,3 +527,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced airport-baggage-claim-with-suitcases analogies with Chrome DevTools Service Worker install event four-state decision tree + React Query hydration check). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (Why care + How it works anchors already use level-3 engineering surfaces: Chrome DevTools Service Worker panel + React Query hydration check). Added Move 1 mnemonic diagram (three-layer flow: flags → 4-quadrant query → branch + flag) + 4 Move 2 sub-section diagrams: SecureStore gates in code-flow form, 4-quadrant grid, each-branch-in-detail, with-vs-without-flag two-device timeline. Total: 5 new diagrams.

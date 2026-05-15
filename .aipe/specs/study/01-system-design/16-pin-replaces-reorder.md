@@ -11,7 +11,7 @@
 
 ## Why care
 
-Open Gmail and look at how starred messages work. You don't drag every important email into the "top of inbox" position; you star the ones that matter today and they float to the top of a separate strip, while everything else stays sorted by date. Open GitHub and look at pinned repositories on your profile — same shape: pin the ones you reach for daily, the rest stay sorted by recent activity. Slack does pinned messages in channels; Linear has favorited issues. The first option (drag-to-reorder) is more flexible; the second (boolean flag) covers the actual use case (one thing matters today, the rest are background). Most days, you'd never reach for the drag handle.
+You're designing a todo list with a "make this important" affordance. Option one: add an integer `position` column to every row, give the UI a drag handle that calls an `onDragEnd` handler to renumber `position` across affected rows, write a rebalance routine to handle integer drift, and watch out for the race condition when two reorders fire simultaneously. Option two: add a `pinned BOOLEAN` column, give the UI a pin icon that toggles one row's boolean, and sort `ORDER BY pinned DESC, created_at DESC`. The first option is more flexible; the second covers the actual use case (one thing matters today, the rest are background). For 90% of products, nobody ever uses option one's drag handle for anything the boolean wouldn't have covered.
 
 The question subtractive design answers is one every product team eventually has to answer: when usage data shows a flexible affordance is being used in exactly one way, do you keep the flexibility (because someone might use it differently someday) or do you delete it and ship the simpler thing that captures the same intent? Not "add a setting that toggles between drag and star" — that ships both. The answer is *subtractive design*: downgrade the data model and the UI to match what people actually do.
 
@@ -36,11 +36,61 @@ Find the cheapest version of the same affordance and ship that.
 
 ## How it works
 
-Gmail's `starred + created_at DESC` ordering is the canonical pattern. You don't drag every important message into a perfect-priority list; you star the one or two that matter today, and everything else sorts by recency. Slack's pinned messages, GitHub's pinned repos, and Linear's favorited issues all use the same shape. loopd's `todo_meta.pinned` boolean is this exact pattern: one column to flag what matters today, recency as the tiebreak for everything else — and the drag-handle UI machinery the user never asked for never gets built.
+A `BOOLEAN pinned` column on the table plus `ORDER BY pinned DESC, created_at DESC` on every read. That's the whole pattern. The JS equivalent is the one-line comparator every reader has written before: `arr.sort((a, b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)`. loopd's `todo_meta.pinned` boolean is this exact shape applied to a SQLite column — one column to flag what matters today, recency as the tiebreak for everything else — and the drag-handle UI machinery the user never asked for never gets built.
+
+The before/after of the schema + UI swap in one picture:
+
+```
+       Before (drag-to-reorder, deprecated)        After (boolean pin)
+   ┌─────────────────────────────────────┐   ┌──────────────────────────────────┐
+   │ todo_meta:                          │   │ todo_meta:                       │
+   │   position INTEGER NULL              │   │   pinned   BOOLEAN  (new!)        │
+   │   (user-managed rank)                │   │   position INTEGER NULL           │
+   │                                      │   │   (dead-but-kept, always NULL)    │
+   │ Sort:                                │   │                                   │
+   │   ORDER BY position ASC              │   │ Sort:                             │
+   │                                      │   │   ORDER BY pinned DESC,           │
+   │ UI:                                  │   │            createdAt DESC          │
+   │   drag handle per row                │   │                                   │
+   │   onDragEnd renumbers positions      │   │ UI:                               │
+   │   periodic rebalance routine         │   │   tap pin icon → toggle boolean   │
+   │   race conditions between reorders   │   │   no drag state, no race          │
+   │                                      │   │                                   │
+   │   ~300 lines of UI + drag-flatlist   │   │   ~5 lines (Pressable + togglePin) │
+   └─────────────────────────────────────┘   └──────────────────────────────────┘
+```
+
+The five sub-sections below trace the schema move, the sort key, the gesture, what got deleted, and how Phase A leaves `position` as a dead-but-kept column.
 
 ### The schema move — `pinned` BOOLEAN replaces `position` INTEGER
 
 Migration `0005_todo_meta_pinned.sql` added a `pinned BOOLEAN NOT NULL DEFAULT false` column to `todo_meta`. The old `position INTEGER NULL` column was *not* dropped — it stays in the schema, no UI reads it, every cloud-sync upsert writes NULL into it. If you're coming from frontend, this is the same shape as a typed enum widening to a union where most variants become `never` after a refactor — the type can express positions but nothing ever sets one. Concrete consequence: a fresh todo from `scanTodos` produces a `todo_meta` row with `pinned=false, position=NULL`. A user-pinned todo gets `pinned=true, position=NULL`. The sort key never reads `position`; the column is dead-but-kept until the next destructive Postgres migration cleans up several deprecated columns at once. Boundary: the column lives forever in this state if the team never decides "now is the time for a destructive migration"; the cost is one nullable int per row, paid in storage and ignored everywhere else.
+
+The migration SQL and the resulting row shapes:
+
+```
+   migration 0005_todo_meta_pinned.sql:
+
+     ALTER TABLE todo_meta
+       ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT false;
+
+     -- position INTEGER NULL stays in the schema (deprecated)
+
+   row state in todo_meta:
+   ┌────────┬───────────┬──────────┬─────────────────────────┐
+   │ id     │ pinned    │ position │ source                  │
+   ├────────┼───────────┼──────────┼─────────────────────────┤
+   │ t-A    │ false     │ NULL     │ new via scanTodos       │
+   │ t-B    │ true      │ NULL     │ user tapped pin         │
+   │ t-C    │ false     │ NULL     │ older row, never set     │
+   │                                      position             │
+   └────────┴───────────┴──────────┴─────────────────────────┘
+
+   the dead column costs one nullable int per row,
+   ignored by every read path
+```
+
+The `position` column is in the schema but never read — dead-but-kept until Phase B's destructive migration.
 
 ### The sort key — pinned-first, then chronological
 
@@ -54,20 +104,106 @@ SELECT * FROM todo_meta
 
 If you've ever sorted a React array with `arr.sort((a, b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)` you've written exactly this — group by the sticky flag, then break ties by recency. Concrete consequence: a user with 8 todos, 1 pinned, will see the pinned item at row 1 every time; the other 7 land in created order, newest at top. A new capture lands at row 2 (newest unpinned), unless the user immediately pins it, in which case it lands at row 1 (newest pinned). Boundary: the sort can't express "pinned A before pinned B" — all pinned items sort by `createdAt` among themselves. If two items are pinned, the newest-pinned wins the top slot, no exception.
 
+Walking the sort on 8 rows (1 pinned, 7 unpinned):
+
+```
+   ORDER BY pinned DESC, createdAt DESC
+
+   ┌──────┬───────────┬───────────┬─────────┐
+   │ rank │ id        │ pinned    │ created │
+   ├──────┼───────────┼───────────┼─────────┤
+   │  1   │ t-B       │ true      │ 14:00   │ ◄── only pinned row
+   │  2   │ t-H       │ false     │ 14:30   │     unpinned, newest
+   │  3   │ t-G       │ false     │ 14:00   │     │
+   │  4   │ t-F       │ false     │ 13:00   │     │  rest in
+   │  5   │ t-E       │ false     │ 12:00   │     │  createdAt
+   │  6   │ t-D       │ false     │ 11:00   │     │  DESC
+   │  7   │ t-C       │ false     │ 10:00   │     │
+   │  8   │ t-A       │ false     │ 09:00   │     ▼
+   └──────┴───────────┴───────────┴─────────┘
+```
+
+Two-key sort: pin wins; otherwise newest first. No third tier within pinned.
+
 ### The gesture — tap pin → toggle → write → re-sort
 
 The pin icon is a `Pressable` on each todo row. Tap fires `togglePin(meta_id)` in `database.ts`, which writes `UPDATE todo_meta SET pinned = NOT pinned, updated_at = now() WHERE id = ?`, then `schedulePush()`. The hook subscribing to the query re-runs, gets the new row order, and React re-renders. If you're coming from React, this is the same pattern as toggling `selected` state on a list item — the only difference is the state lives in SQLite instead of `useState`, and the re-sort comes from the query, not from `useMemo`. Concrete consequence: tap pin on todo #5 → 1ms SQLite write → re-render shows todo #5 at the top → 5 seconds later `pushAll()` upserts the change to Supabase. No drag-gesture state, no inter-row position calculation, no race condition between two simultaneous reorders. Boundary: if the user pins five items in rapid succession, they all land at the top in `createdAt` order — there's no "I pinned this one first so it should rank highest" affordance.
 
+The tap-to-resort flow:
+
+```
+   user taps pin icon on row t-A
+              │
+              ▼
+   togglePin(meta_id_for_t_A)   // database.ts
+              │
+              ▼
+   UPDATE todo_meta
+      SET pinned     = NOT pinned,
+          updated_at = now()
+    WHERE id = ?
+              │
+              ▼  ~1ms SQLite write
+              ▼
+   schedulePush()  arms 5s timer
+              │
+              ▼
+   hook re-runs query → gets new row order → React re-renders
+              │
+              ▼
+   t-A jumps to row 1; no drag state, no inter-row math
+              │
+              ▼  ~5s later
+              ▼
+   pushAll() upserts the change to Supabase
+```
+
+One column, one toggle, one re-render — no per-row state to keep coherent during a drag gesture.
+
 ### What got deleted
 
 The same commit that added `pinned` removed the drag-handle gestures, the position-renumber logic that ran on every reorder, the three-stage status filter (`todo` / `next` / `done`), and added a `Swipeable` wrapper for swipe-to-delete on each row. About 300 lines of UI plus the `react-native-draggable-flatlist` dependency footprint went away in one commit. If you've ever shipped a feature and then watched a redesign delete it cleanly, this is the same shape — the value was in the subtraction, not in the next iteration.
+
+What the same commit removed vs added:
+
+```
+   Removed (~300 LOC + 1 dependency)        Added (~5 LOC)
+   ──────────────────────────────────       ──────────────────────────────
+   drag-handle gesture per row               <Pressable> pin icon per row
+   onDragEnd renumber handler                togglePin(id) call
+   position-rebalance routine                (re-sort happens via query)
+   three-stage status filter
+     (todo / next / done)
+   react-native-draggable-flatlist
+     dependency
+                                            net: codebase shrank
+```
+
+The value was in the subtraction — most products that ship drag-to-reorder never gather the data that would tell them whether anyone uses it.
 
 ### Phase A / Phase B — `position` as a dead-but-kept column
 
 - **Phase A (current):** `pinned` column live and the sole sort modifier. `position` column in the schema, never read by any UI, written as NULL on every cloud upsert. Both columns mirror to Supabase via the existing sync layer; no migration was needed beyond the additive `pinned` column.
 - **Phase B (deferred):** drop `position` from `todo_meta` in a future destructive migration once it's certain no old client is still writing to it. The trigger condition is "no installed version older than 2026-05-05 in the field for 90 days."
 
-The point of Phase A/B here is that the schema didn't have to change between phases — `position` becoming NULL forever is a Phase-A state that costs one ignored int per row. The architecture absorbed the simplification without forcing a synchronous schema cleanup; the cleanup gets to be lazy.
+Side by side, with the dead column carrying forward in Phase A:
+
+```
+            Phase A (current)                       Phase B (deferred)
+   ┌──────────────────────────────────┐   ┌──────────────────────────────────┐
+   │ pinned   BOOLEAN  active          │   │ pinned   BOOLEAN  active          │  unchanged
+   │ position INTEGER  NULL forever    │   │ position dropped                  │ ← change
+   │                                   │   │                                   │
+   │ sync writes NULL into position    │   │ schema cleaner; no dead column    │
+   │ on every push                     │   │                                   │
+   │                                   │   │ trigger condition:                │
+   │                                   │   │   no installed version older      │
+   │                                   │   │   than 2026-05-05 in the field    │
+   │                                   │   │   for 90 days                     │
+   └──────────────────────────────────┘   └──────────────────────────────────┘
+```
+
+The schema didn't have to change between phases — `position` becoming NULL forever is a Phase A state that costs one ignored int per row. The architecture absorbed the simplification without forcing a synchronous schema cleanup; the cleanup gets to be lazy.
 
 This is what people mean by "find a cheaper version of the same affordance." Drag-to-reorder is the canonical answer to "let users prioritise," but the cheapest version — pin one thing — covers 90% of real usage. The disciplined move is to ship the cheap version first and only build the expensive one when usage data forces it. Most products that ship drag-to-reorder never gather the data that would tell them whether anyone uses it. The full picture is below.
 
@@ -414,3 +550,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced grocery-list-with-star analogies with Gmail starred + GitHub pinned repositories + Slack pinned messages + Linear favorited issues). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from four whole-product references (Gmail starred / GitHub pinned / Slack pinned / Linear favorited) to the level-1 primitive (a `BOOLEAN pinned` column on the table + `ORDER BY pinned DESC, created_at DESC` two-key sort; equivalent JS comparator `arr.sort((a,b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)`). Added Move 1 mnemonic diagram (before/after schema + UI swap) + 5 Move 2 sub-section diagrams: migration SQL + row state, sort walkthrough on 8 rows, tap-to-resort flow, removed-vs-added in the same commit, Phase A/B side-by-side. Total: 6 new diagrams.

@@ -11,7 +11,7 @@
 
 ## Why care
 
-A clinic has a triage nurse at the front desk and a specialist down the hall. Most arrivals are easy — a scraped knee, a sore throat, someone needing a prescription refill. The nurse handles those in two minutes from a clipboard checklist. Anything ambiguous — chest pain, an unfamiliar rash, a symptom the checklist doesn't cover — gets routed to the specialist who has more time, more diagnostic tools, and a higher hourly rate. Run every walk-in straight to the specialist and the waiting room overflows; skip the nurse entirely and the cheap obvious cases pay specialist prices.
+You're writing a function that needs to return a value, and there are two paths to the answer: a cheap synchronous one (a regex match, a hash lookup, a quick comparison) and an expensive asynchronous one (a network call, an LLM inference, a database round-trip). Most inputs are easy — you can recognise them with a regex or a quick branch and return immediately. Some inputs need real work — they cost hundreds of milliseconds and a few cents to resolve. Option one: call the expensive path for every input. Option two: try the cheap path first; if it returns a confident answer, use it; if it returns `null`, fall through to the expensive path. The second option is the same shape as a `useMemo` that returns a cached value on key match and recomputes only on a miss, or a CDN `Cache-Control` header that lets a request short-circuit at the edge and only hit origin when the edge misses.
 
 Two stages, asymmetric cost — that's the shape of heuristic-before-LLM. Not "use rules instead of AI," not "always use AI" — a cheap deterministic gate that returns a confident answer or abstains, and an expensive intelligent fallback that only fires when abstention happens. Naming the cascade this way is what keeps both the bill and the keystroke path honest.
 
@@ -27,23 +27,132 @@ With heuristic-before-LLM:
 - `[] thinking about onboarding redesign` returns `null`; row lands with default `type='todo'`, async Haiku updates it ~600ms later
 - The dashboard renders at typing speed; `scheduleClassify` trickles updates in over the next few seconds
 
-Cascade by cost — the doorman waves through the regulars, the manager handles the ambiguous arrivals.
+Cascade by cost — the cheap path returns on the easy cases, the expensive path handles the rest. Same shape as a `useMemo` cache hit vs miss.
 
 ---
 
-A doorman at a club. Most arrivals are easy — regulars who wave their card, obvious VIPs, obvious no-gos. The doorman handles those in two seconds. Anyone ambiguous gets sent inside to the manager, who has more time and more authority. The doorman's job isn't to decide everything; it's to decide the obvious cases and route the hard ones up. If you're coming from frontend, this is the same shape as a `useMemo` that returns a cached cheap value for known input shapes and falls through to an expensive recompute otherwise — short-circuit on the easy cases, defer to the heavy path on ambiguity.
+## How it works
+
+A typed guard followed by an async fallback. `heuristicClassify(text)` returns `'todo' | null` synchronously in microseconds. On `'todo'`, the codebase uses the answer immediately and stops. On `null`, it inserts a placeholder row with `classifier_confidence=null` and fires `scheduleClassify(todoId, text)` async — a Haiku 4.5 call that resolves ~600ms later and updates the row. Same shape as a `useMemo` that returns a cached value on key match and recomputes on miss, or a CDN serving from the edge cache and falling back to origin only when the edge misses.
+
+The cascade in one picture:
+
+```
+   new todo: '[] call mom'
+              │
+              ▼
+   heuristicClassify(text)             ◄── cheap, synchronous,
+              │                              ~microseconds
+        ┌─────┴─────┐
+        ▼           ▼
+   returns         returns
+   'todo'           null
+   (confident)      (abstain)
+        │           │
+        │           ▼
+        │   insert row with               ◄── placeholder
+        │     classifier_confidence=null   placeholder
+        │           │
+        │           ▼  scheduleClassify(todoId, text)
+        │           │  ~600ms later
+        │           ▼
+        │   updateTodoMeta(id,
+        │     type='idea',
+        │     classifier_confidence='haiku')
+        ▼
+   classifier_confidence='heuristic'
+   no LLM call needed
+```
+
+The three sub-sections below trace the cheap path, the async fallback, and why the asymmetry is a UX argument before it's a cost argument.
 
 ### The cheap path — heuristic regex
 
 `heuristicClassify(text)` runs a series of ordered regex tests (see [02-dsa/10](../02-dsa/10-heuristic-first-classifier.md) for the algorithm). The tests look for obvious markers — verbs in the imperative, action-word patterns, common todo phrasings — and return either `'todo'` (high confidence) or `null` (don't know). The function is synchronous, runs in microseconds, costs zero dollars. Concrete consequence: a user types `[] call mom`. The heuristic regex hits the imperative pattern (`call <object>`), returns `'todo'`. The codebase inserts a `todo_meta` row with `type='todo'` and `classifierConfidence='heuristic'`. The LLM is never called. Boundary: the heuristic is precision-tuned — it returns `'todo'` only when it's sure. False positives (calling something a todo when it isn't) corrupt the data; false negatives (not knowing) just defer to the LLM. Bias toward abstention.
 
+The function signature and what it does to a few sample inputs:
+
+```
+   heuristicClassify(text: string): 'todo' | null
+   ──────────────────────────────────────────────────
+
+   input                                      output
+   ──────────────────────────────────────     ──────────
+   "call mom"                                 'todo'        ◄── imperative verb
+   "ship the feature"                         'todo'        ◄── imperative verb
+   "book dentist"                             'todo'        ◄── imperative verb
+   "thinking about how to redesign onboarding" null         ◄── abstain (not obvious)
+   "the team should focus on retention"       null         ◄── abstain (not obvious)
+
+   the regex bias: precision-tuned to return 'todo' only
+   when confident. False negatives are cheap (defer to LLM);
+   false positives corrupt the data.
+```
+
+A row labelled `'todo'` by the heuristic skips the LLM call entirely — the row is correctly typed at insertion time.
+
 ### The fallback — async LLM classifier
 
 When the heuristic returns `null`, the codebase inserts the meta row with `classifierConfidence=null` (acknowledged unknown) and fires `scheduleClassify(todoId, text)` — an async background task that calls `claude-haiku-4-5` with the todo text and gets back a typed mode (`todo` / `idea` / `knowledge` / `study` / `reflect`). When the call returns, the codebase updates the row with the new `type` and `classifierConfidence='haiku'`. Think of it like a deferred React Query mutation — fire it, let the UI render with stale (null) data, update when the response lands. Concrete consequence: a user writes `[] thinking about how to redesign the onboarding flow`. Heuristic returns `null` (no imperative match). Meta inserted with `type='todo'` (the default), `confidence=null`. Async classify runs ~600ms later, returns `idea`. The row updates; the UI re-renders. The user sees the type shift from default-todo to idea in under a second, without ever waiting on the LLM. Boundary: if the LLM call fails (network, rate limit, malformed response), the row stays at `type='todo'` `confidence=null`. A future periodic sweep could retry; the codebase doesn't currently have one. The acknowledged-unknown state is the safety net.
 
+Walking the async path on the ambiguous input:
+
+```
+   user types: '[] thinking about how to redesign onboarding'
+                       │
+                       ▼  heuristicClassify returns null
+                       ▼
+   ┌───────────────────────────────────────────────────────┐
+   │ INSERT INTO todo_meta (                                │
+   │   todoId,                                              │
+   │   type = 'todo',                  ◄── safe default      │
+   │   classifier_confidence = null    ◄── acknowledged      │
+   │ )                                       unknown        │
+   └────────────────────┬──────────────────────────────────┘
+                        │
+                        ▼  scheduleClassify(todoId, text)
+                        │  (async, fire-and-forget)
+                        │
+                        ▼  ~600ms later
+   ┌───────────────────────────────────────────────────────┐
+   │ Haiku 4.5 returns: 'idea'                              │
+   │                        │                                │
+   │                        ▼                                │
+   │ UPDATE todo_meta                                       │
+   │   SET type = 'idea',                                   │
+   │       classifier_confidence = 'haiku'                  │
+   │ WHERE id = todoId                                      │
+   └────────────────────┬──────────────────────────────────┘
+                        │
+                        ▼
+   UI re-renders; user sees type shift from 'todo' → 'idea'
+   in <1 second, never waited on the LLM
+```
+
+If the LLM call fails, the row stays at `(type='todo', confidence=null)` — the acknowledged-unknown state is the safety net.
+
 ### Why typing never waits — the UX argument over the cost argument
 
 The cost win is real ($0.0004 per Haiku classify × 100 todos/day × 30 days = ~$1.20/month avoided), but the UX win is bigger. If the LLM ran inline on every `[]` line, every typing burst with new todos would stutter for 300-800ms while the network round-trip resolved. The user's input would lag. By routing through the heuristic synchronously and the LLM async, the codebase guarantees that the keystroke path never waits on a network. If you've worked with optimistic UI in React Query, this is exactly that pattern — commit local first, show the optimistic state, reconcile with the server result later. Concrete consequence: a user adds three todos in five seconds. All three meta rows land instantly with their heuristic types (or default + null confidence). The dashboard renders without lag. The Haiku calls trickle back over the next 2-3 seconds; the UI updates per-row as the responses land. The user never noticed the LLM was involved. Boundary: this works because the default type (`todo`) is safe and useful — wrong only in the sense that it could be more specific. If the default were unusable, the user would see broken UI during the async window.
+
+Three-todos-in-five-seconds on a timeline:
+
+```
+   Time     User action            Heuristic     LLM (Haiku)   UI state
+   ─────    ───────────────────    ───────────   ───────────   ────────────────
+   0.0s     '[] call mom'           'todo'        skipped       row shown: todo
+   1.5s     '[] thinking about       null          scheduled     row shown: todo
+            onboarding redesign'                                  (default)
+   3.0s     '[] ship the feature'   'todo'        skipped       row shown: todo
+   ...
+   2.1s                                            returns      row 2 updates:
+                                                  'idea'        todo → idea
+   ─────────────────────────────────────────────────────────────────────────
+   user never waited on a network round-trip; all three rows
+   visible by 3.0s; LLM-resolved type for row 2 arrives at 2.1s
+```
+
+The default type (`todo`) is what makes this work — it's safe and useful even when the LLM hasn't returned yet.
 
 This is what people mean by "cascade by cost, route hot cases through cheap stages." Spam filters work this way (rules then ML), OCR pipelines work this way (whitespace detection then character recognition), CDNs work this way (cache then origin). The shared insight is that *most inputs are easy*, and a cheap gate that knows when to abstain saves the expensive stage for the hard cases. The asymmetry is the design — precision-tuned on the cheap path, recall-tuned on the expensive one — and the discipline is naming when to defer instead of brute-forcing every input through the expensive engine. The full picture is below.
 
@@ -394,3 +503,6 @@ Updated: 2026-05-10 — v1.24.0 pass: added `## How it works` heading with three
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (clinic-with-triage-nurse-and-specialist scenario → "two-stage cascade, asymmetric cost" pattern naming → bolded stakes pivot to `heuristicClassify` + `scheduleClassify` + `classifier_confidence` keeping keystroke latency and bill honest → before/after bullets on inline-Haiku vs heuristic-first → one-line "cascade by cost" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: (1) FIXED missing `## How it works` heading — the v1.30.0/v1.31.0 passes had dropped it. (2) Swapped Why care Move 1 from the clinic-triage-nurse-and-specialist physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitives (a function with cheap-sync + expensive-async paths; `useMemo` cache-hit/miss; CDN cache-edge vs origin). (3) Swapped How it works Move 1 from "doorman at a club" analogy (also banned) to the same level-1 primitives. (4) Updated Move 5 one-liner from doorman/manager wording to `useMemo` cache hit/miss. Added Move 1 mnemonic diagram (cascade-by-confidence flow) + 3 Move 2 sub-section diagrams: heuristic function signature with sample inputs, async-path walked on the ambiguous case, three-todos timeline. Total: 4 new diagrams.

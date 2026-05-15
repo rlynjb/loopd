@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a controlled `<input>` in React that gets its initial value from a `defaultValue` prop, but the parent's `defaultValue` keeps changing as background data flows in. The naive shape — `<input value={defaultValue} onChange={…}>` — overwrites the user's edits every time `defaultValue` updates. The fix is a flag: hold `value` in `useState`, hold a separate `userHasTyped` boolean, and only honour the next `defaultValue` change when `userHasTyped === false`. The flag is sticky: once the user touches the input, every future `defaultValue` write checks the flag and skips. Same shape as a `dirty` bit on a form field — the marker outlives the value, and every framework path that wants to overwrite reads the marker first.
 
-Open GitHub's branch-protection settings on a repo with "Restrict who can push to matching branches" enabled. Now any merge attempt that bypasses code review gets blocked — by an admin, by automation, by a script that doesn't know the rule exists. The flag isn't on the commit ("this commit is protected"); it's on the branch ("this branch refuses certain writes"). Pull the restriction off and writes resume; until then, the rule is read by every automated path before any write. Same shape as a React controlled input that ignores upstream `defaultValue` changes once the user has typed — the framework asks "has the user touched this?" before writing.
-
-That branch-protection flag is the sticky override. Not "the system is smarter," not "the latest edit always wins" — a single flag, set when the user acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
+That flag-with-stickiness is the user override lock. Not "the system is smarter," not "the latest edit always wins" — a single boolean, set when the user acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
 
 **What breaks without it:** trust in the AI surface. The codebase puts `user_overridden_type BOOLEAN` on `todo_meta`, default `false`. When the user picks a type from the picker, the handler writes `updateTodoMeta(id, { type: 'idea', user_overridden_type: true })` — both columns set in one SQL statement so an async classifier landing between two writes can't sneak in. Every AI write path then consults the flag: `scheduleClassify`'s success handler reads the meta before writing and skips when `user_overridden_type=true` (the Haiku call still ran, the result is discarded); the catch-up classifier that fills `classifier_confidence IS NULL` rows reads the flag and skips locked rows. Drop the flag and the user's Monday correction of `loopd` from `todo` to `idea` gets silently reverted by Tuesday's reclassify sweep — the user fixes it twice, then concludes the AI doesn't listen, then stops using the type picker.
 
@@ -35,13 +33,101 @@ User override is sticky — the patron's note keeps the robot's hands off.
 
 A React controlled input that ignores upstream `defaultValue` changes once the user has typed. The component holds two pieces of state: the current value AND a flag that says "the user has touched this." When the framework wants to reset the value (a `defaultValue` prop change, a form reset), it reads the flag first — if `userHasTouched` is `true`, the reset is skipped and the user's edit stands. The framework doesn't fight the user; the user's choice is sticky. If you're coming from React, this is exactly that pattern, except the flag lives as a SQLite column and the framework writing back is the AI classifier instead of the form library. The flag IS the user's signal; the value IS what they chose; both move together.
 
+The flag's lifecycle in one picture:
+
+```
+   row inserted (new todo)
+              │
+              ▼
+   ┌──────────────────────────────────────────┐
+   │ todo_meta:                                │
+   │   type = 'todo' (default)                 │  flag = false:
+   │   classifier_confidence = 'heuristic'     │  AI writes are
+   │     or null                               │  freely allowed
+   │   user_overridden_type = false  ◄── flag  │
+   └──────────────────┬───────────────────────┘
+                      │  AI classifier runs
+                      ▼
+   AI writes type freely (flag is false)
+                      │
+                      ▼  user opens picker, picks 'idea'
+                      │
+   ┌──────────────────────────────────────────┐
+   │ todo_meta:                                │
+   │   type = 'idea'                            │  flag = true:
+   │   user_overridden_type = true   ◄── flag   │  AI writes are
+   │   (both set in ONE SQL statement)         │  skipped
+   └──────────────────┬───────────────────────┘
+                      │  future AI runs:
+                      ▼
+   classify() runs, gets a different type
+              │
+              ▼  scheduleClassify reads flag
+              │  flag = true → skip the write
+              ▼
+   row stays at type='idea' forever
+   (until user clears the flag)
+```
+
+The four sub-sections below trace the flag column, the atomic write, the three AI paths that consult it, and why it isn't `classifier_confidence='user'`.
+
 ### The flag — `user_overridden_type` BOOLEAN on `todo_meta`
 
 `todo_meta.user_overridden_type` is a single boolean column, default `false` on insert. The codebase reads it before any AI-driven type update; if `true`, the AI write is skipped. Think of it like a `READONLY` flag on a typed Redux entity — the reducer respects it, downstream automation respects it, the entity itself can still be edited by the user. Concrete consequence: a brand-new todo lands with `user_overridden_type=false` and either `type='heuristic-result'` or `type='todo'` + `confidence=null`. The AI classifier runs and overwrites freely. The user clicks the type selector and picks `idea`. The codebase writes `UPDATE todo_meta SET type='idea', user_overridden_type=true, updated_at=now WHERE id=?`. From that point forward, every AI path that wants to write this row's `type` reads the flag and skips. Boundary: this works as long as every AI write path actually consults the flag. A new contributor adding a "re-classify this todo" feature could forget; the discipline lives in code review and naming.
 
+The column shape on `todo_meta`:
+
+```
+todo_meta
+┌────────┬─────────┬────────────┬─────────────────────────┬───────────────────────┐
+│ id     │ todoId  │ type       │ classifier_confidence   │ user_overridden_type   │
+│        │         │             │                          │ (the lock)              │
+├────────┼─────────┼────────────┼─────────────────────────┼───────────────────────┤
+│ m-A    │ t-1     │ 'todo'     │ 'heuristic'              │ false                   │
+│ m-B    │ t-2     │ 'idea'     │ 'haiku'                  │ false  ◄── AI may       │
+│        │         │             │                          │          overwrite       │
+│ m-C    │ t-3     │ 'idea'     │ 'user'                   │ true   ◄── AI skips      │
+│        │         │             │                          │          this row        │
+└────────┴─────────┴────────────┴─────────────────────────┴───────────────────────┘
+
+   default on insert: false (AI may overwrite)
+   set on user pick:  true  (every AI write reads, then skips)
+```
+
+The column is read-before-write at every AI path; the discipline is universal across the codebase.
+
 ### The single write — user pick sets type AND flag atomically
 
 When the user manually picks a type, the update sets both `type` and `user_overridden_type=true` in the same SQL statement. They're never written separately. If you've worked with optimistic-UI updates that also need to set a `dirty` flag, this is the same shape — the marker and the value travel together so there's no window where one is set without the other. Concrete consequence: user opens todo detail, taps the type selector, picks "knowledge." The handler calls `updateTodoMeta(id, { type: 'knowledge', user_overridden_type: true })`. Both columns update; both columns sync to Supabase together via the next `pushAll()`. The flag arrives at the cloud at the same time as the type. Boundary: if the codebase had two writes (one for type, one for flag), an AI classifier firing between them could overwrite the type before the flag landed. The single-write shape eliminates the race.
+
+The atomic SQL that prevents the race:
+
+```
+   user picks 'knowledge' in the type selector
+              │
+              ▼
+   handler calls:
+     updateTodoMeta(id, {
+       type: 'knowledge',
+       user_overridden_type: true
+     })
+              │
+              ▼  single SQL statement
+              │
+   UPDATE todo_meta
+      SET type                  = 'knowledge',
+          user_overridden_type  = true,
+          updated_at            = now()
+    WHERE id = ?
+              │
+              ▼
+   both columns set in one row write
+   any AI classifier firing between would only see
+   the BEFORE state or the AFTER state — never an
+   intermediate "type set but flag not yet set"
+```
+
+If type and flag were two separate writes, an AI classifier firing between them could overwrite type before the flag landed — race eliminated by the single statement.
 
 ### Every AI write path consults the flag
 
@@ -53,9 +139,53 @@ Three places where the codebase respects the lock:
 
 If you're coming from frontend, this is the same shape as a `useEffect` cleanup that checks a `isMounted` ref before calling `setState` — the side-effect always checks the gate before writing. Concrete consequence: user pins `loopd` as an idea on Monday. Tuesday morning, a catch-up sweep that re-classifies all `confidence=null` rows runs; it reads `user_overridden_type=true` on the loopd row and skips. The user's choice survives the sweep. Boundary: a new AI write path that *forgets* to read the flag is the only failure mode — and the rule is loud enough that the failure would be caught in code review before shipping.
 
+The three AI write paths and what each does with the flag:
+
+```
+   AI write path                        what it does on user_overridden_type=true
+   ─────────────────────────────        ──────────────────────────────────────────
+   scheduleClassify's                   reads flag before write
+   success handler                       → skips updateTodoMeta call
+                                          (Haiku still ran; result discarded)
+
+   catch-up classifier                   reads flag in the SQL filter:
+   (fills confidence IS NULL rows)         WHERE classifier_confidence IS NULL
+                                              AND user_overridden_type = false
+                                          → locked rows never even enter the queue
+
+   future "retroactive re-classify"     must read flag — enforced by code review,
+   feature (if added)                   not by the type system
+                                          → discipline encoded in convention
+```
+
+Three places, one rule: every AI write path consults the flag before writing the `type` column.
+
 ### Why the flag isn't `confidence='user'`
 
 A simpler design would be to use the existing `classifier_confidence` column with a new value `'user'` and treat that as the lock. The codebase chose a separate boolean because the two concerns are independent: `classifier_confidence` describes *who labeled this row* (heuristic, haiku, user, null); `user_overridden_type` describes *whether the value is locked*. A user *could* manually pick a type, then later allow an AI re-classify by toggling some other affordance — the lock and the labeler are conceptually different even if they currently always co-vary. Think of it like the difference between `dirty` and `last_modified_by` in a form state — both track recent activity, but they answer different questions. Concrete consequence: future code that asks "who set this type?" reads `classifier_confidence`; code that asks "can I overwrite this type?" reads `user_overridden_type`. The questions get clean answers. Boundary: at small scale these two columns always agree (user-set rows are locked, AI-set rows aren't), so the redundancy looks like waste. At larger scale (a future "I want AI to relabel this if it changes its mind" affordance), the columns diverge.
+
+The two columns answer different questions:
+
+```
+   question                              column to read
+   ─────────────────────────────────     ────────────────────────
+   "who labeled this row?"               classifier_confidence
+                                          values: 'heuristic',
+                                                  'haiku', 'user', null
+   "can I overwrite this type?"          user_overridden_type
+                                          values: true / false
+
+   today they always co-vary:
+     user-set rows:  confidence='user',  flag=true
+     AI-set rows:    confidence!='user', flag=false
+
+   future: an "unlock for re-classify" affordance would let
+   the user keep a row with confidence='user' but reset
+   flag=false → AI can re-suggest without forgetting
+   who originally labeled it.
+```
+
+Two questions, two columns, two answers — instead of one column trying to encode both.
 
 This is what people mean by "user override is sticky." Every AI feature that ever tried to be helpful by re-running its classification on top of user input has learned this — the moment the user feels their choice was reverted, trust is gone. The lock is the discipline of recognising that the user's signal beats the model's signal, full stop, every time. Every framework that has ever shipped controlled inputs respects this; every AI surface that hasn't has paid for it. The full picture is below.
 
@@ -404,3 +534,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced library/shelving-robot + library-book-sticker analogies with GitHub branch protection rules and the React controlled-input userHasTouched pattern).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped GitHub branch protection (level-5 whole-product) from Why care Move 1; led with the React controlled-input + `userHasTyped` flag (level-1 primitive). Kept How it works Move 1 anchored on the same primitive. Added Move 1 mnemonic diagram (flag lifecycle from insert through user-pick through AI-skip) + 4 Move 2 sub-section diagrams: column shape on todo_meta, atomic SQL preventing race, three AI write paths and their flag handling, two-columns-two-questions table. Total: 5 new diagrams.

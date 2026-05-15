@@ -38,25 +38,178 @@ Five storage layers, each with one job — same shape as the AWS DynamoDB / S3 /
 
 An AWS app's typical storage stack: DynamoDB for hot rows, S3 for blobs, Secrets Manager for credentials, RDS for relational queries, Lambda for stateless compute. Five services, five jobs, no overlap. loopd ships the same shape: SQLite for hot rows (every UI read), filesystem for video clips (too large for SQLite rows), SecureStore for API keys (Android Keystore-backed), Supabase Postgres for the cloud mirror (cross-device durability), LLM provider APIs for stateless compute the app doesn't store. Each layer has its own access pattern and its own role; the architecture's discipline is keeping them straight.
 
+The five layers and the trust directions between them:
+
+```
+              ┌─── every read goes here ───┐
+              │                             │
+              ▼                             │
+   ┌────────────────────────┐               │
+   │ SQLite (loopd.db)      │  ◄── 12 tables, canonical
+   │ WAL mode               │     reads + writes
+   └──────────┬─────────────┘
+              │
+              │  SQLite rows hold path strings / dirty flags
+              │  pointing at:
+              │
+              ├──▶ Filesystem        (clip / export .mp4)
+              │
+              ├──▶ SecureStore       (API keys, run-once flags)
+              │
+              ├─ ─ ─▶ Supabase Postgres   (mirror; async push;
+              │                            NEVER read first)
+              │
+              └─ ─ ─▶ Anthropic / OpenAI  (stateless compute;
+                                          no persistent state
+                                          on their side)
+```
+
+Five layers, one job each, one read direction. The five sub-sections below trace each layer.
+
 ### SQLite — the canonical drawer
 
 `loopd.db` is the only store the app *reads from*. Every screen, every hook, every scanner, every reconciler asks SQLite for its data. WAL mode (`PRAGMA journal_mode=WAL`) makes single-process concurrent reads + writes safe; the codebase opens one DB handle from `database.ts` and routes every mutator through it. If you're coming from frontend, this is the same shape as a Redux store: one place that holds everything, every component reads via selectors, every action goes through reducers. Concrete consequence: 12 tables live here — 10 synced (entries, projects, vlogs, day_meta, ai_summaries, nutrition, habits, todo_meta, threads, thread_mentions) plus 2 local-only (`sync_meta` ledger and the deprecated `sync_deletions` outbox). The dashboard reads via `useEntries`, the editor reads via `useProject`, the habits screen reads via `useHabits`. Nothing reads from anywhere else. Boundary: this discipline holds because there's exactly one file (`database.ts`) that opens `loopd.db`; if a future contributor opens a second handle, the WAL guarantees still apply at the SQLite level but the application invariants (one place to enforce `updated_at` and `schedulePush`) start to leak.
+
+The table inventory in one view:
+
+```
+   loopd.db (SQLite, WAL mode, single-process)
+   ──────────────────────────────────────────────────────────────
+   ┌──────────────────┬─────────────────────────────────────────┐
+   │ synced (10)      │ entries, projects, vlogs, day_meta,     │
+   │ → mirror to       │ ai_summaries, nutrition, habits,         │
+   │   Supabase        │ todo_meta, threads, thread_mentions     │
+   ├──────────────────┼─────────────────────────────────────────┤
+   │ local-only (2)   │ sync_meta (per-table sync ledger),      │
+   │                  │ sync_deletions (deprecated, Notion era) │
+   └──────────────────┴─────────────────────────────────────────┘
+
+   single mouth: src/services/database.ts is the ONLY file
+   that opens the DB handle. Every read goes through helpers
+   exposed by that file.
+```
+
+The single-opener invariant is what makes `updated_at` + `schedulePush()` enforceable in one place.
 
 ### Filesystem — the bulky-items drawer
 
 Video clips and exports are too large for SQLite. They live as files under `/document/loopd/clips/<date>/<id>.mp4` and `/document/loopd/exports/<date>.mp4`. The SQLite row holds the absolute path string in `clip_uri` (legacy single-clip column on `entries`) or in `clips_json` (the array-of-clips column). When a screen plays a clip, `react-native-video` opens the file directly; SQLite is not in the read path for the bytes. Think of it like a database row pointing at an S3 URL — the row carries the metadata, the blob lives somewhere else. Concrete consequence: a user records a 12-second clip. ffmpeg writes the .mp4 to `/document/loopd/clips/2026-05-10/abc123.mp4`. `database.ts` upserts the entries row with `clips_json = [{uri: '/document/loopd/clips/2026-05-10/abc123.mp4', start: 0, end: 12, ...}]`. The home feed renders the clip thumbnail by passing the URI to `react-native-video`'s `<Video source={{uri}}/>`. Boundary: this works as long as the absolute path stays valid — `repairBareClipUris` is a defensive sweep that re-resolves any bare-filename leftovers from the deleted Notion-sync code, but a moved-app-data directory would invalidate every clip URI at once.
 
+The row-with-path-pointer-to-bytes shape:
+
+```
+   Filesystem (clip bytes):
+     /document/loopd/clips/2026-05-10/abc123.mp4    ◄── raw video
+     /document/loopd/exports/2026-05-10.mp4         ◄── exported vlog
+
+                          ▲
+                          │  path stored here
+                          │
+   SQLite row (200 bytes of metadata):
+   ┌──────────────────────────────────────────────────────────────┐
+   │ entries.clips_json = [                                        │
+   │   {                                                            │
+   │     uri: '/document/loopd/clips/2026-05-10/abc123.mp4',         │
+   │     start: 0,                                                  │
+   │     end: 12                                                    │
+   │   }                                                            │
+   │ ]                                                              │
+   └──────────────────────────────────────────────────────────────┘
+
+   playback:
+     <Video source={{uri}}/>  reads bytes directly from the file
+     SQLite is NOT in the byte-read path
+```
+
+The row is kilobytes; the file is megabytes. Reading the dashboard pulls 200-byte rows, not 12MB blobs.
+
 ### SecureStore — the locked drawer for keys
 
 `expo-secure-store` is the Android Keystore-backed key/value store; it survives uninstall protection differently depending on Android version. It holds: LLM API keys (`anthropic_api_key`, `openai_api_key`), provider preference (`ai_provider`), Supabase config (`supabase_url`, `supabase_anon_key`), and run-once flags (`cloud_initial_push_done`, per-feature backfill flags). If you're coming from frontend, this is the same shape as `localStorage` for user-config plus the OS keychain for secrets — except both live behind the same `expo-secure-store` API on Android. Concrete consequence: the user opens AI settings and pastes their Anthropic key. `setItemAsync('anthropic_api_key', key)` writes to Keystore. The next `summarize()` call reads via `getApiKey('claude')`, builds the request, sends to api.anthropic.com. The key never appears in the JS bundle, never lives in plain disk, never gets logged. Boundary: a corrupted Keystore (rare; OS-level issue) would clear the keys; the user would re-paste them on next boot. The cloud sync flags getting cleared would re-trigger bootstrap, which is recoverable.
+
+The key-value inventory:
+
+```
+   expo-secure-store (Android Keystore-backed key/value)
+   ─────────────────────────────────────────────────────────
+   key                              value
+   ───────────────────────────      ──────────────────────────
+   anthropic_api_key                'sk-ant-...'
+   openai_api_key                   'sk-...'
+   ai_provider                      'claude' | 'openai'
+   supabase_url                     'https://….supabase.co'
+   supabase_anon_key                'eyJ...'
+   cloud_initial_push_done          'true' | 'false'
+   <per-feature backfill flags>     'true' | 'false'
+
+   never in JS bundle, never on plain disk
+   accessed via getApiKey() / isCloudConfigured() helpers in
+   src/services/ai/config.ts + src/services/sync/client.ts
+```
+
+A leaked `loopd.db` file gives an attacker journal text; it doesn't give them the Anthropic key, because the key isn't in the file.
 
 ### Supabase Postgres — the mirror across the wall
 
 Supabase is the cloud copy. It never gets read by the app — reads always hit SQLite. Writes commit locally first, then `schedulePush()` mirrors them up via `pushAll()` 5 seconds later ([07-cloud-sync-mirror](./07-cloud-sync-mirror.md)). On a new device, `firstPull()` populates SQLite from Supabase one time; from that point on, sync runs in both directions on the normal cadence. Think of it like a Git remote — the local working tree is what you read; `git push` mirrors your commits; `git pull` fetches commits from other clones. Concrete consequence: user writes a journal entry. The row lands in `loopd.db` in 1ms (the dashboard re-renders from local). Five seconds later, Supabase receives the upsert. If the user then opens the same Supabase project from a different device, that device's first pull brings the entry down. The cloud is durable; the device is canonical. Boundary: the cloud is also the dependency-of-last-resort — if both local and cloud are wiped, the data is gone. The user is responsible for not wiping both at once.
 
+Read path vs write path — only writes touch Supabase:
+
+```
+       write path                              read path
+   ─────────────────────                  ─────────────────────
+   user write                              user opens app
+        │                                       │
+        ▼  ~1ms                                 ▼  ~1ms
+   SQLite (canonical)                      SQLite (canonical)
+        │                                       │
+        ▼  schedulePush() arms 5s timer         ▼
+        ▼                                       │
+        ▼  fire() after 5s of quiet       UI re-renders
+        ▼                                       │
+   pushAll() → Supabase                         │
+   (eventual)                                   │
+                                                
+                                                ▲
+   first-pull on a new device is the   ────────┘
+   one-time exception that reads from
+   Supabase, triggered explicitly via
+   bootstrap()
+```
+
+The cloud is durable; the device is canonical; the steady-state read path never touches the network.
+
 ### External LLMs — the passthrough drawer
 
 Anthropic and OpenAI hold loopd's data only for the duration of one API request. There's no fine-tune, no embedding store, no session memory the server keeps. The codebase sends a prompt, gets a response, persists the response to SQLite, and forgets the call ever happened. If you're coming from frontend, this is the same shape as calling Stripe to charge a card — the call is stateless from your side; whatever state the vendor keeps is for their own purposes (rate limits, billing), not yours. Concrete consequence: `generateCaption(date)` builds a prompt from local journal text, POSTs to api.anthropic.com, gets a JSON response with four caption variants, persists to `ai_summaries.summary_json.variants`. The next page render reads from SQLite, not from Anthropic. Boundary: the stateless contract holds only if you don't enrol in any vendor feature that creates server-side state (Anthropic Files API, vector stores, fine-tunes). The codebase deliberately avoids those — every call is a one-shot.
+
+The stateless API-call shape:
+
+```
+   ┌─ App ───────────────────────────────────────────────┐
+   │ summarize(date) / generateCaption(date) / ...       │
+   └──────────────────────┬──────────────────────────────┘
+                          │
+                          ▼  HTTPS POST (prompt + API key)
+   ┌─ api.anthropic.com / api.openai.com ────────────────┐
+   │ stateless on loopd's side:                          │
+   │   no fine-tunes                                      │
+   │   no vector stores                                   │
+   │   no session memory across calls                     │
+   │                                                       │
+   │ returns: completion text                              │
+   └──────────────────────┬──────────────────────────────┘
+                          │
+                          ▼  parse + validate
+                          ▼
+   persist to ai_summaries.summary_json in SQLite
+                          │
+                          ▼  subsequent reads come from SQLite;
+                             no return calls to the LLM for
+                             the same data
+```
+
+The stateless contract holds only because the codebase deliberately avoids vendor features that create server-side state.
 
 This is what people mean by "give every storage layer a job and a single direction of trust." SQLite reads, filesystem holds blobs, SecureStore holds secrets, Supabase mirrors, LLMs compute. Once each layer has exactly one job and the trust directions are documented, the architecture stops accumulating weird back-channels. Every database course teaches "right tool for the job"; the harder discipline is naming the tools and not letting one quietly take over another's role. The full picture is below.
 
@@ -397,3 +550,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-with-five-drawers analogies with AWS storage stack — DynamoDB hot rows + S3 blobs + Secrets Manager keys + RDS relational + Lambda stateless compute). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-4 — AWS storage services as polyglot-persistence primitives; no level-1 frontend primitive captures "five layers, one job each" at the same fidelity). Added Move 1 mnemonic diagram (five-layers-with-trust-directions shape) + 5 Move 2 sub-section diagrams: SQLite table inventory, row-points-at-bytes filesystem shape, SecureStore key-value inventory, Supabase write-vs-read paths, stateless-LLM API flow. Total: 6 new diagrams.

@@ -38,21 +38,139 @@ The matcher is React's keyed-list reconciler applied to backend rows: strong ide
 
 React's keyed-list reconciler is the canonical version. Pass 1 matches new entries to old by `key` prop (the strong identifier — most rows survive a reorder unchanged); Pass 2 falls back to position for whatever Pass 1 didn't claim (catching the case where the user edited a row's value but kept its slot in the list). Two ordered checks, strongest evidence first, with a hard rule that nothing matched in Pass 1 is eligible for Pass 2. Git's `--find-renames` flag runs the same shape on file paths: exact hash match first, content-similarity threshold second.
 
+The cascade of identity checks in one picture:
+
+```
+   each new item from the scanner
+              │
+              ▼
+   ┌────────────────────────────────────┐
+   │ Pass 1: strong signal (exact text) │  ──▶  claim row, inherit metadata
+   └────────────────────────────────────┘
+              │  unmatched leftovers
+              ▼
+   ┌────────────────────────────────────┐
+   │ Pass 2: fuzzy signal (line index)  │  ──▶  claim row, inherit metadata
+   └────────────────────────────────────┘
+              │  still unmatched
+              ▼
+              insert as a new row (mint a fresh id)
+```
+
+Each pass consumes only what the previous pass didn't claim — `claimed` and `used` sets enforce the "no double-claim" rule. The four sub-sections below trace each pass, why neither is sufficient alone, and the snapshot that pass 1 actually diffs against.
+
 ### Pass 1 — exact-text match
 
 The matcher walks every item the scanner produced and tries to find an existing `todo_meta` row whose `text` matches the new line's text (case-insensitive, whitespace-normalised). If a match is found and that existing row hasn't already been claimed by a prior item in this pass, the row is claimed and the new item inherits its id. If you're coming from React, this is the same job `key` props do for list reconciliation — give every item a stable identifier and the framework can preserve component identity across re-renders even when the array reorders. Here the "key" is the text content itself, and the framework is the matcher. Concrete consequence: if a user has `[] call mom` on line 3 today and adds three new lines above tomorrow pushing it to line 6, pass 1 finds `"call mom"` in the existing rows, claims that row's id, and the `todo_meta` keeps every piece of attached metadata — `expanded_md`, `classifier_confidence`, `pinned`, `user_overridden_type`. Nothing was deleted; nothing was re-created. Boundary: pass 1 fails the moment the user edits the line in place (changes the text by even one character), at which point the row appears to be missing.
+
+A reordering case where Pass 1 alone is enough:
+
+```
+   yesterday's todo_meta rows:           today's scanner output:
+   ┌─────┬─────────────┐                 ┌─────┬─────────────┐
+   │ id  │ text         │                │ ln  │ text         │
+   ├─────┼─────────────┤                 ├─────┼─────────────┤
+   │ t-A │ "call mom"   │                │ 6   │ "call mom"   │   ◄── moved
+   │ t-B │ "ship feat"  │                │ 4   │ "ship feat"  │   ◄── moved
+   │ t-C │ "fix bug"    │                │ 5   │ "fix bug"    │   ◄── moved
+   └─────┴─────────────┘                 └─────┴─────────────┘
+                              │
+                              ▼  Pass 1: exact-text match
+                              │  (case-insensitive, whitespace-normalised)
+                       ┌─────────────────────────────┐
+                       │ "call mom"  → claims t-A    │
+                       │ "ship feat" → claims t-B    │
+                       │ "fix bug"   → claims t-C    │
+                       └─────────────────────────────┘
+                              │
+                              ▼
+                       all metadata preserved
+                       Pass 2 has nothing to do
+```
+
+Reorder all you want — every row's `expanded_md`, `type`, `pinned`, `user_overridden_type` survive because the text was the identifier.
 
 ### Pass 2 — line-index fallback
 
 For every item that pass 1 *didn't* claim, the matcher takes a second walk and looks for an existing row whose previous `sourceLine` matches this item's new line index. Think of it like React's reconciliation when no `key` is provided — the framework falls back to positional matching, with the well-known caveat that reordering corrupts identity. Same trade here, intentionally accepted. Concrete consequence: if a user has `[] call mom` on line 3 and edits it in place to `[] call mom about flight`, pass 1 fails (the text changed) but pass 2 succeeds (this line is still index 3, and the previous scan tagged the row at line 3). The row keeps its id. Boundary: pass 2 fails when the user deletes line 3 *and* inserts a new line at position 3 in the same commit — pass 1 finds no match (new text), pass 2 finds the index but it now belongs to a different prose line. The match is wrong, the existing row gets a wrong text update, and the deleted item's row is now orphaned (and soft-deleted on the next reconcile).
 
+A same-line edit case where Pass 2 saves the row:
+
+```
+   yesterday's todo_meta:                 today's scanner output:
+   ┌─────┬──────────────────┬──────┐    ┌─────┬──────────────────────────┐
+   │ id  │ text              │ line │    │ ln  │ text                      │
+   ├─────┼──────────────────┼──────┤    ├─────┼──────────────────────────┤
+   │ t-A │ "call mom"        │  3   │    │  3  │ "call mom about flight"   │  ◄── edited
+   └─────┴──────────────────┴──────┘    └─────┴──────────────────────────┘
+                              │
+                              ▼  Pass 1: exact-text match
+                       ┌─────────────────────────────┐
+                       │ "call mom about flight"     │
+                       │   ✗ no exact match          │
+                       └─────────────────────────────┘
+                              │
+                              ▼  Pass 2: line-index fallback
+                       ┌─────────────────────────────┐
+                       │ line 3 was previously t-A   │  ──▶  claim t-A
+                       │ (sourceLine match)          │      update text in place
+                       └─────────────────────────────┘
+                              │
+                              ▼
+                       row keeps its id
+                       expanded_md, type, pinned preserved
+```
+
+The text field updates to the new prose, but every other column on the row rides along untouched.
+
 ### Why both passes — neither alone is enough
 
 If you ran only pass 1 (text-only), the moment the user fixes a typo in place the row is treated as new — they lose its classifier result and `expanded_md`. If you ran only pass 2 (index-only), the moment the user reorders lines every row's metadata shifts to the wrong todo. The pattern works because the two signals are independent — text identity survives reordering, position identity survives same-line edits — and the matcher consumes them in the right order: cheap-and-strict first, fuzzy-and-positional as a safety net for the leftovers.
 
+Walking the failure modes of each signal alone side by side:
+
+```
+   user action                Pass 1 only           Pass 2 only            Two passes
+   ─────────────────────      ──────────────────    ──────────────────     ──────────────────
+   fix typo on line 3         ✗ new text →          ✓ line still 3 →       ✓ Pass 2 catches it
+                                 row treated new       row claimed
+                                 metadata orphaned
+   reorder lines (no edit)    ✓ text match holds    ✗ all indices         ✓ Pass 1 catches it
+                                 metadata survives     shifted →
+                                                       wrong row per slot
+   reorder + edit same line   ✗ text changed         ✗ index shifted        ✓ Pass 1 catches
+                                                                              unedited lines;
+                                                                              Pass 2 catches
+                                                                              the edited one
+   delete + insert same slot  ✗ different text       ✗ wrong row at index   ✗ wrong match
+                                                                              (one bad case
+                                                                              accepted by design)
+```
+
+Two signals, independent failure modes — every realistic user action is caught by at least one pass except the delete-then-insert-at-same-index case, which we accept by design (it's rare in practice and the soft-delete invariant cleans up the orphan).
+
 ### The last-known scan record — what pass 1 reads against
 
 Pass 1 doesn't compare against the new scan; it compares against what the previous scan stored as `text` on each `todo_meta` row. That's the "before" snapshot the matcher diffs into the "after." If you've worked with React's reconciler, this is the equivalent of the previous virtual DOM — the framework keeps it around so the next render has something to diff against. The codebase stores it directly on `todo_meta.text`; every successful reconcile updates it so the next pass's pass 1 reflects today's state.
+
+What `todo_meta.text` looks like as a snapshot the matcher diffs against:
+
+```
+   todo_meta (the "previous virtual DOM")
+   ┌─────────┬──────────────────┬──────┬──────────┬─────────────────────┐
+   │ todoId  │ text              │ line │ type     │ expanded_md          │
+   ├─────────┼──────────────────┼──────┼──────────┼─────────────────────┤
+   │ t-A     │ "call mom"        │  3   │ personal │ "Mom's birthday..."  │
+   │ t-B     │ "ship feat"       │  4   │ work     │ "v2 spec..."         │
+   │ t-C     │ "fix bug"         │  5   │ work     │ "404 on /todos..."   │
+   └─────────┴──────────────────┴──────┴──────────┴─────────────────────┘
+        │           │            │
+        │           │            └── Pass 2 reads sourceLine
+        │           └─────────────── Pass 1 reads text
+        └─────────────────────────── id is what survives the match
+```
+
+After every successful reconcile, the matcher writes today's `text` and `sourceLine` back to these columns — so tomorrow's Pass 1 reflects what the user typed today, not what they typed last week.
 
 This is what people mean by "graceful identity preservation." When you can't stamp a primary key into your source format, you reach for two cheap proxies (content + position) and rank them by strictness. The same pattern shows up in `git`'s rename detection (content similarity threshold + path heuristic), in `react`'s reconciler (`key` first, position second), in `diff` algorithms (LCS first, fall back to position when ties tie). The full picture is below.
 
@@ -407,3 +525,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced librarian-rebuilding-shelf + librarian-re-cataloguing analogies with React keyed-list reconciler + git rename detection layered identity checks). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already use level-1 primitives: React reconciler + `key` prop + git rename detection). Added Move 1 mnemonic diagram (cascade-of-checks shape) + 4 Move 2 sub-section diagrams: Pass 1 reordering trace, Pass 2 same-line-edit trace, signal-failure comparison table, last-known-scan snapshot. Total: 5 new diagrams.

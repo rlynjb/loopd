@@ -11,7 +11,7 @@
 
 ## Why care
 
-React Native's platform-specific module pattern — `Foo.ios.ts` and `Foo.android.ts` resolved by the bundler based on the platform target — is exactly this shape. The component imports `from './Foo'`; the bundler picks the right file; the rest of the app is platform-agnostic. The day a platform changes, only the platform-specific file changes; everything that imports `./Foo` stays put. Stripe's `PaymentIntent` accepts `payment_method_types: ['card', 'apple_pay', 'us_bank_account']` for the same reason — same upstream call, same downstream parse, only the method picked at request time changes. Vercel's adapter pattern lets the same Next.js app target Edge or Node runtimes with one swap point.
+React Native's platform-specific module pattern — `Foo.ios.ts` and `Foo.android.ts` resolved by the bundler based on the platform target — is exactly this shape. The component imports `from './Foo'`; the bundler picks the right file; the rest of the app is platform-agnostic. The day a platform changes, only the platform-specific file changes; everything that imports `./Foo` stays put. Same shape as a typed `switch (env) { case 'web': …; case 'native': …; }` block inside a single function — one call site, multiple implementations, divergence quarantined to the branches.
 
 The question those swap-point patterns answer is one any codebase with replaceable backends has to answer: when a vendor changes pricing, deprecates an endpoint, or goes down for a day, how prepared is the call site for a swap? Not "sprinkle the vendor's SDK across every file" — that's a week-long chase to swap providers. Not "wrap everything behind a single interface that both vendors satisfy" — that interface becomes the surface area that breaks when one vendor adds a feature the other doesn't have. The answer is a *thin strategy seam*: pick provider, then branch in each call site, then converge on a shared tail.
 
@@ -35,23 +35,161 @@ The seam is `Foo.ios.ts` / `Foo.android.ts` — one import path, two implementat
 
 ## How it works
 
-React Native's `.ios.ts` / `.android.ts` resolution is the canonical pattern. Two implementations behind one import path; the bundler picks one based on the platform target; everything that imports the path is platform-agnostic. The codebase has two AI providers (Claude and OpenAI) wired to the same call shape — pick provider, get key, build prompt, call, parse JSON, persist. The two providers are the platforms; the import path is the chain function; the resolution lives in `getProvider()` reading from SecureStore at call time. Same shape as Stripe's `payment_method_types` parameter — one upstream call, one downstream parse, only the swap point changes.
+React Native's `.ios.ts` / `.android.ts` resolution is the canonical pattern. Two implementations behind one import path; the bundler picks one based on the platform target; everything that imports the path is platform-agnostic. The codebase has two AI providers (Claude and OpenAI) wired to the same call shape — pick provider, get key, build prompt, call, parse JSON, persist. The two providers are the platforms; the import path is the chain function; the resolution lives in `getProvider()` reading from SecureStore at call time. Same shape as a `switch (env)` block where each arm uses its own native APIs and the caller doesn't care which arm ran.
+
+The strategy-pattern shape in one picture:
+
+```
+   AI service caller (summarize / classify / expand / generateCaption)
+                            │
+                            │  await getProvider()
+                            ▼
+   ┌──────────────────────────────────────────────────┐
+   │ switch (provider) {                              │
+   │   case 'claude':                                  │  ◄── branch 1
+   │     await client.messages.create({...})           │     Claude's typed SDK
+   │     return res.content[0].text                    │     (uses prompt caching)
+   │                                                   │
+   │   case 'openai':                                  │  ◄── branch 2
+   │     await fetch('api.openai.com/...', { ... })    │     raw fetch
+   │     return data.choices[0].message.content        │     (uses response_format)
+   │ }                                                 │
+   └─────────────────────┬────────────────────────────┘
+                         │  both branches return a string
+                         ▼
+                parse → validate → persist
+                (shared tail, same code regardless of provider)
+```
+
+Each branch keeps its provider's native shape; the convergence happens after the call, not inside it. The four sub-sections below trace the config, the two branches, the shared tail, and why there's deliberately no `AIProvider` interface.
 
 ### The config — `getProvider()` + key getters from SecureStore
 
 `src/services/ai/config.ts` exposes `getProvider()` (returns `'claude'` or `'openai'`) and `getApiKey(provider)`. Both read from `expo-secure-store` (Android Keystore-backed), so the key never lives in JS bundle or plain disk. The reads are async but cached — first call hits the keystore, subsequent calls hit memory. If you're coming from frontend, this is the same shape as a React Context that holds the active feature-flag config — the consumer doesn't care where the config came from, only that it's typed and available synchronously after the first await. Concrete consequence: every AI service file starts with `const provider = await getProvider(); const apiKey = await getApiKey(provider);` — two await calls that are essentially free after the first one. The pattern keeps the keystore reads in one named place; if the storage backend changes (encrypted file, env var, server-side fetch), only `config.ts` needs editing. Boundary: this assumes the key was set during cloud-sync onboarding; if the user opens an AI feature without configuring keys, the call throws and the UI shows an "AI not configured" hint.
 
+The config surface and how it's used:
+
+```
+   src/services/ai/config.ts
+   ──────────────────────────────────────────────────
+   async function getProvider(): Promise<'claude' | 'openai'>
+     // expo-secure-store read (Android Keystore-backed)
+
+   async function getApiKey(provider): Promise<string>
+     // expo-secure-store read per provider key
+
+   ──────────────────────────────────────────────────
+
+   Every AI service file starts the same way:
+     const provider = await getProvider();
+     const apiKey   = await getApiKey(provider);
+
+   ┌─────────────────────────────────────────────┐
+   │ first call:    keystore read ~5ms            │
+   │ subsequent:    memory cache ~0.01ms          │
+   └─────────────────────────────────────────────┘
+```
+
+One named module owns key access; changing the storage backend (env var, server-side fetch, KMS) means editing one file.
+
 ### The branch — Claude SDK vs raw fetch to OpenAI
 
 Every AI service has the same structure: a `switch (provider)` (or `if/else`) with two branches. The Claude branch calls `@anthropic-ai/sdk`'s typed `client.messages.create({...})`. The OpenAI branch builds a `fetch` to `https://api.openai.com/v1/chat/completions` with hand-crafted JSON. If you're coming from frontend, this is the same pattern as two `useQuery` calls in the same hook, switched by a config boolean — same shape of output, different transports. Concrete consequence: in `src/services/ai/summarize.ts`, the Claude branch builds a `messages: [{role: 'user', content: prompt}]` and pulls the text out of `response.content[0].text`. The OpenAI branch builds the same prompt structure plus `response_format: {type: 'json_object'}` (Claude doesn't have that knob, so the Claude branch has to extract JSON from prose), POSTs, and reads `response.choices[0].message.content`. Both branches return a string; the caller doesn't know or care which provider produced it. Boundary: the abstraction is at the *call-site*, not in a shared interface — there's no `AIProvider` interface that both implementations satisfy. The branches diverge in body but converge on the contract (string in, string out). Adding a third provider means three branches in N service files, not one new class.
+
+The two branches side by side, each using its provider's native shape:
+
+```
+   switch (provider) {
+
+     case 'claude':                            case 'openai':
+       const res = await                         const res = await fetch(
+         client.messages.create({                  'https://api.openai.com/...',
+           model: 'claude-sonnet-4-6',             { method: 'POST',
+           messages: [{                              headers: { Authorization, ... },
+             role: 'user',                            body: JSON.stringify({
+             content: prompt                            model: 'gpt-4o',
+           }]                                            messages: [...],
+         });                                             response_format: {
+       return res.content[0].text;                         type: 'json_object'
+                                                          }
+                                                       })
+                                                     }
+                                                   );
+                                                   const data = await res.json();
+                                                   return data.choices[0]
+                                                              .message.content;
+   }
+            │                                         │
+            └────────────────┬────────────────────────┘
+                             ▼
+                       returns string
+                       (caller doesn't know which provider produced it)
+```
+
+Each branch uses provider-native knobs — Claude's typed SDK and prompt caching on one side, OpenAI's `response_format` flag on the other — without flattening either through an interface.
 
 ### The shared tail — parse, validate, persist
 
 After both branches return their string, every AI service runs the same tail: extract JSON (regex or `JSON.parse`), validate against a Zod-like schema (custom validators in `src/services/ai/validate.ts`), persist to SQLite via the `database.ts` helpers ([01-local-first-request-flow](./01-local-first-request-flow.md)). Think of it like a React Query mutation's `onSuccess` — the transport produced the data, now the standard write-and-cache path takes over. Concrete consequence: `summarize.ts` calls the LLM, gets `'{"clipOrder":[...], "filter":"warm", ...}'`, runs `parseAISummary` to lift it into a typed object, calls `upsertAISummary(date, summary)` in `database.ts`. The cloud sync layer picks it up 5s later. Boundary: the validate step is where bad outputs get caught — if Claude returns a malformed JSON inside markdown fences, the validator throws, the UI surfaces an error toast, the user can retry. The persist step trusts the validated object.
 
+The shared tail in one pipeline:
+
+```
+   string output from either provider branch
+                  │
+                  ▼
+   ┌──────────────────────────────────────┐
+   │ parse: extract JSON                  │  ◄── Claude may wrap in
+   │   regex or JSON.parse on             │     markdown fences;
+   │   cleaned string                     │     OpenAI returns clean
+   │       ▼                              │
+   │ validate: typed schema check         │  ◄── src/services/ai/validate.ts
+   │   (Zod-like custom validators)       │     reject malformed payloads loudly
+   │       ▼                              │
+   │ persist: upsert*() via               │  ◄── single-funnel write path
+   │   src/services/database.ts            │     bumps updated_at +
+   │                                       │     schedulePush()
+   └──────────────────────────────────────┘
+                  │
+                  ▼
+       row in SQLite; cloud sync trips ~5s later
+```
+
+Identical pipeline regardless of provider — the validator is the gate that catches bad outputs before they corrupt the canonical store.
+
 ### Why no shared interface — the leak that wasn't worth abstracting
 
 The textbook move would be to define `interface AIProvider { call(prompt: string): Promise<string> }` and have both providers satisfy it. The codebase deliberately doesn't. The reason: the two providers diverge on more than just transport — Claude doesn't have `response_format: json_object`, OpenAI doesn't have Claude's prompt caching, error shapes differ, rate-limit headers differ. Any interface that abstracts both leaks at the edges; the abstraction either lowest-common-denominators (losing both providers' unique features) or grows knobs the leaf services have to thread through. If you're coming from frontend, this is the same situation as trying to wrap `fetch` and `axios` behind a common interface — possible, but the leaks (`onUploadProgress`, retry semantics, response.data shape) usually cost more than the indirection saves. Concrete consequence: a new provider requires touching every AI service file once (a `switch` arm in each). The cost is real (5 files × ~10 LOC each = 50 LOC per new provider). The benefit is that each branch can use the provider's unique features without an interface contract dragging it down. Boundary: at 4+ providers the boilerplate would justify an interface; at 2 it doesn't.
+
+The textbook interface and what it costs vs the switch:
+
+```
+       Interface (the textbook move)            Switch (this codebase)
+   ┌──────────────────────────────────────┐   ┌──────────────────────────────────────┐
+   │ interface AIProvider {                │   │ switch (provider) {                  │
+   │   call(prompt: string):               │   │   case 'claude':                      │
+   │     Promise<string>;                  │   │     /* native Claude SDK call;        │
+   │   // and...                          │   │        uses prompt caching directly */│
+   │   //   prompt caching?               │   │   case 'openai':                      │
+   │   //   response_format?              │   │     /* native fetch;                  │
+   │   //   rate-limit headers?           │   │        uses response_format directly*/│
+   │   //   streaming?                    │   │ }                                    │
+   │   //   error shapes?                 │   │                                       │
+   │ }                                     │   │ each branch uses provider-native     │
+   │                                       │   │ knobs; nothing flattened.            │
+   │ class ClaudeProvider implements …    │   │                                       │
+   │ class OpenAIProvider implements …    │   │ adding provider 3 →                  │
+   │                                       │   │   one new case in N service files    │
+   │ adding feature X →                    │   │   ~50 LOC duplication                │
+   │   both classes update                 │   │                                       │
+   │   interface leaks at every edge       │   │                                       │
+   └──────────────────────────────────────┘   └──────────────────────────────────────┘
+                                                  at 4+ providers, the boilerplate
+                                                  would tip the other way — until
+                                                  then, the switch wins
+```
+
+The interface looks cleaner on paper; in practice it grows knobs faster than the switch grows duplication.
 
 This is what people mean by "thin abstractions over thick differences." The temptation is always to wrap a divergent set of APIs behind a unified interface — but the interface itself becomes the surface area that breaks when one provider adds a new feature. The codebase trades a little duplication (`switch (provider)` in N files) for the ability to use each provider's native shape directly. Every codebase that ever survived a major version upgrade of a vendor library has some version of this discipline: keep the wrapper thin enough that you can rewrite it; keep the callers naive enough that they don't depend on the wrapper's quirks. The full picture is below.
 
@@ -413,3 +551,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-two-stoves + power-strip analogies with React Native platform-specific module pattern .ios.ts/.android.ts + Stripe PaymentIntent payment_method_types + Vercel adapter). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: trimmed level-5 whole-product anchors (Stripe `PaymentIntent` + Vercel adapter) from both Why care Move 1 and How it works Move 1; the level-1 React Native `.ios.ts`/`.android.ts` primitive already carried the point. Added Move 1 mnemonic diagram (strategy-pattern shape) + 4 Move 2 sub-section diagrams: config surface + key-cache, two-branch side-by-side, shared-tail pipeline, interface-vs-switch comparison. Total: 5 new diagrams.

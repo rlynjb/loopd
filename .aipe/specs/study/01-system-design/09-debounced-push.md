@@ -11,7 +11,7 @@
 
 ## Why care
 
-Type fast into the search box on any production app — Google, Linear, Algolia's docs. The autocomplete doesn't fire a request on every keystroke; it waits until you've stopped typing for ~300ms and then fires one request with the final query. Lodash's `_.debounce` ships this primitive; React Query exposes it via `useDebouncedCallback`; React 18's `useDeferredValue` is a related shape. Without the debounce, every keystroke costs a round-trip; with it, a 50-character search produces one round-trip instead of fifty. Same work; fewer trips; same final state.
+You're in a React component with an `<input>` that ought to fire `/api/search` only after the user stops typing. You reach for the primitive: `let timer; const onChange = (v) => { clearTimeout(timer); timer = setTimeout(() => fetch('/api/search?q=' + v), 300); }`. Every keystroke clears the previous timer and arms a new one; the `fetch` runs once at the end of the burst, not on every character. Lodash ships `_.debounce` so you don't have to write the timer-reset by hand; React Query exposes the same shape via `useDebouncedCallback`; React 18's `useDeferredValue` is a related primitive. Without the debounce, every keystroke costs a round-trip; with it, a 50-character search produces one round-trip instead of fifty. Same work; fewer trips; same final state.
 
 The question debouncing answers is one any system with bursty input has to answer: when a single user action produces dozens of small events that all want to trigger the same expensive work, how do you collapse them into one fire without losing any of the input? Not "skip every other event" — that drops state. The answer is *debouncing*: every new event resets a timer; the work runs once when the timer expires after a quiet window.
 
@@ -35,23 +35,139 @@ Debounce once, after the burst is over — same shape as `_.debounce` on a produ
 
 ## How it works
 
-Lodash's `_.debounce(fn, 5000)` is the canonical pattern. Every call to the debounced function resets a timer; the inner function fires only after the timer has been quiet for the configured window. React Query's `useDebouncedCallback` ships the same primitive for client-side handlers; the Gmail autosave that batches keystrokes runs on the same shape. loopd's `schedulePush()` is this pattern applied to cloud sync — every `database.ts` write resets a 5-second timer; `pushAll()` fires once after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
+Lodash's `_.debounce(fn, 5000)` is the canonical pattern. Every call to the debounced function resets a timer; the inner function fires only after the timer has been quiet for the configured window. React Query's `useDebouncedCallback` ships the same primitive for client-side handlers. loopd's `schedulePush()` is this pattern applied to cloud sync — every `database.ts` write resets a 5-second timer; `pushAll()` fires once after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
+
+The shape in one timeline:
+
+```
+   write events (fired from database.ts mutators):
+   t=0    t=1.5s   t=2.8s            (5s of no writes)
+    │       │        │                  │
+    ▼       ▼        ▼                  ▼
+   ┌─────────────────────────────┐   ┌────────────────────┐
+   │ schedulePush() each time:   │   │ fire() at t=7.8s   │
+   │   clearTimeout(timer)        │   │   pushAll() runs    │
+   │   timer = setTimeout(fire,   │   │   one HTTPS upsert  │
+   │             5000)            │   │   per dirty table   │
+   │ the 5s window resets per     │   │                     │
+   │ call → fire() never runs     │   │                     │
+   │ during the burst             │   │                     │
+   └─────────────────────────────┘   └────────────────────┘
+```
+
+Three keystrokes produce one HTTPS upsert at t=7.8s, not three. The four sub-sections below trace the timer, the fire callback, the orchestrator, and the 5-second knob.
 
 ### `schedulePush()` — the debounce trigger
 
 Every synced write in `database.ts` calls `schedulePush()`. The body is one line of state plus one setTimeout: `if (timer) clearTimeout(timer); timer = setTimeout(fire, PUSH_DEBOUNCE_MS)`. If you're coming from frontend, you've debounced search inputs with `lodash.debounce` or with a cleanup function in `useEffect` — same exact pattern here, except the work being deferred is a network upsert instead of a re-render, and the input source is `database.ts` writes instead of an `<input onChange>`. Concrete consequence: if the user types `[] call mom` at t=0, `[] write spec` at t=2s, then backgrounds the app at t=3s, both writes hit SQLite synchronously (the row is canonical the moment it lands), the timer was reset at t=2s, and `fire()` is scheduled for t=7s. At t=3s the cloud is still empty; at t=7s the push runs. Boundary: the debounce window assumes typing comes in bursts shorter than 5s; if the user types one keystroke every 6 seconds, every keystroke triggers its own push. That's fine — it's the wrong scenario for debounce, but the wrong scenario costs no more than no-debounce would.
 
+The body inlined with annotations:
+
+```
+   src/services/sync/schedulePush.ts
+
+   let timer: ReturnType<typeof setTimeout> | null = null;
+   const PUSH_DEBOUNCE_MS = 5_000;
+
+   export function schedulePush() {
+     if (timer) clearTimeout(timer);                  ◄── always clear first
+     timer = setTimeout(fire, PUSH_DEBOUNCE_MS);      ◄── re-arm the window
+   }
+
+   every synced mutator in database.ts ends with:
+     <SQL write>           →   schedulePush()
+                                 │
+                                 ▼  fresh 5s window starts here
+   repeated calls within the window: timer keeps resetting,
+   fire() never runs until the writes stop.
+```
+
+The whole debouncer is two lines and one module-level `timer` variable.
+
 ### `fire()` — the timer callback that respects in-flight pushes
 
 When the timer expires, `fire()` checks a single boolean: `pushing`. If a push is already in flight (e.g. the previous burst's push is still upserting to Supabase), `fire()` calls `schedulePush()` again instead of starting a second push. Think of it like React's `flushSync` being declined when you're already inside a render — the framework doesn't queue a parallel render; it makes you wait. Concrete consequence: if a push that started at t=7s is still uploading at t=12s (slow network, big batch), and another write at t=10s scheduled a second fire for t=15s, the t=15s `fire()` sees `pushing = true` and re-arms for t=20s. The in-flight push is never clobbered; the new writes never get lost (they're already in SQLite and will be `updated_at > synced_at` on the next pass). Boundary: this is single-process — two parallel `pushAll()` calls would race on `synced_at`. The re-arm guard prevents that.
+
+A slow-network scenario where the re-arm guard does its work:
+
+```
+   Time     Event                                  pushing state
+   ─────    ─────────────────────────────────      ─────────────
+   t=7s     fire() runs; pushAll() starts;          true
+            slow network — push is still
+            uploading at t=12s
+   t=10s    user write; schedulePush() arms        true (unchanged)
+            timer for t=15s
+   t=15s    fire() runs; sees pushing=true;        true
+            calls schedulePush() to re-arm
+            for t=20s; does NOT start a 2nd push
+   t=18s    push at t=7s finally completes          false
+   t=20s    fire() runs; sees pushing=false;       true
+            pushAll() starts the new burst
+```
+
+The in-flight push is never clobbered; the new writes wait safely in SQLite via `updated_at > synced_at` until they're picked up.
 
 ### `pushAll()` — the orchestrator over the SyncableTable registry
 
 `fire()` calls `pushAll()`, which walks a registry of `SyncableTable` entries (10 entries: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`) and calls `pushTable()` for each. `pushTable()` selects dirty rows (`updated_at > synced_at`), upserts them to Supabase, and stamps `synced_at = now()` on success. If you've ever written a Redux saga that walks an array of action creators in sequence, this is the same shape — the registry is the array, the `pushTable()` call is the work. The orchestration is sequential per table because Supabase is the bottleneck, not the local query — running 10 tables in parallel would only thrash the same HTTPS pipe. Concrete consequence: if 8 of the 10 tables are clean (no dirty rows), they return in microseconds; the actual work is concentrated on the 1–2 tables that received writes during the burst. Boundary: this scales linearly with table count and per-table dirty row count; the burst-batching means it scales with *bursts* not *keystrokes*, which is the load profile the user actually produces.
 
+The orchestrator's shape — one array, sequential walk:
+
+```
+   pushAll()
+       │
+       ▼
+   const REGISTRY: SyncableTable[] = [
+     entries, projects, vlogs, day_meta, ai_summaries,
+     nutrition, habits, todo_meta, threads, thread_mentions,
+   ];
+                                    ◄── 10 tables, ordered
+       │
+       ▼
+   for (const table of REGISTRY) {
+     await pushTable(table);        ◄── sequential, NOT Promise.all
+   }
+       │
+       ▼  pushTable(t):
+       │    SELECT * FROM t
+       │      WHERE updated_at > synced_at
+       │         OR synced_at IS NULL
+       │    batch in 50s
+       │    supabase.upsert(rows, { onConflict: 'user_id,id' })
+       │    on success: UPDATE synced_at = now()
+       ▼
+   most calls touch 0 rows (no dirty), return in microseconds.
+   the 1–2 tables touched by this burst do the actual upsert work.
+```
+
+Sequential walk because the HTTPS pipe to Supabase is the bottleneck — parallel pushes per table would only thrash the same connection.
+
 ### The 5-second tuning knob
 
 `PUSH_DEBOUNCE_MS = 5_000` lives at `src/services/sync/schedulePush.ts` L9 — it's the only parameter the whole pattern exposes. Shorter feels chattier (more round-trips per typing burst, more battery and data on cellular); longer means a longer "is my last write in the cloud?" window after the user stops typing. 5s is the empirical sweet spot for journaling cadence (people type a sentence, pause, type the next sentence; a 5s gap reliably signals end-of-burst). Concrete consequence: an app kill at t=4.9s loses the cloud copy of the most recent burst (still in SQLite, picked up on next launch's `pushAll()`); an app kill at t=5.1s loses nothing. Boundary: if a second device starts polling, the freshness lag becomes visible — 5s is too long for "I edited on my phone and opened my tablet immediately." The day a second device joins is the day this number drops to 1s (or per-write).
+
+What turning the knob actually costs in either direction:
+
+```
+       Shorter (say 1s)              5s (current)               Longer (say 30s)
+   ┌─────────────────────────┐  ┌─────────────────────┐  ┌─────────────────────────┐
+   │ + cloud fresher          │  │ + smallest window   │  │ + one push covers many  │
+   │   (tablet sees writes    │  │   that visibly      │  │   bursts → less data    │
+   │   within 1s)             │  │   batches a         │  │   + battery             │
+   │                          │  │   journaling burst  │  │                         │
+   │ - more pushes per burst  │  │                     │  │ - longer "in SQLite     │
+   │ - rate-limit risk under  │  │ - tablet sees       │  │   not yet cloud" window │
+   │   sustained typing       │  │   ~5s of staleness  │  │   on app kill           │
+   │ - radio held active      │  │ - app-kill window   │  │ - tablet stale up to 30s│
+   │   longer per session     │  │   bounded by 5s     │  │   when user switches    │
+   └─────────────────────────┘  └─────────────────────┘  └─────────────────────────┘
+
+   The knob isn't sacred — it's the empirical sweet spot for journaling cadence.
+   A different write pattern (live transcription, multi-line paste) would re-tune.
+```
+
+One number tunes the whole pattern; everything else stays the same.
 
 This is what people mean by "write-behind cache": make the user's writes synchronous on the device, defer the publish-to-the-world step, batch the bursts. The kernel's page cache does it. Database group commit does it. Log-structured merge trees do it. Every collaborative editor that "feels responsive" does it. The full picture is below.
 
@@ -386,3 +502,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced waiter-at-cafe-clearing-table analogies with search-box autocomplete debouncing + Lodash _.debounce + React Query useDebouncedCallback + Gmail autosave). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from "Google's search box / Linear / Algolia" whole-product autocomplete anchors to a level-1 primitive (`clearTimeout`/`setTimeout` in an `<input>` `onChange`; lodash `_.debounce` and `useDebouncedCallback` kept as level-1/3 library mentions). Dropped Gmail autosave from How it works Move 1. Added Move 1 mnemonic diagram (write-events-to-fire timeline) + 4 Move 2 sub-section diagrams: schedulePush body annotated, in-flight push re-arm timeline, REGISTRY orchestrator walk, 5s-knob three-column tradeoff. Total: 5 new diagrams.

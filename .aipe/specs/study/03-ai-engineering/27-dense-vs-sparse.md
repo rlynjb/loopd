@@ -27,13 +27,45 @@ With both layers (planned hybrid):
 - Sparse lane: FTS5 on `entries.text` → top-k by exact-token match weighted by BM25
 - Fusion (RRF) merges the two rankings; Spice House entries top the list AND paraphrased meal entries appear
 
-One librarian for exact titles, one for themes, both on the desk.
+Hybrid retrieval — sparse for exact-string lookups, dense for paraphrase; same query, two pipelines, fused at the end.
 
 ---
 
 ## How it works
 
 Both approaches map queries and documents into a representation that's comparable. The representations are radically different.
+
+The two representations side by side:
+
+```
+            Dense (embeddings + cosine)              Sparse (BM25 / TF-IDF)
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ representation                         │    │ representation                         │
+   │   number[1536] — fat vector            │    │   number[~200K] — long but mostly      │
+   │   every dimension is a real number     │    │   zero vector (one slot per word in    │
+   │                                        │    │   the vocabulary)                       │
+   │ similarity                             │    │ similarity                              │
+   │   cosine(queryVec, docVec)             │    │   BM25 score (count of overlapping     │
+   │                                        │    │   query words, weighted by rarity +     │
+   │                                        │    │   doc length)                            │
+   │ what it captures                        │    │ what it captures                       │
+   │   semantic similarity                    │    │   exact-token overlap                   │
+   │   ("Spice House" near                   │    │   ("Spice House" matches the           │
+   │    "Indian restaurant")                  │    │    literal substring, not              │
+   │                                        │    │    paraphrases)                          │
+   │ what it misses                          │    │ what it misses                          │
+   │   proper nouns / rare strings          │    │   paraphrases, synonyms, partial       │
+   │   ("Spice House" → "Indian               │    │   meanings ("the meal at that         │
+   │    restaurant" cluster — too far          │    │    new place" → not enough rare       │
+   │    from the literal-string match)        │    │    words to anchor)                    │
+   │                                        │    │                                        │
+   │ implementation                          │    │ implementation                          │
+   │   embed(text) → vec; cosine search     │    │   FTS5 / Postgres tsvector / Lucene    │
+   │                                        │    │   tokenise + invert + BM25              │
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+```
+
+Both representations are vectors; the difference is whether the dimensions are dense (every dimension carries information) or sparse (most dimensions are zero). The five sub-sections below trace each representation in detail and their strengths and weaknesses.
 
 ### Dense — every document is one fat vector
 
@@ -86,6 +118,31 @@ Now dense wins. The user's query shares no rare words with the relevant entries,
 The practical consequence: dense retrieval is great at *paraphrase* and bad at *out-of-vocabulary identifiers* (proper nouns, product names, code identifiers, error codes). Sparse retrieval is the opposite. Most real corpora have both kinds of queries.
 
 For loopd specifically: a daily-journal corpus has lots of proper nouns (place names, people, project names, `#tags`) that sparse handles well, and lots of natural-language description (mood, feelings, themes) that dense handles well.
+
+What each shape eats vs what it chokes on:
+
+```
+   query type                              dense wins?    sparse wins?
+   ───────────────────────────────         ──────────     ───────────
+   proper noun ("Spice House")              no             yes
+   rare technical term ("vindaloo")         no             yes
+   product / project name ("loopd")          no             yes
+   error code ("ENOTFOUND")                  no             yes
+   #tag                                      no             yes
+   paraphrase ("the place we ate")          yes            no
+   synonym ("dinner" ↔ "supper")             yes            no
+   conceptual query ("memorable meals")     yes            no
+   misspelling ("vindalu")                  partial        no
+   cross-language                            (depends      no
+                                             on model)
+
+   loopd's corpus = lots of proper nouns AND lots of
+   natural-language description → needs BOTH lanes.
+   hybrid retrieval (next file, 28-hybrid-retrieval-rrf) is
+   the production answer.
+```
+
+The two failure modes are complementary — dense and sparse are bad at exactly opposite things.
 
 ### This is what people mean by "no free lunch in retrieval"
 
@@ -340,3 +397,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced two-librarians-reference-desk analogy with GitHub code search exact-string vs natural-language modes, Sourcegraph, Algolia synonyms API).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: kept Why care + How it works Move 1 anchors on GitHub code search + Sourcegraph + Algolia (level-3 engineering surfaces, acceptable). Swapped Why care Move 5 from "one librarian for exact titles, one for themes" physical-world metaphor to "Hybrid retrieval — sparse for exact-string lookups, dense for paraphrase; same query, two pipelines, fused at the end." Added Move 1 mnemonic diagram (dense vs sparse side-by-side: representation + similarity + what each captures and misses + implementation) + 1 new Move 2 sub-section diagram (query-type table mapping what each wins/loses at, with loopd-corpus implication). Sub-sections 1, 2, 3, 4 already had ASCII diagrams from earlier passes. Total: 2 new diagrams.

@@ -37,6 +37,39 @@ The metric must fit the output shape — methods follow data, not reputation.
 
 Five methods, ordered from cheapest to most expensive.
 
+The cost / signal trade across the five methods:
+
+```
+   method                output it fits         cost per item    signal
+   ─────────────────     ─────────────────      ──────────────   ──────────────
+   exact match           discrete labels        ~1 µs            boolean
+                         (classifier outputs)   (==)              + F1 / accuracy
+                                                deterministic
+   fuzzy match           text with whitespace   ~10-100 µs       boolean
+                         or formatting drift    (Levenshtein,    + threshold
+                                                ROUGE)
+                                                deterministic
+   structured / schema   JSON output            ~1-10 ms         boolean
+                         conforming to a        (parse +         + per-field score
+                         schema                 validate)
+                                                deterministic
+   rubric / LLM-judge    free-form prose         ~500-2000 ms     1-5 per criterion
+                         (captions, essays)     + ~$0.001-0.005   (stochastic;
+                                                per item          calibrate vs
+                                                                  human first)
+   pairwise comparison   relative quality       ~1000-4000 ms     win-rate over
+                         where absolute is      + ~$0.002-0.010   N comparisons
+                         hard                   per item          (position bias!)
+                                                                   randomise order
+
+   pick by output shape, not by reputation:
+     discrete       → exact match (free, fast)
+     JSON           → schema + per-field
+     free-form      → rubric + (optional) pairwise
+```
+
+The five sub-sections below trace each method in turn — what output shape it fits, how it scores, and which loopd chain uses it.
+
 ### 1. Exact match — discrete labels
 
 For outputs from a fixed vocabulary (classifier labels, enumerable choices), check if `prediction == label`. Score is per-item 0 or 1. Aggregate as accuracy or per-class F1.
@@ -374,3 +407,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced grade-school-teacher-five-tests analogy with Vitest/Jest test types — toBe / toMatch / zod.parse / toMatchSnapshot / Chromatic visual diff).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (Why care + How it works anchors already at level-3 — Vitest/Jest test types + Chromatic/Percy visual diff are engineering surfaces, acceptable). Added Move 1 mnemonic diagram (5 methods with cost/signal trade — discrete/JSON/free-form output shapes mapped to methods). Sub-section 6 ("Where the methods fail") already had a table; primary diagram already showed method-per-chain mapping. The Move 1 mnemonic covers each of the 5 method sub-sections at-a-glance; per-sub-section drill-downs deemed redundant given the cost/signal table + primary diagram. Total: 1 new diagram.

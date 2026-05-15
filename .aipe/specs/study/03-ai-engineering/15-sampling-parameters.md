@@ -35,9 +35,85 @@ Sampling is half the LLM function — same model, same prompt, different dial, d
 
 The OpenAI Playground's temperature slider sits next to the chat input. At 0, the model is locked to the single most-likely next token at every step; at 2 it's drawing from a much wider pool and sometimes picking the long shot. The model's behaviour feels different at each setting — same prompt, same weights, but the sampling step in front of the output changes what comes out. Two operations welded together in the LLM-as-function picture (predict probabilities → emit one token) split apart into two independent decisions: the model produces a distribution, sampling picks from it.
 
+The split in one picture:
+
+```
+   prompt
+       │
+       ▼
+   ┌───────────────────────────────────────────┐
+   │ MODEL (the weights — same every call)      │
+   │                                             │
+   │ outputs a probability distribution over     │
+   │ the entire vocabulary:                      │
+   │                                             │
+   │   "Paris"     → 0.92                        │
+   │   "Lyon"      → 0.04                        │
+   │   "the"       → 0.02                        │
+   │   "Marseille" → 0.01                        │
+   │   ...                                       │
+   └─────────────────┬─────────────────────────┘
+                     │
+                     ▼
+   ┌───────────────────────────────────────────┐
+   │ SAMPLER (the dials — vary per call)         │
+   │                                             │
+   │ temperature, top_p, top_k decide how to    │
+   │ pick ONE token from the distribution:       │
+   │                                             │
+   │   temp = 0   → always pick the highest:     │
+   │                  "Paris"                    │
+   │   temp = 1   → sample from distribution:    │
+   │                  "Paris" 92%, "Lyon" 4%...  │
+   │   temp = 2   → flatten + sample:            │
+   │                  "Paris" 60%, anything 40%  │
+   └─────────────────┬─────────────────────────┘
+                     │
+                     ▼
+              chosen token
+
+   the model is deterministic given the prompt;
+   sampling makes the API call non-deterministic.
+```
+
+The four sub-sections below trace temperature itself, the silent default trap, the one chain that tunes it, what the codebase doesn't use, and the Phase A → intended-state gap.
+
 ### Temperature — the variance dial
 
 The model emits a probability distribution over the entire vocabulary at every step. Temperature is a scalar that gets divided into the logits before the softmax — `temp=0` collapses the distribution onto the single highest-probability token (greedy decoding); `temp=1` leaves it untouched; `temp=2` flattens it so unlikely tokens get a real chance. If you're coming from frontend, you've used `Math.random()` and you've seen it produce different values on each call — temperature is the parameter that says "how much of that randomness do I want in the model's choice." Practical consequence: classify the same input twice at `temp=0` and you get the exact same JSON object both times; classify the same input at `temp=1` and the model might pick `idea` once and `knowledge` the next time when both were plausible. Boundary: temperature only matters when the model is uncertain. On a "what is 2+2" prompt, the top token is `4` by such a wide margin that even `temp=2` returns `4`.
+
+Same prompt under three temperatures:
+
+```
+   prompt: "Classify '[] thinking about onboarding' — return JSON"
+
+   model's probability distribution at the .type field:
+     "idea"       → 0.42
+     "knowledge"  → 0.38
+     "reflect"    → 0.12
+     "todo"       → 0.05
+     "study"      → 0.03
+
+   temp = 0 (greedy):
+     run 1: "idea"        ◄── always the top one
+     run 2: "idea"
+     run 3: "idea"
+     → deterministic
+
+   temp = 1 (default):
+     run 1: "idea"        ◄── ~42% chance
+     run 2: "knowledge"   ◄── ~38% chance
+     run 3: "idea"
+     → varies
+
+   temp = 2 (flattened):
+     run 1: "reflect"     ◄── unlikely tokens get a real chance
+     run 2: "study"
+     run 3: "idea"
+     → drifts toward nonsense
+```
+
+When the model is uncertain, temperature controls how often you see the second-best choice; on highly-confident inputs, even `temp=2` returns the top token.
 
 ### Default temperatures — the silent setting
 
@@ -59,15 +135,97 @@ If you're coming from frontend, this is like calling `setTimeout(fn)` without a 
 
 `src/services/ai/interpret.ts` L14 declares `const TEMPERATURE = 0.7;` and passes it to both Claude and OpenAI. This is the only file in the codebase that explicitly sets temperature. The choice of 0.7 — slightly below the default — is the conventional "creative but coherent" setting; high enough that two interpretations of the same journal entry feel meaningfully different, low enough that the model doesn't lose the thread. In React terms, this is like wrapping a component in `useMemo` only for the one path where memo'd behaviour matters — every other chain accepts the default and gets the provider's "balanced" setting whether they wanted it or not.
 
+What every chain passes today, vs what they should:
+
+```
+   chain         today (silent default)        intended            why
+   ──────────    ────────────────────────      ──────────────      ─────────────────
+   summarize     temperature: undefined         temp: 0            JSON validity:
+                 → uses provider default 1                          deterministic
+                                                                    structured output
+   caption       temperature: undefined         temp: 0.7          tonal variance
+                 → uses provider default 1                          across 4 variants
+                                                                    is the FEATURE
+   classify      temperature: undefined         temp: 0            5-mode label pick
+                 → uses provider default 1                          should be
+                                                                    deterministic
+   expand        temperature: undefined         temp: 0            per-type JSON
+                 → uses provider default 1                          schema; structured
+                                                                    output
+   interpret     TEMPERATURE = 0.7  ◄── only    temp: 0.7          "creative but
+                 file with explicit setting     (unchanged)         coherent" for
+                                                                    markdown reflection
+
+   fix: four edits (one constant + one ...args spread per branch
+   in each chain). no schema change, no migration, no contract change.
+```
+
+interpret is the only chain that's already at the intended setting; the other four are silently riding the default.
+
 ### What the codebase doesn't use
 
 `top_p` (nucleus sampling — keep only the smallest set of tokens whose cumulative probability hits p) and `top_k` (keep only the top k tokens) are both available on both providers and both omitted in every chain. The defaults — typically `top_p=1` (no nucleus filter) on OpenAI, no top-p/top-k on Anthropic by default — are what you get. Practical consequence: every chain runs with full vocabulary access, modulated only by the default temperature. For a solo single-user app this is fine; production systems serving thousands of users typically combine `temp=0.7 + top_p=0.9` to control variance without locking the model entirely.
+
+The three sampling dials and where each one fits:
+
+```
+   dial        what it does                     loopd uses    when to add
+   ──────────  ──────────────────────────       ──────────    ──────────────────
+   temperature divides logits before softmax;   yes (one      always — every
+               higher = more randomness         chain;        chain should set
+                                                others use    this explicitly
+                                                default)
+   top_p        keep smallest set of tokens     no             when temp > 0.5 and
+   (nucleus    whose cumulative probability                    you want to filter
+   sampling)   reaches p (typically 0.9)                       out the long tail
+                                                                of unlikely tokens
+   top_k        keep only the top-k tokens by   no             when you want a
+                probability (typically 40)                      hard cap on the
+                                                                pool — less common
+                                                                than top_p
+
+   for solo scale + four small chains, just setting temperature
+   per chain is enough. top_p and top_k are tunings to reach for
+   when temperature alone doesn't control variance the way you want.
+```
+
+Temperature is the one dial worth setting in every chain; the other two are reach-for-when-you-need-them.
 
 ### Move 2.5 — Current state vs intended
 
 **Now (Phase A):** four of five chains run at provider default temperature (=1). One (`interpret`) sets `temp=0.7`. The classifier, which arguably should be `temp=0` for deterministic 5-mode output, currently is not.
 
 **Later:** the right shape is `temp=0` on the classifier (deterministic 5-mode pick), `temp=0` on the structured summary (JSON validity), `temp=0.7` on captions (tonal variance is the feature), `temp=0.7` on interpret (already set). The cost of the migration: four new constants and four edits — `client.messages.create({ ..., temperature: 0 })` and `body: { ..., temperature: 0 }` in both branches of each chain. No schema change, no migration, no contract change. The fact that this hasn't been done yet is a real bug-shaped gap, not a stylistic one.
+
+Phase A (now) vs intended-state, side by side:
+
+```
+            Phase A (today)                          Intended
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ summarize      temp = 1 (default)     │    │ summarize      temp = 0  (new)         │
+   │                non-deterministic       │    │                deterministic JSON      │
+   │                                        │    │                                       │
+   │ caption         temp = 1 (default)     │    │ caption         temp = 0.7  (new)      │
+   │                non-deterministic        │    │                tonal variance is      │
+   │                                        │    │                the feature             │
+   │                                        │    │                                       │
+   │ classify        temp = 1 (default)     │    │ classify        temp = 0  (new)        │
+   │                same input, different    │    │                deterministic 5-mode    │
+   │                label across runs        │    │                pick                   │
+   │                                        │    │                                       │
+   │ expand          temp = 1 (default)     │    │ expand          temp = 0  (new)        │
+   │                JSON-shape drift          │    │                deterministic per-     │
+   │                                        │    │                type schema             │
+   │                                        │    │                                       │
+   │ interpret       TEMPERATURE = 0.7  ✓   │    │ interpret       TEMPERATURE = 0.7  ✓   │  unchanged
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+
+   migration cost:
+     4 chains × 2 branches × ~2 lines  =  ~16 LOC total
+     no schema change, no migration, no contract change.
+```
+
+A real bug-shaped gap, not a stylistic one — the fix is contained to four files.
 
 This is what people mean by "sampling is half the function." The model weights are what most of the engineering effort goes into; the sampling parameters are what most of the production tuning goes into. A model at the wrong temperature is the same model giving you the wrong UX. The full picture is below.
 
@@ -412,3 +570,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-counter-radio + radio-dial analogies with the OpenAI Playground temperature slider and Anthropic Workbench).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3 — OpenAI Playground + Anthropic Workbench are vendor-provided developer surfaces, acceptable). Added Move 1 mnemonic diagram (model + sampler split with three temp settings) + 4 Move 2 sub-section diagrams: same-prompt-three-temperatures token-distribution walked, current-vs-intended temperature per chain, three-sampling-dials comparison table, Phase A vs intended side-by-side. Total: 5 new diagrams.

@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open a GitHub repo with a `CODEOWNERS` file plus branch protection that says "all changes require code review" — then look at `.github/dependabot.yml` and notice the exception: dependabot PRs auto-merge after CI green, no human review required. The rule survives because the exception is *named, bounded, and visible* — anyone reading the merge policy sees both. The rule doesn't survive if a second auto-merge path appears, and a third, each undocumented, because at that point the rule is just "sometimes through review." Same shape as a React app where most state lives in one Redux store *except* form-input state which lives in `useState`, and the architecture doc names that exception explicitly.
+You've got a TypeScript codebase with `strict: true` and an ESLint rule that bans `any`. One file — `src/legacy-bridge.ts` — has a single `as any` cast on a single line, with a `// eslint-disable-next-line @typescript-eslint/no-explicit-any` comment above it plus a paragraph explaining why: a third-party library's types are wrong, the workaround is contained, the typed wrapper alternative would be 200 lines. The rule survives because the exception is *named, bounded, and visible* — anyone reading the file sees both the cast and the reason. The rule doesn't survive if a second `as any` slips into another file undocumented, and a third, because at that point the rule is just "sometimes typed."
 
 The question that named-exception pattern answers is one every architecture with an invariant eventually has to answer: there will be one or two cases that don't fit the rule. Do you weaken the rule until it accommodates everything (no rule), or do you keep the rule and document each exception in the same place the rule lives? The answer is a *named carve-out*: keep the principle, enumerate the exception, scope it to one named function, and cap the budget at one.
 
@@ -30,29 +28,173 @@ With the carve-out named and budgeted at one:
 - Principle 11 remains "prose canonical with exactly one named exception"; the contract survives
 - The 54 lines of `toggleThreadTouchToday` stay the only place in the codebase where the invariant doesn't hold, documented next to the principle in `docs/spec.md`
 
-The carve-out is the dependabot auto-merge clause in `CODEOWNERS` — named alongside the main rule, scoped to one path, capped at one exception.
+The carve-out is the one `as any` cast with a comment explaining why — named alongside the main rule, scoped to one file, capped at one exception.
 
 ---
 
 ## How it works
 
-A GitHub repo with one canonical merge path plus one documented exception. Every change goes through PR review by default; the dependabot auto-merge is the named exception, documented in `.github/dependabot.yml` and visible alongside the main rule. The rule "everyone goes through PR review" is preserved precisely because the exception is named, bounded, and visible. If you've ever shipped a feature flag rollout where the default is "off" but a few user IDs get "always on," the named-exception pattern is the same shape — and the discipline is enforcing that exactly one exception lives in the budget.
+A TypeScript codebase with `strict: true` plus one annotated `// @ts-expect-error` line. Every value flows through the type system by default; the one annotated line is the documented escape hatch, visible in PRs, scoped to one expression. The rule "everything is typed" survives precisely because the exception is named, bounded, and visible. If you've ever shipped a feature flag rollout where the default is "off" but a few user IDs get "always on," the named-exception pattern is the same shape — and the discipline is enforcing that exactly one exception lives in the budget.
+
+The rule + carve-out shape in one picture:
+
+```
+   Rule (Principle 11):
+   every thread_mentions row points back at prose
+   (entry_id IS NOT NULL  OR  todo_id IS NOT NULL)
+                       │
+                       ▼
+   exactly ONE named exception in the whole codebase:
+   ┌────────────────────────────────────────────────────┐
+   │ toggleThreadTouchToday()                           │
+   │   54-line file, one function                       │
+   │   writes thread_mentions row with                  │
+   │     entry_id = NULL                                │  ◄── deviation
+   │     todo_id  = NULL                                │  ◄── deviation
+   │   documented in docs/spec.md Principle 11          │
+   │   budget = 1 (capped)                              │
+   └────────────────────────────────────────────────────┘
+                       │
+                       ▼
+   downstream readers (computeStaleness, activity strip)
+   treat both shapes identically → math composes uniformly
+```
+
+One rule, one exception, one named function — and a published budget. The four sub-sections below trace each: the rule, the deviation's mechanics, why the downstream math stays uniform, and how the budget keeps the rule alive.
 
 ### The rule the deviation violates
 
 Every prose-derived feature in the codebase has the same shape: a marker in `entries.text` (`[]`, `#tag`, `** food N kcal`) gets scanned out and a derived row is written to a typed table (`todo_meta`, `thread_mentions`, `nutrition`). The invariant — Principle 11 in `docs/spec.md` — is that every `thread_mentions` row's `entry_id` or `todo_id` points back at the prose that produced it. If you're coming from frontend, this is the same invariant a typed Redux store has: every state slice has a typed action that produced it, and you can trace any value back to the dispatch that wrote it. Concrete consequence: if you query `SELECT thread_id, count(*) FROM thread_mentions GROUP BY thread_id` and want to know *why* thread X has 7 mentions, the invariant means you can join back to `entries.id` or `todos_json` and see the 7 prose lines that produced them. Boundary: the invariant assumes every gesture that affects thread state has a prose representation to attach to.
 
+The invariant in code form:
+
+```
+   for every row r in thread_mentions:
+     r.entry_id IS NOT NULL  OR  r.todo_id IS NOT NULL
+
+   (same for nutrition, todo_meta)
+
+   prose source for #loopd in entries.text line 7
+                       │
+                       ▼  scanThreads / parseTags scan
+                       ▼
+   thread_mentions row:
+   ┌──────────────┬─────────────┬──────────┬────────────┬─────────────┐
+   │ thread_id    │ entry_id    │ todo_id  │ source_line│ tag_text     │
+   ├──────────────┼─────────────┼──────────┼────────────┼─────────────┤
+   │ loopd_id     │ e-1         │ NULL     │ 7          │ "loopd"      │
+   └──────────────┴─────────────┴──────────┴────────────┴─────────────┘
+                  └─────┬─────┘             └────┬─────┘
+                  back-pointer to prose          line in entries.text
+```
+
+Every row's `entry_id` joins back to a real line in `entries.text` — that's what "prose canonical" means at the row level.
+
 ### The deviation — `toggleThreadTouchToday`
 
 There's exactly one gesture that doesn't fit: the user taps a thread chip on the dashboard's daily-schedule grid for "today" — a soft commitment to the thread without typing anything. `toggleThreadTouchToday` writes a `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`, `source_line = 0`, `tag_text = ''`. The 54-line file is the entire exception — there's nothing else in the codebase that produces a NULL-keyed `thread_mentions` row. Think of it like a TypeScript `as any` cast that lives in one named file with a comment explaining why — the type system survives because the escape is in one place, the reviewer can see it, and the cast itself is documented in `docs/spec.md` Principle 11 alongside the rule it deviates from. Concrete consequence: tap the dashboard chip for thread `loopd` at 3pm. `toggleThreadTouchToday(loopd_id)` inserts `(thread_id=loopd_id, entry_id=NULL, todo_id=NULL, entry_date='2026-05-10', source_line=0, tag_text='')`. The 14-day activity strip for `loopd` now shows today as active. Tap the chip again — the row gets `deleted_at` stamped, the activity strip's today cell goes inactive. Boundary: the deviation is allowed because the soft commitment has no natural prose representation — you can't synthesize a prose line without polluting the user's journal with content they didn't type.
+
+Walking the tap gesture to row insert:
+
+```
+   user taps dashboard chip for #loopd at 15:00
+              │
+              ▼
+   toggleThreadTouchToday(loopd_id)
+              │
+              ▼
+   INSERT INTO thread_mentions (
+     thread_id   = loopd_id,
+     entry_id    = NULL,        ◄── DEVIATION (no prose source)
+     todo_id     = NULL,        ◄── DEVIATION (no prose source)
+     source_line = 0,
+     tag_text    = '',
+     entry_date  = '2026-05-10'
+   )
+              │
+              ▼
+   14-day activity strip for #loopd now shows today active
+              │
+              ▼  tap again
+              │
+   UPDATE thread_mentions SET deleted_at = now()
+   WHERE thread_id = loopd_id AND entry_id IS NULL
+     AND entry_date = '2026-05-10'
+              │
+              ▼
+   activity strip's today cell returns to inactive
+```
+
+54 lines, one function, one toggle behaviour. The cast-with-comment shape: the rule survives because the escape is contained.
 
 ### Why the staleness math still composes uniformly
 
 Downstream readers — `computeStaleness`, `getThreadCards`, the 14-day activity strip — all read `thread_mentions` *the same way regardless of source*. The staleness label uses any non-deleted mention regardless of `entry_id`/`todo_id`; the 14-day strip queries the NULL-keyed rows specifically for the "touch" cell shape but treats them as identical to prose-derived mentions for the activity count. If you've worked with React Context, this is the same shape as a context value that's typed identically whether it came from a provider or a default — the consumer doesn't care about the origin. Concrete consequence: if a thread has 3 prose mentions and 2 manual touches in the last 14 days, `computeStaleness` returns "5 mentions, last 0 days ago" — the math is uniform. The activity strip shows 5 active cells, regardless of which were prose and which were touches. Boundary: the uniformity breaks the moment a reader wants to distinguish "prose-derived" from "touch-only" — e.g. the journal export, which by design *excludes* touch rows because they have no prose to print.
 
+For thread #loopd over the last 14 days — what readers see vs what export filters:
+
+```
+   thread_mentions rows (after 14 days of usage):
+   ┌────────────┬──────────┬───────────┬──────────┐
+   │ entry_id   │ todo_id  │ tag_text  │ source   │
+   ├────────────┼──────────┼───────────┼──────────┤
+   │ e-3        │ NULL     │ "loopd"   │ prose    │
+   │ e-7        │ NULL     │ "loopd"   │ prose    │
+   │ NULL       │ NULL     │ ""        │ touch    │ ◄── deviation
+   │ NULL       │ NULL     │ ""        │ touch    │ ◄── deviation
+   │ e-12       │ NULL     │ "loopd"   │ prose    │
+   └────────────┴──────────┴───────────┴──────────┘
+              │
+              ▼  computeStaleness / activity strip read ALL non-deleted rows
+              │  (no filter on entry_id / todo_id)
+              ▼
+   result: "5 mentions, last 0 days ago"
+           activity strip shows 5 active cells
+
+   Journal export (the one consumer that DOES distinguish):
+   ──────────────────────────────────────────────────────
+     SELECT … WHERE entry_id IS NOT NULL OR todo_id IS NOT NULL
+     touch rows excluded — no prose to print
+```
+
+Same shape, two consumers: most ignore the deviation; the one that has to distinguish it filters explicitly.
+
 ### The exception budget — one, capped
 
 The carve-out is allowed because it's the *only* one. The discipline isn't refusing to add exceptions; it's making each exception named, documented in `docs/spec.md` Principle 11, scoped to one function, and capped at a budget. Adding a second deviation (say, a button that writes to `nutrition` without prose) would change the rule's shape from "prose canonical with one named exception" to "prose canonical with N exceptions" — at which point the rule is just "sometimes canonical" and the contract dissolves. If you're coming from frontend, think of it like having exactly one `useEffect` with an empty dep array per file — the rule's spirit survives one carve-out but not a forest of them. Concrete consequence: if a future PR wants to add a second NULL-keyed write site, the reviewer's job is to ask "can the soft commitment be expressed as prose instead?" before the budget gets spent. Boundary: a second deviation forces a rewrite of Principle 11 itself — at that point the architecture, not the rule, has shifted.
+
+How the budget decision flow plays out on a PR proposing a second deviation:
+
+```
+   PR proposes: "quick add nutrition" button writes to nutrition
+                directly, no prose involved
+                       │
+                       ▼
+   reviewer asks:
+   ┌──────────────────────────────────────────────────────────┐
+   │ "Can the soft commitment be expressed as prose instead?"  │
+   └──────────────────────────────────────────────────────────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+            YES                 NO
+              │                 │
+              ▼                 ▼
+   write a marker            ESCALATE
+   into prose                Principle 11 itself
+   ('** food 200 kcal'),     needs revision;
+   scanner picks it up,      the architecture has
+   derived row is            shifted — this is no
+   reachable via the         longer a "carve-out"
+   normal path; no            decision, it's a rule
+   deviation needed          rewrite
+              │
+              ▼
+   Principle 11 stays:
+   "prose canonical with ONE named exception"
+```
+
+Without the budget, the rule's shape becomes "prose canonical with N exceptions" — at which point the rule is just "sometimes canonical" and the contract dissolves.
 
 This is what people mean by "principled exception." Every architecture rule will need a carve-out eventually; the discipline isn't refusing to carve, it's making the carve-out named, documented, bounded, and visible. One named exception plus a published rule beats five undocumented compromises every time — and the rule survives precisely because its limits are on the page next to it. The full picture is below.
 
@@ -388,3 +530,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced house-with-front-door-and-service-entrance analogies with GitHub CODEOWNERS + dependabot auto-merge as a named documented exception to the all-PRs-require-review rule). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from whole-product references (GitHub CODEOWNERS + dependabot auto-merge) to level-1 TypeScript primitives (`as any` cast with `// eslint-disable-next-line` comment in one named file; `// @ts-expect-error` line as the named escape hatch under `strict: true`). Same swap on Why care Move 5 summary. Added Move 1 mnemonic diagram (rule + one-named-exception shape) + 4 Move 2 sub-section diagrams: invariant in code+row form, tap-to-insert mechanics, prose-vs-touch row table + export filter, budget decision flow on PR proposing a second deviation. Total: 5 new diagrams.

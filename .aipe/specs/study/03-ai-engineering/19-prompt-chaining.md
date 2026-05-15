@@ -29,7 +29,7 @@ With prompt chaining:
 - Mood handed from step 1 to step 2 via `buildCaptionInput` — step 2 doesn't re-derive it
 - Caption broken? Check `caption.ts` only. Structured data wrong? Check `prompt.ts` only.
 
-Two stations, one dish.
+Two functions, one final output — each stage focused, the seam between them named.
 
 ---
 
@@ -37,21 +37,176 @@ Two stations, one dish.
 
 Next.js's middleware → route-handler chain runs in two stages. Middleware shapes the request — parses cookies, attaches `req.user`, validates origin — and passes a transformed object forward. The route handler runs second on the already-shaped input and writes the response. Each stage has one job; each request flows through both. Two operations welded together in a single big handler (auth AND business logic) split apart into two functions with one job each. Same shape as a GitHub Actions `needs:` graph or a tRPC procedure where `input(zodSchema)` is the parse stage and the handler is the business stage.
 
+The two-stage chain in one picture:
+
+```
+   caller (e.g. editor screen for date X)
+              │
+              ▼
+   ┌────────────────────────────────────────────────────┐
+   │ summarize(date)                  (stage 1)          │
+   │   system prompt: 23 lines —                         │
+   │     "produce structured AISummary JSON"             │
+   │   user msg: entries + clips + habits                │
+   │   call LLM → JSON → validate                        │
+   │   returns: { mood, clipOrder, textOverlays, ... }   │
+   └──────────────┬─────────────────────────────────────┘
+                  │
+                  ▼  buildCaptionInput(entries, summary.mood, …)
+                  │  (the seam — step 2 inherits mood from step 1)
+                  ▼
+   ┌────────────────────────────────────────────────────┐
+   │ generateCaption(captionInput)    (stage 2)          │
+   │   system prompt: 77 lines —                         │
+   │     "produce 4 tonal voice variants"                │
+   │   user msg: rawLog + mood + recentCaptions          │
+   │   call LLM → JSON → validate                        │
+   │   returns: { clean, smoother, reflective, punchy }  │
+   └──────────────┬─────────────────────────────────────┘
+                  │
+                  ▼
+   final write: upsertAISummary(date, {
+     ...summary,                       // from stage 1
+     variants: caption.variants        // from stage 2
+   })
+```
+
+The five sub-sections below trace each stage, the hand-off, the rationale for two calls vs one, and how the chain evolved.
+
 ### Step 1 — `summarize()` produces structured editor data
 
 The first chain is `summarize(date)` in `summarize.ts` L42–L105. It reads the day's entries from SQLite, builds a prompt that asks for a structured `AISummary` object (headline, summary, mood, clipOrder, clipTrims, textOverlays, filterPreset), calls Claude or OpenAI, parses the JSON, and validates against the typed contract. If you're coming from frontend, this is the same shape as the first step of a multi-step form — you collect the structured data first, before you ask the user to write any free-text fields. Practical consequence: the editor needs `clipOrder` and `mood` to start composing the vlog video; those fields exist after this call regardless of whether step 2 succeeds. Boundary: this call is the load-bearing one — if it fails, the chain stops. Step 2 is best-effort.
+
+Stage 1's input → output shape:
+
+```
+   summarize(date)
+      │
+      ▼  buildPrompt(entries, clips, habits, date)
+   ┌──────────────────────────────────────────┐
+   │ input: entries[date] (prose, drops),      │
+   │        clips[] (video metadata),          │
+   │        habits[] (the user's habits),      │
+   │        date                                │
+   └──────────────────┬───────────────────────┘
+                      │
+                      ▼  LLM call (one round-trip)
+                      ▼  validateSummary
+   ┌──────────────────────────────────────────┐
+   │ output (AISummary):                       │
+   │   headline: string                         │
+   │   summary: string                          │
+   │   mood: 'flat' | 'ok' | 'good' | 'great'   │  ◄── load-bearing
+   │         | 'fired'                          │     for stage 2
+   │   clipOrder: string[]                      │
+   │   clipTrims: {...}                         │
+   │   textOverlays: {...}[]                    │
+   │   filterPreset: string                     │
+   └──────────────────────────────────────────┘
+```
+
+Stage 1 is the load-bearing call — if it fails, the chain stops; stage 2 doesn't run.
 
 ### Step 2 — `generateCaption()` produces 4 tonal variants
 
 The second chain is `generateCaption(captionInput)` in `caption.ts` L201–L223. It runs *inside* `summarize()` at L87–L96 — after step 1's `summary` object has been validated. It takes the day's raw log + the mood from step 1 + the last 5 captions for rotation, calls the LLM with a different system prompt (the 4-voice prompt at `caption.ts` L24–L100), and returns four variants + a detected theme. If you're coming from frontend, this is the shape of a follow-up RPC that runs once the user has confirmed the form data — a second-stage call shaped by the first stage's output. Practical consequence: the caption call sees what the summary call extracted, so the four variants describe the same day the structured summary describes. Boundary: this call is best-effort; failures don't fail the parent chain. If the caption call throws, the editor falls back to the structured summary's `summary` field as the text overlay.
 
+Stage 2's input → output shape, with the inherited mood:
+
+```
+   generateCaption(captionInput)
+      │
+      ▼  captionInput built by buildCaptionInput
+   ┌──────────────────────────────────────────┐
+   │ input (CaptionInput):                     │
+   │   date                                     │
+   │   rawLog: string[]                         │
+   │   recentCaptions: string[]   ◄── last 5    │
+   │                                  for       │
+   │                                  rotation   │
+   │   mood: 'flat'|'ok'|'good'|  ◄── INHERITED │
+   │         'great'|'fired'           from     │
+   │                                   stage 1   │
+   │   themeHint: null                          │
+   └──────────────────┬───────────────────────┘
+                      │
+                      ▼  LLM call (one round-trip)
+                      ▼  parseAndValidate
+   ┌──────────────────────────────────────────┐
+   │ output (CaptionVariants):                  │
+   │   clean: string                            │
+   │   smoother: string                         │
+   │   reflective: string                       │
+   │   punchy: string                           │
+   │   detectedTheme: string                    │
+   └──────────────────────────────────────────┘
+```
+
+Best-effort by design — if stage 2 fails, the editor falls back to stage 1's `summary` field as the text overlay.
+
 ### The hand-off — what step 2 sees from step 1
 
 The `buildCaptionInput` helper in `summarize.ts` L111–L163 is the seam. It takes `entries` (the same input step 1 saw), `summary.mood` (the output of step 1), and assembles a `CaptionInput` shape: `{ date, rawLog, recentCaptions, mood: moodLabel, themeHint: null }`. The `mood` is the most interesting field — step 2 doesn't re-derive it; it inherits it. Practical consequence: the four caption variants are constrained by the mood step 1 already chose. If step 1 picked `mood='flat'`, step 2 writes flat-feeling captions. The chain consistency is enforced by passing the mood through, not by asking step 2 to re-classify it. Boundary: if step 1 misclassifies mood, step 2 inherits the misclassification.
 
+The seam — what crosses from stage 1 to stage 2:
+
+```
+   buildCaptionInput(entries, summary, getRecentCaptions, today)
+              │
+              ▼  (in summarize.ts L111–L163)
+   ┌──────────────────────────────────────────────────────┐
+   │ takes:                                                 │
+   │   entries           ◄── same input stage 1 saw         │
+   │   summary.mood      ◄── stage 1 OUTPUT (the inherit)   │
+   │   recentCaptions    ◄── 5 last days from cache        │
+   │   today             ◄── date                            │
+   │                                                        │
+   │ assembles CaptionInput:                                │
+   │   {                                                    │
+   │     date,                                              │
+   │     rawLog: split(entries.text),                       │
+   │     recentCaptions,                                    │
+   │     mood: moodLabel,    ◄── INHERITED, not re-derived   │
+   │     themeHint: null                                    │
+   │   }                                                    │
+   └──────────────────────────────────────────────────────┘
+              │
+              ▼  passes CaptionInput to stage 2
+              ▼
+   stage 2 doesn't ask the LLM "what's the mood here?"
+   stage 2 trusts stage 1's answer.
+   chain consistency comes from passing through, not re-classifying.
+```
+
+The seam is one function in TypeScript — that's what makes the chain debuggable.
+
 ### Why two calls instead of one — the actual win
 
 A single prompt asking for both structured fields AND four tonal variants would carry a system prompt 150+ lines long. Worse, the model's attention would split: the structured JSON shape and the four variant voices compete for the same context budget. The two-chain split lets each call be focused: step 1's system prompt (`prompt.ts` L4–L27) is 23 lines and only talks about JSON shape + tone rules; step 2's system prompt (`caption.ts` L24–L100) is 77 lines and only talks about the four variant voices + forbidden patterns + rotation. If you're coming from frontend, this is the same shape as a single big component vs two focused components — `Form` that does layout, validation, submission, AND rendering becomes `<FormProvider>` + `<FormFields>` + `<FormSubmit>`, each with one responsibility. Practical consequence: each chain is independently debuggable. If captions are bad, you check `caption.ts`; if structured data is wrong, you check `prompt.ts`. The blast radius is one chain.
+
+One mega-prompt vs two focused prompts:
+
+```
+       Mega-prompt (NOT loopd)                  Two focused prompts (loopd)
+   ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
+   │ system: 150+ lines                 │    │ summarize.ts: 23-line system     │
+   │   - JSON shape rules                │    │   prompt: JSON shape + tone      │
+   │   - four-voice descriptions         │    │   rules                          │
+   │   - tone rules                      │    │                                  │
+   │   - forbidden patterns              │    │ caption.ts: 77-line system       │
+   │   - rotation                        │    │   prompt: four-voice descriptions│
+   │                                    │    │   + forbidden patterns + rotation │
+   │ output: structured fields AND       │    │                                  │
+   │   four variants in ONE response     │    │ each chain debuggable on its own │
+   │                                    │    │                                  │
+   │ model's attention splits across    │    │ caption broken? check caption.ts  │
+   │ competing constraints              │    │ structure wrong? check prompt.ts  │
+   │ structured fields drift chatty     │    │                                  │
+   │ captions drift bullet-pointy        │    │ blast radius = ONE chain         │
+   └──────────────────────────────────┘    └──────────────────────────────────┘
+```
+
+Two focused prompts each ~half the size; the model's attention isn't pulled across competing constraints.
 
 ### Move 2.5 — How the chain evolved
 
@@ -60,6 +215,37 @@ A single prompt asking for both structured fields AND four tonal variants would 
 **Phase B (2026-05-08 onward):** the caption became four tonal variants and the prompt for "four tonal variants" got long enough that bundling it with the structured editor prompt would have exceeded what fits cleanly in one system prompt. The chain split into two calls — summarise first, caption second.
 
 **What didn't have to change:** the storage layer. Both `caption` (legacy single string) and `variants` (the new 4-variant object) live on the same `summary_json` blob in `ai_summaries`. The two-stage chain produces the same shape the single-stage chain produced; the validator (`validate.ts:validateSummary`) round-trips both old and new shapes. The architectural payoff: splitting one chain into two didn't require a schema change, didn't require a migration, didn't change any caller. The change was contained to `summarize.ts` and `caption.ts`.
+
+Phase A vs Phase B side by side:
+
+```
+            Phase A (pre-2026-05-08)              Phase B (2026-05-08 onward)
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ summarize() is ONE LLM call           │    │ summarize() is TWO LLM calls          │
+   │   → structured fields + caption       │    │   stage 1: structured fields          │
+   │     (single string)                   │    │   stage 2: 4 tonal variants           │
+   │                                       │    │                                       │
+   │ caption: string                       │    │ variants: {                           │
+   │                                       │    │   clean, smoother,                    │
+   │                                       │    │   reflective, punchy                  │
+   │                                       │    │ }                                     │
+   │                                       │    │                                       │
+   │ STORAGE: ai_summaries.summary_json    │    │ STORAGE: ai_summaries.summary_json    │  unchanged
+   │   carries the single caption string   │    │   carries both caption AND variants    │
+   │                                       │    │   (validator round-trips both shapes) │
+   │                                       │    │                                       │
+   │ schema: no migration needed           │    │ schema: no migration needed           │
+   │                                       │    │                                       │
+   │ callers: unchanged                    │    │ callers: unchanged                    │
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+              │                                          │
+              └─────────────────┬────────────────────────┘
+                                ▼
+              the storage layer didn't have to change between phases
+              splitting one chain into two = contained refactor
+```
+
+The architectural payoff: splitting a chain doesn't ripple beyond the chain files themselves.
 
 This is what people mean by "small focused stages beat big general-purpose stages." Each stage is something the model is good at when asked nothing else; chaining them is something your code is good at. Separation of concerns at the LLM layer, the same way it works at every other layer. The full picture is below.
 
@@ -461,3 +647,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-station-kitchen analogies with the Next.js middleware → route-handler flow, GitHub Actions job dependency graph, tRPC input parsing).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: kept Why care + How it works Move 1 anchors on Next.js middleware / GitHub Actions / tRPC (level-3 engineering surfaces, acceptable per v1.32.0). Swapped Why care Move 5 from "Two stations, one dish" physical-world metaphor to "Two functions, one final output." Added Move 1 mnemonic diagram (two-stage chain from caller through buildCaptionInput seam to final write) + 5 Move 2 sub-section diagrams: stage 1 input/output shape, stage 2 input/output shape with inherited mood, buildCaptionInput seam internals, mega-prompt-vs-two-focused-prompts comparison, Phase A vs Phase B with storage-layer-unchanged note. Total: 6 new diagrams.

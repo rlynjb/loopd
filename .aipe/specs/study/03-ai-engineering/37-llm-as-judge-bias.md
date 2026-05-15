@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open Vercel's A/B test framework and look at how it controls for position bias. If variant A is always shown first and variant B second, the click-through rate on A overstates A's real lift by 5–15% — users default to the first option presented. Vercel's framework randomises variant order per session, then averages results across the two orderings. GitHub Copilot Chat's "rate this completion" UI faces the same trap and addresses it the same way. PostHog's experiment system ships position-randomisation by default for the same reason. None of these biases are corrupt — they're systematic preferences that leak into ratings whenever the rater (human or LLM) sees options in a fixed order, and the production fix is always order-swap-plus-averaging.
+You're running an A/B test in your app where users see two variants of a button label, and you measure which gets more clicks. If variant A is always rendered first and B second, the click-through rate on A overstates A's real lift by 5–15% — users default to the first option, regardless of content. The fix is straightforward: shuffle the order per session and average results across both orderings. Same shape as any rating system where the rater (human or LLM) sees options in a fixed order — a systematic preference leaks into the ratings, and the production fix is always order-swap-plus-averaging.
 
 The implicit question is "what systematic preferences does the judging instrument bring that aren't actually about quality?" LLM-as-judge biases are the answer: position bias (favours whichever output appears first, 5–15%), verbosity bias (favours longer outputs even when filler, 10–20%), self-preference bias (favours outputs from its own model family, 5–10%). Production eval pipelines name them and apply controls; lazy pipelines treat the judge as ground truth and ship the bias as a quality regression.
 
@@ -37,6 +35,38 @@ The judge isn't a person — it's a measurement instrument with its own preferen
 
 A judge LLM, given `(input, output, rubric)`, returns a score. The score is not "the quality" — it's "the judge's score of the quality." The two correlate but differ in three known directions.
 
+The three biases and their controls in one picture:
+
+```
+   raw judge score              after controls applied
+   ─────────────────            ─────────────────────────────────
+                                
+   judge(A, B) = "A wins"        judge(A, B) twice with swapped
+                                  positions → if A wins both times,
+                                  real preference; if A wins only
+                                  once, position bias → score as tie
+                                                          [bias 1]
+                                
+   judge(A 200w) >               rubric explicitly includes
+   judge(B 80w)                   "concise" as a criterion → judge
+   on same content                no longer rewards filler
+                                                          [bias 2]
+                                
+   Sonnet judges Sonnet           judge with a DIFFERENT model
+   captions → +5-10%               family (GPT-4o judges Sonnet-
+                                  generated captions); cross-
+                                  provider judging is one config
+                                  flip via getProvider() abstraction
+                                                          [bias 3]
+                                
+   ┌─────────────────────────┐  ┌──────────────────────────────┐
+   │ "12% quality lift"       │  │ "6% real lift + 6% bias"      │
+   │ shipped as truth          │  │ that the controls separated   │
+   └─────────────────────────┘  └──────────────────────────────┘
+```
+
+The five sub-sections below trace position bias, verbosity bias, self-preference bias, other less common biases, and where bias matters most.
+
 ### Bias 1: Position bias
 
 When the judge sees two outputs side-by-side ("which is better, A or B?"), it systematically prefers whichever is shown *first*. Studies have measured this preference at 5-15% across different judge models.
@@ -44,6 +74,37 @@ When the judge sees two outputs side-by-side ("which is better, A or B?"), it sy
 If you're coming from frontend, this is the same shape as A/B test results being biased by which option appears on top of the page. The model has a "default to the first thing" prior.
 
 **Control:** run every pairwise comparison twice with positions swapped. Average the two scores. If A wins position-1 and loses position-2, treat as a tie — the apparent preference was position bias, not quality.
+
+The position-swap control walked through one pairwise:
+
+```
+   pairwise: caption variant A vs caption variant B for the same entry
+                       │
+                       ▼  run 1
+   judge.evaluate({ first: A, second: B })  → A wins
+                       │
+                       ▼  run 2 (positions swapped)
+   judge.evaluate({ first: B, second: A })  → A still wins
+                       │
+                       ▼
+   verdict: A wins (consistent across position swap) ✓
+
+   alternative scenarios:
+   ┌──────────────────────────────────────────────────────┐
+   │ run 1: A wins (first slot)                            │
+   │ run 2: B wins (A now in second slot)                  │
+   │ → BIAS DETECTED — score as tie                         │
+   │                                                        │
+   │ run 1: A wins                                          │
+   │ run 2: A wins (cross-position variance ≤ 5%)           │
+   │ → real preference, ship the lift                       │
+   └──────────────────────────────────────────────────────┘
+
+   cost: 2× judge calls per pairwise; ~$1-2 per full eval
+   instead of $0.50-1 — worth it.
+```
+
+The position-swap control is what turns the judge from "voter" into "measurement."
 
 ### Bias 2: Verbosity bias
 
@@ -53,6 +114,36 @@ Judges systematically prefer longer outputs. A 200-word response with the same c
 
 For loopd: caption variants are deliberately short (one line each). Without a concise criterion, the judge might rate longer captions as "more thorough" — wrong direction for caption.
 
+The rubric-criterion control:
+
+```
+   bare rubric (verbosity bias present):
+   ──────────────────────────────────────
+   rubric: ["thorough", "specific to the entry", "non-repetitive"]
+   
+   200-word caption vs 80-word same-content caption:
+     judge tends to score the 200-word higher on
+     "thorough" and "specific" — even when those extra
+     120 words are filler
+   
+   loopd's deliberately-short captions get downscored
+
+   ──────────────────────────────────────
+   rubric with "concise" added:
+   ──────────────────────────────────────
+   rubric: ["thorough", "specific to the entry",
+            "non-repetitive", "concise",  ◄── new criterion
+            "fits the mood",
+            "avoids forbidden patterns"]
+   
+   judge now scores brevity as positive; verbosity
+   bias self-corrects against the explicit criterion
+   
+   loopd's short captions score correctly
+```
+
+Add "concise" as an explicit rubric criterion; the bias self-corrects against the new criterion.
+
 ### Bias 3: Self-preference bias
 
 A judge tends to prefer outputs generated by models in its own family — Sonnet judging Sonnet output rates it ~5-10% higher than identical-quality output from GPT-4. The bias is documented across model families.
@@ -61,15 +152,93 @@ A judge tends to prefer outputs generated by models in its own family — Sonnet
 
 For loopd: the provider-abstracted chain layer makes cross-provider judging cheap to implement.
 
+The cross-provider judging shape:
+
+```
+   generator side                            judge side
+   ───────────────                          ──────────────
+   caption.ts                                rubricJudge.ts
+     getProvider() → 'claude'                  getProvider() → 'openai'
+     await client.messages.create({…})         await openai.fetch(…)
+     model: 'claude-sonnet-4-6'                model: 'gpt-4o'
+                       │                                       ▲
+                       │  output (caption variants)             │
+                       └───────────────────────────────────────┘
+                                       │
+                                       ▼
+                         judge scores Sonnet's outputs
+                         self-preference bias eliminated
+                         (judge ≠ generator family)
+
+   one config flip via the existing provider abstraction:
+   captureMode flips generator + judge independently.
+```
+
+The provider abstraction was built for cost/latency reasons; cross-provider judging is free.
+
 ### Other biases worth knowing
 
 - **Refusal bias** — judges sometimes refuse to score outputs that contain edge content (rare in journaling but worth knowing for product apps).
 - **Anchoring bias** — judge's score on output N can be anchored by output N-1 in batched evals.
 - **Sycophancy** — when the input prompt contains "this is a great output, please score it," the judge tends to agree. Don't write rubrics that lead the judge.
 
+The less-common biases and how to defend against each:
+
+```
+   bias                       trigger                          defense
+   ────────────────────       ────────────────────────         ───────────────────
+   refusal bias               edge content (violence,           use a model with
+                              self-harm, etc.) makes the         lower refusal
+                              judge refuse to score              tuning; or human
+                                                                  fallback for
+                                                                  refused items
+   anchoring bias             batched evals — score on output    randomise the
+                              N is influenced by score on        order of items
+                              N-1 (recent context anchors        within a batch
+                              the next decision)
+   sycophancy                 rubric prompt says "this is a     write neutral
+                              great output, please score it"     rubrics: "score
+                                                                  this output against
+                                                                  the criteria"
+```
+
+These are the second-tier biases — controls are still cheap, but they don't move scores as much as position / verbosity / self-preference.
+
 ### Where these matter most
 
 The biases multiply in pairwise comparison (position + verbosity + self-preference all act simultaneously). They matter less in rubric scoring of a single output (no position bias because there's nothing to compare to). They matter least in exact-match scoring of discrete labels (no judge at all).
+
+Eval-method exposure to bias:
+
+```
+   eval method                bias exposure                 example
+   ────────────────────       ──────────────────────        ─────────────────────
+   exact-match on labels      none — no judge involved      "did the classify chain
+   (classify chain)            (deterministic equality       output match the
+                                check)                       expected type?"
+   
+   rubric scoring on a        verbosity, self-preference     "score this caption
+   single output              (no position bias — only       1-5 on these 5
+   (caption single-output)    one output to look at)         criteria"
+   
+   pairwise comparison        ALL THREE: position +          "compare caption A
+   (caption A vs B)            verbosity + self-preference   vs B for the same
+                              compound                       entry; which is
+                                                              better?"
+                              ◄── apply position swap,
+                                  rubric criteria, and
+                                  cross-provider judging
+   
+   judge picks N-best          all three biases plus         "pick the 3 best
+                              compounding across the         from these 10"
+                              N choices
+
+   prefer the leftmost method that answers your question — if you can
+   write an exact-match check, do; if you can score a single output,
+   do that; reach for pairwise only when nothing else works.
+```
+
+The bias bill grows from left to right; pick the least-biased method that answers your question.
 
 ### This is what people mean by "the eval is not the truth"
 
@@ -340,3 +509,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced piano-competition-one-judge analogy with Vercel A/B test framework position randomization, GitHub Copilot Chat rating UI, PostHog experiment randomization). Why care WC1 was missed by the original triage (only HIW1 was flagged, and HIW1 turned out to be a direct technical opening with no analogy); WC1 was the actual violation.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped Vercel + GitHub Copilot Chat + PostHog (level-5 whole-product anchors) from Why care Move 1; led with an in-app A/B test where the same shuffle-positions-and-average pattern is the level-1 primitive. Kept How it works Move 1 abstract (`judge LLM (input, output, rubric) → score` is already level-1). Added Move 1 mnemonic diagram (three biases + their controls + "12% lift = 6% real + 6% bias") + 5 Move 2 sub-section diagrams: position-swap walked through one pairwise, rubric-criterion bare-vs-with-concise, cross-provider judging shape, less-common-biases controls table, eval-method bias-exposure ranking. Total: 6 new diagrams.

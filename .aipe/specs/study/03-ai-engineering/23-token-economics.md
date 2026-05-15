@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a server handling 5 different endpoints, and your hosting bill at the end of the month is one number — $312. The bill doesn't tell you which endpoint accounts for what; doubling next month becomes a mystery. The fix every backend learns to apply: add per-endpoint metrics (`requests_total`, `avg_response_size`, `p95_latency_ms`) and aggregate by `endpoint_name`. Now the bill has shape: "`/api/search` is 60% of compute; `/api/health` is 0.1%." Same total dollar amount, attributed to handlers. LLM spend is the same problem — one aggregate API bill, five chains underneath, and no idea which one is the freezer with a broken seal.
 
-A small café gets a single utility bill at the end of the month: $312. The owner pays it and shrugs. The next month it's $487 and the owner still doesn't know why — the bill aggregates the espresso machine, the lights, the walk-in freezer, the music speakers, into one number. To find out the freezer's seal failed and is running 24/7, the owner has to walk around with a clamp meter, room by room, and measure. Until those per-circuit numbers exist, every "make the bill smaller" plan is a guess.
-
-The implicit question is where the spend is going, not how much it is. Not a single monthly total, not "feels cheap" intuition — per-chain, per-call, per-user numbers that let you point at the freezer.
+The implicit question is where the spend is going, not how much it is. Not a single monthly total, not "feels cheap" intuition — per-chain, per-call, per-user numbers that let you point at the chain that grew.
 
 **What depends on getting this right:** answering "which of the five chains in `src/services/ai/` accounts for most of the spend, and is the heuristic gate on `classify` actually saving money?" In this codebase nothing currently logs token usage — the planned `ai_call_log` table (referenced by exercise `[B1.2]` in this file and `21-tokenization.md`) would write one row per call with `chain_name`, `input_tokens`, `output_tokens`, `model`, `timestamp`. The Anthropic response's `usage.input_tokens` / `usage.output_tokens` and OpenAI's `prompt_tokens` / `completion_tokens` are already in every response — they just aren't read. Without that table, three cost surprises stay hidden: the cheap-but-frequent chain (classify firing on every new todo when the heuristic skip-rate drops), the chain whose context quietly grew (`expand.ts` shipping ~3 days of entry context), and the chain whose output doubled (output is 5× input per token on Sonnet, so verbose output is the early-warning signal).
 
@@ -27,7 +25,7 @@ With per-chain token logging (planned `ai_call_log`):
 - Aggregate by `chain_name` → "interpret is 60% of spend, summarize is 25%, classify is 5%"
 - Heuristic skip-rate visible; output-token p95 visible; optimisation targets visible
 
-A clamp meter on every circuit, not one monthly bill.
+Per-endpoint metrics, not an aggregate bill — log every call by chain name so the spend has shape.
 
 ---
 
@@ -35,11 +33,66 @@ A clamp meter on every circuit, not one monthly bill.
 
 LLM billing has two prices per model: input tokens (what you send) and output tokens (what comes back). On Claude Sonnet 4.6 the prices are ~$3 per million input tokens and ~$15 per million output tokens — a 5× ratio. On Haiku 4.5 they're ~$0.80 and ~$4 — same ratio, smaller absolute number. The ratio is roughly stable across providers because output is more expensive to generate than input is to process.
 
+The token-cost shape per call:
+
+```
+   one call:    input_tokens × $input_per_M  +  output_tokens × $output_per_M
+
+   Sonnet 4.6:  $3 / M input        $15 / M output  ── 5× ratio
+   Haiku 4.5:   $0.80 / M input     $4 / M output   ── 5× ratio
+   GPT-4o:      $2.50 / M input     $10 / M output  ── 4× ratio
+   GPT-4o-mini: $0.15 / M input     $0.60 / M output ── 4× ratio
+
+   example call: summarize on a 1000-token entry
+     input:  ~3000 tokens (entry + clips + habits + prompt)
+            × $3 / 1M  = $0.009
+     output: ~600 tokens (AISummary JSON)
+            × $15 / 1M = $0.009
+     total:                          $0.018
+
+   output is 5× more expensive per token than input — so long
+   outputs are the bigger lever than long inputs.
+```
+
+The four sub-sections below trace the per-call cost unit, the provider response shape that ships token counts, where cost surprises hide, and the observability-before-optimisation principle.
+
 ### The unit of cost is the call, not the day
 
 Provider dashboards aggregate at the API-key level by day. That's useful for noticing a regression ("yesterday cost 2× normal") but useless for diagnosing *which feature* caused the regression. If you're coming from frontend, this is the same problem as having one big "JS bundle size" number without per-route attribution: you know the answer at the wrong granularity.
 
 The practical consequence: to attribute spend, you log every call with `chain_name`, `input_tokens`, `output_tokens`, `model`, `timestamp`, `user_id` (always 1 today; matters when loopd grows to multi-tenant). The provider responses ship the token counts for free in their `usage` field — you just have to read them and write them to a local table.
+
+The planned `ai_call_log` table shape:
+
+```
+   ai_call_log (planned, exercise [B1.2])
+   ┌──────────┬───────────────┬──────────────┬───────────────┬──────────┬──────────────┐
+   │ id        │ chain_name    │ input_tokens │ output_tokens │ model    │ timestamp     │
+   ├──────────┼───────────────┼──────────────┼───────────────┼──────────┼──────────────┤
+   │ 1         │ summarize     │ 1234         │ 567           │ sonnet-  │ 2026-05-13   │
+   │           │               │              │               │ 4.6      │ T10:14:00    │
+   │ 2         │ classify      │ 47           │ 12            │ haiku-   │ 2026-05-13   │
+   │           │               │              │               │ 4.5      │ T10:14:30    │
+   │ 3         │ caption       │ 1102         │ 423           │ sonnet-  │ 2026-05-13   │
+   │           │               │              │               │ 4.6      │ T10:14:45    │
+   │ ...                                                                                  │
+   └──────────┴───────────────┴──────────────┴───────────────┴──────────┴──────────────┘
+
+   one row per call, ~6 columns; ~100 bytes per row.
+   ~30 calls/day at solo scale = ~1 MB/year of log data.
+   storage cost is irrelevant; ANALYSIS cost is everything.
+
+   queries you can now run:
+     SELECT chain_name, SUM(input_tokens + output_tokens)/1e6 * price AS spend
+       FROM ai_call_log
+       WHERE timestamp > NOW() - 30 days
+       GROUP BY chain_name
+       ORDER BY spend DESC;
+
+     → "interpret 60%, summarize 25%, caption 10%, classify 5%, expand 0%"
+```
+
+Six columns, one row per call, queries answer "which chain dominates spend?" in one SQL statement.
 
 ### The provider gives you the counts; you build the table
 
@@ -58,6 +111,36 @@ Anthropic response shape (relevant fields)
 
 OpenAI's response shape is similar but renames fields (`prompt_tokens`, `completion_tokens`). In a provider-abstracted codebase like loopd, normalising these into one `ai_call_log` row per call is two lines per provider arm.
 
+The two provider response shapes mapped to one row:
+
+```
+   Anthropic                                OpenAI
+   ────────────────────────                 ────────────────────────
+   {                                        {
+     content: [{type:'text',                  choices: [{
+       text:"..."}],                            message:{content:"..."}
+     usage: {                                 }],
+       input_tokens: 1234,                    usage: {
+       output_tokens: 567                       prompt_tokens: 1234,
+     }                                          completion_tokens: 567
+   }                                          }
+                                            }
+              │                                       │
+              └───────────────────┬───────────────────┘
+                                  ▼  normalise to one shape
+                                  ▼
+   const usage = {
+     input_tokens:  res.usage.input_tokens
+                 ?? res.usage.prompt_tokens,
+     output_tokens: res.usage.output_tokens
+                 ?? res.usage.completion_tokens
+   };
+
+   insertAICallLog({ chain_name, ...usage, model, timestamp: now() });
+```
+
+Two lines per provider arm, one shared `insertAICallLog` helper — the rest is SQL.
+
 ### Where the cost surprises hide
 
 Three patterns recur in real codebases:
@@ -67,6 +150,36 @@ Three patterns recur in real codebases:
 2. **The expensive chain that ran on context you didn't notice.** `expand.ts` ships ~3 days of entry context plus 5 sibling todos. If a user writes long entries, the expand prompt grows. You'd never notice the per-call cost creep without per-chain p50/p95 input-token logging.
 
 3. **The output that was 10× longer than expected.** Models sometimes go verbose. The 5× input/output ratio means a chain whose output doubled has effectively doubled its cost. Output-token p95 is the early-warning signal.
+
+The three hiding spots with example queries to surface them:
+
+```
+   surprise                  example                              query that surfaces it
+   ───────────────────       ──────────────────────────────       ──────────────────────────
+   cheap-but-frequent        classify fires on every new todo;    SELECT chain_name,
+   chain                     heuristic skip-rate drops from 70%    COUNT(*) AS calls
+                             to 40% after content shift; classify  FROM ai_call_log
+                             spend silently triples                WHERE chain_name='classify'
+                                                                    AND timestamp >
+                                                                       NOW() - 7 days
+                                                                    GROUP BY week;
+
+   context creep             expand ships 3 days + 5 siblings;     SELECT chain_name,
+                             user writes long entries;             percentile_cont(0.95)
+                             expand input grows from 800 to        WITHIN GROUP (ORDER BY
+                             3000 tokens silently                    input_tokens)
+                                                                  FROM ai_call_log
+                                                                  GROUP BY chain_name;
+
+   verbose output            model goes off the rails on an        SELECT chain_name,
+                             ambiguous input; output doubles       percentile_cont(0.95)
+                             from 500 to 1100 tokens; 5× output    WITHIN GROUP (ORDER BY
+                             ratio means cost effectively           output_tokens)
+                             doubles for that chain                FROM ai_call_log
+                                                                  GROUP BY chain_name;
+```
+
+Without `ai_call_log` all three surprises hide; with it, one SQL query surfaces each.
 
 ### This is what people mean by "observability before optimisation"
 
@@ -330,3 +443,6 @@ Answer: `ai_call_log` (target, not yet created). `usage` is *received* on every 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (café-with-one-utility-bill scenario, name the per-circuit-attribution question, planned ai_call_log stakes for the five chains, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 5 from café-utility-bill / clamp-meter physical-world analogies (banned per v1.31.0/v1.32.0) to level-1 primitive (per-endpoint server metrics vs aggregate hosting bill). Added Move 1 mnemonic diagram (token-cost shape with 4 model price tiers + example call) + 3 Move 2 sub-section diagrams: planned ai_call_log table shape + example query, Anthropic-vs-OpenAI response normalisation, three cost surprises with SQL queries that surface each. Total: 4 new diagrams.

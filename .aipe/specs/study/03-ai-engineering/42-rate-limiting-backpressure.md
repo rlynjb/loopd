@@ -38,6 +38,49 @@ The queue is the rate limiter you actually control — size it conservatively an
 
 Two facts shape the design: providers have rate limits, and your code can produce work faster than the limits allow during bursts.
 
+The two paths a burst can take, with and without backpressure:
+
+```
+   trigger: sync-pull brings 50 entries down from cloud;
+   each one fires scheduleClassify async
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+   WITHOUT backpressure         WITH centralized queue (cap=6)
+   ┌──────────────────────┐    ┌──────────────────────────────────┐
+   │ 50 calls fire        │    │ 50 enqueue() calls fire instantly  │
+   │ simultaneously       │    │                                    │
+   │     │                 │    │ queue holds 50; runs 6 in-flight   │
+   │     ▼                 │    │                                    │
+   │ provider receives 50  │    │ provider receives 6 at a time      │
+   │ in 100ms             │    │ at sustained 6-concurrent rate     │
+   │     │                 │    │                                    │
+   │     ▼                 │    │ no 429s, no retries needed         │
+   │ rate-limit kicks in   │    │ all 50 complete in ~10s             │
+   │ 10 succeed            │    │                                    │
+   │ 40 return 429         │    │ user sees "indexing in background" │
+   │     │                 │    │ → results appear over 10s          │
+   │     ▼                 │    │                                    │
+   │ retry logic fires     │    └──────────────────────────────────┘
+   │ all 40 → still 429
+   │     │
+   │     ▼
+   │ exponential backoff
+   │     ▼
+   │ ~30s of failures
+   │ before recovery
+   │
+   │ user sees: "first
+   │ launch is broken"
+   └──────────────────────┘
+
+   the queue moves the friction from the provider's hard limit
+   (where 429s = user-visible failures) to the app's soft limit
+   (where queue depth = "indexing in background").
+```
+
+The six sub-sections below trace the provider's exposed limits, the backpressure pattern, loopd's existing per-chain MAX_CONCURRENT, the centralized-queue shape, the three flavours of backpressure, and where it goes wrong.
+
 ### The provider's view
 
 Most providers expose two limits:
@@ -93,6 +136,52 @@ Centralized AI call queue (target — [B5.1])
 3. **Adaptive backoff** — slow down when 429s appear; speed up when they don't. Self-tuning.
 
 For loopd, concurrency cap is sufficient. Token bucket would matter at higher scale; adaptive backoff matters most when you don't know the provider's limit in advance.
+
+The three flavours compared:
+
+```
+   flavour               implementation               best when
+   ────────────────      ──────────────────────       ────────────────────────
+   concurrency cap        let inFlight = 0;            you know the provider's
+                          if (inFlight >= MAX) {        limit and your bursts
+                            queue.push(fn);             aren't massive
+                          } else {
+                            inFlight++;
+                            run(fn).finally(
+                              () => inFlight--
+                            );
+                          }
+                          
+   token bucket           let tokens = MAX_TOKENS;     bursts are spiky AND
+                          setInterval(() => {           you have a known RPM
+                            tokens = Math.min(           limit per minute
+                              tokens + REFILL_RATE,
+                              MAX_TOKENS
+                            );
+                          }, 1000);
+                          // before each call:
+                          if (tokens > 0) {
+                            tokens--;
+                            run(fn);
+                          } else {
+                            queue.push(fn);
+                          }
+                          
+   adaptive backoff       let backoff = 0;             you don't know the
+                          on 429 response:              provider's limit OR
+                            backoff = Math.min(         the limit changes
+                              backoff * 2 + 1, MAX);     (multi-tenant cloud)
+                            sleep(backoff);
+                            retry();
+                          on success:
+                            backoff = max(0, backoff/2);
+                          
+   loopd today: concurrency cap (MAX_CONCURRENT=3) only.
+   [B5.1] centralises it; token bucket + adaptive backoff are
+   future additions if scale or unknown limits force them.
+```
+
+Concurrency cap is the cheapest pattern that actually works at solo scale; the other two are upgrades for when scale or uncertainty demands them.
 
 ### Where it goes wrong
 
@@ -327,3 +416,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced coffee-shop-rope-line analogy with npm install rate-limits, GitHub X-RateLimit-Remaining header, Stripe API throttling, AWS API Gateway throttling).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3/4 — GitHub + Stripe + AWS rate-limit headers are engineering surfaces, acceptable). Added Move 1 mnemonic diagram (burst-of-50 with vs without backpressure side-by-side) + 1 new Move 2 sub-section diagram (three flavours of backpressure with code snippets and when-each-fits guidance). Sub-section "shape of a centralized queue" already had a comprehensive diagram. Total: 2 new diagrams.

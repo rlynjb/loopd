@@ -11,9 +11,9 @@
 
 ## Why care
 
-Open any GitHub Actions workflow that has five separate jobs — `lint`, `test`, `build`, `deploy-staging`, `deploy-production` — each with its own steps and its own failure handling. When `lint` fails, the others don't run, but you know exactly which job broke and you can re-run just that one from the UI. Now picture the same workflow collapsed into one giant `run:` script that does everything in sequence: when step 3 fails, the entire workflow goes red and you've lost visibility into whether the build actually succeeded or whether deploy would have failed anyway.
+You're writing a service file that has to do five things: fetch data, transform it, validate it, save it to the DB, and send a notification. Option one: one big `doEverything()` function that does all five in sequence. When `transform` throws, you don't know if the data was saved, you can't retry just the notification, and the stack trace points at one giant frame. Option two: five separate functions, called from a thin orchestrator. When `transform` throws, the fetch result is still in scope, you retry just the transform, and the failure is named (`TransformError`, not `DoEverythingError`). Same five operations; two completely different blast radii on failure.
 
-That second workflow is what "one heroic mega-prompt" looks like at runtime. The first one is the pattern named here — single-purpose chains, one job per call, validated and persisted before the next chain starts. Same shape as Stripe's separate `PaymentIntent` / `SetupIntent` / `Refund` endpoints (one API call, one job, one failure mode each) or React's `useMutation` per side-effect — localise the failure, name the contract.
+That second arrangement is the pattern named here — single-purpose chains, one job per call, validated and persisted before the next chain starts. Same shape as splitting a giant `useEffect` with five side-effects into five focused `useEffect`s, or writing separate `useMutation` hooks per side-effect instead of one mega-mutation. Localise the failure, name the contract.
 
 **What breaks without it:** the ability to diagnose, retry, and contain failure on any AI surface. The codebase ships five chains under `src/services/ai/` (`summarize`, `caption`, `classify`, `expand`, `interpret`) — each owns one prompt, one contract, one persist step. When OpenAI returned a malformed `variants` object on 2026-05-08, `caption.ts` threw alone; the editor still loaded with `ai_summaries.summary_json.summary` populated from the cached summarize result. The user saw "AI captions unavailable," not "AI features unavailable." Collapse that into one mega-chain and a single bad token in the caption block would poison the structured editor data alongside it; `validate.ts` rejection becomes "the whole thing failed" instead of "this one chain failed."
 
@@ -33,7 +33,30 @@ One chain, one contract, one persist — failures stay where they happen.
 
 ## How it works
 
-GitHub Actions runs each `job` independently — `lint` fails, `test` still completes, `build` still runs against the unbroken code, and the failure surfaces as one named job in the UI. Five jobs, five status badges, five places to rerun. AWS Lambda deploys each function the same way: one handler, one role, one error path, one CloudWatch log stream. The shape is "many small things over one big thing" — each failure is named, each is rerunnable, each owns its blast radius. If you're coming from frontend, this is the same shape as splitting a giant `useEffect` with five side-effects into five focused `useEffect`s — when one throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of one effect.
+Splitting a giant `useEffect` with five side-effects into five focused `useEffect`s is the canonical shape — when one throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of one effect. Same instinct as separate `useMutation` hooks per side-effect, or AWS Lambda's one-handler-one-error-path discipline at infrastructure scale. The pattern is "many small things over one big thing" — each failure is named, each is rerunnable, each owns its blast radius. loopd ships five AI chains using the same shape: one chain per AI job, one contract, one persist step.
+
+The two arrangements side by side:
+
+```
+       one mega-chain                          five focused chains
+   ┌──────────────────────────┐         ┌──────────────────────────────┐
+   │ doEverything() {          │         │ summarize.ts                  │
+   │   build mega-prompt        │         │   build prompt → call model   │
+   │   call model               │         │   parse JSON → validate       │
+   │   parse JSON               │         │   persist                     │
+   │   validate ALL fields      │         ├──────────────────────────────┤
+   │   persist ALL columns      │         │ caption.ts                    │
+   │ }                          │         │   (same shape, own contract)  │
+   │                            │         ├──────────────────────────────┤
+   │ ANY field malformed →      │         │ classify.ts                   │
+   │   whole call throws         │         │ expand.ts                     │
+   │ ANY persist fails →        │         │ interpret.ts (markdown out)   │
+   │   nothing persists          │         └──────────────────────────────┘
+   │ retry is all-or-nothing     │            5 contracts, 5 failure
+   └──────────────────────────┘            modes, 5 retry boundaries
+```
+
+The three sub-sections below trace the chain inventory, why splitting localises failures, and the one chain (interpret) whose contract differs in kind from the others.
 
 ### The five chains — one prompt, one shape, one persist
 
@@ -47,13 +70,90 @@ Each AI service file owns one job. The shape: build a system prompt naming the e
 
 If you've worked with React Query, this is the same shape as separate `useMutation` hooks per side-effect — each owns its own retry, error state, and cache invalidation. The five chains don't share helpers beyond `getProvider()` and the `database.ts` persistence layer. Concrete consequence: when Anthropic ships a new model parameter that the codebase wants to start using on `caption` only, the change is a few lines in `caption.ts` and nothing else. No cross-file contract to renegotiate. Boundary: this shape costs duplication — five places where "call the model, parse JSON, validate" gets repeated. The codebase accepts that cost because the alternative (a unified helper) leaks the wrong abstraction.
 
+The inventory in one table:
+
+```
+   src/services/ai/  (+ src/services/todos/ for two)
+   ────────────────────────────────────────────────────────────────
+   chain          job                                    output
+   ──────────     ──────────────────────────────────     ──────────
+   summarize      structured editor data                  JSON
+                  (clip order / trims / filter / mood)
+   caption        4 tonal voice variants                  JSON
+                  (clean / smoother / reflective / punchy)
+   classify       pick 1 of 5 thinking modes              JSON
+                  (todo / idea / knowledge / study /
+                   reflect)
+   expand         typed JSON expansion per type           JSON
+                  (4 templates; 'todo' non-expandable)
+   interpret      long-form markdown reflection           MARKDOWN
+                  (user-triggered, ephemeral)
+
+   shape per chain:
+     build system prompt → build user prompt →
+     call model once → parse → validate → persist
+
+   no shared helpers beyond getProvider() and database.ts.
+```
+
+Five files, five contracts, five retry boundaries.
+
 ### Why split — failures stay local
 
 `caption` used to live inside `summarize`. The day the 4-variant prompt landed, the codebase split them. The reason: if `caption` fails (a tonal variant comes back malformed), the *editor data* shouldn't fail too. By splitting, a caption failure shows a "couldn't generate captions, retry" toast while the editor still loads the structured summary. Think of it like a microservices boundary at the function level — one service crashing shouldn't take down its neighbour. Concrete consequence: on 2026-05-08, OpenAI's API returned a malformed `variants` object for one day's caption call. `caption.ts` threw; the editor still loaded with `summary_json.summary` populated from the still-cached summarize result. The user saw "AI captions unavailable" instead of "AI features unavailable." Boundary: the split only works because the data shape they share (`ai_summaries.summary_json`) allows partial fill — one column can be present while another is empty.
 
+Walking the 2026-05-08 incident under both arrangements:
+
+```
+   Trigger: OpenAI returned malformed variants object for one day's caption
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+   With one mega-chain:                With single-purpose chains:
+   ┌─────────────────────────────┐    ┌─────────────────────────────┐
+   │ whole response throws         │    │ caption.ts throws           │
+   │ JSON.parse fails on the       │    │ summarize.ts already         │
+   │ variants block                │    │   succeeded an hour earlier  │
+   │                                │    │                              │
+   │ editor data lost too           │    │ ai_summaries.summary_json   │
+   │   (would have been valid       │    │   .summary populated         │
+   │    if extracted alone)         │    │   .variants empty            │
+   │                                │    │                              │
+   │ user sees:                     │    │ user sees:                  │
+   │   "AI features unavailable"    │    │   "couldn't generate         │
+   │                                │    │    captions, retry"          │
+   │                                │    │   editor still renders       │
+   └─────────────────────────────┘    └─────────────────────────────┘
+```
+
+Partial fill on the shared row (`ai_summaries.summary_json`) is what makes the split useful — one column present, another empty, neither corrupts the other.
+
 ### The interpret carve-out — different output contract, different chain
 
 `interpret` was added in 2026-05-10 because its output contract is markdown, not JSON. The other four chains all return JSON the app reads programmatically; interpret returns prose the user reads directly. Bolting markdown rendering onto the validate-and-persist pattern of the other four would have either weakened the JSON validators (to accept "or markdown") or required a runtime branch every chain has to navigate. The cleaner move was a separate chain with its own contract — no JSON parser, no schema validator, no persistence step (the output is shown once and discarded). If you've worked with React Server Components vs Client Components, this is the same instinct — when the contract differs in kind (sync vs async, JSON vs markdown), splitting the abstraction is cheaper than over-generalising one. Concrete consequence: `interpret.ts` builds a long prompt, calls the LLM, receives ~400-800 words of markdown, hands it to the UI, done. No `validate.ts` step, no `database.ts` upsert. The other four chains never had to grow a "skip persistence" branch. Boundary: interpret's lack of caching means every invocation costs a round-trip; the codebase accepts that because the feature is user-triggered and rare.
+
+The other four chains vs interpret, contract-by-contract:
+
+```
+   summarize / caption / classify / expand    interpret
+   ─────────────────────────────────────      ──────────────────────
+   build prompt                                build prompt
+   call model                                  call model
+   parse JSON                ◄── shape         receive markdown          ◄── different
+   validate.ts schema check  ◄── shape         <no validate step>            in kind
+   database.ts upsert        ◄── shape         <no persist step>
+                                               hand to UI; done
+
+   if interpret had been bolted onto the same flow:
+     option A: validators weaken to accept "JSON or markdown"
+               → every JSON chain's validator now has to fork
+     option B: every chain grows a "skip persistence" branch
+               → four chains carry code they never run
+
+   splitting was cheaper than over-generalising one shape.
+```
+
+When the contract differs in kind, a separate chain beats a more-general one.
 
 This is what people mean by "one chain, one contract, one persist." The chain-per-feature shape doesn't scale to a thousand chains, but at five it produces a debuggable, separable AI surface where one chain's bug is one chain's problem. Every LLM application that has ever grown into a "monolithic AI service" eventually pays the cost — chains start sharing helpers, the helpers grow toggles, and one chain's needs start to constrain another's. Splitting early keeps the helpers thin and the failure modes named. The full picture is below.
 
@@ -424,3 +524,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced five-station-kitchen + diner-rework analogies with GitHub Actions independent jobs + AWS Lambda per-function deployments + Stripe's PaymentIntent / SetupIntent / Refund split + React `useMutation` per side-effect).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from GitHub Actions + Stripe whole-product anchors to a level-1 primitive (one mega-function vs five focused functions in any service file). Swapped How it works Move 1 to lead with the React `useEffect` / `useMutation` primitive (kept AWS Lambda as a level-4 follow-up). Added Move 1 mnemonic diagram (mega-chain vs five focused) + 3 Move 2 sub-section diagrams: chain inventory table, 2026-05-08 incident walked under both arrangements, four-chains-vs-interpret contract comparison. Total: 4 new diagrams.

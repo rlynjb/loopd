@@ -37,13 +37,109 @@ The producer is unreliable; the consumer enforces the contract.
 
 Zod's `schema.parse(unknown)` is the canonical shape. The producer hands over an unknown value; the schema checks each field against the rules; values that don't match are rejected at the parse step, not after they've been used downstream. Two operations welded together in the naive picture (LLM returns text → you trust it) split apart into three independent operations: ask for structured output, parse what you got, validate against the contract. Same shape as a tRPC procedure's `input(zodSchema)` boundary or a Hono handler's `c.req.valid('json')` — untyped data becomes typed at the door, or it doesn't enter.
 
+The three-step gate in one picture:
+
+```
+   LLM raw response (untyped string)
+              │
+              ▼
+   ┌────────────────────────────────────────────────┐
+   │ Step 1: ASK                                     │
+   │   system prompt: "Respond with ONLY valid       │
+   │     JSON matching: { mood, clipOrder, ... }"    │
+   │   request body: response_format:                │
+   │     { type: 'json_object' }  (OpenAI only)      │
+   └─────────────────┬──────────────────────────────┘
+                     │  model returns text
+                     ▼
+   ┌────────────────────────────────────────────────┐
+   │ Step 2: PARSE                                   │
+   │   regex: text.match(/\{[\s\S]*\}/)              │
+   │     strips markdown fences / preamble           │
+   │   JSON.parse(match) in a try/catch              │
+   │     return null on throw                         │
+   └─────────────────┬──────────────────────────────┘
+                     │  Record<string, unknown> or null
+                     ▼
+   ┌────────────────────────────────────────────────┐
+   │ Step 3: VALIDATE                                │
+   │   per-field checks:                             │
+   │     mood ∈ ['flat','ok','good','great','fired'] │
+   │     clipOrder[i] ∈ known clip IDs                │
+   │     clipTrims clamped to clip duration           │
+   │   missing/invalid → defaults or null              │
+   └─────────────────┬──────────────────────────────┘
+                     │  AISummary | null
+                     ▼
+              caller decides
+              (persist on valid; surface error on null)
+```
+
+The five sub-sections below trace the typed contract, the ask in the prompt + request body, the defensive parse, the per-field validate, and the one chain (interpret) that opts out of the structured-output pattern entirely.
+
 ### The contract — a typed shape the chain promises to return
 
 Every JSON chain in this codebase has a TypeScript type that names the contract. For the structured summary it's `AISummary` (in `src/types/ai.ts`) with fields like `headline: string`, `mood: 'flat' | 'ok' | 'good' | 'great' | 'fired'`, `clipOrder: string[]`. If you're coming from frontend, this is the same shape as a `Response` type from a `useQuery` hook — the component renders against the type, not against whatever the network returned. The contract is what makes the rest of the codebase typed: the editor reads `summary.mood` and gets autocomplete; the screen renders `summary.headline` and TypeScript catches any wrong access. Practical consequence: a chain that returns a shape outside the contract is rejected at the validation step rather than crashing a screen three layers up.
 
+The contract type and how the rest of the codebase reads it:
+
+```
+   src/types/ai.ts
+   ──────────────────────────────────────────────────
+   export type AISummary = {
+     headline: string;
+     summary: string;
+     mood: 'flat' | 'ok' | 'good' | 'great' | 'fired';   ◄── narrow enum
+     clipOrder: string[];                                  ◄── strings (clip IDs)
+     clipTrims: { id: string; start: number; end: number }[];
+     textOverlays: { text: string; xPct: number; yPct: number }[];
+     filterPreset: 'default' | 'warm' | 'cool' | 'mono' | … ;
+   };
+
+   downstream consumers read against this type:
+     - editor:  summary.clipOrder.forEach(...)
+     - card:    summary.mood === 'fired' && <Badge />
+     - export:  summary.filterPreset
+     - sync:    JSON.stringify(summary) → cloud upsert
+
+   TypeScript catches typos like summary.modd at compile time.
+   the validator's job is to make sure the runtime shape matches.
+```
+
+The type is the same word the validator uses — autocomplete on one side, runtime check on the other.
+
 ### The ask — telling the model "return JSON only"
 
 There are two ways to communicate the contract to the model. First, in the **system prompt** — every chain spells out the JSON shape in prose at the end of the system prompt. Look at `summarize.ts`'s system prompt (`prompt.ts` L17–L27): the last paragraph says "Respond with ONLY valid JSON matching this exact shape:" and then literally types the JSON shape with field types. Second, on the **request body** — for OpenAI, every JSON chain sets `response_format: { type: 'json_object' }` (caption.ts L144, classify.ts L57, expand.ts L50). For Anthropic, there's no equivalent flag on the basic Messages API; the prompt is the only contract. If you're coming from frontend, the system-prompt approach is like JSDoc — documentation that tools and humans both read — while the `response_format` flag is like a `Content-Type` header, the formal commitment in the protocol layer. Practical consequence: OpenAI chains get an extra guarantee from the API (the response will always parse as JSON) while Claude chains rely on the prompt + the validation gate to enforce the contract.
+
+The two communication channels side by side:
+
+```
+       prompt-layer ask (every chain)            request-body flag
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ system prompt last paragraph:          │    │ OpenAI:                                │
+   │   "Respond with ONLY valid JSON         │    │   body: {                              │
+   │    matching this exact shape:           │    │     model: 'gpt-4o',                   │
+   │    {                                    │    │     messages: [...],                   │
+   │      headline: string,                  │    │     response_format: {                 │
+   │      mood: ...,                          │    │       type: 'json_object'             │
+   │      clipOrder: string[],               │    │     }                                  │
+   │      ...                                │    │   }                                    │
+   │    }                                    │    │                                        │
+   │    No prose preamble, no markdown        │    │ Anthropic:                             │
+   │    fences, no commentary."              │    │   no equivalent flag on the basic      │
+   │                                        │    │   Messages API — the prompt is the     │
+   │ shape: like a JSDoc comment             │    │   only contract                        │
+   │ (documentation for humans + the model)  │    │                                        │
+   │                                        │    │ shape: like a Content-Type header      │
+   │                                        │    │ (formal protocol commitment)            │
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+
+   OpenAI chains get TWO layers (prompt + protocol flag).
+   Claude chains get ONE layer (prompt) + the validator catches drift.
+```
+
+The two channels are complementary — the prompt tells the model the shape; the protocol flag enforces that the response can at least be parsed as JSON.
 
 ### The parse — getting the object out of the response
 
@@ -67,9 +163,63 @@ The regex matches "the outermost JSON object" so a response wrapped in `Here's y
 
 After the parse, every field gets checked: type, range, valid enum value, valid reference. `validate.ts:validateSummary` is the longest example — L20 checks `headline` is a string and slices to 100 chars; L22 checks `mood` is one of the five valid values or defaults to `'ok'`; L23 same for `filterPreset`; L26–L36 checks every `clipOrder` ID exists in the known clip set and any missing IDs get appended at the end; L40–L52 clamps every `clipTrims` start/end to the clip's actual duration. The pattern is the same in every chain — `caption.ts:parseAndValidate` L169–L199 checks all four variants are present and the theme is one of six valid values. If you're coming from frontend, this is exactly what `zod.parse(schema, data)` does at the route handler boundary in a tRPC or Hono server — type narrowing the unknown into the typed shape with fallbacks. Practical consequence: a malformed value never reaches the persistence layer. `upsertAISummary(date, JSON.stringify(summary), ...)` is always called with a valid `AISummary` because the validation function is the only producer.
 
+What `validateSummary` does to a malformed payload, field by field:
+
+```
+   parsed JSON (untyped):                       after validateSummary:
+   ──────────────────────                       ──────────────────────────
+   { headline: 12345,                            { headline: '',
+     summary: undefined,                            summary: '',
+     mood: 'happy',                                 mood: 'ok',         ◄── not in enum
+     clipOrder: ['c1', 'c-bogus', 'c2'],            clipOrder:                → default
+       (where 'c-bogus' isn't in input clips)         ['c1', 'c2'],     ◄── filter out
+     clipTrims: [{                                    clipTrims: [{          unknown ID
+       id: 'c1',                                       id: 'c1',
+       start: -10,        // below clip duration       start: 0,        ◄── clamp
+       end: 999           // above clip duration       end: 12          ◄── clamp
+     }],                                              }],
+     filterPreset: 'cyberpunk',                      filterPreset:
+       (not in 7-value enum)                          'default',         ◄── not in enum
+     textOverlays: 'should be an array'              textOverlays: []   ◄── wrong type
+   }                                                                       → empty
+                                                  }
+
+   every field has a default or a clamp; the validator never throws.
+   the cost: every consumer downstream gets typed data with sane defaults.
+```
+
+The validator's job isn't to reject — it's to narrow. A malformed field becomes a sane default; the consumer always gets typed data.
+
 ### What `interpret` does differently
 
 `interpret.ts` is the one chain that does NOT use structured outputs. It returns markdown — a long-form essay with `##` headings, blockquotes, bullet lists. The whole point of the chain is human-readable prose; forcing it through a JSON schema would defeat the feature. The validation step that exists (`cleanMarkdown` at L98–L108) just strips an optional outer code fence and checks the response is non-empty. If you're coming from frontend, this is the same difference as a JSON API endpoint vs an HTML-rendering endpoint — the contract is "valid markdown body" rather than "schema-conforming object." Practical consequence: `interpret`'s output is rendered straight to a modal (via `react-native-markdown-display`) and never persisted in a typed column.
+
+Interpret vs the structured chains, contract by contract:
+
+```
+   contract layer            structured chains              interpret
+   ───────────────────       ────────────────────────       ────────────────
+   ask layer                  "Respond with ONLY valid       "Output valid
+                              JSON matching: { ... }"        markdown — no
+                                                              preamble, no JSON,
+                              + response_format on OpenAI    no code fences"
+
+   parse layer                regex {…} + JSON.parse +       no-op
+                              try/catch                      (text already
+                                                              valid markdown
+                                                              after fence strip)
+   validate layer             per-field shape check          cleanMarkdown:
+                              against typed schema           strip outer ``` fence
+                                                              + reject if empty
+   downstream consumer        application code reads          UI renders to a
+                              typed fields                    <Markdown> component
+   persisted?                 YES — DB column                 NO — modal state only
+
+   the contract is "valid markdown body" instead of "schema-conforming
+   object" — same boundary discipline, different content type.
+```
+
+JSON API endpoint vs HTML-rendering endpoint — the boundary discipline is the same, just the content type differs.
 
 This is what people mean by "type your contracts at the LLM boundary." A model that returns natural language is a producer you can't fully trust; the validation step is the same kind of trust boundary as a public API — anyone could be calling it, anyone could send anything, the consumer is responsible for the integrity of the data that gets through. The full picture is below.
 
@@ -474,3 +624,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced courier-printed-form + passport-control analogies with GitHub webhook delivery inspector, Stripe webhook schema drift, Zod schema.parse, tRPC input, Hono c.req.valid). Why care WC1 was missed by the original triage; included in this pass.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3/4 — GitHub webhooks + Stripe webhooks + Zod + tRPC + Hono are engineering-surface and library primitives, acceptable). Added Move 1 mnemonic diagram (3-step ask/parse/validate gate) + 4 Move 2 sub-section diagrams: typed-contract showing downstream consumers, prompt vs response_format two-channel side-by-side, validateSummary on a malformed payload field-by-field, interpret-vs-structured contract layer table. Total: 5 new diagrams.

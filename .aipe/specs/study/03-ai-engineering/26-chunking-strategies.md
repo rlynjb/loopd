@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a 5000-character document and you want to embed it for retrieval. Option one: `embed(text)` once, store one 1536-float vector. Option two: `text.split('\n\n')` to get paragraphs, embed each, store 10 vectors. Option three: split at every sentence boundary, embed each, store 50 vectors. The first has the smallest storage footprint and the simplest search path. The third has the most precision for sub-document retrieval, but loses inter-sentence context (`"It was great"` — what was?). Same input string; three different ways to slice it before each piece passes through the fixed-output `embed()` function.
 
-A long letter arrives — five pages, single envelope. The mail room has a slot that fits A4-sized envelopes but not a folded five-page wad. The clerk's options: stuff the whole letter into one large envelope and hope the slot accepts the bulge; cut it cleanly between paragraphs into five smaller envelopes that fit; or chop it sentence-by-sentence into thirty tiny envelopes. The clerk that sends one bulky envelope loses some pages at the slot; the clerk sending thirty tiny envelopes loses the thread between sentences ("It was great" — what was great?). Same letter, three deliveries, three different things received on the other side.
-
-The implicit question is what size piece you cut the document into before sending it through a fixed-size opening. Not "how do I embed the entry," but "how much of the entry per vector." A single vector per long entry averages every idea into a centroid that points at none of them; one vector per sentence shatters the antecedents; somewhere in between is the right cut.
+The implicit question is what size piece you cut the document into before sending each through the same fixed-size embed function. Not "how do I embed the entry," but "how much of the entry per vector." A single vector per long entry averages every idea into a centroid that points at none of them; one vector per sentence shatters the antecedents; somewhere in between is the right cut.
 
 **What depends on getting this right:** every retrieval feature in the Phase 2A roadmap that touches long entries. Today loopd doesn't chunk — `interpret.ts` and `expand.ts` work at the whole-entry granularity (`buildContext` in `expand.ts` ships ~3 days of entry context as-is). When `[B2A.7]` interpret-this-week or any "find what I said about my knee" feature lands, the planned `embed.ts` will face the call: one vector per `entries.text` row (whole-entry, simplest), one per sentence (highest precision, 5–20× storage in `entry_embeddings`), or one per paragraph (middle). Pick wrong and the right entry gets buried at rank 17 behind cat-topic centroids, or — at the other extreme — "it was great" lands in a chunk with no antecedent. The decision affects `entry_embeddings` storage cost, search latency, and recall, and re-chunking later means re-embedding every entry.
 
@@ -27,13 +25,45 @@ With sentence-window chunking:
 - "It was great" sentence has no antecedent in its own vector → meaningless match
 - Higher recall on multi-topic entries; lower precision on context-dependent sentences
 
-A long letter cut into envelopes that fit the slot — not so big it jams, not so small the sentences lose each other.
+Pick the chunk size your eval scores best — not too coarse (whole document loses local detail), not too fine (sentences lose antecedents).
 
 ---
 
 ## How it works
 
 A 1500-word entry has many ideas. The embedding model compresses all of them into one 1536-float vector — and that vector is the centroid of the entry's many meanings. Centroid-of-many is the problem.
+
+The same 1500-word entry under three chunking strategies:
+
+```
+   entries.text (1500 words, 3 topics: cat / knee / movie)
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+   ┌────────────┐ ┌────────────┐ ┌────────────┐
+   │ Whole-doc  │ │ Paragraph  │ │ Sentence   │
+   │            │ │            │ │            │
+   │ 1 vector   │ │ 3 vectors  │ │ 50 vectors │
+   │ centroid   │ │ one per    │ │ one per    │
+   │ of all 3   │ │ topic       │ │ sentence    │
+   │ topics      │ │            │ │            │
+   └────────────┘ └────────────┘ └────────────┘
+        │              │              │
+        ▼              ▼              ▼
+   query "knee":     query "knee":     query "knee":
+   cosine to         cosine to topic   cosine to ~50
+   centroid          vectors → finds   sentence vectors
+   → may miss        the knee para    → finds "it was
+   the entry if     directly          great" with no
+   cat dominates                       antecedent for
+                                       "it"
+
+   1 vector          3 vectors          50 vectors
+   smallest          ~3x storage         ~50x storage
+   storage            
+```
+
+The four sub-sections below trace the three common strategies, when whole-document is the right choice, the chunk-size and overlap knobs, and the three failure modes that recur.
 
 ### Three common strategies, in order of granularity
 
@@ -43,11 +73,67 @@ A 1500-word entry has many ideas. The embedding model compresses all of them int
 
 If you're coming from frontend, this is the same trade-off as `Array.prototype.find()` vs `Array.prototype.filter()` vs a B-tree index — the question is *how granular should your queryable unit be?* and the answer depends on the query patterns you expect.
 
+The three strategies, with concrete cost/precision tradeoffs:
+
+```
+   strategy             vectors/entry        recall       precision     storage cost
+   ─────────────        ──────────────       ─────────    ──────────    ─────────────
+   whole-document       1                    low on       high on        1× baseline
+                                              multi-topic  whole-entry
+                                              entries      queries
+   paragraph-level      ~3-10                medium       medium         3-10×
+                        (depends on
+                         entry length)
+   sentence-window      ~10-50                high         low on         10-50×
+                        (depends on            on multi-   short-
+                         entry length)         topic       context
+                                              entries     sentences
+                                                          ("it was
+                                                           great")
+
+   pick based on (a) entry length distribution and (b) query pattern:
+   "find this whole entry" → whole-doc wins
+   "find this paragraph" → paragraph-level wins
+   "find this exact sentence" → sentence-window wins
+```
+
+The right strategy depends on what the user is searching for — whole entries, paragraphs, or sentences.
+
 ### Why "embed the whole entry" sometimes works and sometimes doesn't
 
 For loopd's existing chains, the entry-level granularity is correct because the chain's job is "summarise/caption *this entry*." There's no sub-entry retrieval. Whole-document is correct when the retrieval unit matches the consumption unit.
 
 The practical consequence: chunking only earns its place when (a) entries become long enough that a single vector loses fidelity, AND (b) the user wants to find *parts of entries*, not whole entries. For Phase 2A's `[B2A.7]` interpret-this-week, the consumption unit is "this week's entries" — the entry-level granularity works fine, because the user asks "what was this week about?" not "what was the second paragraph of Tuesday about?"
+
+When whole-document wins vs when sub-entry chunking does:
+
+```
+   condition                                 whole-doc       chunking earns
+                                             still wins?      its place?
+   ─────────────────────────────────         ──────────       ──────────────
+   entries are short (<500 words)            yes              no
+   entries are long but single-topic         yes              no
+   entries are long AND multi-topic          no               yes
+   user queries "find this entry"            yes              no
+   user queries "find this paragraph"        no               yes
+   user queries "what did I say about X"     marginal          yes
+   (cross-entry topic search)                
+   
+   loopd today (existing chains):
+     short-to-medium entries, mostly single-topic per day,
+     consumption unit = whole entry
+   → whole-document is correct
+   
+   Phase 2A [B2A.7] interpret-this-week:
+     consumption unit = the week's entries
+   → entry-level granularity still works
+   
+   future "find what I said about my knee" feature:
+     consumption unit = sub-entry passage
+   → sentence-window or paragraph chunking earns its place
+```
+
+Chunking earns its place only when the consumption unit is smaller than the entry — until then, whole-document is the simpler win.
 
 ### Chunk size and overlap are knobs, not constants
 
@@ -58,6 +144,32 @@ When you do chunk, two parameters matter:
 
 The sentence-window approach with 3-sentence chunks and 1-sentence overlap is a popular default; it lands chunks at natural boundaries and keeps adjacent ideas joined.
 
+The two knobs visualised:
+
+```
+   chunk size = 3 sentences, overlap = 1 sentence
+   ──────────────────────────────────────────────────────────────────
+   input: "S1. S2. S3. S4. S5. S6. S7."   (7 sentences)
+   
+   chunk 1: S1 S2 S3                       ◄── first 3
+            └──┐
+              ▼
+   chunk 2:    S3 S4 S5                    ◄── overlap S3,
+            └──────┐                         then next 2
+                  ▼
+   chunk 3:          S5 S6 S7              ◄── overlap S5,
+                                              then final 2
+   
+   3 chunks from 7 sentences with 1-sentence overlap.
+   storage cost: ~33% more than no-overlap (each sentence
+   appears in ~1.4 chunks on average).
+   
+   benefit: a query about S3 hits BOTH chunk 1 and chunk 2 —
+   antecedent + idea travel together.
+```
+
+Two knobs, one decision per chain: bigger chunks lose precision; bigger overlap costs storage; the right value comes from your eval set, not from default values.
+
 ### Where chunking goes wrong
 
 Three failure modes recur:
@@ -67,6 +179,32 @@ Three failure modes recur:
 3. **Boundary-cut over-fragmentation.** A blank-line splitter cuts a single thought across chunks because the user pressed Enter twice mid-paragraph.
 
 The fix to all three is "evaluate, don't theorise" — pick a strategy, build the eval set, measure hit@5, iterate.
+
+The three failure modes with concrete examples and fixes:
+
+```
+   failure mode               example input → bad chunk        fix
+   ─────────────────────      ──────────────────────────       ──────────────────
+   cross-chunk references     "I ate at Spice House. It        add overlap so the
+   ('it' lost antecedent)     was great."                      antecedent travels
+                                                                 with the followup
+                              chunk A: "I ate at Spice House."  
+                              chunk B: "It was great."          OR use paragraph
+                              "it" → embeds to nothing useful   chunks instead of
+                                                                 sentence chunks
+   topic-bleed averaging      [cat → knee → movie] in one      smaller chunks +
+                              chunk → averaged vector near      semantic boundaries
+                              none of them                       (paragraph splits
+                                                                  often catch topic
+                                                                  shifts)
+   boundary-cut over-         user pressed Enter twice mid-     smaller threshold
+   fragmentation              paragraph; blank-line splitter    + semantic
+                              cuts a single thought              boundary check
+                                                                 OR merge tiny chunks
+                                                                 with their neighbours
+```
+
+The fix to all three is "evaluate, don't theorise" — pick a strategy, run the same eval set used for embedding-model selection, iterate.
 
 ### This is what people mean by "chunking is an empirical decision"
 
@@ -328,3 +466,6 @@ Answer: `chunkEntry()` in `src/services/ai/embed.ts` (target, not yet created). 
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (long-letter-through-mail-slot scenario, name the how-much-per-vector question, planned chunkEntry/entry_embeddings stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from long-letter-through-mail-slot physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitive (`embed(text)` once vs `text.split('\n\n').map(embed)` paragraph chunking vs sentence-window). Swapped Why care Move 5 metaphor to "pick the chunk size your eval scores best." Added Move 1 mnemonic diagram (3 strategies on the same 1500-word entry) + 4 Move 2 sub-section diagrams: strategy cost/precision/recall table, whole-doc-wins-vs-chunking-wins decision matrix, chunk-size + overlap knob visualization, three failure modes with examples and fixes. Total: 5 new diagrams.

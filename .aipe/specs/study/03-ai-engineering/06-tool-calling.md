@@ -11,9 +11,9 @@
 
 ## Why care
 
-A guest calls a hotel concierge and asks for a dinner recommendation near the train station that's open after 11pm. The concierge can't see Google Maps, can't check restaurant hours, can't book a table — only talk. So the concierge puts the guest on hold, picks up a second line to call the restaurant directly, comes back with hours and availability, puts the guest on hold again to book, comes back with the confirmation. Four legs of conversation for one dinner. Every "let me check on that" is another phone call; without somebody standing by to dispatch each request, the concierge is just a polite voice with no way to act.
+You're calling a function that returns a value, but the value depends on data that lives in a DB. Option one: the function takes the data as an argument — the caller fetches everything upfront and passes it in, the function runs once with every input present. Option two: the function is a generator (`function*`) that yields `{ fetch: 'todos' }`, your loop runs the fetch and `next()`s with the result, the generator maybe yields another fetch, you run that, you `next()` again — back and forth until the generator returns the final value. Same final answer; option one is one synchronous call, option two is N round-trips with the function deciding what to ask for next. LLM tool calling is option two — the model yields tool calls instead of generator values, and an orchestrator runs them and feeds the results back.
 
-That's the shape of tool calling — model as the concierge, application code as the dispatcher, every step another round-trip. The pattern is documented here precisely because this codebase doesn't use it. Naming what's *not* in play is the load-bearing distinction; every chain in `src/services/ai/` is single-shot, prompt-in-JSON-out, no orchestrator, no loop.
+That's the shape of tool calling — model as the generator, application code as the loop driver, every step another round-trip. The pattern is documented here precisely because this codebase doesn't use it. Naming what's *not* in play is the load-bearing distinction; every chain in `src/services/ai/` is single-shot, prompt-in-JSON-out, no orchestrator, no loop.
 
 **What depends on getting this right:** the cost, latency, and debuggability of every AI feature. The codebase pre-fetches everything inline via per-chain `buildContext` (in [03-context-window](./03-context-window.md)) — `expand(todoId)` reads the todo text, the last 3 days of summaries, and the 5 sibling todos from SQLite *before* the prompt is built, calls Claude once, parses ~400 tokens of JSON via `validate.ts`, persists. One round-trip, predictable cost, deterministic shape. The agentic version would have the model say "give me todos from the past week" → orchestrator runs SQL → "give me yesterday's summary" → orchestrator runs SQL → "give me sibling todos" → orchestrator runs SQL → final answer. Four round-trips for the same data; four points the loop can fail, get stuck, or run away. The codebase ships zero agentic chains because zero features today need open-ended queries the prompt builder can't pre-fetch for.
 
@@ -33,19 +33,135 @@ The cheapest agent is no agent — pre-fetch the data deterministically and let 
 
 ## How it works
 
-A telephone hotline where the operator can put you on hold and call someone else for information, then come back to you with the answer. The model is the operator; the tools are the people the operator can reach out to mid-call. The catch: every "let me check on that" costs another round-trip, and the operator can't actually call anyone without an orchestrator standing by to dispatch the request. Loopd's AI calls don't do this — every call is one-shot, prompt-in-JSON-out, no orchestrator, no loop. The pattern is documented here because understanding what loopd *doesn't* do is the load-bearing distinction.
+A loop where the model emits tool calls and your code runs them and feeds the results back — same shape as driving a JavaScript generator (`function*`) with `next()`, except the `yield` points come from an LLM emitting `{ tool: 'X', input: { ... } }` instead of a `yield` keyword, and the loop driver decides when to stop. Loopd's AI calls don't do this — every call is one-shot, prompt-in-JSON-out, no orchestrator, no loop. The pattern is documented here because understanding what loopd *doesn't* do is the load-bearing distinction.
+
+The loop the codebase DOES NOT use, side by side with the one it does:
+
+```
+       Tool-calling loop (NOT loopd)              One-shot (loopd today)
+   ┌────────────────────────────────┐         ┌────────────────────────────────┐
+   │ prompt + tool schemas           │         │ prompt with all data inlined   │
+   │           │                      │         │ (buildContext fetched it       │
+   │           ▼                      │         │  before the call)              │
+   │      ┌────────┐                  │         │           │                    │
+   │      │  LLM    │                  │         │           ▼                    │
+   │      └────┬───┘                  │         │      ┌────────┐                 │
+   │           │ yields                │         │      │  LLM    │                 │
+   │           ▼                       │         │      └────┬───┘                 │
+   │   { tool: 'query_todos',          │         │           │                    │
+   │     input: {…} }                  │         │           ▼                    │
+   │           │                       │         │      final answer              │
+   │           ▼  orchestrator         │         └────────────────────────────────┘
+   │   run SQL / HTTP                  │             one round-trip, always
+   │           │                       │
+   │           ▼                       │
+   │   feed observation back ──┐       │
+   │                            │       │
+   │           ▲────── loop ────┘       │
+   │                                    │
+   │   3–5 iterations typical;          │
+   │   3–5× cost and latency            │
+   └────────────────────────────────┘
+```
+
+The three sub-sections below trace the loop itself, why loopd opted out, and what one-shot gives up that an agent could provide.
 
 ### The tool-calling loop — model emits a tool call, orchestrator runs it, re-prompts
 
 The model is given a list of "tools" with their input schemas as part of the prompt. Its output may include a tool call: `{ tool: "search_entries", input: { query: "sickest" } }`. The orchestrator (application code surrounding the model) detects this output shape, runs the tool (a SQL query, an HTTP fetch, a calculation), packages the result as an "observation," and re-prompts the model with the original conversation + the observation. The model can then issue another tool call or a final answer. This loops until the model emits a final answer or the orchestrator gives up. If you're coming from frontend, this is the same shape as React's effect-driven control flow — the component renders a request to "do X," some effect handler does X and feeds the result back as state, the next render decides what to do next. The model owns "what to ask for"; the orchestrator owns "how to fulfill." Concrete consequence: a hypothetical agent asked "what was my sickest workout last month?" would emit `{ tool: "query_workouts", input: { from: "...", filter: "intensity_high" } }`, the orchestrator runs the SQL, returns the rows, the model reads them and emits the final answer. The model never touched the database; the orchestrator never reasoned. Boundary: each loop iteration is another LLM round-trip — 3-5 iterations is typical for an agent, which means 3-5× the cost and latency of a one-shot call.
 
+Walking the loop on a hypothetical "what was my sickest workout last month?" agent:
+
+```
+   iteration 1:
+     prompt:    user query + tool schemas (query_workouts, ...)
+     model →    { tool: 'query_workouts',
+                  input: { from: '2026-04-14', filter: 'intensity_high' } }
+     orchestrator runs SQL → returns 12 rows
+                              │
+                              ▼
+   iteration 2:
+     prompt:    conversation so far + observation (12 rows)
+     model →    { tool: 'get_workout_details',
+                  input: { id: 'w-7' } }
+     orchestrator runs SQL → returns details for w-7
+                              │
+                              ▼
+   iteration 3:
+     prompt:    conversation so far + observation
+     model →    final answer: "Your sickest workout was on
+                  May 3, intensity 9.4, heart rate 178..."
+
+   total: 3 LLM round-trips for one user question
+   (3× the cost and latency of a one-shot call)
+```
+
+The model owns "what to ask for"; the orchestrator owns "how to fulfill." Neither one alone is enough.
+
 ### Why loopd doesn't do this — every chain is one-shot
 
 Every AI chain in this codebase is single-shot: build a prompt with all the data the model needs, call the LLM once, parse the response, persist. No tool-calling loop, no orchestrator, no "let me check on that." The data the chain needs is fetched from SQLite *before* the prompt is built — see `buildContext` per chain in [03-context-window](./03-context-window.md). The model sees the data inline; it doesn't ask for it. Think of it like the difference between a stateless backend handler that gets everything it needs in the request body vs an agentic handler that calls out to other services mid-request. The codebase deliberately picks the former. Concrete consequence: when `expand(todoId)` runs, the codebase reads the todo text, the last 3 days of summaries, the 5 sibling todos — all from SQLite — packs them into a prompt, calls Claude once, parses ~400 tokens of expansion JSON. One round-trip, predictable cost, deterministic shape. An agentic version would have the model say "give me todos from the past week" → orchestrator runs SQL → "give me yesterday's summary" → orchestrator runs SQL → "give me sibling todos" → orchestrator runs SQL → final answer. Four round-trips for the same data the one-shot version assembled deterministically in code. Boundary: the one-shot pattern works because the codebase knows in advance what data the chain needs. When the data needed depends on the input in unpredictable ways (e.g. an open-ended Q&A), agentic shapes become unavoidable.
 
+The `expand(todoId)` call under both arrangements:
+
+```
+       One-shot (loopd today)                Agentic (NOT loopd)
+   ┌───────────────────────────────┐    ┌───────────────────────────────┐
+   │ expand(todoId)                 │    │ expand(todoId)                 │
+   │   ▼                             │    │   ▼                             │
+   │ buildContext:                   │    │ prompt with tool schemas only   │
+   │   getTodoText(id)               │    │   ▼                             │
+   │   getRecent3DaysSummaries()     │    │ LLM → 'query_todo(id)'          │
+   │   getSibling5Todos(id)          │    │ SQL → todo text                 │
+   │   ▼                             │    │   ▼                             │
+   │ build full prompt               │    │ LLM → 'query_summaries(3)'      │
+   │   ▼                             │    │ SQL → summaries                 │
+   │ LLM call (one round-trip)       │    │   ▼                             │
+   │   ▼                             │    │ LLM → 'query_siblings(id, 5)'   │
+   │ parse + validate + persist      │    │ SQL → siblings                  │
+   │                                 │    │   ▼                             │
+   │ predictable cost,               │    │ LLM → final expansion JSON      │
+   │ deterministic shape             │    │                                 │
+   │                                 │    │ 4 LLM round-trips for the same  │
+   │                                 │    │ data the one-shot prefetched    │
+   └───────────────────────────────┘    └───────────────────────────────┘
+```
+
+When the codebase knows what data the chain needs in advance, fetching it deterministically wins every time on cost, latency, and debuggability.
+
 ### What the one-shot path gives up — open-ended queries
 
-The cost of one-shot is that the codebase can't support "ask the AI anything about your journal" features. The model can only see what the prompt builder chose to include; novel cross-cutting queries ("show me the days where I mentioned both `loopd` and `gym`") need their own chain with their own data-fetch logic. An agentic shape would let the model improvise the data fetch — `query_entries(filter: "mentions thread X AND thread Y")` — without a new chain. If you've worked with the difference between typed REST endpoints and a GraphQL backend that lets the client compose queries, this is the same shape — typed endpoints are predictable and cheap; GraphQL is flexible and harder to constrain. Concrete consequence: the codebase has 5 chains for 5 specific jobs. A user who wants a 6th job (e.g. "summarise my last 3 trips") would need either a new chain or an interpret-like generic chain. The agentic version could handle ad-hoc queries without code changes — but at 4× the cost-per-call and a much wider failure surface (the model picks the wrong tool, the orchestrator dispatches wrong, the loop never terminates). Boundary: the right time to add agentic shapes is when the user-visible feature requires open-ended queries the codebase doesn't know how to pre-fetch for. Until then, one-shot wins.
+The cost of one-shot is that the codebase can't support "ask the AI anything about your journal" features. The model can only see what the prompt builder chose to include; novel cross-cutting queries ("show me the days where I mentioned both `loopd` and `gym`") need their own chain with their own data-fetch logic. An agentic shape would let the model improvise the data fetch — `query_entries(filter: "mentions thread X AND thread Y")` — without a new chain. If you've worked with the difference between typed REST endpoints and a GraphQL backend that lets the client compose queries, this is the same shape — typed endpoints are predictable and cheap; GraphQL is flexible and harder to constrain. Concrete consequence: the codebase has 5 chains for 5 specific jobs. A user who wants a 6th job (e.g. "summarise my last 3 trips") would need either a new chain or an interpret-like generic chain. The agentic version could handle ad-hoc queries without code changes — but at 4× the cost-per-call and a much wider failure surface (the model picks the wrong tool, the orchestrator dispatches wrong, the loop never terminates). Until then, one-shot wins.
+
+The cost ledger for adding a 6th capability — typed chain vs agentic:
+
+```
+        Typed chain (loopd's pattern)              Agentic chain
+   ┌──────────────────────────────────────┐   ┌──────────────────────────────────────┐
+   │ writer's time:                        │   │ writer's time:                        │
+   │   build one new chain file            │   │   define tool schemas + dispatcher    │
+   │   (buildContext + prompt + parse)     │   │   wire orchestrator loop              │
+   │                                       │   │                                       │
+   │ cost per call:                        │   │ cost per call:                        │
+   │   one round-trip; predictable          │   │   3–5 round-trips; variable           │
+   │                                       │   │                                       │
+   │ failure modes:                        │   │ failure modes:                        │
+   │   prompt malformed (1 surface)         │   │   model picks wrong tool              │
+   │                                       │   │   orchestrator dispatches wrong       │
+   │                                       │   │   loop never terminates               │
+   │                                       │   │   observation parse fails              │
+   │                                       │   │   (4+ surfaces)                       │
+   │                                       │   │                                       │
+   │ adds support for:                     │   │ adds support for:                     │
+   │   one job                             │   │   any job whose data the tools can    │
+   │                                       │   │   reach (open-ended)                  │
+   │                                       │   │                                       │
+   │ right call when:                      │   │ right call when:                      │
+   │   the job is known in advance         │   │   the user needs ad-hoc Q&A           │
+   └──────────────────────────────────────┘   └──────────────────────────────────────┘
+```
+
+Agents earn their cost when you don't know in advance what data is needed; until you cross that threshold, the deterministic prompt-builder is the right call.
 
 This is what people mean by "the cheapest agent is no agent." Tool-calling loops are powerful, expensive, and hard to debug — every iteration is another LLM decision the codebase has to defend. One-shot calls trade flexibility for predictability: if you know the data the model needs, fetch it deterministically and let the model do the LLM-shaped work (reasoning over typed inputs). Agents earn their cost when you don't know in advance what data is needed; until you cross that threshold, the deterministic prompt-builder is the right call. The full picture is below.
 
@@ -395,3 +511,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (hotel-concierge-on-hold scenario → "model as concierge, app code as dispatcher, every step another round-trip" pattern naming → bolded stakes pivot to `buildContext` pre-fetching for `expand` vs 4-round-trip agentic alternative → before/after bullets on tool-loop vs one-shot → one-line "cheapest agent is no agent" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from physical-world analogies (hotel concierge / telephone hotline operator, both banned per v1.31.0/v1.32.0) to level-1 primitives (a JavaScript generator function `function*` driven by `next()`; tool calls are LLM-emitted `yield`s with a loop driver running the requested fetches). Added Move 1 mnemonic diagram (tool-loop vs one-shot side-by-side) + 3 Move 2 sub-section diagrams: hypothetical 3-iteration agent trace, expand() under one-shot vs agentic walkthroughs, sixth-capability cost ledger. Total: 4 new diagrams.

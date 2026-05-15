@@ -35,6 +35,28 @@ The model only sees what flies in the suitcase this trip — pack it deliberatel
 
 An AWS Lambda function's deployment package has a hard size cap — you decide what code goes into the zip for each function and leave the rest in shared layers or S3. The context window is the same shape: every LLM call has a fixed token budget, and the codebase's job is to decide what gets to ride in *this* prompt. Spread across five chains, the codebase carries different things for different jobs — never one giant payload that tries to do everything.
 
+The shape in one picture — what fills the prompt for one call:
+
+```
+   prompt assembled by your code:
+   ┌─────────────────────────────────────────────────┐
+   │ system prompt         [████░░░░░░░░░░░░░░░░░░]   │
+   │ + today's entry        [██████████░░░░░░░░░░░░]   │  total stays
+   │ + recent context        [████░░░░░░░░░░░░░░░░░░]   │  under the
+   │ + output instructions   [██░░░░░░░░░░░░░░░░░░░░]   │  per-chain
+   └─────────────────────────────────────────────────┘  budget
+                    │
+                    ▼  one HTTP POST
+   ┌────────────────────────────┐
+   │ LLM (~200K-token ceiling)  │
+   └────────────────────────────┘
+
+   what doesn't fit, doesn't go.
+   per-chain code decides what to pack.
+```
+
+The three sub-sections below trace the per-chain budgets, where the caps live in code, and the one chain (interpret) whose cap is `truncateTail` instead of `slice`.
+
 ### Per-chain context budgets — what each call brings
 
 If you're coming from frontend, this is the same shape as a per-route data loader picking exactly what each page needs from a global store, instead of dumping the whole store into every page. Each chain's input is decided at code-write time and capped explicitly:
@@ -45,15 +67,86 @@ If you're coming from frontend, this is the same shape as a per-route data loade
 - **expand** — entry text + ≤5 sibling todos + last 3 days of entries with their cached AI summaries. The biggest context window of the four JSON chains; even so, each part is capped.
 - **interpret** — only the journal entry's text. No surrounding context, no recent summaries, no other days. The text is `truncateTail`'d to `MAX_INPUT_CHARS = 2000` and short-circuits below `MIN_TEXT_LENGTH = 20`. ~600–1000 tokens of markdown out, capped at `MAX_TOKENS = 1800`.
 
+The five chains' budgets in one table:
+
+```
+   chain         input budget                            output cap
+   ──────────    ───────────────────────────────────     ──────────
+   classify      text only — no surrounding context       ~50 tokens
+   summarize     full day + clips + habits                ~1024
+   caption       rawLog + last 5 captions + mood          ~768
+   expand        entry text + ≤5 sibling todos +          ~1024
+                 last 3 days' cached summaries
+   interpret     truncateTail(text, 2000 chars)           ~1800
+                 NO surrounding context
+
+   .slice(0, 3) and .slice(0, 5) are the load-bearing
+   caps — without them, a 50-todo / 14-day backfill day
+   would blow the budget 10×.
+```
+
+Each chain's input is decided at code-write time, not at call time — predictable cost per call.
+
 Concrete consequence: a power-user with 10 journal entries on one date triggers `expand` on a todo. The prompt builder reads the current entry text (~200 tokens), grabs 5 sibling todos (~50 tokens), and pulls the last 3 days of cached `ai_summaries` (~600 tokens combined). Total input: ~850 tokens. The model returns ~400 tokens of expansion JSON. The bill: ~$0.002, predictable per call. Boundary: caps are the load-bearing detail. Without `.slice(0, 5)` and `.slice(0, 3)`, a heavy journaling day with 50 todos and a 14-day backfill could land 5,000+ tokens in the context window and the cost-per-call jumps 10×.
 
 ### Where the caps live — `buildContext` per chain
 
 Each chain has its own `buildContext` helper (e.g. `src/services/todos/expand.ts:147 → buildContext`). The helper is where slicing and truncating happen. The pattern: pull from SQLite as much as the chain might want, then slice/truncate to the per-chain budget, then build the prompt string. Think of it like a React selector that fetches the whole entity from the store and then projects only the fields the component renders — the wide read is fine, the narrow projection is what matters. Concrete consequence: `expand`'s `buildContext` reads up to 14 days of recent entries from SQLite (cheap, local), then calls `recentDates.slice(0, 3)` (cheaper, in-memory). The model sees only the slice. If a developer needs to widen the window for a specific feature, they edit the slice — not the read. Boundary: caps don't compose — five chains with different caps means five different `buildContext` functions, and a tweak to one doesn't affect the others. That's the cost of per-chain budgets and also the win.
 
+The pattern, in code-flow form:
+
+```
+   src/services/todos/expand.ts:147 → buildContext()
+   ──────────────────────────────────────────────────
+     ┌──────────────────────────────────────────────┐
+     │ 1. read wide from SQLite                       │
+     │      const recent = getEntries(14 days)         │  cheap, local
+     │      const siblings = getSiblingTodos(entryId)  │
+     │                                                 │
+     │ 2. slice to per-chain budget                   │
+     │      recent.slice(0, 3)                         │  in-memory
+     │      siblings.slice(0, 5)                       │
+     │                                                 │
+     │ 3. build the prompt string                     │
+     │      const prompt = template(slice, ...)        │
+     └──────────────────────────────────────────────┘
+
+   wide read is fine; narrow projection is what matters.
+   widening a window = edit the slice, not the read.
+```
+
+Five chains have five different `buildContext` helpers — the caps are per-chain by design.
+
 ### Why `truncateTail` for interpret — most-recent matters more
 
 Interpret's input cap is unusual: `truncateTail(text, 2000)` keeps the *last* 2000 characters, not the first. The reason: when a user opens "interpret" on a long journal entry, they want a reflection on the most recent passage they wrote — what they were just thinking about. The opening paragraph of an entry is often stage-setting; the tail is where the thinking lands. If you're coming from frontend, this is the same instinct as a chat history that pages the most recent N messages instead of the first N — recency is the signal, not chronological position. Concrete consequence: a user writes a 5000-char journal entry, opens "interpret" near the end. The prompt sees the last 2000 chars (the thinking-out-loud section), not the opening 2000 chars (the agenda). The reflection lands on what the user actually wrestled with. Boundary: this breaks for entries where the lede IS the point — a single-paragraph reflection at the top followed by stream-of-consciousness afterward. The codebase accepts that mismatch because most journals don't have that shape.
+
+Walking the truncation on a 5000-char entry:
+
+```
+   entries.text for one date (5000 characters):
+   ┌────────────────────────────────────────────────────────┐
+   │ chars 0–1500    | agenda / what I'm doing today          │ ◄── dropped
+   │ chars 1500–3000 | middle of the entry (notes / drops)    │ ◄── dropped
+   │ chars 3000–5000 | the thinking-out-loud section           │ ◄── KEPT
+   └────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼  truncateTail(text, 2000)
+                                    ▼
+                            last 2000 chars only
+                                    │
+                                    ▼  sent to model
+                                    ▼
+                  reflection lands on what the user was
+                  just wrestling with — not on the agenda.
+
+   chat-history pattern: recency is the signal, not chronological
+   position. interpret picks the tail, summarize picks the whole day,
+   classify picks just the one todo line — each chain's truncation
+   strategy matches its job.
+```
+
+The truncation strategy is the part the caller customizes per chain.
 
 This is what people mean by "the prompt is the application." Once you accept that the model only sees what you put in the prompt, the engineering moves from "how do I make the model do X" to "what should the prompt contain for X to fall out." Every chain in the codebase is a separate answer to that question, and the caps in `buildContext` are the moment the team committed to what each chain actually needs vs what it might theoretically want. Wisdom in LLM engineering tends to look like a smaller `slice()`. The full picture is below.
 
@@ -373,3 +466,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced airline-suitcase + airport-check-in analogies with AWS Lambda deployment-package size cap, API gateway POST-body limits, Slack message char cap, and Git push size limits).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-4 — AWS Lambda payload, HTTP POST, Slack message char cap, Git push limits, all industry-standard size primitives). Added Move 1 mnemonic diagram (prompt-fills-budget shape) + 3 Move 2 sub-section diagrams: chain budget table, buildContext wide-read-then-slice code-flow, truncateTail walked on a 5000-char entry. Total: 4 new diagrams.

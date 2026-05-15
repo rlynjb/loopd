@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Hit send in Gmail. The message vanishes from compose into the sent folder in under 16ms — the UI never waited for the SMTP handshake. Gmail kicked off the network call in the background; if your wifi cuts out mid-flight the message stays queued and retries when the connection comes back. You moved on the moment the UI confirmed; the delivery completed independently. Linear does the same when you check an issue off: optimistic checkmark in 16ms, server confirmation lands later, the checkmark only rolls back if the network actually fails.
+You're writing a form `onSubmit` handler. Option one: `await fetch('/api/save', { body })` then `setState({ saved: true })`. The user clicks Save, waits for the round-trip, then sees the confirmation. Option two: `setState({ saved: true })` immediately, then `fetch('/api/save', { body })` without `await` — the confirmation appears in 16ms, the network call fires in the background, and you reconcile state if the request fails. The second option is what every modern app does when the UI ought to feel instant: commit to local state first, fire the network call asynchronously, update again if reality disagrees.
 
 That two-phase shape — instant acknowledgement, eventual delivery — is fire-and-forget classification. Not "make the AI faster," not "skip the AI step" — commit a safe default synchronously, kick off the model call without awaiting, update the row when the result arrives, emit an event so any mounted listener re-renders.
 
@@ -27,29 +25,161 @@ With fire-and-forget:
 - Each `scheduleClassify` returns ~600ms later; `CLASSIFY_PROGRESS_EVENT` triggers a per-row re-render
 - Offline keystrokes still commit; the type badges stay at default-todo until network returns
 
-Optimistic UI with eventual reconciliation — the receipt is instant, the drink follows.
+Optimistic UI with eventual reconciliation — the local commit is instant, the network result follows.
 
 ---
 
 ## How it works
 
-Open Linear and check off an issue. The checkmark appears in 16ms — far before any server has confirmed the change. The UI committed locally, fired the API call in the background, and trusted that the network would either confirm or roll back. If you're coming from frontend, this is exactly React's optimistic UI pattern — commit local state immediately, fire the network call in the background, update again when the response lands. Same shape as Gmail's send-and-move-on, same shape as a React Query `mutation.mutate()` with `optimisticData`. The user never waits on the network; the system catches up.
+`setState` followed by an `await`-less `fetch()` is the canonical pattern. Commit local state first; fire the network call in the background; trust that the network will either confirm or update again when reality disagrees. React Query's `mutation.mutate()` with `optimisticData` ships exactly this shape — local state commits immediately, the underlying request runs in the background, `onSuccess` lands when (and if) the server agrees. loopd's `reconcileTodoMetaForEntry` runs the same arrangement for AI classification: heuristic + insert + `scheduleClassify` without await, then a `CLASSIFY_PROGRESS_EVENT` updates the UI when the LLM call returns.
+
+The shape in one timeline:
+
+```
+   user focus-blurs the journal text (commit boundary)
+              │
+              ▼  t = 0ms
+   ┌────────────────────────────────────────────────┐
+   │ reconcileTodoMetaForEntry walks 3 new todos:   │  synchronous
+   │   for each:                                     │  ~10ms total
+   │     heuristic = heuristicClassify(text)         │
+   │     INSERT todo_meta(type='todo',               │
+   │       confidence = heuristic ? 'heuristic' :    │
+   │                                 null)            │
+   │     if heuristic == null:                       │
+   │       scheduleClassify(id, text)   ◄── NO AWAIT │
+   └─────────────────┬──────────────────────────────┘
+                     │
+                     ▼  dashboard re-renders with 3 todo cards
+                     │  (the user moves on; nothing waited
+                     │   on the network)
+                     ▼
+   ... ~600ms per scheduled classify ...
+                     │
+                     ▼  Haiku response 1 lands
+   ┌────────────────────────────────────────────────┐
+   │ updateTodoMeta(id, type='idea',                │
+   │                 confidence='haiku')             │
+   │ emit CLASSIFY_PROGRESS_EVENT                    │
+   │ /todos screen re-fetches → badge updates live  │
+   └────────────────────────────────────────────────┘
+```
+
+The four sub-sections below trace the synchronous commit, the awaitless dispatch, the event channel that re-renders the UI, and why there's no retry loop.
 
 ### The synchronous commit — meta row lands instantly
 
 `reconcileTodoMetaForEntry` walks every newly-scanned todo. For each one it calls `heuristicClassify(todo.text)` (sync, microseconds), inserts a `todo_meta` row with whatever the heuristic returned (`type='todo'` + `confidence='heuristic'` when matched; `type='todo'` + `confidence=null` when unsure), and moves on. The whole reconcile completes in single-digit milliseconds. Think of it like a typed Redux dispatch with optimistic state — the action commits to the store, the UI re-renders, and the side-effect that finalises the value runs separately. Concrete consequence: a user types three new todos in a journal entry and focus-blurs. The reconciler inserts 3 `todo_meta` rows, the dashboard re-renders with three new todo cards, and the user moves on — total time from blur to render: ~10ms. Nothing waited on a network. Boundary: this only works because the codebase has a usable *default* type — `'todo'`. If the default were unusable, the UI would show broken cards during the async window.
 
+The insert path per new todo:
+
+```
+   for each new todo:
+     heuristic = heuristicClassify(todo.text)   ◄── sync, microseconds
+              │
+              ▼
+     INSERT todo_meta {
+       id, todoId, entry_id,
+       type: 'todo',                            ◄── safe default
+       classifier_confidence:
+         heuristic ? 'heuristic' : null
+     }
+              │
+              ▼
+   total reconcile for 3 todos: ~10ms
+   dashboard re-renders; user moves on
+   (nothing waited on a network)
+```
+
+The "safe default" is what makes this safe — `'todo'` is correct enough for the UI even when the LLM hasn't run yet.
+
 ### The async dispatch — `scheduleClassify` without await
 
 When the heuristic returned `null`, the reconciler additionally calls `scheduleClassify(todoId, todo.text)` — but does NOT `await` it. The `scheduleClassify` function fires off the Haiku call in the background and returns a Promise the reconciler never reads. If you're coming from React, this is the same shape as `useEffect(() => { void doAsync(); }, [])` — fire and forget, with the understanding that the result will land via a different mechanism (state update + re-render). Concrete consequence: the reconciler kicks off N background classifies (one per unsure todo) and returns to the caller. The browser's microtask queue eventually runs each `scheduleClassify` body; each body does `await classifyTodo(text)`, which is the actual ~600ms LLM round-trip; each body then calls `updateTodoMeta(id, { type, confidence: 'haiku' })`. The DB writes trigger re-renders in any subscribed screens. Boundary: the reconciler doesn't track how many background classifies are in flight — they could pile up if the user types 50 todos in five seconds. In practice this never happens; the codebase trusts the OS scheduler to handle the concurrency.
+
+The dispatch and its internals:
+
+```
+   in reconcileTodoMetaForEntry, after insert:
+
+     if (heuristic == null && !todo.done) {
+       scheduleClassify(todo.id, todo.text);   ◄── NO AWAIT
+       //                                      returns a Promise
+       //                                      the reconciler
+       //                                      never reads
+     }
+
+   scheduleClassify(id, text):
+     classifyTodo(text)              ← ~600ms LLM round-trip
+       .then(result =>
+         updateTodoMeta(id, {
+           type: result.type,
+           classifier_confidence: 'haiku'
+         })
+       )
+       .catch(err => log warning)    ← swallowed; never throws
+```
+
+Fire-and-forget by design — the reconciler doesn't track in-flight classifies; the OS scheduler handles the concurrency.
 
 ### The event channel — `CLASSIFY_PROGRESS_EVENT`
 
 When `scheduleClassify` finishes a successful classify and writes the result via `updateTodoMeta`, it emits a `CLASSIFY_PROGRESS_EVENT` on the codebase's internal event emitter (`src/services/eventBus.ts` or similar). The `/todos` screen subscribes to this event; on receive, it re-fetches the affected meta rows and updates the badge UI. Think of it like a typed Redux subscription or React Query's `invalidateQueries` — a server-side change publishes a signal, listeners re-fetch and re-render. Concrete consequence: 600ms after a typing burst, the first Haiku response lands. `scheduleClassify` writes `type='idea'` to the meta row, emits the event. `/todos` listens, re-fetches metas, re-renders with the new badge. The user sees the badge shift from default-todo to idea live. The next responses arrive over the following second; each triggers another re-render. The UI feels "alive" without the editor commit having paid for it. Boundary: the event channel is fire-and-forget — a listener that's not mounted when the event fires never sees it. The next read of the meta row will reflect the new state, so the "live" feel only matters when the user is actively watching.
 
+The event flow from LLM response to UI badge update:
+
+```
+   ┌─ scheduleClassify completes ──────────────────┐
+   │   updateTodoMeta(id, type='idea',              │
+   │                   confidence='haiku')          │
+   │       ▼                                         │
+   │   emit CLASSIFY_PROGRESS_EVENT { todoId }       │
+   └───────────────────────┬───────────────────────┘
+                           │
+                           ▼  internal event bus
+                           │
+   ┌─ /todos screen (subscribed) ──────────────────┐
+   │   on event:                                     │
+   │     refetch affected meta rows                  │
+   │     re-render badge UI                          │
+   │       ▼                                         │
+   │   type badge shifts: 'todo' → 'idea' live      │
+   └───────────────────────────────────────────────┘
+
+   listener mounted     → sees the live update
+   listener unmounted   → sees the new state on next mount/read
+                          ("live" is best-effort, not guaranteed)
+```
+
+The event channel is a nice-to-have for live updates; the DB row is the source of truth either way.
+
 ### Why no retry loop — acknowledged unknown is acceptable
 
 If `classifyTodo` fails (network error, malformed response, rate limit), `scheduleClassify` catches the error, logs it, and does nothing else. The meta row stays at `type='todo'` `confidence=null`. There's no exponential backoff, no retry queue, no DLQ. If you've worked with React Query's default retry behaviour, this is a deliberate departure — the codebase decided that an unresolved classify is acceptable indefinitely (the type is just less specific than it could be), and a retry loop is overhead that doesn't earn its cost at single-user scale. Concrete consequence: a user offline for 30 minutes types 20 todos. All 20 land with `confidence=null`. Three weeks later, they remain at `confidence=null` because there's no sweep job to retry. The user can manually edit any todo's type via the type selector, which is the recovery path. Boundary: at multi-user scale with reliable network, this is fine; at multi-user scale with intermittent network, a measurable fraction of todos would stay stuck. The fix is a periodic sweep that re-enqueues `confidence IS NULL AND created_at < now - 24h` — deferred until needed.
+
+What happens on failure, today vs the deferred retry sweep:
+
+```
+       Today (no retry)                       Deferred (periodic sweep)
+   ┌─────────────────────────────────┐    ┌─────────────────────────────────┐
+   │ scheduleClassify catches error   │    │ same scheduleClassify behavior   │
+   │ logs warning; does nothing else  │    │ + periodic background job:       │
+   │                                  │    │                                  │
+   │ row stays at:                    │    │   SELECT id, text FROM todo_meta │
+   │   type = 'todo'                  │    │    WHERE classifier_confidence    │
+   │   classifier_confidence = null   │    │            IS NULL                │
+   │                                  │    │      AND created_at <             │
+   │ 3 weeks later: still at null     │    │            now - INTERVAL '24h'   │
+   │                                  │    │                                  │
+   │ recovery path: user manually     │    │   for each: re-enqueue classify   │
+   │ edits via type selector          │    │                                  │
+   │                                  │    │ recovers stuck rows automatically │
+   └─────────────────────────────────┘    └─────────────────────────────────┘
+        adequate at single-user scale          needed at multi-user scale
+        with intermittent network              with intermittent network
+```
+
+The "acknowledged unknown" state is safe to leave alone indefinitely — the type is just less specific than it could be, not wrong.
 
 This is what people mean by "optimistic UI with eventual reconciliation." The user's keystroke commits locally; the expensive network work happens elsewhere; the UI updates when the network catches up. Every framework that has ever felt fast does some version of this — React Query optimistic updates, Firebase's offline writes, Linear's local-first sync. The discipline is naming what state is acceptable during the async window (here: `type='todo'`, the safe default) and what mechanism propagates the eventual result (here: an event emit + re-fetch). Get either wrong and the optimism leaks into broken UI; get both right and the user never notices the network was involved. The full picture is below.
 
@@ -426,3 +556,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced barista/café analogies with Gmail optimistic send, Linear optimistic checkmark, React Query optimistic UI). Why care WC1 was missed by the original triage; included in this pass.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from Gmail/Linear (level-5 whole-products) to level-1 primitives (`setState` + `fetch()` without `await`; React Query's `mutation.mutate()` with `optimisticData`). Added Move 1 mnemonic diagram (focus-blur to live-update timeline) + 4 Move 2 sub-section diagrams: synchronous insert path, dispatch internals, event-flow from LLM response to badge update, today-vs-deferred-retry-sweep comparison. Total: 5 new diagrams.

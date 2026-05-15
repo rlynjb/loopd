@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open ChatGPT, paste a week's worth of journal entries, ask "reflect on what I've been thinking about this week — don't give me advice, don't motivate me, just name the patterns." ChatGPT writes a paragraph or two of warm prose, asks one or two honest questions, ends with a sentence to carry forward. You read it once, close the tab, don't bookmark it, don't ask the app to save it. The output IS the artifact — not a structured row the app uses, not a label the UI renders, just prose the user reads and moves on from. Notion AI's "summarise this page" button does the same thing on documents; Claude's `claude.ai` artifact pane does it on attached files.
+You've got a `useMutation` hook that POSTs a question to your server and returns a markdown string. You wire the result directly into a modal: `<Modal>{mutation.data}</Modal>`. When the user closes the modal, the React state goes with it; if they open it again, you re-fire the mutation. No `useQuery` with a stale-time, no caching layer, no database row holding the markdown string between sessions. The result IS the artifact — the markdown the user reads, rendered once, gone on dismiss. Same shape as a `useMutation` whose `data` field is markdown for inline rendering, not a structured row the rest of the app consumes.
 
 That single-session, no-database shape is the interpret chain. Not "another data-producing chain that writes a structured row," not "the assistant that classifies your day" — a chain where the model's output *is* the artifact the user reads, rendered once into a modal, never persisted, never validated against a schema, never consumed by anything downstream.
 
@@ -27,33 +25,212 @@ With the ephemeral posture:
 - `cleanMarkdown` is the whole validator; section drift slips through and the user is the integrity check
 - The system prompt's "skip if not fitting" permission is at the prompt layer, not the validator layer
 
-AI features for reading, not for storing — the therapist talks once, you sit with it, close the notebook.
+AI features for reading, not for storing — a `useMutation` whose result renders into a modal and never reaches the database.
 
 ---
 
 ## How it works
 
-ChatGPT's "summarise what I've been thinking about this week" prompt produces a paragraph or two of warm prose — naming patterns, asking one or two honest questions, ending with a sentence the user carries forward. You read it once, close the tab, don't save it. Notion AI's per-page summary button does the same: prose the user reads inline, not a structured field the app stores. Interpret is the same shape — a single LLM call that produces a markdown essay the user reads once, and the output is never persisted.
+A `useMutation` hook whose `data` field is a markdown string for inline rendering — no `useQuery` cache, no database row, no validator behind it. The mutation fires on a button tap, the modal renders the result from React state, the modal closes and the state goes with it. If the user opens the modal again, the mutation re-fires from scratch. Interpret is exactly this shape: a single LLM call that produces a markdown essay, rendered once, never persisted, never consumed by anything downstream.
+
+The shape in one picture:
+
+```
+   user taps "Interpret" button
+              │
+              ▼
+   const mutation = useMutation({
+     mutationFn: () => interpretEntry(entries[date].text)
+   })
+              │
+              ▼
+   ┌────────────────────────────────────────────────────┐
+   │ interpretEntry(rawText):                            │
+   │   1. guard: text.length < MIN_TEXT_LENGTH (20)      │  ◄── skip
+   │      → { ok: false, reason: 'too-short' }           │
+   │                                                      │
+   │   2. guard: no API key                              │  ◄── skip
+   │      → { ok: false, reason: 'no-ai' }               │
+   │                                                      │
+   │   3. truncateTail(text, MAX_INPUT_CHARS = 2000)     │
+   │   4. switch (provider) {                             │
+   │        case 'claude': client.messages.create(...)   │  ◄── one shot
+   │        case 'openai': fetch('api.openai.com/...')   │
+   │      }                                              │
+   │                                                      │
+   │   5. cleanMarkdown(rawOutput)                        │  ◄── strip fence,
+   │      → strip outer ```…``` fence                     │     reject empty
+   │      → reject empty/whitespace as 'malformed'         │
+   │                                                      │
+   │   6. return { ok: true, markdown }                  │
+   └────────────────────────┬───────────────────────────┘
+                            │
+                            ▼  mutation.data
+                            ▼
+                  <Modal>{mutation.data}</Modal>
+                            │
+                            ▼  user closes modal
+                  React state unmounts; markdown gone
+                  re-open → mutation.mutate() fires again
+                  (~$0.005, ~3-5s; output is similar but
+                   not identical to the first run)
+```
+
+The five sub-sections below trace the trigger, the chain structure, the two pre-call guards, the no-persistence stance, and the system prompt's permission to skip sections.
 
 ### The trigger — user-initiated, modal-rendered
 
 A user opens a journal entry, taps the "Interpret" button next to the Vlog button, and a modal opens calling `interpretEntry(entries[date].text)`. The modal renders the markdown response with selectable text for copy/paste. If you're coming from frontend, this is the same shape as a typed `useMutation` fired by a button click that renders the result inline — no caching, no auto-refetch, the result lives in the modal's React state until close. Concrete consequence: user taps Interpret on a 1500-character entry; the modal shows a loading state for ~3-5 seconds; the markdown renders; the user reads, scrolls, copies a sentence, dismisses. The modal unmounts; the markdown is gone. Boundary: this means re-opening the modal re-fires the entire chain — another ~$0.005, another 3-5s wait. The codebase accepts this because the feature is rare (user-triggered, not background).
 
+The trigger-to-render flow:
+
+```
+   ┌─ Journal screen ─────────────────────────────┐
+   │   <Pressable onPress={() => mutation.mutate()}> │
+   │     Interpret                                  │
+   │   </Pressable>                                 │
+   └────────────────────┬──────────────────────────┘
+                        │
+                        ▼  mutation fires
+   ┌─ InterpretModal mounted ─────────────────────┐
+   │   { mutation.isLoading && <Spinner /> }       │  ~3–5s
+   │   { mutation.data && (                        │
+   │     <Markdown selectable>                      │  user reads,
+   │       {mutation.data.markdown}                 │  copies a
+   │     </Markdown>                                │  sentence
+   │   )}                                           │
+   └────────────────────┬──────────────────────────┘
+                        │  user dismisses modal
+                        ▼
+            React state unmounts; markdown gone
+            re-open → mutation fires again from scratch
+```
+
+User-triggered + ephemeral by design — caching would buy little because re-opens are rare.
+
 ### The chain structure — same shape as the other four, different output contract
 
 The chain is structurally identical to summarize/caption/classify/expand: read `getProvider()`, read `getApiKey(provider)`, branch on `'claude' | 'openai'`, call once, return. The difference is the output contract — the other four emit JSON the app parses programmatically; interpret emits a markdown essay the user reads directly. Think of it like the difference between a typed `useMutation<DataShape>` and a `useMutation<string>` — same hook, same shape, different downstream consumer. Concrete consequence: `interpret.ts` builds a long system prompt (32 lines, the longest in the codebase) + user prompt (the journal text), calls Claude, receives ~600-1000 words of markdown, runs `cleanMarkdown` to strip an outer triple-backtick fence if present, returns the string. No `JSON.parse`, no schema validator, no persistence call. Boundary: this shape only works because the output is for human eyes; if interpret's output ever needed to feed downstream code (e.g., extracting "themes" the dashboard renders), the markdown contract would have to be replaced with JSON.
+
+Interpret vs the other four chains:
+
+```
+   step                       summarize / caption / classify / expand     interpret
+   ──────────────────────     ───────────────────────────────────────     ──────────────────
+   getProvider()              same                                         same
+   getApiKey(provider)        same                                         same
+   switch (provider)           same                                         same
+   build prompt               JSON-shape system prompt                     32-line markdown
+                                                                            system prompt
+   LLM call                   one round-trip                                same
+   parse                      parseJson(text)                               (no JSON parse)
+   validate                   per-chain schema validator                   cleanMarkdown
+                              (validateSummary, etc.)                       (strip fence,
+                                                                            reject empty)
+   persist                    database.ts upsert*()                         (no persist)
+   downstream consumer        the app (typed reads)                         the user (markdown
+                                                                            in a modal)
+```
+
+Same hook shape, different output type, different downstream consumer.
 
 ### Two pre-call guards — `MIN_TEXT_LENGTH` and `truncateTail`
 
 Before the network call fires, two guards run. `MIN_TEXT_LENGTH = 20` skips entries too short to mirror — a one-word entry produces no interpretation worth the cost. `MAX_INPUT_CHARS = 2000` truncates long entries to the **most recent** 2000 chars via `truncateTail` (not `truncateHead`). If you've worked with input-length validation in a React form, this is the same shape — reject inputs that are clearly too short to be useful, cap inputs that are clearly too long to fit the model's effective context. The unusual choice is `truncateTail` over `truncateHead` — when a user opens "interpret" on a long entry, the *tail* is where the thinking lands; the head is often agenda-setting. Concrete consequence: a user writes a 5000-char journal entry over the course of an evening, opens interpret near bedtime. The prompt sees the last 2000 chars (the late-night reflection), not the opening 2000 chars (the morning's todo list). The interpretation lands on what the user actually wrestled with. Boundary: this breaks for entries where the most important thought is at the top — a single-paragraph reflection followed by stream-of-consciousness. The codebase accepts the mismatch because most journals don't have that shape.
 
+The two guards on a 5000-char entry:
+
+```
+   raw text: 5000 chars (entries.text for this date)
+                       │
+                       ▼  guard 1: MIN_TEXT_LENGTH check
+                       │
+        5000 > 20 → passes, continue
+                       │
+                       ▼  guard 2: truncateTail(text, 2000)
+                       │
+   ┌──────────────────────────────────────────────────────┐
+   │ chars 0–1500    │ morning agenda / what I'm doing     │ ◄── dropped
+   │ chars 1500–3000 │ middle of the entry (notes, drops)  │ ◄── dropped
+   │ chars 3000–5000 │ late-night reflection (the thinking) │ ◄── KEPT
+   └──────────────────────────────────────────────────────┘
+                       │
+                       ▼  send last 2000 chars to model
+                       ▼
+   interpretation lands on the thinking, not the agenda
+```
+
+The unusual choice is `truncateTail` over `truncateHead` — recency is the signal for journaling, not chronological position.
+
 ### No persistence — the result is ephemeral by design
 
 There is no `interpretations` table. No `last_interpretation` column on `entries`. No cache layer. The output lives in the modal's React state until close, then it's gone. If the user opens the modal again, the chain re-fires from scratch. Think of it like a `useQuery` with `staleTime: 0` and `cacheTime: 0` — every read is a fresh fetch. Concrete consequence: a user runs interpret on Monday's entry, then re-opens it on Tuesday wanting to see the same interpretation. The codebase doesn't have it; the chain runs again. Because LLM output isn't deterministic, the second interpretation is similar but not identical to the first. The user accepts this; the codebase doesn't pretend otherwise. Boundary: this matters for cost (re-opens cost dollars), but the feature is rare enough that the total cost is bounded. If interpret usage scaled 100×, caching would become attractive — but caching markdown is harder than caching JSON because there's no canonical comparison.
 
+What persistence would have to add, and what the ephemeral posture skips:
+
+```
+       With persistence (NOT loopd)              Ephemeral (loopd)
+   ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
+   │ interpretations table              │    │ no table                          │
+   │   primary key (entry_id, model)    │    │                                   │
+   │   markdown TEXT                    │    │ React state holds the markdown    │
+   │   created_at TIMESTAMP             │    │ for the modal's lifetime          │
+   │                                    │    │                                   │
+   │ "regenerate" button + invalidation │    │ re-open re-fires; no cache to     │
+   │ logic                              │    │ invalidate                        │
+   │                                    │    │                                   │
+   │ cache freshness rule:               │    │ no freshness rule                 │
+   │   how do we know cached markdown    │    │                                   │
+   │   is still relevant?                │    │                                   │
+   │                                    │    │                                   │
+   │ canonical comparison for invalid-   │    │ no comparison; the user reads     │
+   │ ation: markdown isn't trivially     │    │ once and moves on                  │
+   │ comparable                         │    │                                   │
+   │                                    │    │                                   │
+   │ storage cost grows with usage      │    │ storage cost = 0                  │
+   └──────────────────────────────────┘    └──────────────────────────────────┘
+```
+
+Re-opens cost dollars; at this scale, caching costs more in complexity than it saves in API calls.
+
 ### The system prompt — structural template + permission to skip sections
 
 The 32-line system prompt prescribes a structural template: opening bold + blockquote → numbered themes → "healthy side" / "part to watch" / "deeper fear" / "honest interpretation" / "strongest line" / "final thought" sections with emoji-prefixed H2 headings. Critically, the prompt explicitly says: **"skip any section that doesn't fit the user's actual content; do not pad."** A 3-section response on a flat day is better than a forced 11-section read of nothing. If you've worked with strict typed output and noticed how often the model dutifully fills every field even when the input doesn't warrant it, you'll recognise why this matters — the codebase deliberately negotiates with the model's compulsion to over-fill. Concrete consequence: a user writes a short bored entry. The model produces a 2-section interpretation: opening blockquote + "honest interpretation" + done. Without the explicit skip permission, the model would have filled all 11 sections with thin observations. The discipline is at the prompt layer, not the validator layer. Boundary: the prompt's structural guidance is suggestion, not contract — the codebase doesn't validate which sections appeared. Section drift slips through; the user is the integrity check.
+
+The system prompt's template + the load-bearing skip permission:
+
+```
+   src/services/ai/interpret.ts → SYSTEM constant (~32 lines)
+   ──────────────────────────────────────────────────────────
+   structural template (suggested, not enforced):
+     opening bold + blockquote
+       │
+       ▼ (one numbered theme per content cluster)
+     ## 🌱 healthy side
+     ## ⚠️ part to watch
+     ## 🌊 deeper fear
+     ## 🔎 honest interpretation
+     ## ⭐ strongest line
+     ## 🌅 final thought
+
+   load-bearing instruction:
+   ┌─────────────────────────────────────────────────────────┐
+   │ "skip any section that doesn't fit the user's actual     │
+   │  content; do not pad."                                   │
+   └─────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+   short bored entry → 2-section output (blockquote + honest
+                                          interpretation)
+   rich reflection day → 6-section output (all sections appear)
+   flat day with no    → 3-section output (the model picks
+   real content         the relevant ones)
+
+   discipline lives in the prompt, not in the validator.
+   section drift slips through; the user is the integrity check.
+```
+
+The codebase negotiates with the model's compulsion to over-fill at the prompt layer — not in code, not in a schema.
 
 This is what people mean by "AI features for reading, not for storing." Most AI surfaces in production are designed to produce data the app *uses* — classifications, scores, structured fields. Interpret is the rare shape that produces output the *user* uses directly — the codebase is an editor, not a consumer. Once you accept that contract, you can shed the validation gates, the caching layer, the schema enforcement — and let the model write something that doesn't have to fit any application logic downstream. The model gets to write naturally; the user gets to read once and move on. The full picture is below.
 
@@ -492,3 +669,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced therapist + therapist-reading-notebook analogies with ChatGPT reflection prompt, Notion AI summarise-this-page, Claude.ai artifact pane).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped ChatGPT + Notion AI + Claude.ai (level-5 whole-products) from Why care + How it works Move 1; led with a `useMutation` whose `data` is a markdown string for inline modal rendering (level-1 primitive). Swapped Why care Move 5 from "therapist + notebook" physical-world metaphor to "useMutation result rendered into a modal, never reaching the database." Added Move 1 mnemonic diagram (full interpretEntry flow from button tap through render-and-dismiss) + 5 Move 2 sub-section diagrams: trigger-to-render flow, interpret-vs-other-four-chains step table, two guards on a 5000-char entry, persistence vs ephemeral comparison, system-prompt template + load-bearing skip permission. Total: 6 new diagrams.

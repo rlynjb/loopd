@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-A stenographer is sitting beside a witness in a courtroom, typing every word as it lands. The lawyers don't wait for the witness to finish a five-minute answer before they hear anything; they're reading the transcript scroll in real time on a side monitor. The witness still talks at the same speed; the lawyers just don't have to wait for a "done" to start listening. If the same testimony were delivered as a finished printed statement, every minute of speaking would be a minute of silence on the other side.
+You've got a `fetch('/api/long-response')` call that takes 10 seconds to complete. The naive shape: `await fetch(...).then(r => r.json())` then render — the user sees a spinner for 10 seconds and the full response at once. The alternative: switch to a `ReadableStream` on the response body and a `getReader().read()` loop on the client; render each chunk as it arrives. Total wall-clock is unchanged — the server is still computing for 10 seconds — but the user starts reading at ~200ms instead of ~10s. Same bytes on the wire; very different perceived latency.
 
 The implicit question is whether the consumer reads the output as it lands or only when it's complete. Not a faster model, not a smaller response — incremental delivery, so the perceived wait collapses even though the total bytes are unchanged.
 
@@ -27,13 +25,54 @@ With streaming (the hypothetical for `interpret`):
 - Validator question: validate at stream-complete, or use partial-JSON parser?
 - Three new failure modes: partial completion, mid-stream validation, retry-after-partial
 
-A stenographer typing for an audience who reads in real time, not a printer waiting to finish the page.
+An incremental render of the same bytes — `ReadableStream` instead of `await r.json()`; perceived latency drops without changing the wire payload.
 
 ---
 
 ## How it works
 
 Streaming is HTTP done in slow motion. Instead of the server holding the connection open while it computes a single response, it holds the connection open and sends incremental chunks — one chunk per generated token (or every few tokens). The client receives these chunks as they arrive and renders them as soon as they're parsed.
+
+The streaming vs non-streaming flow in one picture:
+
+```
+   NON-STREAMING (loopd today)
+   ┌─ Client ──────────────────────────────────────────────────┐
+   │  fetch(url) ─────────────────────────►                     │
+   │                                                             │
+   │  (5–10s wait — spinner)                                     │
+   │                                                             │
+   │  ◄────────────────────── full response                      │
+   │                                                             │
+   │  await r.json()                                             │
+   │  validate                                                   │
+   │  render                                                     │
+   └───────────────────────────────────────────────────────────┘
+   time-to-first-byte: 5–10s
+   time-to-full-response: 5–10s
+   user perceives 10s of nothing, then everything
+
+
+   STREAMING (planned for interpret only)
+   ┌─ Client ──────────────────────────────────────────────────┐
+   │  fetch(url, { stream: true }) ────►                        │
+   │                                                             │
+   │  ◄── chunk 1: "Today" (200ms)                                │
+   │      render incrementally                                   │
+   │  ◄── chunk 2: " I worked on" (400ms)                          │
+   │      append to DOM                                          │
+   │  ◄── chunk 3: " the Phase 2A spec" (700ms)                   │
+   │      append                                                  │
+   │  ... continues until stream end at 5-10s ...                │
+   │                                                             │
+   │  validate ON STREAM END (not on each chunk)                 │
+   └───────────────────────────────────────────────────────────┘
+   time-to-first-byte: 200ms
+   time-to-full-response: 5–10s (unchanged)
+   user perceives ~80% lower latency without server change
+```
+
+The four sub-sections below trace the wire format, why streaming forces a validator rethink, the three streaming-specific failure modes, and the loopd-specific candidate (interpret).
 
 ### The wire shape — SSE chunks instead of one response body
 
@@ -53,6 +92,37 @@ In loopd, every JSON chain runs a hard validator after the call (`validateSummar
 
 For markdown output, the math is different — partial markdown is still useful to a human reader, even if a heading is incomplete or a code block is unclosed. This is why `interpret.ts` would be the natural first candidate for streaming: it's the only chain in loopd where the model's output is consumed directly by the user, not by the validator-then-database pipeline.
 
+JSON-chain streaming vs markdown-chain streaming:
+
+```
+   chain type            partial output looks like                 useful to render
+                                                                    while streaming?
+   ──────────────        ─────────────────────────────────────     ────────────────
+   summarize (JSON)      { "headline": "Today                      no — invalid JSON;
+                                                                    can't parse;
+                                                                    validator throws
+   caption (JSON)         { "clean": "rough draft 1", "smoother    no — same shape:
+                                                                    JSON not closed,
+                                                                    validator throws
+   classify (JSON)       { "type": "ide                            no — incomplete
+                                                                    enum value
+   expand (JSON)         { "kind": "idea", "summary": "Today        no — partial
+                                                                    fields can't be
+                                                                    validated
+   interpret (markdown)  "## Today\n\nI worked on the              YES — partial
+                          spec...\n\n## Patterns\n\nThe..."         markdown is still
+                                                                    valid markdown;
+                                                                    the renderer
+                                                                    handles incomplete
+                                                                    structures
+
+   the JSON chains can't stream without giving up the validator's
+   correctness guarantees. interpret can stream cleanly because
+   its consumer (a human reading) is robust to mid-stream state.
+```
+
+The validator's all-or-nothing contract is what makes JSON-chain streaming hard; markdown's partial-is-still-useful property is what makes interpret-streaming easy.
+
 ### Where the streaming UX falls apart
 
 Three failure modes a non-streaming chain doesn't have to worry about:
@@ -60,6 +130,40 @@ Three failure modes a non-streaming chain doesn't have to worry about:
 1. **Partial completion** — the connection drops mid-stream and you have half an output. Do you persist the half? Show it to the user with a "...connection lost" indicator? Throw it away?
 2. **Mid-stream validation** — you discover the model is going off the rails 5 seconds into a 10-second stream. Do you cancel? Let it finish and reject?
 3. **Retry semantics** — non-streaming retries are clean ("call failed → call again"). Streaming retries are messy ("call partial → discard partial → call again → user saw both versions").
+
+The three streaming-only failure modes, with decision points:
+
+```
+   failure mode          example                              decisions you'd
+                                                              have to make
+   ────────────────      ───────────────────────────────      ───────────────────
+   partial completion    user opens interpret modal;          (a) persist half?
+                         3 paragraphs render; phone loses     (b) show "connection
+                         signal; stream cuts off                   lost" + half-
+                                                                  rendered text?
+                                                              (c) throw it away,
+                                                                  restart on retry?
+
+   mid-stream validation user opens interpret modal;          (a) cancel stream
+                         3 paragraphs render; paragraph 4         mid-flight?
+                         starts going off the rails           (b) let it finish
+                         (clinical labels, motivational           and reject after
+                         platitudes)                              stream-end?
+                                                              (c) cancel + show
+                                                                  partial + retry?
+
+   retry semantics       non-streaming retry:                 streaming retry:
+                         call() → fail → call()                call() → 3 paragraphs
+                         clean state                          → fail → discard →
+                                                              call() → user sees
+                                                              both versions
+                                                              + needs UI for
+                                                              "continuing from where
+                                                              we stopped" or
+                                                              "restarting from scratch"
+```
+
+Three new failure modes to design for — none of them appear in the non-streaming case.
 
 ### This is what people mean by "streaming is a UX pattern, not a model pattern"
 
@@ -305,3 +409,6 @@ Answer: `src/services/ai/interpret.ts` (markdown output, no validator gate). `va
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (courtroom-stenographer scenario, name the incremental-vs-complete question, interpret.ts streaming candidate stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from courtroom-stenographer / printer physical-world analogies (banned per v1.31.0/v1.32.0) to level-1 primitive (`await r.json()` vs `ReadableStream.getReader().read()` loop). Swapped Why care Move 5 metaphor to "incremental render of the same bytes — `ReadableStream` instead of `await r.json()`." Added Move 1 mnemonic diagram (streaming vs non-streaming flow side-by-side) + 3 Move 2 sub-section diagrams: JSON-chain-vs-markdown-chain partial output comparison, three streaming-only failure modes with decision points. Total: 4 new diagrams.

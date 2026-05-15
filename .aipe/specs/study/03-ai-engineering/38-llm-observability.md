@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-An air-traffic controller's job at the end of a long shift is reconstructing one specific plane's path: where did it enter the sector, which beacons did it cross, what altitude did it hold at each, what radio exchanges took place, and at exactly what timestamp did it leave. The control tower keeps a synchronized log of every radar ping, every voice transmission, every altitude change, all stamped against a shared flight-ID. Reading the tape, the controller rebuilds the flight in evidence. Without the log she remembers the plane's call sign and nothing else.
+You've got a production incident in a microservice app. The user clicked a button, the request failed, the error message is "Internal Server Error." You go to the logs and find ~50 lines of stdout from each of 5 services that touched the request, none of them labelled with a `request_id`, none of them with timestamps that line up. Reconstructing what happened is detective work. Now picture the same incident with distributed tracing turned on: every request carries a `trace_id`; every service writes spans into a shared trace store; one query against the trace_id pulls back the full timeline — `14:32:01 service A received → 14:32:01.020 called service B → 14:32:01.450 service B threw NoSuchUserException`. Same incident, evidence instead of memory. LLM observability is exactly that, applied to LLM calls: every chain invocation gets a trace_id, every sub-step (prompt build, provider call, parse, validate) writes a span, every span carries timestamp + input + output + tokens + error.
 
 The implicit question is "after the fact, can the team reconstruct what happened during this LLM call, with evidence rather than memory?" LLM observability is the answer — every chain invocation gets a trace_id, every sub-step (prompt build, provider call, JSON parse, validator) gets a span, every span carries timestamp + duration + input + output + model + tokens + error. The shape borrows from distributed tracing (OpenTelemetry, Jaeger); the LLM-specific additions are prompt/response capture and model-version tagging.
 
@@ -37,6 +35,44 @@ Print statements show the moment something went wrong; traces give the full time
 ## How it works
 
 Each LLM call is a multi-stage operation. Each stage has inputs, outputs, and timing. Observability captures all of them.
+
+The trace anatomy + storage + queries in one picture:
+
+```
+   one chain invocation (e.g., classify) generates ONE trace:
+   
+   trace_id: 7f3a... (UUID, shared across all spans of one call)
+       │
+       ├─ span: classify(text)         start: t=0,  duration: 1240ms
+       │   parent_span_id: null
+       │   ├─ span: heuristicClassify   start: t+0,  duration: 5ms
+       │   ├─ span: buildPrompt          start: t+5,  duration: 2ms
+       │   ├─ span: provider_call        start: t+7,  duration: 1180ms
+       │   │   ├─ tokens: in=450, out=12
+       │   │   ├─ model: claude-haiku-4-5
+       │   │   └─ status: success
+       │   ├─ span: parseClassifyJson    start: t+1187, duration: 5ms
+       │   └─ span: validator             start: t+1192, duration: 1ms
+       └─ span: write_todo_meta           start: t+1193, duration: 35ms
+
+   all spans persist to ai_trace table:
+   ┌──────────┬────────────────┬─────────────┬──────────┬─────────┬───────────┐
+   │ trace_id │ span_name      │ parent_id   │ duration │ tokens  │ status     │
+   ├──────────┼────────────────┼─────────────┼──────────┼─────────┼───────────┤
+   │ 7f3a...  │ classify        │ null         │ 1240     │         │ success    │
+   │ 7f3a...  │ heuristic       │ classify     │ 5        │         │ delegated  │
+   │ 7f3a...  │ provider_call   │ classify     │ 1180     │ 450/12  │ success    │
+   │ 7f3a...  │ validator       │ classify     │ 1        │         │ passed     │
+   │ ...                                                                          │
+   └──────────┴────────────────┴─────────────┴──────────┴─────────┴───────────┘
+
+   queries become possible:
+     SELECT * FROM ai_trace WHERE output->>'type' = 'X' AND ...
+     SELECT * FROM ai_trace WHERE status = 'validation_failed' AND ts > NOW() - 24h
+     SELECT span_name, AVG(duration_ms) FROM ai_trace GROUP BY span_name
+```
+
+The three sub-sections below trace the call structure, what each span captures, and where the trace data lives.
 
 ### The trace tree of an LLM call
 
@@ -72,6 +108,36 @@ If you're coming from frontend, this is React DevTools' Profiler for LLM calls �
 
 The practical consequence: with a structured trace, "the classifier got this wrong" becomes a query — find trace where output.type='X' AND human-labelled-correct-type='Y' — and you can read the exact prompt, the exact response, the exact validator path.
 
+The fields per span and what each enables:
+
+```
+   field                     value example                  query it enables
+   ──────────────────        ─────────────────────────      ───────────────────────
+   trace_id                  uuid (e.g., 7f3a...)            "show me all spans of
+                                                             this call"
+   span_id / parent_id       uuid hierarchy                  "reconstruct the tree"
+   span_name                 'provider_call', 'validator'    "filter by stage"
+   timestamp                 2026-05-13T10:14:00Z            "all calls in last 24h"
+   duration_ms               1180                            "calls slower than p95"
+   input                      "Classify: 'thinking about      "show me the prompt for
+                              learning rust'..."              this trace"
+   output                     "{type:'reflect', conf:0.7}"   "filter by output value"
+   model + version            'claude-haiku-4-5'              "which version was this?"
+                                                              (track regressions
+                                                              across model bumps)
+   token counts               in=450, out=12                  cost per chain over
+                                                              time
+   error / status             'success' | 'validation_                "all failed calls"
+                              failed' | 'network_error'
+   user_id (multi-tenant)     <uuid> (always 1 today)          per-user attribution
+
+   the rule: capture everything you'd want to QUERY later.
+   prompt+response are big (tokens × bytes); redact PII for
+   shared storage at multi-tenant scale.
+```
+
+Every field is one of these queries waiting to happen.
+
 ### Where to store traces
 
 Three options:
@@ -81,6 +147,41 @@ Three options:
 3. **Hybrid** — local for development, managed for production.
 
 For loopd: at solo scale, local SQLite is sufficient — the `ai_trace` table from `[B3.11]`. The interface stays the same regardless of where traces eventually live.
+
+The three storage options compared:
+
+```
+   option                what loopd would pay              when it's right
+   ──────────────────    ──────────────────────────       ────────────────────
+   local SQLite           + zero new services               loopd today
+   (ai_trace in           + SQL joins with entries          (~30 calls/day,
+   loopd.db)              + sync via existing                solo scale,
+                            schedulePush                     ~30KB/day)
+                          - prompt/response = bytes
+                            grow with traffic
+                          - PII concerns at multi-tenant
+   
+   managed service         + managed search + dashboards    multi-tenant scale
+   (Langfuse / LangSmith   + OpenTelemetry compatible       (1K+ traces/day,
+   / Phoenix)              + per-user encryption built-in    team needs UI,
+                          - new operational surface           PII / compliance)
+                          - ~$50-200/mo at small scale       
+                          - vendor lock-in on schema
+   
+   hybrid                  + local for dev (fast SQL,        team has both
+                            no cost)                         dev + prod needs
+                          + managed for prod (search +
+                            dashboards)
+                          - two storage systems to keep
+                            in mental sync
+                          - sample rate often differs
+                            between environments
+
+   loopd today: option 1. the interface (traceCall, ai_trace schema)
+   stays identical when the team graduates to option 2 or 3.
+```
+
+The interface stays put; the backing store changes when scale forces it to.
 
 ### What traces unlock
 
@@ -370,3 +471,6 @@ Answer: `ai_trace` (target — `[B3.11]`). `traceCall(name, parentSpanId, fn)` i
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (air-traffic-controller-shift-log scenario → "can the team reconstruct what happened, with evidence rather than memory" pattern naming → bolded "what depends on getting this right" with `ai_trace` / `traceCall()` / `[B3.11]` / `[B3.14]` / `[B3.15]` stakes → without/with bullets walking the classify trace tree and async propagation → one-line "print statements show the moment, traces give the timeline" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from air-traffic-controller-shift-log physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitive (distributed tracing in a microservices app — request_id-stamped spans across services; one trace_id query rebuilds the timeline). Added Move 1 mnemonic diagram (trace anatomy + storage + example queries) + 2 new Move 2 sub-section diagrams: fields-per-span with query-it-enables, three storage options with cost/tradeoffs. Sub-section 1 already had the big trace-tree diagram. Total: 3 new diagrams.

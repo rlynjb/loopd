@@ -33,7 +33,42 @@ RAG is a tradeoff, not a requirement — the corpus shape decides.
 
 ## How it works
 
-Sourcegraph's semantic code search and ChatGPT's "ask your codebase" both run the same step under the hood: take a natural-language query ("how does auth work?"), embed it into the same vector space as the indexed corpus, return the top-k chunks closest in meaning — not the top-k by filename match, not the top-k by `grep`. RAG generalises that pattern across any corpus, not just code. Loopd doesn't have that retrieval step because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
+Vector-similarity search applied to text: every chunk gets embedded into a 1024-or-so-dimensional vector at write time, the vectors live in an index, and at query time the user's question gets embedded the same way and the index returns the top-k chunks closest in meaning — not the top-k by filename match, not the top-k by `grep`. RAG generalises that pattern across any corpus. Loopd doesn't have that retrieval step because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
+
+The five stages of RAG in one picture:
+
+```
+   write time (once per chunk):
+   ┌──────────────────────────────────────────────┐
+   │ every chunk → embedding model → 1024-d vector │
+   │                                       │       │
+   │                                       ▼       │
+   │ vector DB (pgvector / Pinecone / Qdrant)      │
+   └──────────────────────────────────────────────┘
+                          │
+                          │  query time:
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ user question                                  │
+   │     │                                          │
+   │     ▼  same embedding model                    │
+   │ query vector ────▶ top-k nearest in vector DB  │
+   │                          │                     │
+   │                          ▼                     │
+   │ retrieved chunks                               │
+   └──────────────────────────────────────────────┘
+                          │
+                          ▼  paste into prompt + call LLM
+                          ▼
+                     final answer
+
+   loopd's alternative (when corpus is small + time-shaped):
+   SELECT * FROM entries WHERE date > NOW() - 3 days
+     LIMIT 3                ◄── microseconds, no vectors,
+                                 no embedding model
+```
+
+The three sub-sections below trace the RAG pipeline, what loopd does instead, and why the corpus shape decides which one wins.
 
 ### The RAG pipeline — embed, index, query, stuff, answer
 
@@ -47,13 +82,81 @@ The five stages of RAG, in order:
 
 If you're coming from frontend, this is the same shape as building a search-with-suggestions feature where the suggestion engine is a separate service that returns "top-5 things relevant to what you typed" — except the relevance metric is vector similarity in meaning-space, not keyword overlap. Concrete consequence: an app like Notion AI or Glean uses RAG because the user could ask about *any* document and the system has to find the relevant one without knowing in advance which it is. Embed cost is one-time per chunk; query cost is one embedding + one vector search per user prompt; storage cost is sized to the corpus. Boundary: RAG quality depends entirely on the embedding model's notion of similarity and the retriever's top-k tuning — get either wrong and the LLM gets unhelpful chunks pasted into the prompt.
 
+The five stages with cost-per-stage annotation:
+
+```
+   stage          when             cost                       failure mode
+   ─────────      ─────────        ──────────────             ──────────────────
+   1 Embed        write-time       $0.0001 per 1K tokens      bad embedding model →
+                  (once per chunk) (one-time per chunk)        all retrieval is wrong
+   2 Index        write-time       storage + index build       index out of sync with
+                                   ~$0.10/GB/mo                source-of-truth
+   3 Query        per request      $0.0001 + vector search    user question doesn't
+                                                                match indexed phrasing
+   4 Stuff        per request      tokens × per-token price   top-k too large → blows
+                                                                context budget
+   5 Answer       per request      tokens × per-token price   LLM hallucinates around
+                                                                irrelevant retrieved
+                                                                chunks
+```
+
+Five places to misconfigure; the embedding model + top-k tuning are the two most common sources of "the retrieval is wrong" bugs.
+
 ### What loopd does instead — hand-picked deterministic retrieval
 
 Loopd's chains know exactly which past data is relevant: `caption.ts` always wants the last 5 captions (anti-repetition), `expand.ts` always wants the last 3 days of entries plus their cached summaries. These are time-based predicates against SQLite, not similarity searches. Think of it like a typed SQL query that always knows its `WHERE created_at > NOW() - INTERVAL '3 days' LIMIT 5` — deterministic, fast, no separate ML pipeline. Concrete consequence: `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3`. The query takes microseconds, costs zero, returns exactly the rows the chain knows it needs. No embedding model, no vector DB, no top-k tuning, no "is this similar enough?" judgment call. Boundary: this only works because the codebase *knows in advance* what context each chain needs. The day a chain needs "the most relevant entries about topic X" — where the topic is supplied at runtime — RAG becomes the load-bearing approach.
 
+The codebase's retrieval rules in one view:
+
+```
+   chain          retrieval rule                                 cost
+   ──────────     ─────────────────────────────────────────      ──────
+   caption        getRecentAISummaries(date, 5)                  ~1ms
+                  → last 5 captions for anti-repetition           (SQL)
+   expand         SELECT * FROM entries                           ~1ms
+                  WHERE date >= today - 3 days                    (SQL)
+                  ORDER BY date DESC LIMIT 3
+                  + siblingTodos.slice(0, 5)
+   classify       text-only — no retrieval                        0ms
+   summarize      one day's entries by date                       ~1ms
+                  (no cross-day retrieval)                        (SQL)
+   interpret      truncateTail(text, 2000)                        0ms
+                  (no cross-day retrieval)                        (in-memory)
+
+   deterministic predicates against SQLite — zero embedding cost,
+   zero top-k tuning, zero "is this similar enough" judgment
+```
+
+Every chain knows in advance what context it needs; the retrieval rule is a fixed SQL filter, not a learned similarity match.
+
 ### Why loopd can skip RAG — the corpus shape
 
 The user's journal is *small and time-shaped*. A heavy month is 50 entries; an active year is ~365. RAG's value scales with corpus size — at 50 entries, top-k vector search doesn't outperform "give me the last 5"; at 50,000 entries, RAG's similarity match becomes essential because nobody can scroll-find what they want. The codebase's corpus profile is "small enough that recency + thread tags do the relevance job." If you've worked with a search bar that just queries `LIKE %query%` for small datasets and only graduates to Elasticsearch when the dataset crosses some threshold, this is the same instinct — the cheap shape works as long as the corpus stays small. Concrete consequence: at 365 entries × 200 words = ~75K tokens of full corpus, the entire journal could fit in Claude's context window twice over. The choice between "stuff the whole corpus" and "retrieve relevant chunks" isn't pressing yet. Boundary: the codebase's threshold for adding RAG is "the day a chain needs query-time relevance over a corpus too large to stuff." Until then, hand-picked retrieval wins.
+
+The decision matrix by corpus size:
+
+```
+   corpus size            time-shaped relevance?    right pattern
+   ──────────────────     ──────────────────────    ──────────────────────
+   ~50 entries            yes (last-N matters)       hand-picked SQL (loopd)
+   (today's loopd)
+   
+   ~365 entries           yes                        hand-picked SQL still wins
+   (1-year active user)                              entire corpus fits in
+                                                     context window 2× over
+   
+   ~50K entries           no — user asks about any   RAG becomes load-bearing
+   (long-running notes     entry, including old      (vector search + top-k)
+    archive)              ones the chain can't
+                          enumerate by SQL filter
+   
+   ~1M entries            no — user asks open-       RAG plus sharding +
+   (enterprise corpus)    ended questions about      hybrid retrieval +
+                          a corpus too large to       reranking
+                          stuff
+```
+
+Add RAG today and you pay for an embedding pipeline + vector DB to produce the same `ai_summaries.summary_json` outputs the date-shaped retrieval already produces.
 
 This is what people mean by "RAG is a tradeoff, not a requirement." The pattern is essential when the corpus is large and the query is unpredictable; the pattern is overhead when the corpus is small and the relevance rule is deterministic. The codebase ships an LLM application without RAG because the application's shape — small corpus, time-shaped relevance, fixed chains — doesn't earn the operational cost of an embedding pipeline + vector DB. Every team that has ever paid for a vector DB it didn't need has learned this in retrospect; saving the cost up front is the rarer move. The full picture is below.
 
@@ -441,3 +544,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced filing-cabinet + library-meaning-catalogue analogies with grep at small vs large scale, Sourcegraph semantic code search, ChatGPT "ask your codebase").
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped "ChatGPT's ask-your-codebase" + Sourcegraph from How it works Move 1 (level-5 whole-product references) and led with the abstract pattern (vector-similarity search applied to text). Kept Why care Move 1's `grep -r` anchor (level-2 dev primitive). Added Move 1 mnemonic diagram (5-stage RAG pipeline + loopd's SQL alternative) + 3 Move 2 sub-section diagrams: 5-stage cost table, chain-by-chain retrieval-rule table, corpus-size decision matrix. Total: 4 new diagrams.

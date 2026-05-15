@@ -35,6 +35,42 @@ The vector is data; the index is infrastructure — use the database you already
 
 A vector DB does two things: store vectors with metadata, and answer "k nearest neighbours" queries fast. The first is trivial; the second is everything.
 
+The two jobs and the three places vectors can live:
+
+```
+   job 1: store (vector, metadata) rows
+   ──────────────────────────────────────
+      entry_embeddings
+      ┌──────────┬──────────────────────┬─────────────┐
+      │ entry_id  │ vec (number[1536])   │ updated_at  │
+      ├──────────┼──────────────────────┼─────────────┤
+      │ e-1       │ [0.012, -0.041, ...] │ 2026-05-10  │
+      │ e-2       │ [0.034, -0.009, ...] │ 2026-05-11  │
+      └──────────┴──────────────────────┴─────────────┘
+
+   job 2: k-NN query: given a query vector, return the k closest rows
+   ──────────────────────────────────────
+      exhaustive: scan every row, compute cosine, sort  ◄── O(N)
+      ANN (HNSW): walk a graph greedily                  ◄── O(log N)
+
+   three places to put the table + index:
+   ┌─ in your existing DB ──────────────────────────────┐
+   │   sqlite-vec extension (SQLite — what loopd plans) │
+   │   pgvector extension (Postgres)                    │
+   │   zero new services; SQL joins work                │
+   └─────────────────────────────────────────────────────┘
+   ┌─ in a dedicated vector service ────────────────────┐
+   │   Pinecone, Qdrant, Weaviate, Milvus                │
+   │   optimised for scale; one more service to operate │
+   └─────────────────────────────────────────────────────┘
+   ┌─ in memory ─────────────────────────────────────────┐
+   │   FAISS, hnswlib (in-process)                       │
+   │   fastest; resets on restart                        │
+   └─────────────────────────────────────────────────────┘
+```
+
+The four sub-sections below trace the exhaustive-vs-ANN algorithmic split, the three places vectors physically live, the sync mirror for loopd's vectors, and the common production failure.
+
 ### Exhaustive search vs ANN — the algorithmic split
 
 For N vectors of dimension D, exhaustive nearest-neighbour search is O(N × D). At loopd's solo scale (~365 entries, 1536 dim), that's 561k operations per query — about 5ms in JavaScript on a modern phone. Fine.
@@ -44,6 +80,25 @@ At 100k vectors of the same dim it's 153M operations — about 1500ms. Not fine.
 Approximate Nearest Neighbour (ANN) algorithms trade exact correctness for speed. HNSW (Hierarchical Navigable Small World, the dominant algorithm) builds a graph where each vector has a few connections, and queries walk the graph greedily. Query time scales roughly with log(N) instead of N — sub-10ms even at millions of vectors.
 
 If you're coming from frontend, the analogue is `Array.prototype.find()` vs a Map lookup. Linear search is fine at small sizes; you switch to indexed lookup when it isn't.
+
+Exhaustive vs HNSW at three scales:
+
+```
+   N vectors    exhaustive O(N×1536)   HNSW O(log N × const)   verdict
+   ──────────   ──────────────────     ────────────────────    ──────────
+   365          ~5ms (in JS on phone)   ~1ms                    exhaustive
+                                                                  is fine
+   10K          ~150ms                  ~3ms                    HNSW pays off
+   100K         ~1500ms                 ~5ms                    HNSW is
+                                                                  mandatory
+   1M           ~15s (app freezes)      ~10ms                    HNSW is the
+                                                                  only option
+
+   exhaustive's accuracy: 100% (returns exactly the top-k)
+   HNSW's accuracy: ~95-99% (approximate; tunable via M, efConstruction)
+```
+
+ANN trades exact correctness for sub-linear scaling — at solo scale exhaustive wins on simplicity; past 10K vectors the trade flips.
 
 ### Where the vectors physically live
 
@@ -55,13 +110,111 @@ Three options, ordered by infra burden:
 
 For loopd specifically: the SQLite layer is the canonical store; the cloud mirror is Supabase Postgres. Both have first-class vector support (`sqlite-vec` ships as an extension; pgvector is a Postgres extension). Adding a separate Pinecone service would be a new operational surface for marginal benefit.
 
+The three storage choices side by side, with loopd's actual constraints:
+
+```
+   option              what loopd would pay                    when it's right
+   ─────────────────   ───────────────────────────────         ──────────────────
+   sqlite-vec          + zero new services                     loopd today
+   (in loopd.db)       + SQL joins with deleted_at / user_id    (~365 entries,
+                       + sync via existing schedulePush         solo-dev, local-
+                       - locked into SQLite's concurrency       first stance)
+                         limits
+   
+   pgvector            + Supabase already has it as an          multi-tenant
+   (in Supabase        extension                                 production at
+   Postgres)           + free PostgREST queries                  scale
+                       - changes loopd's read path (cloud
+                         becomes load-bearing for retrieval,
+                         breaking the local-first contract)
+   
+   dedicated Pinecone  + horizontal scale beyond 100M vectors    1M+ vectors AND
+                       - third service to operate                 you've outgrown
+                       - cross-service round-trip per query       Postgres
+                       - no SQL joins with rest of data
+                       - sync mapper between SQLite vec format
+                         and Pinecone vec format
+                       - ~$70/month minimum at small scale
+```
+
+At loopd's scale, the marginal benefit of Pinecone is negative — pick what's already in the stack.
+
 ### Sync mirror for vectors — same shape as everything else
 
 loopd's sync pattern is local SQLite is canonical, Supabase Postgres is mirror. Vectors fit the pattern: store in SQLite locally with the rest of the entry data, push to Supabase via the existing `schedulePush` machinery. The only twist is that vectors are large compared to other columns (1536 floats × 4 bytes = 6 KB per row) — but still small in absolute terms at solo scale.
 
+Where vectors fit in loopd's existing sync flow:
+
+```
+   entries.text edited
+              │
+              ▼  on commit boundary
+   ┌────────────────────────────────────────────┐
+   │ database.ts upsert (existing)               │
+   │ + embed(text) → 1536 floats                 │  ◄── new step
+   │ + entry_embeddings upsert (new table)       │
+   │ + updated_at = now()                        │
+   │ + schedulePush()                            │
+   └────────────────────────────────────────────┘
+              │
+              ▼  5s after last write
+   pushAll() walks the registry — now includes
+   entry_embeddings table; same upsert pattern
+              │
+              ▼
+   Supabase pgvector mirror (cloud copy)
+
+   storage cost per row:
+     entries.text:         ~1 KB (depends on prose length)
+     entry_embeddings.vec: 6 KB (1536 floats × 4 bytes)
+     total at 365 entries: ~2.5 MB on device + ~2.5 MB in cloud
+```
+
+The vectors travel through the same `updated_at > synced_at` dirty filter as every other column — no special-case sync path.
+
 ### Where vector DBs go wrong
 
 The most common production failure: choosing Pinecone (or any dedicated service) at low scale and then having two databases — your "main" database with users, entries, sync metadata, AND the vector DB with vectors. Every query that needs both joins becomes a cross-service round-trip. The fix is "keep everything in one place until you can't" — usually until you have 1M+ vectors or genuine performance pressure.
+
+The two-database failure mode walked through one query:
+
+```
+   query: "show me deleted=NULL entries from the last 7 days
+           whose vector is similar to <query vec>, ranked by cosine"
+                              │
+                              ▼  with one database (sqlite-vec):
+   ┌──────────────────────────────────────────────────────────┐
+   │ ONE SQL query joins everything:                            │
+   │   SELECT e.*, vec_cosine(ev.vec, ?) AS sim                 │
+   │     FROM entries e                                          │
+   │     JOIN entry_embeddings ev ON e.id = ev.entry_id          │
+   │    WHERE e.deleted_at IS NULL                              │
+   │      AND e.date >= now() - 7 days                          │
+   │    ORDER BY sim DESC                                       │
+   │    LIMIT 10;                                                │
+   │                                                            │
+   │ latency: ~5ms total (one DB call)                          │
+   └──────────────────────────────────────────────────────────┘
+                              │
+                              ▼  with two databases (Pinecone + SQLite):
+   ┌──────────────────────────────────────────────────────────┐
+   │ TWO calls + manual join:                                   │
+   │ 1. Pinecone: nearestNeighbours(queryVec, k=100)            │  ~50ms
+   │      → returns 100 entry_ids ordered by cosine             │
+   │ 2. SQLite: SELECT * FROM entries                           │
+   │      WHERE id IN (<100 ids>)                                │  ~5ms
+   │        AND deleted_at IS NULL                              │
+   │        AND date >= now() - 7 days;                         │
+   │      → manually re-sort by Pinecone-returned order         │
+   │      → take top 10                                          │
+   │                                                            │
+   │ latency: ~55ms + cross-service complexity                  │
+   │ over-fetch: had to ask Pinecone for 100 to get 10 after    │
+   │             filtering (no way to push WHERE into Pinecone) │
+   └──────────────────────────────────────────────────────────┘
+```
+
+The "keep everything in one place until you can't" rule is what makes filtered cosine queries one SQL statement instead of a cross-service dance.
 
 ### This is what people mean by "vectors are just another column"
 
@@ -322,3 +475,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced librarian-2D-book-map analogy with the Pinecone console UI, sqlite-vec CREATE VIRTUAL TABLE, pgvector HNSW index).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3 — Pinecone console as engineering surface, sqlite-vec / pgvector as level-1 SQL primitives; existing How it works opens with abstract "stores vectors + answers k-NN" — level-1). Added Move 1 mnemonic diagram (two jobs + three storage choices) + 4 Move 2 sub-section diagrams: exhaustive-vs-HNSW at three scales with latency, three storage options with concrete tradeoffs, sync flow showing where vectors fit, two-database failure mode walked through one query. Total: 5 new diagrams.

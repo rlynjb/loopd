@@ -11,9 +11,9 @@
 
 ## Why care
 
-Open the Kubernetes dashboard for a running cluster and watch how Deployments and Pods stay in sync. The Deployment spec says "I want 3 Pods running this image"; the actual Pod set might briefly be 2 Pods (one crashed mid-rollout), or 4 Pods (the previous deploy's leftovers haven't terminated yet), or 3 Pods running the wrong image. No foreign-key constraint enforces "every Deployment has exactly N Pods" — the kubelet IS the integrity gate. It walks the desired set and the actual set on every tick, notices the gap, and emits the minimum operations to close it. The discipline survives because the reconciler is reliable, the sets are small, and the comparison is cheap.
+You render `<List items={todos}>` in React. Each `<Row key={todo.id}>` has its own local state — a controlled input mid-edit, an animation in flight, a focus ring. The array of `todos` is the parent's source of truth; the `<Row>` component instances live in React's internal fiber tree. The set of `key`s in your `todos` array equals the set of `<Row>` instances React mounts — add an `id` to the array, React mounts a fresh `<Row>` with empty state; remove one, React unmounts the matching `<Row>` and its state goes with it. No foreign-key syntax exists between a JS array and a React fiber tree — React's reconciler IS the integrity gate, and it walks both sides on every render to keep the two-sided invariant honest.
 
-The question Kubernetes answers is one any system with split-but-coupled state has to answer: when a database engine can't enforce referential integrity between two stores — because one side is a JSON array element, or a document field, or a row in a different database — what keeps them in sync? Not a foreign key (the syntax doesn't exist for these targets). The answer is an *application-enforced invariant*: a rule the schema can't check, kept honest by a reconciler that walks both sides and patches the diff.
+The question that reconciliation answers is one any system with split-but-coupled state has to answer: when a database engine can't enforce referential integrity between two stores — because one side is a JSON array element, or a document field, or a row in a different database — what keeps them in sync? Not a foreign key (the syntax doesn't exist for these targets). The answer is an *application-enforced invariant*: a rule the schema can't check, kept honest by a reconciler that walks both sides and patches the diff.
 
 **What depends on getting this right:** whether deleting a todo from prose silently leaves orphaned `todo_meta` rows that the dashboard reads as ghosts, or whether the 1:1 contract holds tight enough that every `todo_meta` row points back at a live `TodoItem` in `entries.todos_json`. In this codebase `entries.todos_json` is a JSON column containing an array of `TodoItem` objects each with its own UUID; `todo_meta` is a separate SQLite table keyed by `todoId`. SQLite has no syntax for `FOREIGN KEY (todoId) REFERENCES entries.todos_json[*].id` — JSON array elements aren't FK targets. So `reconcileTodoMetaForEntry(entry_id, items)` in `src/services/todos/reconcileMeta.ts` is the *only* enforcement layer: it diffs the scanned `items[]` against the existing `todo_meta` rows, inserts what's new, soft-deletes what's missing, and leaves matched rows alone. If the reconciler has a bug, drift is real and visible on the next read.
 
@@ -30,29 +30,160 @@ With the reconciler (1:1 invariant enforced every commit):
 - That row gets `deleted_at` stamped; the dashboard joins return 2 todos
 - The orphan was caught at the next commit boundary, not at the next bug report
 
-The reconciler is Kubernetes's tick loop applied at every commit — without it the invariant is just a wish.
+The reconciler is React's keyed-list reconciler applied to backend rows — without it the invariant is just a wish.
 
 ---
 
 ## How it works
 
-Kubernetes runs a reconciler that walks Deployment specs and Pod state on every tick — no foreign key ties them together, the reconciler IS the integrity gate. React's keyed-list reconciler does the same on virtual DOM trees, emitting the minimum mount/unmount operations to make the live tree match the next render. The discipline survives because the comparison is cheap (Map + Set lookups, both O(1)), the sets are small (one entry's todos, not a whole table's worth), and the reconciler runs reliably on every commit boundary.
+React's keyed-list reconciler walks the next render's array of `{ key, ... }` items and the current component tree, emits the minimum mount/unmount operations to make them agree, and runs on every render — no foreign key ties the array to the tree, the reconciler IS the integrity gate. The same shape shows up wherever schema-enforced FKs can't reach: Kubernetes at infrastructure scale (Deployment spec vs Pod set, every tick), reactive observable streams, eventual-consistency replicas. The discipline survives because the comparison is cheap (Map + Set lookups, both O(1)), the sets are small (one entry's todos, not a whole table's worth), and the reconciler runs reliably on every commit boundary.
+
+The two-sided shape in one picture:
+
+```
+   entries.todos_json (JSON column, the "render array"):
+     [ {id: "t-abc"}, {id: "t-def"}, {id: "t-ghi"} ]
+              │              │              │
+              │              │              │  reconciler diffs
+              │              │              │  the two sets at
+              │              │              │  every commit
+              ▼              ▼              ▼
+   todo_meta (SQL table, the "component tree"):
+     ┌───────┐         ┌───────┐         ┌───────┐
+     │ t-abc │         │ t-def │         │ t-ghi │
+     └───────┘         └───────┘         └───────┘
+        │                 │                 │
+        └─ type           └─ type           └─ type
+           expanded_md       expanded_md       expanded_md
+           pinned             pinned             pinned
+           (the attached "state")
+```
+
+SQLite cannot foreign-key a row to a JSON-array element, so the reconciler in `src/services/todos/reconcileMeta.ts` IS the gate. The four sub-sections below trace the contract, the reconciler, why matched rows are left alone, and why no schema FK can express this.
 
 ### The 1:1 contract — every TodoItem has exactly one `todo_meta`
 
 `entries.todos_json` is a JSON column on each `entries` row, containing an array of `TodoItem` objects each with its own UUID `id`. `todo_meta` is a separate table with one row per TodoItem, keyed by `todoId`. The invariant is that the set of `id`s in any entry's `todos_json` array equals the set of `todoId`s in the matching `todo_meta` rows for that entry. If you're coming from frontend, this is the same shape as a Redux store with two slices that have to stay in sync — entities and their derived metadata — except the "store" is split across SQL and JSON. Concrete consequence: a journal entry with three todos like `[{id: "t-abc"}, {id: "t-def"}, {id: "t-ghi"}]` must have exactly three `todo_meta` rows with `todoId` in `{t-abc, t-def, t-ghi}`. If `todo_meta` has 4 rows including `t-zzz`, the dashboard's `SmartTodoList` reads orphaned metadata for a todo that no longer exists in prose. If `todo_meta` has 2 rows missing `t-ghi`, the third todo renders with no `type` (it falls through to the default `'todo'`). Boundary: drift can exist momentarily between commits — the reconciler is eventually consistent, not transactionally consistent.
 
+The two stores side by side, showing the matching ids:
+
+```
+   entries (row e-1)
+   ┌────────────────────────────────────────────────────────┐
+   │ todos_json:                                             │
+   │   [                                                     │
+   │     { id: "t-abc", text: "call mom" },                  │
+   │     { id: "t-def", text: "ship feat" },                 │
+   │     { id: "t-ghi", text: "fix bug" }                    │
+   │   ]                                                     │
+   └────────────────────────────────────────────────────────┘
+          │ id              │ id              │ id
+          ▼                 ▼                 ▼
+   todo_meta (table)
+   ┌────────┬──────────┬──────────┬────────────────────────┐
+   │ todoId │ entry_id │ type     │ expanded_md             │
+   ├────────┼──────────┼──────────┼────────────────────────┤
+   │ t-abc  │ e-1      │ idea     │ "..."                   │
+   │ t-def  │ e-1      │ work     │ "..."                   │
+   │ t-ghi  │ e-1      │ work     │ "..."                   │
+   └────────┴──────────┴──────────┴────────────────────────┘
+
+     set of ids on both sides MUST be equal — that's the invariant
+```
+
+Any extra row in `todo_meta` is an orphan; any missing row makes the corresponding todo render with default metadata.
+
 ### The reconciler — `reconcileTodoMetaForEntry`
 
 After every `scanTodos` run, `reconcileTodoMetaForEntry(entry_id, items)` (in `src/services/todos/reconcileMeta.ts`) walks both sides: it builds a `Map<todoId, TodoMetaRow>` of the existing metadata, walks the scanned `items[]`, inserts a new `todo_meta` row for any TodoItem id missing from the map, and soft-deletes any existing row whose `todoId` isn't in the scanned set. Think of it like React's reconciliation between the next virtual DOM and the current one — except the diff is keyed by UUID, the operations are SQL inserts/soft-deletes, and the reconciler runs at commit boundaries instead of every render. Concrete consequence: user types a fourth todo `[] book dentist` and focus-blurs. `scanTodos` produces 4 items; the reconciler sees `todo_meta` has 3 rows; it inserts a 4th row with the new TodoItem's id, default `type='todo'`, `confidence=null`. Then `scheduleClassify` (in `src/services/todos/classify.ts`) fires async to fill in the AI-derived `type`. Boundary: the reconciler is the *only* enforcement mechanism — if any other code path mutates `todo_meta` without running through it, drift accumulates.
+
+Walking the diff when the user adds a fourth todo:
+
+```
+   scanTodos output:                       existing todo_meta rows:
+   [t-abc, t-def, t-ghi, t-new]            {t-abc, t-def, t-ghi}
+                            │
+                            └─────────────┬─────────────┘
+                                          ▼
+                          Map<todoId, row> built from existing
+                                          ▼
+                          walk scanner output:
+                            t-abc  → in map  → leave alone
+                            t-def  → in map  → leave alone
+                            t-ghi  → in map  → leave alone
+                            t-new  → NOT in map → INSERT new row
+                                          ▼
+                          walk map entries:
+                            every key still in scanned set? ✓
+                            no orphans this round
+                                          ▼
+                          invariant holds: 4 ids on each side
+```
+
+The reconciler emits only the minimum operations — one INSERT this round, zero deletes, zero updates on the matched rows.
 
 ### Why matched rows are left alone — preserving identity across edits
 
 The reconciler's behaviour on a matching id is: do nothing. That's the load-bearing detail. If you're coming from frontend, this is the same trick a keyed list reconciler uses to preserve component state across re-renders — `key` matches mean "this is the same item, keep its identity." Here, matching `todoId` means "this `todo_meta` row's `type`, `expanded_md`, `pinned`, `classifier_confidence`, and `user_overridden_type` survive untouched." Concrete consequence: a user has a todo at line 3 with `type='study'` and a 400-word `expanded_md` from the AI expander. They edit line 3 from `[] study CRDTs` to `[] study CRDTs in depth`. Two-pass match ([04-two-pass-matching](./04-two-pass-matching.md)) preserves the TodoItem id. The reconciler sees the id is still present; it leaves the metadata row alone. The 400-word expansion is still there; the `study` type is still there; nothing got reclassified. Boundary: this works as long as the two-pass matcher preserves identity — if the matcher fails (e.g. user deletes and retypes), the reconciler will see a "new" id, insert a fresh metadata row, and the old one becomes orphaned.
 
+What survives when the user edits a todo's text in place:
+
+```
+   yesterday's todo_meta:                   today's scan after in-place edit:
+   ┌────────┬────────────┬──────────┐      ┌────────┬─────────────────────────┐
+   │ todoId │ type       │ expanded │      │ id     │ text                     │
+   │        │            │ _md       │      │        │                          │
+   ├────────┼────────────┼──────────┤      ├────────┼─────────────────────────┤
+   │ t-abc  │ study      │ "400-word │      │ t-abc  │ "study CRDTs in depth"   │
+   │        │ (AI-       │  AI       │      └────────┴─────────────────────────┘
+   │        │  classified)│ output"  │
+   └────────┴────────────┴──────────┘
+                          │
+                          ▼  reconciler sees t-abc still present
+                          ▼
+   ┌─────────────────────────────────────────────┐
+   │ matched → DO NOTHING                         │
+   │ (type, expanded_md, pinned, confidence,     │
+   │  user_overridden_type — all preserved)       │
+   └─────────────────────────────────────────────┘
+```
+
+The text field updates at the JSON layer (via `todos_json`); the metadata row stays intact because its id didn't change.
+
 ### Why not a foreign key — SQLite can't FK to a JSON array element
 
 A foreign key constraint would do this enforcement at the database level: define `FOREIGN KEY (todoId) REFERENCES entries.todos_json[*].id ON DELETE CASCADE`, and the DB would never let `todo_meta` drift. SQLite doesn't have that syntax. The TodoItems live inside a JSON column as array elements — `entries.todos_json[2].id` isn't a queryable target for an FK. Postgres has `JSONB` plus generated columns plus some path-based constraint tricks, but SQLite (the canonical store) doesn't. If you're coming from frontend, this is the same situation as wanting to FK from a child table to a denormalised JSON blob on the parent — there's no syntax, so the constraint has to live in application code. Concrete consequence: the reconciler is *not* a defensive layer behind an FK; it IS the only layer. If the reconciler has a bug, the drift is real and the next read sees it. Boundary: the moment Postgres has to enforce this too (e.g. moving to multi-tenant cloud with shared schemas), the FK story becomes complicated — generated columns on `entries` that lift the ids out of JSON, then FK against those. This is migration work waiting for a real reason to do it.
+
+What you'd write in SQL if it were possible — and why it isn't:
+
+```
+   What you'd want to write:
+
+     CREATE TABLE todo_meta (
+       todoId TEXT PRIMARY KEY,
+       entry_id TEXT,
+       ...
+       FOREIGN KEY (todoId)
+         REFERENCES entries.todos_json[*].id   ◄── NOT valid SQL anywhere
+         ON DELETE CASCADE
+     );
+
+   Why no SQL engine accepts this:
+   ┌─────────────────────────────────────────────────────────┐
+   │ entries.todos_json is a JSON column;                     │
+   │ array elements are not first-class FK targets.           │
+   │                                                           │
+   │ SQLite:   no JSON-path FK syntax exists at all           │
+   │ Postgres: would require a generated column lifting       │
+   │           array ids into a flat shape — extra machinery   │
+   │           for the same end-state                          │
+   └─────────────────────────────────────────────────────────┘
+
+   So `reconcileTodoMetaForEntry` in TypeScript is the ONLY gate.
+   Bug in the reconciler == orphans in production.
+```
+
+The FK doesn't exist because the schema doesn't allow it; the reconciler exists because the invariant still has to hold.
 
 This is what people mean by "application-side referential integrity." The pattern is everywhere FK constraints can't reach — JSON columns, polymorphic relationships, cross-database joins, eventually-consistent replicas. The reconciler is the cheapest expression of "make sure both sides agree" when the schema can't enforce it for you. Kubernetes does this between desired and actual state every tick; React does this between the next and current trees on every render; this codebase does it at every prose commit. Same shape, different ticks. The full picture is below.
 
@@ -387,3 +518,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-filing-cabinets-with-clerk analogies with Kubernetes Deployment/Pod reconciliation + React virtual-DOM reconciler). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from Kubernetes (level-4 industry tool) down to level-1 primitive (React `<List items={todos}>` with `key={todo.id}` and per-row component state). Same swap on How it works Move 1 (lead with React keyed-list reconciler; Kubernetes demoted to "same shape at infrastructure scale"). Added Move 1 mnemonic diagram (two-sided JSON/SQL shape) + 4 Move 2 sub-section diagrams: ids-on-both-sides table view, scanner-vs-existing diff trace, in-place-edit preserves-metadata trace, would-be-FK syntax + why no engine accepts it. Total: 5 new diagrams.

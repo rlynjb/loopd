@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a React component file with 200 lines of code all in one function — props read at the top, state hooks scattered through the body, effects mixed in with handlers, JSX returned from a single block. You change a `useState` and three handlers drift along with it because nothing has its own home. Refactor the same file: props at the top in one block, state hooks together, effects together, handlers together, JSX at the bottom. Now changing the `useState` only touches the state block; the diff maps to behavior one-to-one. The structure didn't make the file shorter; it made each edit's blast radius smaller.
 
-A new hire walks into a temp job and you hand them a single sheet of paper with everything jammed together: who they are, what to do, what never to do, and how to format the output, all in one paragraph. They start, but two hours in they're asking the same question twice — "wait, am I supposed to never write 'I,' or just prefer third-person?" — because the rules are mushed in with the tone notes and the formatting guide. You tweak one line and three other behaviours drift. The page is doing four jobs and you can't tell which one is broken.
-
-The implicit question is whether each instruction has a home. Not a longer page, not a stricter tone — a briefing with four numbered sections so the rule about hashtags lives in constraints, the JSON shape lives in output, and changing one section doesn't ripple. A production prompt has that shape: role, task, constraints, output.
+A production prompt has the same shape: role, task, constraints, output — four named sections so the rule about hashtags lives in constraints, the JSON shape lives in output, and changing one section doesn't ripple through the others.
 
 **What depends on getting this right:** every chain's behaviour stays editable without regressions. In this codebase `summarize.ts:prompt.ts` (L4 role, L17–L27 output spec), `caption.ts` (L24 role, L73–L82 `UNIVERSAL RULES` constraints), `classify.ts` (L12 role + five-mode task), and `interpret.ts` (L19 role, L21 voice constraints, L38–L46 `Voice rules`) all follow the same four-section shape. Lose the structure and a tweak to caption's tone bleeds into the JSON output spec; a contributor adding a new constraint puts it in the role section by accident; the validator catches the malformed output but you can't tell from the prompt diff what changed.
 
@@ -29,13 +27,51 @@ With the four-section shape:
 - New rule? It goes in the constraints block. New output field? Output section.
 - Prompt diffs map to behaviour changes one-to-one
 
-A briefing document, not a wall of notes.
+A typed config with four named sections, not a wall of text — each section has its own job, and edits map to behaviour one-to-one.
 
 ---
 
 ## How it works
 
-A briefing document handed to a freelancer at the start of a job. Page one says who they're working as ("you're our customer-support voice"); page two says what you need them to do ("rewrite these emails"); page three lists the constraints ("never apologise for things that aren't our fault"); page four shows the output format ("subject + body, max 200 words"). The freelancer keeps the briefing open while they work. The model keeps the system prompt in context while it generates. Two operations welded together in a naive prompt (everything in one paragraph) split apart into four operations with one job each.
+Four ordered text sections in the system prompt — Role, Task, Constraints, Output — each one a named block with one job. Same shape as a JSDoc that has `@description` + `@param` + `@throws` + `@returns` instead of one prose paragraph: the structure makes each piece editable in isolation. The model reads the whole system prompt before generating; the four sections give every instruction a home so that changing the tone in section 2 doesn't drift the JSON shape in section 4.
+
+The four sections in one picture:
+
+```
+   SYSTEM PROMPT (the static briefing — same across every call)
+   ────────────────────────────────────────────────────────────
+   ┌─ Section 1: Role ──────────────────────────────────────┐
+   │   "You are composing a daily vlog summary for a         │
+   │    personal journal app called loopd."                  │
+   │   (1 line; the "you are")                               │
+   └─────────────────────────────────────────────────────────┘
+   ┌─ Section 2: Task ──────────────────────────────────────┐
+   │   The work + the rules of the work.                     │
+   │   Tone instructions, content constraints, validity      │
+   │   rules ("clipOrder must only reference clip IDs from   │
+   │   the provided clips list", "max 4 textOverlays").      │
+   │   (largest section)                                     │
+   └─────────────────────────────────────────────────────────┘
+   ┌─ Section 3: Constraints ───────────────────────────────┐
+   │   The "never" / "always" list.                          │
+   │   "Never write 'I' / 'you' / 'we'."                     │
+   │   "No hashtags. No emojis."                              │
+   │   (rules-as-forbidden-patterns)                          │
+   └─────────────────────────────────────────────────────────┘
+   ┌─ Section 4: Output ────────────────────────────────────┐
+   │   The return type.                                      │
+   │   "Respond with ONLY valid JSON matching this shape:    │
+   │    { headline: string, summary: string, ... }"          │
+   │   (strictest phrasing in the whole prompt)              │
+   └─────────────────────────────────────────────────────────┘
+
+   USER MESSAGE (the dynamic payload — changes every call)
+   ────────────────────────────────────────────────────────────
+   per-call data: today's entries, recent captions, mood, ...
+   (no behaviour rules here; this is just the input)
+```
+
+The six sub-sections below trace each of the four sections, the user-message split, and how loopd's prompts have evolved across chains.
 
 ### Section 1 — Role (the "you are")
 
@@ -48,11 +84,47 @@ The role section names what the model is supposed to be in this call. It's the f
 
 If you're coming from frontend, this is the same shape as the first line of a function's JSDoc comment — `/* @description Render a single todo item with check toggle */` — a one-line statement of purpose that frames everything that follows. Practical consequence: when the model gets confused mid-generation (the chain output drifts into a different shape), the role sentence is what pulls it back. The classifier with role *"You classify ... into one of five thinking modes"* is far less likely to write a chatty multi-sentence response than the same prompt without the role.
 
+The role line across loopd's five chains:
+
+```
+   summarize.ts L4    "You are composing a daily vlog summary for a
+                       personal journal app called loopd."
+   caption.ts   L24   "You generate four variant captions for a daily
+                       vlog from the user's raw log."
+   classify.ts  L12   "You classify short personal thoughts into one
+                       of five thinking modes."
+   expand.ts    (varies per type — idea / knowledge / study / reflect)
+   interpret.ts L19   "You are an emotionally intelligent journal
+                       interpreter."
+
+   one line each, declarative, naming the JOB.
+```
+
 ### Section 2 — Task (the "your job is")
 
 The task section describes the work and the rules of the work. This is the largest section in most prompts. For summarize, it's the tone instruction and the constraints on what counts as valid output ("clipOrder must only reference clip IDs from the provided clips list", "textOverlays max 4 items", "mood must be one of: flat, ok, good, great, fired"). For caption, it's the four variant voice descriptions with examples. For classify, it's the definition of each mode. For interpret, it's the multi-section markdown structure with voice rules.
 
 If you're coming from frontend, this is the body of a function specification — the rules and behaviour the function has to honour. Practical consequence: the model treats every line in the task section as a hard rule. Loose phrasing here ("try to be brief") gets ignored; tight phrasing ("max 60 chars per overlay text") gets honoured. The task section is where the trade between prompt length and output quality plays out — every additional rule is a token in every call, but also a guardrail the validator doesn't have to enforce afterward.
+
+Loose vs tight phrasing — same intent, different model behaviour:
+
+```
+   loose phrasing                               tight phrasing
+   ─────────────────────────────────────        ─────────────────────────────────────
+   "Try to be brief in the summary."             "Summary: max 280 chars."
+   "Avoid using too many overlays."              "textOverlays: max 4 items, each
+                                                  max 60 chars."
+   "Make the tone reflective."                   "Mood field must be one of:
+                                                  flat / ok / good / great / fired."
+   "Don't reference clips that don't exist."     "clipOrder must only contain IDs
+                                                  from the input clips list."
+
+   the model treats:
+     "try to be brief"     → suggestion, often ignored
+     "max 280 chars"       → hard rule, almost always honoured
+```
+
+Loose phrasing gets ignored; tight phrasing is what the validator can later confirm landed.
 
 ### Section 3 — Constraints (the "never / always")
 
@@ -64,6 +136,25 @@ Constraints are the negative space — what the model must not do. In loopd's ch
 
 If you're coming from frontend, this is the same shape as a `RuleSet` in a linter config — `no-console`, `no-unused-vars` — rules expressed as forbidden patterns. Practical consequence: explicit "never" rules are far more effective than positive phrasing. Saying *"never write 'I'"* eliminates the construction; saying *"prefer third-person"* gets the model 60% there. The model treats negative constraints as hard rules and positive preferences as suggestions.
 
+Positive preference vs negative constraint — same intent, different effectiveness:
+
+```
+   positive preference (60% effective)         negative constraint (~95% effective)
+   ─────────────────────────────────────      ─────────────────────────────────────
+   "Prefer third-person."                      "Never write 'I' / 'you' / 'we'."
+   "Try to avoid hashtags."                    "No hashtags. No emojis."
+   "Keep the voice neutral."                   "Never moralize, never motivate,
+                                                never lecture."
+   "Be careful with clinical labels."          "Never use clinical labels:
+                                                'trauma', 'paranoid', 'anxious',
+                                                'avoidant'."
+
+   the model treats negatives as RULES; positives as preferences.
+   the constraints block is where the codebase encodes hard refusals.
+```
+
+Explicit "never" rules eliminate the construction; positive preferences get partial compliance at best.
+
 ### Section 4 — Output (the "return ___ matching ___")
 
 The output section names the format and shape. For JSON chains it's the literal JSON shape with field types. For interpret it's the markdown structure with section headings. Examples:
@@ -74,9 +165,64 @@ The output section names the format and shape. For JSON chains it's the literal 
 
 If you're coming from frontend, this is the same shape as the return type of a function. The output section is what the validator (`validate.ts`, `parseAndValidate`) implicitly checks the model honoured. Practical consequence: this section earns the strictest phrasing in the whole prompt. *"No prose preamble"* + *"JSON only"* is repetitive on purpose — the model has been trained on millions of "Here's the JSON you asked for: {...}" examples, and the output section is what fights that prior.
 
+The output section as a return type, with the matched validator:
+
+```
+   chain         output section says                       validator checks
+   ──────────    ────────────────────────────────────      ────────────────────────
+   summarize     "Respond with ONLY valid JSON              parseJson + validateSummary
+                  matching: { headline, summary,             (every clipId ∈ input,
+                  mood, clipOrder: [], textOverlays: } "      filter ∈ enum,
+                                                              mood ∈ 7 strings)
+   caption       "OUTPUT: a single valid JSON object         parseJson +
+                  with EXACTLY this shape:                    parseAndValidate
+                  { clean, smoother, reflective,              (all 4 variants present,
+                    punchy, detectedTheme }                    non-empty)
+                  No prose preamble, no markdown
+                  fences, no commentary. JSON only."
+   interpret     "Output valid markdown — no preamble,       cleanMarkdown
+                  no JSON, no code fences around              (strip fence, reject
+                  the whole thing."                            empty)
+
+   strictest phrasing in the whole prompt — fighting the model's
+   "Here's the JSON: {...}" training prior.
+```
+
+The output section is where the validator's tightening starts.
+
 ### The user message — payload only
 
 The system prompt holds the four sections; the user message holds only the per-call payload. For summarize, the user message is the entries + clips + habits (built by `buildPrompt` in `prompt.ts` L29–L58). For caption, it's the raw log lines + mood + recentCaptions (built by `buildUserPrompt` in `caption.ts` L102–L121). For classify, it's literally the todo text. If you're coming from frontend, the system prompt is to `const Component = () => …` what the user message is to `<Component prop={value} />` — the component shape is fixed once; the prop changes every call. Practical consequence: changing the chain's behaviour means changing the system prompt; changing the data the chain operates on means changing how the user message is built. The two never bleed together.
+
+What's in the system prompt vs the user message:
+
+```
+   ┌─ SYSTEM PROMPT (the component declaration) ──────────────────┐
+   │  static — same across every call                              │
+   │                                                                │
+   │  Role + Task + Constraints + Output                            │
+   │                                                                │
+   │  changing this = changing the chain's BEHAVIOUR                │
+   │  edited in prompt.ts / caption.ts SYSTEM constants            │
+   └──────────────────────────────────────────────────────────────┘
+
+   ┌─ USER MESSAGE (the prop being passed) ───────────────────────┐
+   │  dynamic — built per call                                     │
+   │                                                                │
+   │  summarize:  entries[date].text + clips + habits               │
+   │  caption:    rawLog[] + recentCaptions + mood                  │
+   │  classify:   todo.text (single string)                         │
+   │  expand:     todo.text + siblingTodos + recentSummaries        │
+   │  interpret:  truncateTail(entry.text, 2000)                    │
+   │                                                                │
+   │  changing this = changing the DATA the chain operates on       │
+   │  edited in buildPrompt / buildContext / buildUserPrompt        │
+   └──────────────────────────────────────────────────────────────┘
+
+   the two never bleed together — that's the split.
+```
+
+Behaviour and data have separate edit surfaces; the prompt diff maps to which one changed.
 
 ### Move 2.5 — How loopd's prompts have evolved
 
@@ -85,6 +231,30 @@ The system prompt holds the four sections; the user message holds only the per-c
 **Phase B (interpret, added 2026-05-10):** same shape, but the output section permits markdown rather than enforcing JSON. The voice rules section is longer than in any other chain because the failure mode (clinical language, motivational platitudes) is more subtle than a missing field.
 
 **What didn't have to change:** the system prompt structure. interpret slotted into the same four-section shape as the others; the only field that changed was the output format. That's the architectural payoff — once the structure is settled, adding a chain is a system-prompt write, not a refactor.
+
+Phase A vs Phase B side by side:
+
+```
+            Phase A (caption / summarize /             Phase B (interpret —
+            classify / expand)                          added 2026-05-10)
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ Role:        one line                  │    │ Role:        one line                  │ unchanged
+   │ Task:        JSON-shape rules          │    │ Task:        markdown structure rules  │  shape
+   │ Constraints: "never X / never Y"       │    │ Constraints: voice rules (longer —     │  same;
+   │                                        │    │              clinical language ban)    │  contents
+   │ Output:      "Respond with ONLY        │    │ Output:      "Output valid markdown —  │  vary
+   │              valid JSON matching       │    │               no JSON, no fences."     │
+   │              this shape: { ... }"      │    │                                        │
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+                            │                                          │
+                            └──────────────────┬───────────────────────┘
+                                               ▼
+                              structure didn't have to change between phases
+                              adding a new chain = write a new system prompt
+                              in the same four-section shape, NOT a refactor
+```
+
+The architectural payoff: once the structure is settled, every new chain slots in.
 
 This is what people mean by "treat the prompt like code." A prompt with sections has structure; a prompt without sections has prose. Code reviewers can read a sectioned prompt; they can only stare at a prose prompt. The full picture is below.
 
@@ -446,3 +616,6 @@ Then open `prompt.ts`, `caption.ts`, and `interpret.ts` to verify.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (new-hire briefing scenario, name the each-rule-has-a-home question, four-section stakes across chains, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from new-hire / freelancer-briefing physical-world analogies (banned per v1.31.0/v1.32.0) to level-1 primitives (200-line React component refactored from one function into props/hooks/effects/JSX blocks; JSDoc with `@description`/`@param`/`@throws`/`@returns` sections). Swapped Why care Move 5 from "briefing document" metaphor to "typed config with four named sections." Added Move 1 mnemonic diagram (four sections of system prompt + user message split) + 6 Move 2 sub-section diagrams: role-line inventory across chains, loose-vs-tight task phrasing, positive-preference vs negative-constraint effectiveness, output-section + matched-validator table, system-prompt vs user-message split, Phase A vs Phase B side-by-side. Total: 7 new diagrams.

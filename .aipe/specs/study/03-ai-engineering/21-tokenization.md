@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You write `text.split(' ')` to break a string into words for processing — the resulting array's length is a clean number you could use to bill or budget. Now imagine the same call with a different splitting function: not whitespace, not characters, but a *learned vocabulary* of ~50,000 strings, where the function chops the input into the *fewest* matching entries. Common English fragments collapse to one entry (`"the"` → one integer); rare strings shatter into many (`"a8f3b2c1"` → eight integers, one per char). A 1k-character paragraph of English might map to 250 entries; the same byte count of UUIDs maps to 600+ entries. Same input length, very different costs. That's exactly what the model's tokenizer does — a learned `split()` whose output-array length is what the API bills.
 
-Picture a clerk at a sorting desk with a 50,000-line phrasebook in front of them. A handwritten letter comes in. The clerk runs through the letter and chops it into the fewest phrasebook entries possible — sometimes a whole word matches one line (`the`), sometimes only a fragment matches (`ization` is one line; `a8f3b2c1` has to be broken into eight single-character lines because no phrase matches). Every chop costs one line-number. A page of plain English fits in 250 chops; a page of UUIDs costs 800 chops. Same number of bytes, three times the cost.
-
-The implicit question is what unit the bill is denominated in. Not characters, not words — the phrasebook entries chosen by the cutting algorithm, where common English maps cheaply and rare strings shatter.
+The implicit question is what unit the bill is denominated in. Not characters, not words — the vocabulary entries chosen by the tokenizer's cutting algorithm, where common English maps cheaply and rare strings shatter.
 
 **What depends on getting this right:** every cost estimate, every context-window budget, every "why did that prompt suddenly get expensive" mystery in this codebase. `interpret.ts` already caps input at `MAX_INPUT_CHARS = 2000` (L17), which is a character cap standing in for a token cap. The summary prompt at `prompt.ts` L4–L27, the four-voice caption prompt at `caption.ts` L24–L100, and the rotation block at `caption.ts` L102–L121 all get billed in tokens — when the day's `rawLog` is long, or when the prior captions feed has rare technical phrasing, the token count balloons in ways the character count doesn't predict. Lose this mental model and you misjudge which prompt edits cost real money — a 50-line addition of plain prose is cheaper than a 5-line addition of base64 tokens, and the cost-per-call diff hides until the bill arrives.
 
@@ -27,13 +25,38 @@ With the tokenization mental model:
 - 1k chars of English ≈ 250 tokens; 1k chars of UUID/code ≈ 600+ tokens
 - The cost-per-character is not constant; rare-string cost is the surprise budget
 
-Tokens are the line-numbers in the phrasebook your text gets cut into.
+Tokens are the integers your input maps to via a learned `split()` — that integer count is what the API bills.
 
 ---
 
 ## How it works
 
-Imagine a 50,000-line dictionary where each line is a short string of bytes — sometimes a whole word (`the`), sometimes a fragment (`ization`), sometimes a single character (`ø`), sometimes punctuation (`",\n`). The tokenizer's job is to chop your input into the *fewest* dictionary entries possible, then output the integer line numbers.
+A function that maps `string` to `number[]` via a learned vocabulary of ~50,000 entries. Each entry could be a whole word (`"the"` → one integer), a fragment (`"ization"` → one integer), a single character (`"ø"` → one integer), or punctuation (`'",\n'` → one integer). The tokenizer's job is to chop the input into the *fewest* vocabulary entries possible, then output the integer IDs as a `number[]`.
+
+The function signature in one picture:
+
+```
+   function tokenize(text: string): number[] {
+     /* greedy BPE merge against ~50,000-entry vocabulary */
+   }
+
+   input:                          output:
+   "loopd uses Sonnet"             [14334, 67, 5829, 328, 86471]
+        │                                ↑
+        │  greedy BPE merge              │
+        │  against vocabulary             │
+        ▼                                │
+   "loop"  ──▶  14334  ─────────────────┤
+   "d"     ──▶     67  ─────────────────┤
+   " uses" ──▶   5829  ─────────────────┤  one integer per
+   " S"    ──▶    328  ─────────────────┤  vocabulary entry
+   "onnet" ──▶  86471  ─────────────────┘
+
+   array length = 5 tokens
+   API bills you for 5 input tokens (plus the system prompt's tokens)
+```
+
+The three sub-sections below trace the BPE training, the attention cost (tokens are also the unit of compute), and how the boundary cuts shape model behavior.
 
 ### BPE — the dictionary is learned, not designed
 
@@ -41,13 +64,83 @@ Byte-pair encoding builds the dictionary by greedy merging. Start with one entry
 
 The practical consequence: the string `"ization"` is one token (~one integer), while `"a8f3b2c1"` is eight tokens (one per character). A 1k-character paragraph of English prose is ~250 tokens; a 1k-character JSON payload with UUIDs is ~600+ tokens. **This is why your cost-per-character is not constant.**
 
+Same 1k chars, very different token counts:
+
+```
+   input (1k characters)                       token count       chars-per-token
+   ───────────────────────────────────         ───────────       ───────────────
+   English prose ("The quick brown fox...      ~250 tokens       ~4
+   thought about going to the store...")
+                                                                   ◄── common
+                                                                       fragments
+                                                                       are single
+                                                                       tokens
+
+   markdown                                     ~280 tokens       ~3.5
+   ("## Header\n\n- bullet 1\n- bullet 2")
+
+   JSON with UUIDs                              ~600 tokens       ~1.6
+   ([{ id: "a8f3b2c1-...", ... }])                                ◄── UUIDs
+                                                                       shatter
+                                                                       to 1 char
+                                                                       per token
+
+   minified JS                                  ~500 tokens       ~2
+   (function(a,b){return a+b})
+```
+
+The takeaway: when planning prompt edits, English ≈ 4 chars/token; rare strings approach 1 char/token. The bill follows the harder-to-compress shape.
+
 ### The token is also the unit of attention
 
 The model's transformer architecture computes attention between *every pair of tokens*. Attention cost scales quadratically with sequence length. So tokens aren't just a billing unit — they're the unit of computation the model actually performs. A 2× longer prompt costs ~4× more compute even before output generation.
 
+The quadratic-attention curve at a glance:
+
+```
+   prompt tokens         attention pairs computed       relative cost
+   ─────────────         ──────────────────────────     ─────────────
+        500              500 × 500   = 250,000          1×
+      1,000              1,000 × 1,000 = 1,000,000      4×
+      2,000              2,000 × 2,000 = 4,000,000      16×
+      8,000              8,000 × 8,000 = 64,000,000     256×
+     32,000              32,000 × 32,000 = 1,024,000,000  4096×
+    128,000              128,000² = 1.6 × 10¹⁰          16,384×
+
+   doubling prompt length quadruples the attention compute.
+   modern models use sparse attention and other tricks to keep
+   the constant low, but the asymptotic shape is O(n²) — that's
+   why "stuff the whole corpus" stops being viable past a certain
+   corpus size.
+```
+
+Tokens aren't just a billing unit; they're the unit the model's actual computation scales against.
+
 ### Where the boundary cuts shape the model's behavior
 
 Tokenizers are case-sensitive: `"loopd"` and `"Loopd"` are usually different tokens. Whitespace is part of the token: `" the"` (with leading space) and `"the"` (without) are different tokens. This means *small textual edits can change tokenization significantly* — and the model's prior over what comes next is conditioned on the exact tokens, not the exact characters.
+
+How small textual edits change the tokenization:
+
+```
+   string                          tokens (approx)             notes
+   ─────────────────────────       ──────────────────────      ─────────────
+   "the"                           [1820]                      common; one token
+   " the"                          [262]                       different — leading
+                                                                space matters
+   "The"                           [1858]                      different — case
+                                                                matters
+   "the!"                          [1820, 0]                   2 tokens
+   "the !"                         [1820, 837]                 3 tokens (space-bang
+                                                                is its own entry)
+
+   "loopd"                         [9437, 67]                  rare brand → 2 tokens
+   "Loopd"                          [43, 9437, 67]              cap'd version → 3
+                                                                 (one extra capital
+                                                                  prefix)
+```
+
+The model's next-token prior is conditioned on the exact integer sequence, not the visible string — formatting consistency in prompts matters for both cost and behavior.
 
 ### This is what people mean by "tokens, not words"
 
@@ -295,3 +388,6 @@ Answer: tokenization itself is not implemented in loopd; the `usage` count is co
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (clerk-with-phrasebook scenario, name the what-is-the-bill-unit question, MAX_INPUT_CHARS/prompt-cost stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from the clerk-with-phrasebook / 50,000-line-dictionary physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitives (`text.split(' ')` returning a `number[]` via a learned vocabulary). Swapped Why care Move 5 from "tokens are the line-numbers in the phrasebook" to "tokens are the integers your input maps to via a learned `split()`." Added Move 1 mnemonic diagram (tokenize() function signature with input/output trace) + 3 Move 2 sub-section diagrams: chars-per-token table across input types, quadratic-attention compute table from 500 to 128K tokens, small-edits change tokenization examples. Total: 4 new diagrams.

@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've built an autocomplete dropdown that returns 5 suggestions on each keystroke. The naive shape returns the same suggestions for similar queries — the user clicks "pasta primavera" three days in a row because it's the top result every time. You add a `Set<string>` of the user's last-5 selections and pass it to the ranker; the ranker downranks anything in that set. Same query, different output because the recent-history input changed. Past output becomes a constraint on next output. Anti-repetition by negative example, hardcoded into the call: not a smarter ranker, just an additional input that says "exclude these."
 
-A staff writer at a magazine has the lead piece every issue. By the third month every opening sounds the same — "Today was the day that…" — not because the writer is bad but because the prompt has a single most-natural opening and the writer falls into it every time. The editor walks over, pins the last five openings on the wall, and says: don't open this one like any of those. The writer can still write; they just can't write the way they wrote before.
-
-The implicit question is how to force variance without rewriting the brief. Not a new style guide, not a stricter editor — show the writer their last five openings and forbid them. Anti-repetition by negative example: past output becomes a constraint on future output.
+The implicit question is how to force variance without rewriting the brief. Not a new style guide, not a stricter editor — pass the model the last five outputs and forbid them in the next call. Anti-repetition by negative example: past output becomes a constraint on future output.
 
 **What depends on getting this right:** four caption variants per day that don't all start with "Today was the day that." In this codebase `caption.ts:buildUserPrompt` (L102–L121) reads the last five cached captions via `getRecentAISummaries(date, 5)` and appends them under "Recent captions (avoid repeating phrasing or formula):" — the system prompt's `UNIVERSAL RULES` block (`caption.ts` L73–L82) lists the absolute forbidden formulas ("never write 'I' / 'you' / 'we'", "No 'today I…' / 'Today was…' framings"). Lose the rotation feed and the four variants converge across days; lose the rule block and they converge within a single day. The user opens the picker and sees four near-identical captions, the feature collapses to "one caption with cosmetic differences."
 
@@ -34,11 +32,79 @@ Past output becomes the constraint on future output.
 
 ## How it works
 
-A short-story writer at a literary magazine who's been asked to write the lead piece every issue for a year. By month three the editor pins their last five openings on the wall and says: "Don't open any new piece the way you opened these." The writer can still write; they just can't write the way they wrote *before*. The constraint is generative, not restrictive — it forces variance the writer wouldn't have produced from scratch. Two operations welded together in a naive prompt ("generate four captions in different voices") split apart into two: generate four captions, but with awareness of the last five captions you produced.
+An autocomplete ranker that takes both the current query AND a `Set<string>` of the user's last 5 selections, then downranks anything in the set when scoring new suggestions. The caption chain runs the same pattern: the system prompt declares static forbidden formulas (the always-banned phrasings), and the user message appends a dynamic rotation block (the last 5 captions to avoid). Two operations welded together in a naive prompt ("generate four captions in different voices") split apart into two: generate four captions, but with awareness of the last five captions you produced.
+
+The two-layer constraint shape:
+
+```
+   SYSTEM PROMPT (static — same every call)
+   ────────────────────────────────────────────────
+   ┌─ UNIVERSAL RULES (caption.ts L73–L82) ───────┐
+   │ - "Never write 'I' / 'you' / 'we'"            │  ◄── always banned
+   │ - "No hashtags. No emojis."                    │     (hard rule
+   │ - "No 'today I…' / 'Today was…' framings"     │      every call)
+   │ - "No questions, no exclamations."             │
+   │ - "No motivational platitudes"                 │
+   └────────────────────────────────────────────────┘
+                       
+   USER MESSAGE (dynamic — changes per call)
+   ────────────────────────────────────────────────
+   Today's log: ...
+   Mood: good
+                       
+   Recent captions (avoid repeating phrasing or formula):
+   ┌─ rotation block (caption.ts L102-L121) ──────┐
+   │  caption from 3 days ago                       │  ◄── dynamic
+   │  ---                                            │     (last 5
+   │  caption from 2 days ago                       │     captions)
+   │  ---                                            │
+   │  caption from yesterday                        │
+   │  ---                                            │
+   │  caption from today (existing)                 │
+   │  ---                                            │
+   │  caption from last week                        │
+   └────────────────────────────────────────────────┘
+                       
+   model sees both layers together:
+     hard rules where SHAPE matters (never "today I…")
+     soft guidance where NOVELTY matters (avoid these 5 examples)
+```
+
+The five sub-sections below trace the data fetch, the injection, the static constraints in the system prompt, what the model does with both, and how the rotation evolved through the 4-variant migration.
 
 ### The data — fetching prior captions
 
 When the summarize chain assembles the caption input, it calls `getRecentAISummaries(date, 5)` to pull the last five cached `AISummary` rows from SQLite. For each row, it tries to extract the legacy `caption` field (the single string from the pre-4-variant era). If you're coming from frontend, this is the same shape as React Query's `useInfiniteQuery` reading the last page of cached data to render alongside the new request — past state and current state living in the same call. Practical consequence: the captions are pulled from the device's SQLite, not from a remote source — `getRecentAISummaries` is just a `SELECT ... ORDER BY date DESC LIMIT 5` against the `ai_summaries` table. Boundary: this only works because every prior `AISummary` is cached locally; if the user reinstalls the app, the rotation history resets.
+
+The data flow from SQLite to the rotation array:
+
+```
+   summarize.ts → buildCaptionInput(entries, summary, getRecentAISummaries, today)
+              │
+              ▼  getRecentAISummaries(today, 5)
+              │  → SELECT * FROM ai_summaries
+              │     WHERE date < today
+              │     ORDER BY date DESC
+              │     LIMIT 5
+              │
+              ▼  5 AISummary rows
+              ▼
+   for each row, extract row.summary_json.caption (legacy single string):
+                       │
+                       ▼
+   recentCaptions: string[] = [
+     "Spent the morning on the sync layer.",
+     "Pulled out the manual touch deviation.",
+     "Drilled into AI cost cuts.",
+     "Reviewed the spec from the top.",
+     "Wrote the interpret prompt."
+   ]
+                       │
+                       ▼
+   passed into the CaptionInput → buildUserPrompt
+```
+
+The rotation feed is SQLite-local — every cached summary is on the device, no remote fetch.
 
 ### The injection — adding them to the user message
 
@@ -65,9 +131,61 @@ The system prompt at `caption.ts` L73–L82 lists `UNIVERSAL RULES (apply to all
 
 These are the static forbidden formulas — patterns the model converges on by default that must be killed before they ship. They never change. The dynamic forbidden formulas (the last 5 captions) live in the user message and rotate with each call. Two layers, working together. If you're coming from frontend, this is the same shape as a lint rule (`no-console`, static) plus an eslint-disable comment with a date (dynamic, per-file). Together they constrain behaviour at two timescales. Practical consequence: the model never opens with "Today I…" because the static constraint kills it, AND the model never opens the way it opened yesterday because the dynamic constraint shows yesterday's opening as a forbidden example.
 
+The two layers compared:
+
+```
+   layer                  lives in                  changes              examples
+   ──────────────────     ──────────────────        ──────────────       ──────────────
+   static constraints      system prompt             never                "No 'today I…'"
+   (always-banned          (caption.ts L73-L82)                            "No emojis"
+   formulas)                                                               "No questions"
+                                                                            "No first-person
+                                                                             pronouns"
+   dynamic constraints     user message              every call (5         the last 5
+   (rotation history)      (rotation block at        most-recent             cached caption
+                           bottom of caption        captions feed)         strings
+                           prompt)
+
+   model behavior:
+     static:  treated as HARD RULES — model trained on negative
+              instructions; "never X" → almost never X
+     dynamic: treated as SOFT GUIDANCE — model attends to the list
+              but doesn't substring-match; semantically-different
+              uses of similar words are OK
+```
+
+Hard rules where shape matters; soft guidance where novelty matters.
+
 ### What the model does with it
 
 The model treats the system-prompt constraints as hard rules — they're written as "never X" and the training prior on negative instructions is strong. The user-message rotation block ("avoid repeating phrasing or formula") is read as soft guidance — the model attends to the prior captions when picking openings but doesn't treat them as a strict block-list. The combination is exactly what you want: hard rules where shape matters, soft guidance where novelty matters. Practical consequence: caption N+1 reliably opens differently from captions N, N-1, N-2, N-3, N-4, but the model isn't paranoid about exact substring matches — if "Spent the morning…" is in the rotation history but "Spent the afternoon…" is the natural opening for today's log, the model will use it.
+
+What the model produces, with and without the rotation block:
+
+```
+       Without rotation block               With rotation block (loopd)
+   ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
+   │ day 1: "Spent the morning on the   │    │ day 1: "Spent the morning on the   │
+   │         sync layer."                │    │         sync layer."                │
+   │ day 2: "Spent the afternoon         │    │ day 2: "Drilled into the conflict  │
+   │         debugging the conflict      │    │         resolver."                   │
+   │         resolver."                  │    │ day 3: "Pulled the manual-touch    │
+   │ day 3: "Spent the day pulling out   │    │         deviation out into its       │
+   │         the manual-touch dev..."    │    │         own file."                   │
+   │ day 4: "Spent..."                   │    │ day 4: "Reviewed the spec from      │
+   │ day 5: "Spent..."                    │    │         the top."                    │
+   │                                      │    │ day 5: "Wrote the interpret         │
+   │ → 5 days, 5× same opening pattern    │    │         prompt."                     │
+   │                                      │    │                                     │
+   │ user opens picker:                   │    │ → 5 days, 5 different openings      │
+   │   "all four variants start with      │    │                                     │
+   │    'Spent...'" → useless picker      │    │ user opens picker:                  │
+   │                                      │    │   "four genuinely different         │
+   │                                      │    │    variants" → real choice           │
+   └──────────────────────────────────┘    └──────────────────────────────────┘
+```
+
+The rotation block doesn't make the model smarter — it makes the model aware of what it just wrote.
 
 ### Move 2.5 — How the rotation evolved
 
@@ -78,6 +196,36 @@ The model treats the system-prompt constraints as hard rules — they're written
 **The gap (what's actually true today):** the rotation history is dominated by pre-2026-05-08 single captions for users with long history; new 4-variant users get an empty rotation block on their first ~5 days because there are no legacy captions to read. The bug is harmless (the model still converges to good variants on its own) but real — the rotation feature degraded slightly during the variant migration and hasn't been re-tuned.
 
 **What didn't have to change:** the prompt structure. The "Recent captions (avoid repeating phrasing or formula):" line in `buildUserPrompt` works for both single captions and (if ever wired up) variant captions; the change is in what `summarize.ts` decides to push into `recentCaptions`. The architectural foresight is that the rotation block is a list of strings — what you put into the strings is a downstream decision.
+
+Phase A (pre-2026-05-08) vs Phase B (now) vs intended:
+
+```
+        Pre-2026-05-08              2026-05-08 onward         Intended (not yet)
+   ┌──────────────────────┐    ┌──────────────────────┐    ┌──────────────────────┐
+   │ caption: single string │    │ caption: 4 variants   │    │ caption: 4 variants   │
+   │   per day              │    │   per day              │    │   per day              │
+   │                        │    │ + legacy.caption       │    │ + legacy.caption       │
+   │ rotation: pull last 5  │    │   field still in DB   │    │   ALL 4 variant strings│
+   │   single captions       │    │                        │    │   from last 5 days     │
+   │   from cached rows     │    │ rotation: pull last 5 │    │   = 20 strings in rot. │
+   │                        │    │   legacy.caption        │    │   block                │
+   │                        │    │   strings ONLY (new    │    │                        │
+   │                        │    │   4-variant rows have   │    │ richer negative        │
+   │                        │    │   no legacy.caption    │    │ space for novelty       │
+   │                        │    │   to read)              │    │                        │
+   │                        │    │                        │    │                        │
+   │ works for long-history │    │ works for users with   │    │ works for everyone     │
+   │ users                  │    │ pre-2026-05-08 history │    │                        │
+   │                        │    │ degrades for new users │    │                        │
+   │                        │    │ (empty rotation on     │    │                        │
+   │                        │    │ first ~5 days)         │    │                        │
+   └──────────────────────┘    └──────────────────────┘    └──────────────────────┘
+                                          ▲
+                                          │
+                            current bug-shaped gap; harmless but real
+```
+
+The buildUserPrompt structure is unchanged across all three phases — only what `summarize.ts` pushes into `recentCaptions` shifts.
 
 This is what people mean by "anti-repetition is a UX concern as much as a prompt one." The model doesn't know which of its outputs the user has seen recently; you have to tell it. Whichever past outputs you decide to surface become the negative space for the next generation. The full picture is below.
 
@@ -469,3 +617,6 @@ Then open `caption.ts` and `summarize.ts` to verify.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (magazine-writer-with-pinned-openings scenario, name the force-variance question, caption rotation stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from magazine-writer / short-story-writer physical-world analogies (banned per v1.31.0/v1.32.0) to level-1 primitive (autocomplete dropdown with a `Set<string>` of last-5 selections downranking recent picks). Added Move 1 mnemonic diagram (two-layer constraint: system-prompt UNIVERSAL RULES + user-message rotation block) + 5 Move 2 sub-section diagrams: data flow from getRecentAISummaries to recentCaptions array, static-vs-dynamic layers comparison, with-vs-without rotation 5-day before/after, Phase A vs Phase B vs intended three-column comparison. (Sub-section 2 already had a code snippet — kept as inline annotation.) Total: 5 new diagrams.

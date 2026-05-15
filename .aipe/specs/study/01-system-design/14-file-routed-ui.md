@@ -39,21 +39,139 @@ The filesystem is the router.
 
 Next.js 13+'s `app/` directory routing is the canonical pattern. The folder structure IS the route table; there's no separate config file declaring what routes exist; adding a new route is the same gesture as creating a new file. expo-router ships exactly this convention for React Native: the `app/` directory's tree of files IS the route map, and the file naming (`.tsx` for screens, `_layout.tsx` for nested layouts, `[param].tsx` for dynamic segments) carries the routing semantics. Remix and SvelteKit follow the same model. The discipline kills the "router config drifts from screen files" failure mode by making the screen files the config.
 
+The mental model in one picture — filesystem maps directly to URLs:
+
+```
+   filesystem tree                            URLs
+   ─────────────────────────────              ────────────────────
+   app/index.tsx                    ───▶     /
+   app/todos.tsx                    ───▶     /todos
+   app/journal/[date].tsx           ───▶     /journal/:date  (dynamic)
+   app/_layout.tsx                  ───▶     wraps everything below
+   app/settings/_layout.tsx         ───▶     wraps app/settings/*
+
+   no routes.ts. no manual registration. no second map.
+
+   add screen      = add file
+   remove screen   = remove file
+   where does X live?  =  read the path
+```
+
+The four sub-sections below trace the convention itself, layouts as wrappers, dynamic params, and how navigation calls resolve to files.
+
 ### The route convention — file path equals URL path
 
 `app/index.tsx` renders `/`. `app/todos.tsx` renders `/todos`. `app/journal/[date].tsx` renders `/journal/:date` with `date` becoming a dynamic param. The bracket convention `[param]` is the only syntax the framework cares about; everything else is the filesystem doing the work. If you're coming from frontend, this is the same idea as Next.js's `pages/` directory or Remix's `routes/` directory — same convention, same trade. Concrete consequence: a developer wants to add a `/threads/:id` screen. They create `app/threads/[id].tsx`. No router config, no route table edit, no manual import. The next dev server reload picks up the new file. Inside the component, `useLocalSearchParams<{ id: string }>()` reads the param. Boundary: this assumes the file convention is followed exactly — a file at `app/threads/show.tsx` would create `/threads/show`, not the dynamic `:id` route the developer intended. The bracket is load-bearing.
+
+The actual mapping in this codebase:
+
+```
+   file path                             URL path
+   ──────────────────────────            ────────────────────
+   app/index.tsx                  ──▶   /
+   app/todos.tsx                  ──▶   /todos
+   app/todos/[id].tsx             ──▶   /todos/:id
+   app/journal/[date].tsx         ──▶   /journal/:date
+   app/editor/[date].tsx          ──▶   /editor/:date
+   app/threads/[id].tsx           ──▶   /threads/:id
+   app/more/habits.tsx            ──▶   /more/habits
+   app/settings/ai.tsx            ──▶   /settings/ai
+
+   bracket convention:  [param]  =  dynamic segment
+   anything else:                =  literal path
+```
+
+The bracket is the only piece of routing syntax; the rest is the filesystem doing the work.
 
 ### Layouts — `_layout.tsx` at every level wraps its children
 
 `_layout.tsx` files are special: at any directory level, the `_layout.tsx` wraps everything below it. The root `app/_layout.tsx` wraps the entire app — it's the boot path. `app/(main)/_layout.tsx` (if it exists) wraps every screen in the `(main)` group. Think of it like React Router's `<Outlet />` in a parent route, or Next.js's `layout.tsx` files — the same composition pattern. Concrete consequence: the root `app/_layout.tsx` runs `useDatabase()` (initialises SQLite, runs migrations, sets up the connection pool), runs `bootstrap()` for cloud sync ([10-bootstrap-decision-tree](./10-bootstrap-decision-tree.md)), and wraps the rest of the tree in `<GestureHandlerRootView>`, theme provider, font loader, and the navigation stack. Every screen below sees a ready DB, a converged sync state, and the gesture system. Boundary: if the root layout's async setup throws (e.g. SQLite can't open), the entire tree never mounts. There's no "render the screen anyway with a broken DB" fallback because every screen depends on the DB being ready.
 
+The layout-wraps-children composition in the file tree:
+
+```
+   app/
+   ├── _layout.tsx          ◄── wraps EVERY screen below
+   │       useDatabase()
+   │       bootstrap()
+   │       <GestureHandlerRootView>
+   │       <ThemeProvider>
+   │       <Stack> (the navigation stack)
+   │
+   ├── index.tsx            ◄── /              (rendered inside _layout)
+   ├── todos.tsx            ◄── /todos         (rendered inside _layout)
+   ├── journal/
+   │    └── [date].tsx      ◄── /journal/:date (rendered inside _layout)
+   └── ...                  every screen below shares the boot work
+```
+
+Every screen mounts with a ready DB, converged sync, and the gesture system — because the root layout did all of that before any screen rendered.
+
 ### Dynamic params — `[date]` resolves at runtime
 
 `app/journal/[date].tsx`'s param `date` resolves to whatever string is in the URL slot. The component reads it via `useLocalSearchParams<{ date: string }>()` — a typed React hook from expo-router. If you're coming from frontend, this is the same shape as Next.js's `useParams()` or React Router's `useParams()`. Concrete consequence: the dashboard's "open today's entry" navigation calls `router.push('/journal/2026-05-10')`. Expo-router resolves this to `app/journal/[date].tsx` with `date = '2026-05-10'`. The component runs `useEntries(date)` to fetch the matching SQLite row. Closing the screen pops the navigation stack back to whatever pushed it. Boundary: the param is always a string — coercion to Date or number happens in the component. A malformed param (e.g. `/journal/not-a-date`) doesn't throw at the routing layer; the component is responsible for handling it (usually by returning an empty entry or rendering an error state).
 
+Walking the param from URL to component:
+
+```
+   file:  app/journal/[date].tsx
+                       │
+                       ▼  expo-router sees [date] in the path
+                       ▼
+   URL:   /journal/2026-05-10
+                       │
+                       ▼  resolves
+                       ▼
+   inside the component:
+
+     const { date } = useLocalSearchParams<{ date: string }>();
+     //         └─── 'date' matches the [date] bracket name
+
+     const entry = useEntries(date);
+     // ... render based on date
+
+   note: params are ALWAYS strings.
+   coercion to Date / number happens inside the component.
+   a malformed param ('/journal/not-a-date') doesn't throw —
+   the component handles it (empty entry or error state).
+```
+
+The bracket name in the file IS the variable name in the hook — that's the binding.
+
 ### Navigation — `useRouter().push()` and hardware back
 
 There's no manual route table, no `<Link to={...}>` requiring registration, no `routes.ts` file mapping names to components. Navigation is just `useRouter().push('/path')` where `/path` is the file path under `app/` minus the extension. Hardware back on Android pops the stack back to the previous file — Expo-router maintains the stack automatically based on push history. Think of it like the browser's history stack, except the entries are file paths instead of URLs. Concrete consequence: a screen at `app/threads/[id].tsx` shows a list with each row calling `router.push('/journal/2026-05-10')`. The user enters the journal, hits back on the device, lands at `/threads/<id>` again. No `goBack()` plumbing in the component code — the system handles it. Boundary: deep linking from outside the app (e.g. opening a push notification's link) goes through the same `router.push` API but with the URL coming from the OS — same code path, different trigger.
+
+The push call to screen mount flow:
+
+```
+   ┌─ Caller component ───────────────────────────────────┐
+   │   const router = useRouter();                          │
+   │   <Pressable onPress={() =>                            │
+   │     router.push('/journal/2026-05-10')                 │
+   │   }>...</Pressable>                                    │
+   └──────────────────────┬───────────────────────────────┘
+                          │
+                          ▼  expo-router resolves
+   ┌─ Routing layer ──────────────────────────────────────┐
+   │   match path '/journal/:date'                          │
+   │     → app/journal/[date].tsx                           │
+   │     → date = '2026-05-10'                              │
+   │   push onto navigation stack                           │
+   └──────────────────────┬───────────────────────────────┘
+                          │
+                          ▼
+   ┌─ Screen mounts ─────────────────────────────────────┐
+   │   app/journal/[date].tsx renders inside root layout   │
+   └──────────────────────┬───────────────────────────────┘
+                          │
+                          ▼  user taps hardware back
+                          ▼
+   stack pops; previous screen mounts
+   (no goBack() plumbing in component code)
+```
+
+Deep linking from outside the app (push notifications, OS share-sheet) hits the same `router.push` API — just with the URL coming from the OS instead of a button press.
 
 This is what people mean by "convention over configuration for routes." The file system IS the source of truth; there's no map between names and components because the names ARE the components' paths. Every framework that has ever made routing pleasant — Next.js, Remix, Astro, SvelteKit, expo-router — has reached for some version of this. The cost is that the file tree's depth is the route depth, which can produce deep folders; the win is that "where does this route live?" never has a wrong answer. The full picture is below.
 
@@ -385,3 +503,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced library-shelves-as-catalogue analogies with Next.js 13+ app/ directory routing + Remix + SvelteKit + Express manual route registration as the failure mode). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-3 — Next.js / Remix / SvelteKit framework conventions). Added Move 1 mnemonic diagram (filesystem-to-URL mapping) + 4 Move 2 sub-section diagrams: codebase route table, layout-wraps-children file-tree, URL-to-param binding flow, push-call-to-screen-mount flow. Total: 5 new diagrams.

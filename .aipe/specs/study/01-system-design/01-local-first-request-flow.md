@@ -11,9 +11,9 @@
 
 ## Why care
 
-You're on the subway, no signal, and you want to jot down a thought before you forget it. You open the notes app, type a sentence, and the cursor freezes between every keystroke because the app is trying to reach a server through tunnel walls. You give up, switch to Apple Notes, and the cursor moves at the speed of your thumb. By the time you surface above ground the thought is gone.
+You're typing into a `<textarea>` on a flaky train. Every keystroke fires `onChange`, the handler calls `setState` with the new value, and the next render shows the typed character — that whole round-trip runs inside React's render loop, never leaves the device, and the cursor moves at the speed of your thumb. Now imagine the same `<textarea>` rewritten so every keystroke `await`s a `fetch()` to the server before updating `value`. On 400ms cellular RTT the cursor freezes between every keystroke; through tunnel walls the typed characters never appear at all.
 
-What decided which app felt usable is where the write actually lands. Apple Notes wrote to your phone's disk and acknowledged immediately; the other app tried to write to a server first and asked the disk to wait. Local-first is the name for the first shape — the user's write commits to an on-device store synchronously, and a background process races to mirror it somewhere durable later. Not "fast enough to feel local" — actually local.
+What decides which version feels usable is where the write actually lands. The first writes to local React state and acknowledges immediately; the second tries to write to a server first and asks the input to wait. Local-first applies that same shape to *durable* storage — the user's write commits to an on-device store synchronously (SQLite, not just React state), and a background process races to mirror it somewhere durable later. Not "fast enough to feel local" — actually local.
 
 **What depends on getting this right:** the perceived speed of every keystroke, and whether the user's writes survive when the network doesn't. In this codebase a journal entry's text is autosaved to `entries.text` on every keystroke; `[]` markers in that text get scanned into `todo_meta` rows at commit; the dashboard reads from SQLite, never from Supabase. If a keystroke had to wait for HTTPS, the cursor would stutter on the train and the autosave invariant ("the row is in SQLite by the next render") would collapse — every prose-derived feature (`scanTodos`, `scanThreads`, `scanNutrition`) depends on that invariant. Lose it and the editor stops feeling like an editor.
 
@@ -37,23 +37,130 @@ The user's writes go to the device; the cloud catches up later.
 
 ## How it works
 
-Git's `commit` and `push` are two different operations split apart for the same reason. The commit lands instantly in the local repo at disk-I/O speed, and the push runs whenever the network agrees to cooperate. Gmail does a consumer-facing version of the same shape: hit send and the message vanishes from compose to the sent folder immediately, while the actual SMTP handoff finishes in the background; flaky wifi just queues the retry. Two operations that most apps weld together — writes and publish — split apart so the user never waits on the network.
+`setState` and `fetch()` are two different operations split apart for the same reason. The `setState` call updates React's local tree instantly — the next render shows the new value at frame-rate speed — and the `fetch()` runs whenever the network agrees to cooperate. Git's `commit` and `push` work the same way at a different scale: the commit lands in the local repo at disk-I/O speed, the push runs whenever the network agrees. Two operations that most apps weld together — *write* and *publish* — split apart so the user never waits on the network.
+
+The shape, in one picture:
+
+```
+   keystroke
+       │  (t = 0)
+       ▼
+  ┌──────────────────────────────┐
+  │  React setState  ~16ms       │  ◄── local, synchronous
+  │  SQLite INSERT   ~1ms        │     the UI sees it
+  │  updated_at = now()          │     before the next frame
+  └──────────────┬───────────────┘
+                 │
+                 │  (5s of no more writes)
+                 ▼
+  ┌──────────────────────────────┐
+  │  pushAll() → HTTPS upsert    │  ◄── remote, eventually
+  │  to Supabase Postgres        │     network catches up later
+  └──────────────────────────────┘
+```
+
+Same shape as the `setState`/`fetch()` split, but with a synchronous SQLite write sitting between them so the write is durable on the device, not just held in React memory. The four sub-sections below trace each layer of that split in turn.
 
 ### The single funnel — every write goes through `database.ts`
 
 `src/services/database.ts` is the only file that opens `loopd.db`. Hooks (`useEntries`, `useHabits`, `useExport`, …) call services (`src/services/<domain>/<verb><Noun>.ts`), and the services call `database.ts`. If you're coming from frontend, this is the same shape as a Redux store where every action passes through one root reducer — the funnel exists so two invariants can be enforced in one place: `updated_at = now()` and `schedulePush()` get called on every synced write, no exceptions. Concrete consequence: if a new contributor adds a mutation in a per-domain service file and forgets `schedulePush()`, the write lands in SQLite but never propagates to Supabase. The funnel makes that mistake hard to make — the helper that opens `loopd.db` is the same helper that fires the debounce. Boundary: if any other file opens the DB handle directly (e.g. a future migration script bypassing the helper), the invariants stop being enforceable.
 
+The funnel shape — many callers, one mouth:
+
+```
+   ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐
+   │ useEntries │ │ useHabits  │ │ useProject │ │ useExport  │
+   └─────┬──────┘ └─────┬──────┘ └─────┬──────┘ └─────┬──────┘
+         │              │              │              │
+         └──────────┬───┴──────┬───────┴──────────────┘
+                    │          │
+                    ▼          ▼
+       ┌──────────────────────────────────────┐
+       │  src/services/database.ts            │
+       │   1. INSERT / UPDATE row              │  ◄── only opener
+       │   2. stamp updated_at = now()         │     of loopd.db
+       │   3. call schedulePush()              │
+       └──────────────────────────────────────┘
+                    │
+                    ▼
+                loopd.db (SQLite, WAL)
+```
+
+A new mutation written in any per-domain file routes through this helper or it doesn't write at all — and any mutator that bypasses the helper trips both invariants at once.
+
 ### Synchronous local write — the cursor never lags
 
 Inside `database.ts`, the mutator runs SQLite via `expo-sqlite`. In WAL mode this is a synchronous in-process call — write commits in single-digit milliseconds and the next read sees the new row. If you're coming from frontend, this is the same shape as calling `setState` in React: the next render sees the new state without waiting on anything external. Concrete consequence: a user types `[]` at t=0 and the autosave fires at t=1ms; the line is in `entries.text` immediately, the next focus blur's scanner reads it, the `todo_meta` row exists by t=5ms. The user has never observed the network. Boundary: this assumes the local DB is healthy — if `loopd.db` is corrupted or locked by another process (which can't happen in single-process mobile, but matters in unit tests), the synchronous contract collapses.
+
+Walking that path on a timing axis makes the "no network observed" claim concrete:
+
+```
+ Time     React UI                  database.ts                 SQLite
+   │         │                          │                         │
+  0ms       │  user types '['            │                         │
+            │  setState({text})          │                         │
+  1ms       │ ───── editEntry() ──────▶ │                         │
+            │                            │  INSERT INTO entries   │
+            │                            │  updated_at = now()    │
+            │                            │ ─────── SQL ──────────▶│
+            │                            │                         │  WAL commit
+            │                            │ ◀────── ok ────────────│
+            │                            │  schedulePush()         │
+            │ ◀───── returns ────────── │   (debounced timer       │
+            │                            │    armed for +5s)       │
+  2ms       │  re-render reads row       │                         │
+            │                            │                         │
+ 16ms       │  frame paints (60Hz)       │                         │
+            ▼                            ▼                         ▼
+```
+
+Every horizontal step is a function call on the same thread — no `await`, no network, no IPC. The next render and the SQLite row exist in the same frame the keystroke was typed.
 
 ### Debounced push — the cloud trails by 5 seconds
 
 After the local write, `database.ts` calls `schedulePush()` (`src/services/sync/schedulePush.ts` L14–L21). The function clears any pending timer and starts a new 5-second one. After 5s of write quiet, `fire()` kicks off `pushAll()`, which walks the 10-table SyncableTable registry and upserts any rows where `updated_at > synced_at`. Think of it like React's batching: hundreds of `setState` calls in one render produce one re-render, not hundreds — same idea, except the batched output is HTTPS upserts to Supabase. Concrete consequence: a user types `[] call mom` at t=0, `[] write spec` at t=2s, then backgrounds at t=3s. Both rows are in SQLite by t=3s. The push fires at t=7s (5s after the last write). If the device is offline at t=7s, the push errors and the rows stay dirty (`updated_at > synced_at`); the next session with network picks them up via the boot-time `pushAll()` in `app/_layout.tsx`. Boundary: the 5-second window assumes a single writer. With two devices the user can observe staleness (open the tablet immediately after typing on the phone — the tablet sees yesterday's state for up to 5s).
 
+The timer behaviour on a timeline:
+
+```
+   write at  write at  write at        (5s of no writes)
+   t=0       t=1.5s    t=2.8s          │
+     │         │         │              │
+     ▼         ▼         ▼              ▼
+  ┌─────────────────────────────┐   ┌──────────────────────────┐
+  │ schedulePush() each time:   │   │ fire() at t=7.8s:         │
+  │   clearTimeout(timer)        │   │   pushAll() walks the     │
+  │   timer = setTimeout(        │   │   10-table SyncableTable  │
+  │     fire, 5000)              │   │   registry; upserts every │
+  │ window resets on each call  │   │   row with                │
+  │                              │   │   updated_at > synced_at  │
+  └─────────────────────────────┘   └──────────────────────────┘
+```
+
+Three keystrokes produce one HTTPS upsert at t=7.8s, not three. The timer is a single boolean — *quiet for 5s* — and `pushAll()` does the actual table-by-table work only when that boolean flips.
+
 ### Offline reconciliation — dirty rows wait
 
 If the network is down, the local writes pile up with `updated_at > synced_at` and the push fails silently. The boot-time `pushAll()` in `app/_layout.tsx` is what catches these on the next launch with network. If you've worked with offline-first React Native apps via `NetInfo` + a queue, the queue is what this codebase replaces with the `updated_at > synced_at` SQL predicate — the dirty filter IS the queue, and SQLite is the durable store. Concrete consequence: a user writes 8 entries on a plane with no network. The pushes all error; the rows stay dirty. When they land and the device gets WiFi, the next foreground `pushAll()` walks the registry, selects all 8 dirty rows, upserts them in one batch, stamps `synced_at = now()`. The user's experience: their writes survived; the cloud caught up silently. Boundary: this assumes the next boot eventually happens — if the device dies forever, the writes never make it to the cloud, but the user can still recover from the local SQLite file.
+
+The plane-then-WiFi sequence in side-by-side form makes the "queue is just a SQL predicate" point concrete:
+
+```
+       Offline session                       Next launch (online)
+   ┌────────────────────────────┐       ┌────────────────────────────┐
+   │  user writes 8 entries      │       │  app/_layout.tsx boots      │
+   │  → SQLite INSERTs ✓         │       │  → pushAll() runs           │
+   │  → schedulePush() fires     │       │                              │
+   │  → HTTPS times out          │       │  SELECT * FROM entries       │
+   │  → row stays dirty:         │  ──▶  │  WHERE updated_at > synced_at│
+   │      updated_at > synced_at │       │  ─── returns 8 dirty rows ──▶│
+   │  (queue = this SQL filter)  │       │                              │
+   │                              │       │  upsert all 8 in one batch  │
+   │                              │       │  stamp synced_at = now()    │
+   └────────────────────────────┘       └────────────────────────────┘
+```
+
+The "queue" never gets built — the SQL predicate on the durable table *is* the queue, so the eight rows survive every kind of crash that doesn't destroy the SQLite file itself.
 
 This is what people mean by "decouple availability from durability." The user's writes get availability — they land instantly, the cursor never lags, the device is the canonical store. The cloud gets eventual durability — it catches up at its own pace, batched. Every framework that has ever felt fast — Git, the OS page cache, Firebase's offline cache, every collaborative editor — does some version of this. The full picture is below.
 
@@ -407,3 +514,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of How it works to anchor on real software (replaced bank-teller-with-ledger analogy with Git's `commit` / `push` split + Gmail's optimistic send + background SMTP retry).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from Apple Notes (whole-product) to a `<textarea>` + `setState` vs awaited `fetch()` primitive. Swapped How it works Move 1 from Git + Gmail to `setState`/`fetch()` primitive (kept git as level-4 industry primitive). Added Move 1 mnemonic diagram + 4 Move 2 sub-section mechanism diagrams (funnel shape, synchronous-write timing sequence, debounce timeline, offline reconciliation side-by-side). Total: 5 new diagrams.

@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Type "knee" into GitHub's code search and you get an avalanche of token matches — README mentions, irrelevant CSS classes, every test fixture using the word. Now type "knee injury physical therapy" and the result set narrows dramatically — completely different ranking, more focused. The Algolia API exposes this gap explicitly: `query` is what the user typed, `queryLanguages` is the rewrite layer that can expand or reshape the input before retrieval fires. Google Search runs the rewrite implicitly under the hood every time you type a fragment. The user's typed string and the corpus the search runs against live in different vocabularies; the rewrite bridges them.
+You've got a search box that takes whatever the user types and runs it against your corpus of long-form documents. The user types `"knee"` — one token, no context. Your retrieval ranker embeds that token and looks for matches in document-space, where every document is a 1000-word entry. The user's short query and the long documents live in different parts of vector space, and the cosine search returns whatever happens to have "knee" in passing — not the entry that's actually about a knee injury. The fix isn't a smarter embedding model or a bigger context window. The fix is to *transform the input before retrieval* — rewrite `"knee"` into a hypothetical document-shaped string ("I hurt my knee yesterday playing tennis...") and search with THAT string's vector. Same kind of input bridging as `text.trim().toLowerCase()` before a `db.users.find({email})` lookup, applied at a higher semantic level.
 
 The implicit question is "why doesn't the user's typed string look like the things we're searching against, and how do we close that gap before the lookup?" Query rewriting is the family of techniques that answers it — and HyDE (Hypothetical Document Embeddings) is one specific shape: ask an LLM to generate a hypothetical document-shaped answer, embed *that*, and search with its vector instead of the user's. The short query and the long document live in different parts of vector space; the rewrite moves the search point into the documents' neighbourhood.
 
@@ -35,6 +33,50 @@ The user's typed string is one input shape; the documents are another — the re
 ## How it works
 
 The fundamental observation: a short query and a long document live in different parts of vector space. "knee" embeds near other short queries, not near long entries that happen to discuss knee injuries. Closing that gap is the whole problem.
+
+The asymmetry and three rewrite strategies in one picture:
+
+```
+   The asymmetry:
+   ┌─────────────────────────────────────────────────────┐
+   │ user types:    "knee"                                 │
+   │   ▼  embed                                            │
+   │ "knee" vector lives in short-query cluster            │
+   │                                                       │
+   │ ─────────── (big vector-space gap) ───────────        │
+   │                                                       │
+   │ documents:     "I hurt my knee yesterday playing      │
+   │                 tennis. It's been swelling..."         │
+   │   ▼  embed (already done at index time)               │
+   │ document vectors live in long-document cluster        │
+   └─────────────────────────────────────────────────────┘
+                              │
+                              │  three rewrite strategies bridge the gap
+                              ▼
+   ┌─────────────────────────────────────────────────────┐
+   │ Strategy 1: Expansion                                  │
+   │   "knee" → "knee injury pain tennis sports"            │
+   │   ▼  embed                                             │
+   │   slightly closer to documents, helps sparse           │
+   │   retrieval more than dense                             │
+   │                                                         │
+   │ Strategy 2: Reformulation                              │
+   │   "knee" → "what did I write about hurting my knee?"   │
+   │   ▼  embed                                             │
+   │   modest help; mostly shape normalisation              │
+   │                                                         │
+   │ Strategy 3: HyDE (this file's focus)                   │
+   │   "knee" → LLM("knee") generates a hypothetical        │
+   │             entry: "I hurt my knee yesterday playing   │
+   │             tennis. It's been swelling..."             │
+   │   ▼  embed the hypothetical                            │
+   │   hypothetical_vector lives in document cluster        │
+   │   ▼  cosine search                                     │
+   │   finds the REAL knee entries the user wanted          │
+   └─────────────────────────────────────────────────────┘
+```
+
+The four sub-sections below trace the three rewrite strategies, the HyDE-specific trick of generating a document-shaped string, where each shines vs hurts, and the cost ledger.
 
 ### Three flavours of query rewriting
 
@@ -93,9 +135,62 @@ HyDE doesn't help (and can hurt) when:
 - The user is searching for proper nouns or exact identifiers — HyDE blurs them into the hypothetical document's prose.
 - The latency cost of the LLM rewrite call breaks the latency budget.
 
+When HyDE earns its place, in a decision matrix:
+
+```
+   condition                                    HyDE helps?   why
+   ───────────────────────────────────────      ───────────   ─────────────────
+   short query + long-form corpus               YES            asymmetry is real;
+   (loopd's exact shape)                                       rewrite bridges it
+   short query + short-form corpus              MAYBE          asymmetry smaller;
+   (chat-history search)                                       diminishing returns
+   long natural-language question +             NO             query already looks
+   long corpus                                                 like a document
+   query is a proper noun /                     NO (HURTS)     LLM blurs the
+   exact identifier ("Spice House,"                            specificity into
+   "loopd," "ENOTFOUND")                                       generic prose →
+                                                               sparse lane wins
+                                                               this case
+   latency budget < 500ms                       NO              the rewrite call
+   (real-time autocomplete)                                    blows the budget
+                                                               by itself
+   latency budget ~2-5s                         YES            +1s rewrite fits;
+   (modal-triggered, batch)                                    quality lift earns
+                                                               the latency
+
+   for loopd specifically:
+     [B2A.8] related-entries: latency-tolerant → HyDE candidate
+     [B2A.7] interpret-this-week: already at 3-5s → +1s breaks UX
+```
+
+The decision is per-feature, not global — HyDE on the feature where short-query asymmetry is the bottleneck.
+
 ### The cost ledger
 
 HyDE adds ~500-2000ms per query (one LLM call) plus per-query LLM cost (~$0.001-0.003 on Sonnet, less on Haiku). For a feature that queries 10 times a day at solo scale, that's pennies per month — affordable. For an autocomplete-on-every-keystroke surface, it's not.
+
+Cost per surface at three latency profiles:
+
+```
+   surface type            queries/day   latency budget   HyDE feasible?
+   ────────────────────    ───────────   ──────────────   ────────────────
+   modal-triggered          ~10           2–5s              YES
+   (interpret, related-                                     ~$0.01–0.03/day
+   entries on Phase 2A)                                     ~$0.30–1/month
+   batch search             ~5            3–10s            YES
+   ("find all entries                                       ~$0.005–0.015/day
+   about X")                                                background-safe
+   inline autocomplete      ~hundreds     <300ms           NO
+   on every keystroke                                       blows latency
+                                                            budget regardless
+                                                            of cost
+   real-time search         ~50           <1s              MARGINAL
+   (search-as-you-type)                                     needs Haiku for
+                                                            speed; some quality
+                                                            loss vs Sonnet
+```
+
+The cost rarely matters; the latency budget does. Most "should we use HyDE?" calls come down to "does +1s break the feature?"
 
 ### This is what people mean by "the query isn't the right input"
 
@@ -357,3 +452,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced traveller-mumbling-at-pharmacy analogy with GitHub code search query refinement and the Algolia queryLanguages rewrite layer).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped Algolia + Google Search (level-5 whole-products) from Why care Move 1; led with the level-1 primitive (a search box where user typed `"knee"` gets normalised before retrieval — same shape as `text.trim().toLowerCase()` before a DB lookup, applied at semantic level). Kept GitHub code search as level-3 secondary anchor. Added Move 1 mnemonic diagram (asymmetry + three rewrite strategies in one picture) + 2 new Move 2 sub-section diagrams: HyDE-when-it-helps decision matrix, cost-per-surface by latency profile. Sub-section 2 already had a big vector-space diagram. Total: 3 new diagrams.

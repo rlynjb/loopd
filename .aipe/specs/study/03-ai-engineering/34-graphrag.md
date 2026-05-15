@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open the GitHub GraphQL API and run two queries. First, "all issues in this repo since 2026-01-01" — a structured filter against an explicit relationship, returns a deterministic set in one round-trip. Second, GitHub Copilot's "find related issues" feature — runs a vector similarity step under the hood, returns a fuzzy ranked list. Now compose the tricky one: "issues semantically similar to this one, in repo X, opened since 2026-01-01." GitHub's query layer doesn't make you choose between graph traversal and similarity — it composes them in order: structured filter first to narrow the candidate set, similarity rank second to order what remains. Linear's API exposes the same composition via `filter` + `searchableContent`.
+You've got two ways to retrieve rows in your service. Way one: a SQL query with explicit joins and WHERE clauses — `SELECT * FROM issues WHERE repo_id = ? AND created_at > '2026-01-01'`. Deterministic, returns the exact rows that match. Way two: a vector search — `cosineSim(queryVec, issue_embeddings)` top-k. Fuzzy, returns the rows most semantically similar to the query. Now compose the question that needs both: "issues semantically similar to this one, IN repo X, opened since 2026-01-01." Two options: SQL-pre-filter then cosine-rank, or cosine-then-SQL-filter. Either way, both signals participate — the explicit edges (foreign-keyed `repo_id`) AND the learned similarity (embeddings). GraphRAG is the name for that composition at the AI layer: graph traversal narrows the candidate set; vector search ranks what remains.
 
 The implicit question is "should the lookup traverse explicit relationships, score by learned similarity, or both?" GraphRAG is the name for the third answer — combine graph traversal with vector retrieval so each stage handles the access pattern it's good at. Three composition shapes: pre-filter by graph then vector-rank, vector-search then expand via graph, or graph as a re-ranker on vector candidates. The architecture is "use both signals because both exist" — throwing away explicit edges to embed everything as text is leaving authoritative information on the table.
 
@@ -35,6 +33,56 @@ Graphs say "this IS connected"; vectors say "this might be similar" — use both
 ## How it works
 
 The fundamental observation: structured data and unstructured data answer different question shapes. Graphs are great at "traverse from a known starting point" (find all entries in project X, find all friends of Alice). Vectors are great at "find the most similar thing" (find entries semantically like this query). Many real questions need both.
+
+The three GraphRAG composition shapes in one picture:
+
+```
+   user question: "entries about anxiety, scoped to #loopd thread"
+                       │
+                       ▼
+   ┌────────────────────────────────────────────────────────────┐
+   │ Pattern 1: pre-filter by graph, then vector-search          │
+   │                                                              │
+   │   SELECT entry_id FROM thread_mentions                      │
+   │     WHERE thread_id = #loopd                                 │
+   │   → ~30 entries                                              │
+   │             │                                                │
+   │             ▼  embed query "anxiety"                         │
+   │             │  cosine vs those 30                            │
+   │             ▼                                                │
+   │   top-5 anxiety-related entries within #loopd                 │
+   │                                                              │
+   │   precise on the filter; semantic on the rank                │
+   └────────────────────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────────────────┐
+   │ Pattern 2: vector-search, then expand via graph              │
+   │                                                              │
+   │   embed query → cosine vs all entries                        │
+   │   → top-5 semantically similar entries                       │
+   │             │                                                │
+   │             ▼  graph walk: which threads do these mention?    │
+   │             │              what other entries mention those? │
+   │             ▼                                                │
+   │   cluster of entries + their thread neighbours                │
+   │                                                              │
+   │   result is a graph fragment, not a list                     │
+   └────────────────────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────────────────┐
+   │ Pattern 3: graph as a re-ranker                              │
+   │                                                              │
+   │   vector search → 50 candidates ranked by cosine              │
+   │             │                                                │
+   │             ▼  re-rank by graph features:                    │
+   │             │  - shared threads with the query                │
+   │             │  - co-mention frequency                         │
+   │             ▼                                                │
+   │   top-5 boosted by structural similarity                      │
+   │                                                              │
+   │   best of both: vector recall + graph precision               │
+   └────────────────────────────────────────────────────────────┘
+```
+
+The four sub-sections below trace loopd's existing graph, the three GraphRAG patterns, why `[B2A.8]` is one of them, and where each signal earns its keep.
 
 ### loopd's existing graph
 
@@ -68,6 +116,40 @@ If you're coming from frontend, this is the same shape as React Context's compon
 ### The practical consequence — loopd's `[B2A.8]` is GraphRAG
 
 `[B2A.8]` ships a "related entries" feature on the thread detail screen — surface entries semantically similar to a thread's prose, *but limited to entries not yet `#tag`-linked to that thread.* That's pattern 1 (graph as filter) plus pattern 2 (vector search to find candidates) combined. It's textbook GraphRAG, even though the file uses the more pedestrian word "related."
+
+The `[B2A.8]` query walked through both stages:
+
+```
+   user opens thread #loopd → screen wants "related entries" rail
+                       │
+                       ▼  Stage 1: graph filter
+   SELECT e.id, e.text
+     FROM entries e
+     WHERE e.id NOT IN (
+       SELECT entry_id FROM thread_mentions
+        WHERE thread_id = #loopd
+     )
+     AND e.deleted_at IS NULL
+   ─────────────────────────────────────────
+   → ~335 candidate entries (of 365 total;
+     30 already tagged to #loopd, excluded)
+                       │
+                       ▼  Stage 2: vector rank
+   threadVec = embed( thread.slug + thread.title +
+                      recent_thread_mentions.text )
+   for each candidate entry:
+     cosine(threadVec, entry_embeddings.vec)
+   sort by cosine desc; take top-5
+   ─────────────────────────────────────────
+   → 5 thematically-related but not-yet-tagged entries
+                       │
+                       ▼
+   render in "related entries" rail
+   tap on one → insertThreadMention(thread_id, entry_id)
+   graph grows; next query reflects the new edge
+```
+
+Without the graph filter, every cosine top-5 would include entries already tagged `#loopd` — useless suggestions. The graph stage makes the rail show new connections, not existing ones.
 
 ### Where graph helps, where vectors help
 
@@ -358,3 +440,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced reference-librarian-structured-and-vibe-questions analogy with GitHub GraphQL filter + Copilot find-related-issues composition, Linear API filter + searchableContent).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped GitHub Copilot + Linear API (level-5 product references) from Why care Move 1; led with the level-1 primitive (SQL with explicit joins/WHERE clauses vs vector cosine search; compose both for filtered semantic queries). Added Move 1 mnemonic diagram (three GraphRAG composition patterns side-by-side) + 1 new Move 2 sub-section diagram (`[B2A.8]` walked through both stages with the graph-filter + vector-rank SQL). Sub-sections 1 and 4 already had ASCII diagrams. Total: 2 new diagrams.

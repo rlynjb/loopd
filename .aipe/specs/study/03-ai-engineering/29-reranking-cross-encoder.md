@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Picture a hiring pipeline at a small firm. A recruiter scans 500 resumes from a CSV in twenty minutes — fast keyword and shape passes, surfaces a shortlist of fifty. The hiring manager then reads each of those fifty resumes carefully against the actual job description, side by side, and picks the top five. Asking the manager to read all 500 takes a week; asking the recruiter to make the final call misses candidates whose strengths only show in a careful read. Two stages — wide screen first, deep read second — get both speed and precision.
+You've got two pieces of code that do the same job — find the most relevant items — at different cost/quality trade-offs. Function A is `array.filter(item => cosineSim(queryVec, item.vec) > 0.7)`: cheap per item (one vector compare), works on the whole array, but loses fidelity because the query and item were embedded SEPARATELY and compared afterward. Function B is `model.score({ query, item })`: expensive per item (a fresh transformer pass each call), can't be run on the whole array, but compares query and item TOGETHER and catches cases the cheap function blurs. The production move: run A on the whole array to narrow to 50 candidates, then run B on those 50 to pick the top 5.
 
 The implicit question is whether one model can do both jobs. Not faster embeddings, not bigger context — a fast wide-net first stage and a slow precise second stage, where the second stage only runs on what the first stage surfaced.
 
@@ -27,13 +25,47 @@ With reranking:
 - Cross-encoder catches the negation; the right answer moves from rank 7 to rank 1
 - Latency budget: +1–5s, parallelised; worth it for the interpret/recall surface
 
-A recruiter for the wide screen, a hiring manager for the final call.
+Wide-net cheap pass first, deep-read precise pass second — same pipeline shape as `array.filter()` then `array.map(slowFn)`.
 
 ---
 
 ## How it works
 
 Retrieval and reranking solve slightly different problems with slightly different shapes of model.
+
+The two-stage pipeline in one picture:
+
+```
+   query: "where did Sarah push back on the architecture?"
+              │
+              ▼
+   ┌────────────────────────────────────────────────────────┐
+   │ Stage 1: hybridRetrieve()                                │
+   │   bi-encoder + sparse fused via RRF                      │
+   │   over the FULL corpus (~365 entries, ~10K              │
+   │   embeddings if chunked)                                 │
+   │   cost: ~50ms total                                      │
+   │   accuracy: good RECALL, ok precision                    │
+   │   returns: top-50 candidates                             │
+   └─────────────────────────┬──────────────────────────────┘
+                             │  50 candidates (not 5; let
+                             │  rerank have material to pick from)
+                             ▼
+   ┌────────────────────────────────────────────────────────┐
+   │ Stage 2: rerank(query, candidates)                       │
+   │   cross-encoder: model(query + each candidate)           │
+   │   ONE model call per (query, doc) pair                    │
+   │   cost: ~200ms per call × 50 = ~2–10s total              │
+   │   (parallelisable down to ~1–3s)                         │
+   │   accuracy: high PRECISION; catches negation,            │
+   │             numeric magnitude, multi-sentence reasoning  │
+   │   returns: top-5 after re-ranking the 50                  │
+   └─────────────────────────┬──────────────────────────────┘
+                             ▼
+                       final top-5 to user
+```
+
+The four sub-sections below trace the bi-encoder vs cross-encoder split, why you need both stages, the latency cost, and the three places cross-encoders earn their cost.
 
 ### Bi-encoder vs cross-encoder — the architectural split
 
@@ -42,6 +74,33 @@ A bi-encoder (what embeddings do) encodes the query and the document *separately
 A cross-encoder takes the query AND the document *together* as input to a single transformer call, and outputs a single relevance score. This is much more accurate (the model gets to attend across query and doc together) but much slower (one model call per (query, doc) pair). You couldn't run a cross-encoder against an entire corpus.
 
 If you're coming from frontend, the analogue is `Array.prototype.indexOf()` vs `Array.prototype.find(predicate)`. `indexOf` is fast (compare pre-computed hashes) but works only on equality. `find(predicate)` is slow (run a function per element) but expresses anything.
+
+The two architectures side by side:
+
+```
+       Bi-encoder (retrieval)                   Cross-encoder (rerank)
+   ┌──────────────────────────────────────┐    ┌──────────────────────────────────────┐
+   │ query   ──▶ embed() ──▶ queryVec      │    │ ┌─ ONE model call per pair ──────┐    │
+   │                                        │    │ │  (query, doc1) → score1         │    │
+   │ docN    ──▶ embed() ──▶ docVecN        │    │ │  (query, doc2) → score2         │    │
+   │ (precomputed at write time)            │    │ │  (query, doc3) → score3         │    │
+   │                                        │    │ │  ...                            │    │
+   │ similarity = cosine(queryVec, docVec)  │    │ │  (query, doc50) → score50       │    │
+   │                                        │    │ └────────────────────────────────┘    │
+   │ query attends to ITSELF only;          │    │ model attends to query AND doc        │
+   │ doc attends to ITSELF only;            │    │ TOGETHER in one forward pass          │
+   │ comparison happens AFTER, on vectors    │    │                                       │
+   │                                        │    │ relevance score is from a single      │
+   │                                        │    │ joint attention over both              │
+   │ shape: Array.prototype.indexOf()        │    │ shape: Array.prototype.find(predicate)│
+   │ (fast, structural, equality-shaped)    │    │ (slow, any predicate expressible)     │
+   │                                        │    │                                       │
+   │ cost: ~50ms for 100K docs              │    │ cost: ~200ms PER (query, doc) pair    │
+   │ scale: works on the whole corpus       │    │ scale: 50–100 docs max                 │
+   └──────────────────────────────────────┘    └──────────────────────────────────────┘
+```
+
+The split is fundamental — bi-encoder can't catch what cross-encoder catches; cross-encoder can't scale to where bi-encoder scales.
 
 ### Why you need both
 
@@ -62,6 +121,31 @@ A cross-encoder call is 50–500ms depending on model and document length. Runni
 
 The practical consequence: rerank is a quality lever, not a latency-free lever. You use it when retrieval-only quality plateaus and you're willing to spend latency to get out of the plateau.
 
+The latency budget by candidate count and parallelism:
+
+```
+   candidates       serial latency       parallel (max 5 conc.)
+   ──────────       ──────────────       ──────────────────────
+   10               1–5s                 200ms–1s
+   50               5–25s                1–5s
+   100              10–50s               2–10s
+   1000             ~3 minutes            ~30s
+                   (unusable)            (still slow)
+
+   the right shape:
+     stage 1 (retrieval): returns ~50 candidates (~50ms)
+     stage 2 (rerank):    re-ranks those 50 (~1–5s)
+     total:               ~1–5s added to the query
+
+   when to skip rerank:
+     - latency budget < 500ms (real-time autocomplete, etc.)
+     - retrieval-only already passes your eval
+     - corpus too small for two-stage to matter
+       (loopd at 365 entries: marginal benefit)
+```
+
+Rerank is the quality lever you reach for when retrieval plateaus and you can afford the latency — not the first thing you build.
+
 ### Where the cross-encoder shines
 
 Cross-encoders catch cases where the bi-encoder's separate-then-compare loses information:
@@ -69,6 +153,35 @@ Cross-encoders catch cases where the bi-encoder's separate-then-compare loses in
 - **Negation** — "I love coffee" vs "I don't love coffee" — bi-encoders often embed these close together; cross-encoders correctly mark them as opposite.
 - **Specific numerical or factual claims** — "weighs 5kg" vs "weighs 50kg" — bi-encoders blur; cross-encoders attend to the difference.
 - **Multi-sentence reasoning** — when relevance requires combining two sentences from the doc, the cross-encoder sees both simultaneously; the bi-encoder compressed them into one centroid.
+
+The three places cross-encoder wins, with concrete examples:
+
+```
+   failure mode of            example pair                         what bi-encoder    what cross-encoder
+   bi-encoder                                                       sees               sees
+   ────────────────────       ──────────────────────────────       ────────────────   ─────────────────
+   negation                   query: "love coffee"                  cosine sim         model attends to
+                              doc A: "I love coffee"                 ~0.85             "don't" + "love"
+                              doc B: "I don't love coffee"            both → both        together, marks
+                                                                     marked relevant    A relevant, B
+                                                                                        irrelevant
+   numerical magnitudes       query: "package weighs 5kg"            cosine sim          model reads "5"
+                              doc A: "weighed 5kg"                   ~0.93              vs "50" as
+                              doc B: "weighed 50kg"                   both close;         distinct tokens
+                                                                     orders of           and scores them
+                                                                     magnitude blur     accordingly
+   multi-sentence reasoning   query: "where did Sarah                cosine of           model attends
+                              push back?"                             query vector       across BOTH
+                              doc A: "Sarah suggested moving         vs single          sentences of doc
+                              the API to GraphQL. Marcus              centroid of        A together;
+                              disagreed and they argued."             doc → vague        recognises Sarah
+                                                                     match               + push-back are
+                                                                                         in different
+                                                                                         sentences but
+                                                                                         related
+```
+
+These three failure modes are exactly where bi-encoder's "embed separately and compare" loses information that cross-encoder's joint attention recovers.
 
 ### This is what people mean by "two-stage retrieval is the production pattern"
 
@@ -307,3 +420,6 @@ Answer: `src/services/ai/rerank.ts` (target, not yet created). Typical: 50–100
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (recruiter-then-hiring-manager scenario, name the two-stage-fast-then-precise question, planned hybridRetrieve→rerank.ts stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from recruiter-and-hiring-manager physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitive (`array.filter(cosineSim > 0.7)` for the cheap pass vs `model.score({query, item})` for the precise pass). Swapped Move 5 metaphor to "same pipeline shape as `array.filter()` then `array.map(slowFn)`." Added Move 1 mnemonic diagram (two-stage pipeline with stage 1 + stage 2 cost/accuracy/return) + 4 Move 2 sub-section diagrams: bi-encoder vs cross-encoder architecture side-by-side, latency-budget-by-candidate-count, three places cross-encoder wins with example pairs. Total: 5 new diagrams.

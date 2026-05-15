@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a Next.js project with eight routes under `app/` — each route is its own file with its own handler, its own logs, its own line item in the hosting bill. To answer "what does this project do?" you read the route list, not the source of one mega-handler. Each route owns one job; nothing crosses between them; adding a ninth route is "add a file" not "branch an existing handler." The same shape applied to an app's AI surface: each AI feature is its own named recipe (one prompt template, one model choice, one output contract, one persistence shape), and the catalogue answers cost, latency, and model-swap questions one row at a time. Without the catalogue, "we added AI" becomes the only available description.
 
-Open the Vercel dashboard for a project. Each route in `app/` has its own deploy log, its own performance metrics, its own error tracking, its own cost line item. Click any route and you see exactly what code lives there, what it serves, how often it fails. Walk into Vercel and ask "what does this project do?" and the dashboard answers route by route — none of that information lives in someone's head; it's named on the page. GitHub's `Actions` tab does the same for workflows; the OpenAI usage dashboard does it for model calls.
-
-A per-feature AI catalogue is the same shape: a named route table, not a heroic monolith. Five named recipes, each with a prompt template, a model choice, an output contract, and a place in the UI. Naming each feature this way is what makes cost, latency, blast radius, and provider-swap decisions tractable.
+A per-feature AI catalogue is that route table for the AI surface: not a heroic monolith, but five named recipes, each with a prompt template, a model choice, an output contract, and a place in the UI. Naming each feature this way is what makes cost, latency, blast radius, and provider-swap decisions tractable.
 
 **What depends on getting this right:** the ability to reason about any single AI feature without re-deriving the whole product. The codebase ships five chains: `summarize.ts` (Sonnet/GPT-4o, structured editor JSON + freeform summary into `ai_summaries.summary_json`), `caption.ts` (Sonnet/GPT-4o, 4 tonal variants `clean/smoother/reflective/punchy` into `summary_json.variants`), `classify.ts` (Haiku/GPT-4o-mini, 1-of-5 mode label into `todo_meta.type` + `classifier_confidence='haiku'`), `expand.ts` (Sonnet/GPT-4o, per-type typed JSON for `idea/knowledge/study/reflect` into `todo_meta.expanded_md`), `interpret.ts` (Sonnet/GPT-4o, long-form markdown into a modal, NOT persisted). The two-tier model split (Sonnet for content, Haiku for labels) keeps classify at ~$0.0004 instead of ~$0.01 per call — 25× the cost ratio that tracks 25× the output-token-count difference. Drop the catalogue and "we added AI" becomes the only available description; cost analysis, model-version migration, and "which feature breaks if Anthropic deprecates Sonnet 4.6?" all become re-discovery exercises every time they're asked.
 
@@ -33,7 +31,27 @@ Five recipes, one binder — every AI feature in this codebase has a named page.
 
 ## How it works
 
-A Vercel deploy log breaks a build into named jobs — `install`, `build`, `route(/)`, `route(/api/x)`, `route(/api/y)`. Each job has its own status, its own logs, its own retry button. The platform doesn't try to do all the work in one undifferentiated step; it names each piece, runs it against its own contract, and surfaces what each one did. AWS Lambda's CloudWatch view does the same — one log group per function, one set of metrics per function, one place to find a stack trace. If you're coming from frontend, this is the same shape as a typed set of `useMutation` hooks, one per server action — each has its mutation function, its onSuccess, its inputs, and they don't cross-call each other.
+A typed set of `useMutation` hooks, one per server action — each has its mutation function, its onSuccess, its inputs, and they don't cross-call each other. Five `useMutation`-shaped chains in `src/services/ai/` is the same pattern at the AI surface: each chain owns a prompt template, a model choice, an output contract, and a persistence shape. AWS Lambda's CloudWatch view applies the same instinct at infrastructure scale — one log group per function, one set of metrics per function, one place to find a stack trace.
+
+The five recipes mapped to their write targets:
+
+```
+   src/services/ai/                          write target
+   ──────────────────────────                ──────────────────────────────
+   summarize.ts (Sonnet/4o)            ──▶   ai_summaries.summary_json
+   caption.ts   (Sonnet/4o)            ──▶   ai_summaries.summary_json
+                                              .variants{clean,smoother,
+                                                        reflective,punchy}
+   classify.ts  (Haiku/4o-mini)        ──▶   todo_meta.type +
+                                              .classifier_confidence
+   expand.ts    (Sonnet/4o)            ──▶   todo_meta.expanded_md
+   interpret.ts (Sonnet/4o)            ──▶   modal only (NOT persisted)
+
+   each row: one prompt template + one model + one output contract +
+   one persistence shape. five rows, no cross-calls between them.
+```
+
+The three sub-sections below trace the recipe inventory, the persisted-vs-ephemeral split, and the two-tier model split (Sonnet vs Haiku) that keeps classify 25× cheaper than summarize.
 
 ### The five recipes — what each AI feature does and why
 
@@ -68,9 +86,67 @@ Concrete consequence: the codebase has five AI files, each ~150-300 LOC, each ow
 
 Four of the five recipes persist their output to SQLite (`ai_summaries.summary_json`, `todo_meta.type`, `todo_meta.expanded_md`); one (interpret) doesn't. The persisted four feed downstream UI surfaces — the editor reads `summary_json`, the dashboard's todo cards read `type` and `expanded_md`. Interpret's output is shown once in a modal and discarded; the user reads it, dismisses the modal, never sees it again. Think of it like the difference between a `useMutation` that updates the React Query cache vs one that fires a side-effect without caching — same call shape, different lifecycle. Concrete consequence: a user runs interpret on the same entry tomorrow; the codebase calls the LLM again from scratch (no cache, no DB column). Costs another ~$0.005. The recipe is deliberately ephemeral because the user reads interpretations and moves on; caching would store data nobody re-reads. Boundary: this works because interpret is rare (user-triggered), not background. If interpret were running on every entry automatically, the cost would justify caching.
 
+Persisted vs ephemeral side by side:
+
+```
+       Persisted (4 recipes)                Ephemeral (1 recipe)
+   ┌──────────────────────────────┐    ┌──────────────────────────────┐
+   │ summarize → summary_json     │    │ interpret → React modal state  │
+   │ caption   → variants         │    │             only                │
+   │ classify  → type, confidence │    │                                │
+   │ expand    → expanded_md       │    │ on dismiss: state unmounts     │
+   │                                │    │ on re-open: chain re-fires     │
+   │ persists in SQLite             │    │ ~$0.005 per re-open             │
+   │ mirrors to Supabase             │    │                                │
+   │ feeds downstream UI             │    │ never feeds downstream code    │
+   │ (editor, dashboard,            │    │ (no other surface reads it)    │
+   │  todo cards)                    │    │                                │
+   │                                │    │ rare + user-triggered →        │
+   │ shape: useMutation that         │    │ caching would store data       │
+   │  updates the React Query        │    │ nobody re-reads                │
+   │  cache + writes to DB           │    │                                │
+   │                                │    │ shape: useMutation that fires   │
+   │                                │    │  a side-effect, no cache        │
+   └──────────────────────────────┘    └──────────────────────────────┘
+```
+
+The split matches consumption: structured UI surfaces need persistent data; user-read modals don't.
+
 ### The two-tier model split — Sonnet for thinking, Haiku for routing
 
 The codebase uses Claude Sonnet 4.6 (or GPT-4o) for the recipes that produce *content* (summarize, caption, expand, interpret); Claude Haiku 4.5 (or GPT-4o-mini) for the recipe that produces a *label* (classify). The split tracks the task — Sonnet is good at writing, reasoning, multi-step output; Haiku is good at fast classification. If you've worked with React's tiered hooks (`useState` for sync state, `useTransition` for async non-urgent state), this is the same instinct — match the tool to the task's shape. Concrete consequence: classifying a todo costs ~$0.0004 with Haiku; summarising a day costs ~$0.01 with Sonnet. The 25× cost ratio reflects the 25× difference in output token count and reasoning depth. If classify had been built on Sonnet, the codebase would spend $0.10/day classifying todos that Haiku does for $0.004/day. Boundary: the model split assumes the two providers' model tiers track similarly. If a future model rebalances the tier (e.g., a cheap Sonnet variant lands), the codebase would re-evaluate.
+
+The model split with cost per call and per-day total:
+
+```
+   chain         model             cost/call    typical calls/day   day total
+   ──────────    ──────────────    ─────────    ─────────────────   ─────────
+   summarize     Sonnet 4.6 /      ~$0.010      1                    $0.010
+                 GPT-4o                          (one per day at
+                                                  focus-blur)
+   caption       Sonnet 4.6 /      ~$0.008      1                    $0.008
+                 GPT-4o                          (chained from
+                                                  summarize)
+   classify      Haiku 4.5 /       ~$0.0004     10                   $0.004
+                 GPT-4o-mini                     (one per ambiguous
+                                                  todo)
+   expand        Sonnet 4.6 /      ~$0.005      1-2                  ~$0.01
+                 GPT-4o                          (user-triggered)
+   interpret     Sonnet 4.6 /      ~$0.005      0-1                  ~$0.005
+                 GPT-4o                          (rare, user-
+                                                  triggered)
+                                                                      ─────────
+                                                  loopd day total:    ~$0.037
+
+   if classify had been built on Sonnet:
+     ~$0.010 × 10 calls/day = $0.10/day
+     vs the actual $0.004/day → 25× the cost for the same labels
+
+   the split exists because Sonnet's reasoning depth and Haiku's
+   speed each match a different job shape.
+```
+
+The 25× cost ratio between Sonnet and Haiku exactly tracks the 25× difference in what each is asked to produce.
 
 This is what people mean by "name the AI features and pick one pattern per feature." The temptation when adding AI to an app is to build one big assistant that does everything; the cheaper, more maintainable, and more debuggable shape is five small features each doing one thing well. The codebase's AI surface is five recipes, no more, no less — and the discipline of keeping it five rather than letting it grow into a generic "ask the AI" feature is what keeps the cost predictable, the failure modes named, and the testing tractable.
 
@@ -486,3 +562,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced small-kitchen-recipe-binder analogies with Vercel dashboard per-route deploy logs, GitHub Actions jobs, AWS Lambda CloudWatch).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped Vercel dashboard + GitHub Actions tab + OpenAI usage dashboard (level-5 whole-product anchors) from Why care Move 1; led with the level-1 primitive (eight Next.js routes under `app/`, each with its own file + log + bill line — adding a ninth = "add a file"). Same swap on How it works Move 1 (led with `useMutation` hooks; kept AWS Lambda CloudWatch as level-4 follow-up). Added Move 1 mnemonic diagram (5 recipes mapped to write targets) + 2 new Move 2 sub-section diagrams: persisted-vs-ephemeral side-by-side, model-split cost-per-call + day-total table (the existing sub-section 1 already had the 5-recipes table). Total: 3 new diagrams.

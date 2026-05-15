@@ -37,6 +37,46 @@ Cost is architectural, not configurational — pull levers in ROI order, not in 
 
 Each lever attacks a different part of the cost equation. Cost per chain = `calls × (input_tokens × input_price + output_tokens × output_price)`.
 
+The five levers in ROI order, with the cost variable each attacks:
+
+```
+   cost equation:
+   ──────────────────────────────────────────────────────────
+   total = calls × (input_tokens × input_$ + output_tokens × output_$)
+            ▲          ▲                        ▲
+            │          │                        │
+            │          │                        └─ Lever 4 (model routing):
+            │          │                            cheaper $/token via smaller
+            │          │                            model
+            │          │
+            │          └─ Lever 2 (prompt cache):    90% off input tokens
+            │             Lever 5 (compression):     fewer tokens at the start
+            │
+            └─ Lever 1 (heuristic skip):     fewer calls
+               Lever 3 (semantic cache):     fewer calls on identical input
+
+   ROI rank (highest to lowest impact / lowest risk):
+   ┌────┬──────────────────────────────────┬───────────────────┬─────────────┐
+   │  # │ lever                              │ cost impact        │ quality risk │
+   ├────┼──────────────────────────────────┼───────────────────┼─────────────┤
+   │  1 │ heuristic-before-LLM (skip the     │ 60–90% of calls    │ low          │
+   │    │ call entirely)                     │                    │              │
+   │  2 │ prompt caching (provider-side)    │ 90% on cached      │ none         │
+   │    │                                    │ prefix              │              │
+   │  3 │ semantic caching (app-side)        │ 100% on identical  │ low          │
+   │    │                                    │ inputs              │              │
+   │  4 │ model routing (cheaper model       │ ~5× cheaper        │ real         │
+   │    │ for cheaper jobs)                  │                    │ (per-chain)  │
+   │  5 │ prompt compression                 │ 10–30%             │ real         │
+   ├────┴──────────────────────────────────┴───────────────────┴─────────────┤
+   │ pull in this order. Lever 4 feels like the senior move but it          │
+   │ ships subtle quality drops; Levers 1–3 are architectural and rarely    │
+   │ regress.                                                                 │
+   └─────────────────────────────────────────────────────────────────────────┘
+```
+
+The five sub-sections below trace each lever in detail.
+
 ### Lever 1: Skip the call entirely (heuristic-before-LLM)
 
 The cheapest call is the call you don't make. A regex-based heuristic that handles 60-70% of the easy cases means 60-70% of the spend disappears. loopd already does this for classify (see [05-heuristic-before-llm](./05-heuristic-before-llm.md)). It's the highest-ROI lever and almost always the right first move.
@@ -336,3 +376,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced household-electric-bill-clamp-meter analogy with the Vercel usage dashboard, OpenAI dashboard usage tab, AWS Cost Explorer).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3/4 — Vercel + OpenAI + AWS cost dashboards are engineering surfaces, acceptable). Added Move 1 mnemonic diagram (cost equation with annotations showing which variable each lever attacks + ROI-ordered comparison table). Sub-section 6 already had a summary table; the Move 1 mnemonic + summary table together cover the 5 levers at the level of "this is what the lever does" — per-sub-section drill-downs deemed redundant given the comprehensive summary. Total: 1 new diagram.

@@ -11,7 +11,7 @@
 
 ## Why care
 
-Open GitHub and look at a closed PR or an archived repo. The PR didn't disappear from storage — it stayed queryable, the comments survive, the URL still resolves, and anyone with the link can read the entire history. Linear archives issues the same way: archived issues drop out of the default list view but stay in search, in linked references, in the audit trail. Stripe's API does it for subscriptions — cancelled subscriptions stay queryable with a `canceled_at` timestamp, and every report can still distinguish "was active in March, cancelled in April" from "never existed." Hard delete erases the past; the record-with-timestamp pattern preserves it for the readers who need to know the row existed.
+You've got a `users` table with `id`, `email`, `created_at`, and one new column: `deleted_at TIMESTAMP NULL`. When a user "deletes" their account, the SQL that runs is `UPDATE users SET deleted_at = now() WHERE id = $1`, not `DELETE FROM users WHERE id = $1`. The row stays in storage; the audit log still resolves; an admin querying `SELECT * FROM users WHERE deleted_at IS NOT NULL` can see who left and when. Every read in the app carries `WHERE deleted_at IS NULL` so the user vanishes from every product surface — but the evidence is intact for the readers who need to know the row existed: the audit log, the foreign-key target for old orders, the sync engine on another device that's about to learn the row is gone.
 
 The question those archive patterns answer is one any replicated store has to answer: how do you propagate the *absence* of a row when "the row isn't there anymore" looks identical to "the row never existed here"? Not a hard `DELETE` — that erases evidence. The answer is a *tombstone*: keep the row, stamp the time of death on it, and trust every reader to walk past.
 
@@ -36,23 +36,137 @@ The tombstone is just an edit that says "I'm not here anymore."
 
 ## How it works
 
-Linear's archived issues are the canonical pattern. The issue stays in storage; the default list view filters it out; deep links still resolve; the audit log shows when it was archived. Soft-delete is the schema-level version: a `deleted_at TEXT` column stamped with a timestamp, every read filters `WHERE deleted_at IS NULL`, and a future cleanup job (loopd's 30-day vacuum, deferred) hard-removes the row once nothing depends on it. Stripe's `canceled_at` on subscriptions ships the same shape — every reader can still ask "did this exist on March 1?" and get a true answer.
+A `deleted_at TIMESTAMP NULL` column on every table, plus a discipline that every read filters `WHERE deleted_at IS NULL`. That's the whole pattern. The row stays in storage; the application stops seeing it; sync treats it as just-another-edit. A future cleanup job (loopd's 30-day vacuum, deferred) hard-removes the row once nothing depends on it. The shape is what every distributed system that survives a partition does — Cassandra's tombstones, Git's deleted-file commits, S3's versioned-delete markers — all the same column plus the same read filter.
+
+The pattern in one picture, from delete gesture to other-device propagation:
+
+```
+   user taps "Delete entry e123"
+              │
+              ▼
+   UPDATE entries
+      SET deleted_at = now(),         ◄── tombstone written
+          updated_at = now()
+    WHERE id = 'e123'
+              │
+              ▼
+   every read site:
+   SELECT * FROM entries
+    WHERE deleted_at IS NULL          ◄── tombstoned rows skipped
+              │
+              ▼
+   sync: same dirty filter
+   (updated_at > synced_at)            ◄── deletion is just-another-edit
+              │
+              ▼
+   tombstone propagates to cloud,
+   then to other devices on pull
+```
+
+No special "delete protocol" — the same `updated_at` dirty filter that ships edits also ships deletions. The four sub-sections below trace the delete gesture, the read filter, the sync layer's tombstone handling, and the deferred vacuum.
 
 ### The deletion gesture — UPDATE, not DELETE
 
 When the user "deletes" anything in this app — an entry, a todo, a habit — the SQL that runs is `UPDATE … SET deleted_at = now, updated_at = now`, not `DELETE FROM`. If you're coming from frontend, this is like a Redux reducer that marks an item as `{ archived: true }` instead of removing it from the array — the array length doesn't change but the consumer sees the item differently. Concrete consequence: a user deletes journal entry e123 at 14:32. `UPDATE entries SET deleted_at='2026-05-10T14:32', updated_at='2026-05-10T14:32' WHERE id='e123'`. The row is still in `loopd.db`; its `deleted_at` is set. The next `SELECT * FROM entries WHERE deleted_at IS NULL` returns 24 entries instead of 25. The user's experience is identical to a real delete; the data is intact. Boundary: this only works as long as every read carries `WHERE deleted_at IS NULL` — a query that forgets the filter would resurrect ghosts.
 
+Walking the SQL the delete actually fires:
+
+```
+   user taps Delete on entry e123
+                  │
+                  ▼
+   UPDATE entries
+      SET deleted_at = '2026-05-10T14:32:00',     ◄── tombstone timestamp
+          updated_at = '2026-05-10T14:32:00'      ◄── trips dirty filter
+    WHERE id = 'e123'
+                  │
+                  ▼
+   row in loopd.db still exists; deleted_at column populated
+                  │
+                  ▼
+   next SELECT … WHERE deleted_at IS NULL
+   returns 24 entries instead of 25
+```
+
+The user's experience is identical to a real delete; the storage layer disagrees.
+
 ### The read filter — every query carries `WHERE deleted_at IS NULL`
 
 Every read in the application — UI queries, scanner reads, sync exports — carries `WHERE deleted_at IS NULL`. The discipline is universal; the codebase has no read paths that "see" deleted rows except the sync layer itself. If you're coming from frontend, this is the same shape as a React selector that always filters `state.items.filter(i => !i.archived)` — the source of truth has everything; the consumer always projects. Concrete consequence: when the dashboard reads `SELECT * FROM entries`, it gets `WHERE deleted_at IS NULL` automatically (via the `database.ts` helper functions). A new write path that forgets the filter is a known bug shape — the linter doesn't catch it, the type system doesn't catch it; the convention is enforced by code review and the `database.ts` funnel ([01-local-first-request-flow](./01-local-first-request-flow.md)). Boundary: it breaks the moment a new read path queries the DB directly without going through the helpers — that's why `database.ts` is the single mouth (see Principle 1 in `docs/spec.md`).
+
+What the table looks like after a delete, and what the read returns:
+
+```
+   entries (after user "deletes" e123):
+   ┌─────────┬──────────────┬───────────────────────┐
+   │ id      │ text          │ deleted_at             │
+   ├─────────┼──────────────┼───────────────────────┤
+   │ e122    │ "..."         │ NULL                   │ ◄── visible
+   │ e123    │ "..."         │ '2026-05-10T14:32:00' │ ◄── filtered out
+   │ e124    │ "..."         │ NULL                   │ ◄── visible
+   └─────────┴──────────────┴───────────────────────┘
+
+   every read site:
+     SELECT * FROM entries WHERE deleted_at IS NULL
+     ─── returns 2 rows: e122, e124 ───
+```
+
+The source table has everything; the application's read paths project to what the user sees.
 
 ### Why sync needs the tombstone — the row has to survive locally
 
 Cloud sync sees soft-deleted rows as ordinary "updated" rows. `pushAll()` selects rows where `updated_at > synced_at`, which now includes the just-deleted row. Supabase receives an upsert with `deleted_at` set; the cloud mirror's read paths (if there are any) filter it the same way. Pull does the reverse: a cloud row with `deleted_at` set arrives via `pullAll()`, gets upserted locally; the local read filter hides it. Think of it like a Git tombstone commit: even when you delete a file, the commit that deletes it is part of history — every clone of the repo agrees the file is gone because every clone has the deletion. Concrete consequence: user deletes entry e123 on the phone. 5 seconds later the row is in Supabase with `deleted_at` set. Tomorrow they open the same Supabase project from a different device; the first pull brings the row in with `deleted_at`; the local read filter hides it. The "deletion" propagated without a special channel. Boundary: this breaks if a third party (e.g. a server-side admin tool) tries to DELETE the row directly — pull would never see the deletion because it's looking at `(updated_at, deleted_at)`, not row presence.
 
+Walking the propagation across two devices:
+
+```
+   Device A (phone)                            Device B (tablet)
+   ┌──────────────────────────────┐           ┌──────────────────────────────┐
+   │ 14:32 user deletes e123      │           │                              │
+   │   UPDATE deleted_at='14:32', │           │                              │
+   │          updated_at='14:32'  │           │                              │
+   │            ▼                  │           │                              │
+   │ 14:37 pushAll() picks it up   │           │                              │
+   │   via updated_at > synced_at  │  upsert  │                              │
+   │            ▼                  │  ───▶    │ next pull arrives             │
+   │ Supabase has e123 with        │           │   e123 with                  │
+   │ deleted_at = 14:32             │           │   deleted_at = 14:32          │
+   └──────────────────────────────┘           │            ▼                  │
+                                               │ local read filter hides it    │
+                                               │ (WHERE deleted_at IS NULL)    │
+                                               └──────────────────────────────┘
+```
+
+A deletion travelled phone → cloud → tablet via the same machinery that ships edits. No "delete channel" exists; the dirty filter and the read filter together do all the work.
+
 ### The deferred vacuum — hard delete after 30 days
 
 Hard delete is reserved for a future "vacuum" job: walk every synced table, hard-delete rows where `deleted_at < now - 30 days`, run on both sides. The 30-day window gives undo, gives sync time to converge, gives a forensic trail if a delete was accidental. If you're coming from frontend, this is the same pattern as a "trash" folder that empties itself after a month — the immediate experience is "gone," the storage cost is delayed until the cleanup runs. The vacuum job is **not yet built** because the row volume in a single-user journaling app doesn't warrant the operational overhead. Concrete consequence: today, a row deleted in 2026-05-10 is still in `loopd.db` and Supabase on 2027-05-10, hidden but present. The DB grows monotonically. Boundary: at the project's scale (single user, ~30 entries per month), this is invisible — a year of soft-deletes might add a few MB. At 100K users it would matter; the vacuum job becomes table stakes.
+
+Timeline from delete gesture to (future) hard removal:
+
+```
+   Time                Row state                         Storage
+   ─────               ─────────────                     ──────────
+   t = 0               user deletes e123                  row + deleted_at
+                       UPDATE deleted_at = t              in loopd.db
+                            │
+   t + 5s              pushAll picks it up                row + deleted_at
+                       push to Supabase                   in both stores
+                            │
+   ... 30 days pass ... (vacuum job NOT YET BUILT) ...
+                            │
+   t + 30d             vacuum DELETEs rows                row HARD-deleted
+                       WHERE deleted_at <                 from both stores
+                             now - INTERVAL '30 days'      no more evidence
+                            │
+   ... vacuum doesn't run today ...
+                            │
+   t + 365d            row still hidden but present       storage grows
+                       (vacuum deferred at this scale)    monotonically
+```
+
+The 30-day window is the dial: long enough for undo + sync convergence, short enough that storage stays bounded once the vacuum exists. At single-user scale, the dial isn't being turned yet.
 
 This is what people mean by "deletes as ordinary edits." Once you stamp `deleted_at` and trust every reader to filter, the sync layer doesn't need a special "delete protocol" — it propagates deletes the same way it propagates edits. Every distributed system that has ever survived a partition does some version of this: Cassandra's tombstones, Git's deleted-file commits, S3's versioned-delete markers. The shape generalises; the 30-day window is just the dial you turn for your domain. The full picture is below.
 
@@ -373,3 +487,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced graveyard + gravestone analogies with GitHub closed PRs + Linear archived issues + Stripe canceled_at subscriptions). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-product references (GitHub closed PRs / Linear archived / Stripe canceled_at) to a level-1 primitive (a `users` table with a `deleted_at TIMESTAMP NULL` column and `WHERE deleted_at IS NULL` read filter). Same swap on How it works Move 1. Added Move 1 mnemonic diagram (delete-to-propagation flow) + 4 Move 2 sub-section diagrams: UPDATE-not-DELETE SQL trace, table-with-tombstone shape, two-device propagation, vacuum timeline. Total: 5 new diagrams.

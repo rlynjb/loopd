@@ -11,9 +11,9 @@
 
 ## Why care
 
-Open a GitHub repo with branch protection enabled and try to merge a PR. Two independent gates have to pass: at least one approved code review AND all required CI checks green. Either one alone would let bad merges through — a review might miss a test failure, and CI might miss a logic issue a human would catch. Together, they catch what each one misses. Stripe enforces the same shape on webhook delivery: signature verification (schema-level — wrong key, request rejected immediately) AND IP allowlist (runtime — only Stripe's outbound IPs reach the endpoint). Take either gate away and the endpoint still *looks* locked from the outside; only one of them is doing the work that would catch a real attempt.
+You're writing a query against a `users`-scoped table — `SELECT * FROM entries WHERE user_id = $1 AND id = $2`. The `WHERE id = $2` clause picks the row; the `WHERE user_id = $1` clause scopes it to the caller. If you only had the first, a client passing someone else's id gets back another user's row. If you only had the second, the query returns *every* row the caller owns instead of the one they asked for. Either clause alone is correct for what it does and wrong for what it leaves uncovered; together, the database returns at most one row, and it's the right one.
 
-The question those gates answer is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
+The question those two clauses answer is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
 
 **What depends on getting this right:** whether one user's journal becomes readable by anyone holding a copy of the anon key, and whether the cost of activating real auth later is "a one-line config swap" or "rewrite the schema." In this codebase the schema gate is composite `PRIMARY KEY (user_id, id)` on every synced Supabase table — even with bad code, a query for the wrong user's `id` returns no rows because the row's full key includes a `user_id` the caller doesn't know. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but disabled in Phase A; Phase A uses a hardcoded `PHASE_A_USER_ID` UUID in `src/services/sync/client.ts`. The schema was built to accept the runtime gate later without a migration — because the composite PK was correct from day one, Phase B activation is `auth.uid()` replacing the hardcoded UUID plus enabling migration 0002, not a schema rewrite.
 
@@ -27,32 +27,119 @@ With two gates (composite PK + staged RLS):
 - Queries still return no rows because the row's full composite key isn't visible to the wrong caller
 - The bug is "RLS off," recovery is "re-enable the policy"
 
-The composite PK is the structural gate; RLS is the runtime gate. Same shape as GitHub's "review AND status checks both required" — defense in depth, two independent mechanisms, the endpoint stays locked even when one fails.
+The composite PK is the structural gate; RLS is the runtime gate. Same shape as the two `WHERE` clauses up top — defense in depth, two independent mechanisms, the row stays invisible even when one mechanism fails.
 
 ---
 
 ## How it works
 
-GitHub's branch-protection model: two independent gates, both required, evaluated by different mechanisms. The composite PK (`(user_id, id)`) is the structural gate — it doesn't ask who you are; it just makes the row appear to not exist if your scope doesn't include it. RLS (`auth.uid() = user_id`) is the runtime gate — it consults the JWT, evaluates a policy, and rejects unauthorised reads. Today only the structural gate is active in loopd; the runtime gate is scaffolded (migration 0002) but disabled in Phase A. Two independent mechanisms, layered — same shape as GitHub requiring review AND status checks before merge.
+Two `WHERE` clauses on the same query, both required, evaluated by different mechanisms. The composite PK (`(user_id, id)`) is the structural gate — it doesn't ask who you are; it just makes the row appear to not exist if your scope doesn't include it. RLS (`auth.uid() = user_id`) is the runtime gate — it consults the JWT, evaluates a policy, and rejects unauthorised reads. Today only the structural gate is active in loopd; the runtime gate is scaffolded (migration 0002) but disabled in Phase A. Two independent mechanisms, layered — either one alone would still narrow the rows correctly under perfect conditions, and together they survive imperfect ones.
+
+The mental model in one picture:
+
+```
+   Query: SELECT * FROM entries WHERE user_id = $1 AND id = $2
+
+   ┌────────────────────────────┐
+   │  WHERE user_id = $1        │  ◄── gate 1: composite-PK schema
+   │   (composite PK lookup)    │     active in Phase A
+   └─────────────┬──────────────┘     (row doesn't exist for wrong user_id)
+                 │
+                 │  rows narrowed to caller's namespace
+                 ▼
+   ┌────────────────────────────┐
+   │  WHERE auth.uid() = user_id│  ◄── gate 2: RLS runtime
+   │   (RLS policy filter)      │     STAGED, OFF in Phase A
+   └─────────────┬──────────────┘     (postgres adds it automatically in Phase B)
+                 ▼
+            row returned
+```
+
+Either clause alone narrows the result correctly under normal conditions; together they survive a bug in either layer. The three sub-sections below trace each gate in turn, then the Phase A / Phase B split.
 
 ### The schema gate — composite primary keys
 
 Every synced table in Supabase has `PRIMARY KEY (user_id, id)`. That's two columns participating in the primary key, not one — it's called a *composite primary key*. If you're coming from frontend, you're used to thinking of an `id` as globally unique (like a React key in a map). Here it's different: an `id` only means something *inside* a particular user's namespace. The compound key is `(user_id, id)`; the same `id` can exist for two different users and they refer to different rows. Concrete consequence: if user A's client sends a query for `id = 'abc123'` belonging to user B, the database looks for `(user_A_id, 'abc123')` and that row literally does not exist — not "exists but you can't see it"; it does not exist. The data is invisible at the structural level, not at the policy level. Boundary: this works whether the user is authenticated or not, whether RLS is on or off, whether the client lies about who it is — the rows are isolated at the schema. The only thing that breaks it is a client that knows the *full composite key* (both user_id and id), which the runtime gate's job is to prevent.
 
+The composite-key shape, with two users having the same `id`:
+
+```
+entries
+┌──────────────┬───────────┬────────────────┬───────────┐
+│ user_id      │ id        │ text           │ ...       │
+├──────────────┼───────────┼────────────────┼───────────┤
+│ alice-uuid   │ 'abc123'  │ 'call mom'      │ ...       │
+│ alice-uuid   │ 'xyz789'  │ 'write spec'    │ ...       │
+│ bob-uuid     │ 'abc123'  │ 'ship v2'       │ ...       │ ◄── same id,
+└──────────────┴───────────┴────────────────┴───────────┘     different row
+              └──────┬───────┘
+       PRIMARY KEY (user_id, id) — the pair is what's unique
+```
+
+Two rows can share the `id` `'abc123'` because the primary key is the *pair*, not the `id` alone. Alice's client asking for `'abc123'` finds her row; Bob's client asking for the same string finds his. Neither can see the other's row because the lookup is keyed on `(user_id, 'abc123')` and the cross-user pair simply doesn't exist in the index.
+
 ### The runtime gate — Row-Level Security
 
 Migration `supabase/migrations/0002_rls_policies.sql` defines RLS policies that filter every query to `WHERE user_id = auth.uid()`. Postgres applies these policies automatically — the client doesn't add the filter, the database does. If you're coming from frontend, this is like a backend middleware that injects an `if (user.id !== resource.userId) return 403;` check before every read and write — except it's at the database layer, not in application code, so even raw SQL access is bound by it. Concrete consequence: if user A is authenticated and runs `SELECT * FROM entries`, Postgres rewrites the query to `SELECT * FROM entries WHERE user_id = 'user-A-uuid'`. There's no way to forget the filter; the filter is *part of the table* from the policy's perspective. Boundary: RLS only works once `auth.uid()` returns the right value — that requires Supabase auth to be configured and a JWT in the request headers. Without auth, `auth.uid()` is NULL and the policy filters everything to zero rows.
+
+What the client sends vs what the database actually runs:
+
+```
+       client query                       what postgres executes
+   ┌────────────────────────┐         ┌──────────────────────────────┐
+   │ SELECT * FROM entries  │  ──▶    │ SELECT * FROM entries        │
+   │                        │  RLS    │ WHERE user_id = auth.uid()   │  ◄── added by
+   │                        │  on     │                              │     policy
+   └────────────────────────┘         └──────────────────────────────┘
+```
+
+The client doesn't know the filter is there. The policy is on the table, not in application code, so any query path — raw SQL, the Supabase client SDK, even a service-role admin tool — passes through the same gate.
 
 ### Phase A / Phase B — current state vs planned
 
 - **Phase A (current):** schema gate active, runtime gate dormant. `auth/client.ts` carries a single hardcoded `PHASE_A_USER_ID` UUID; every Supabase call inserts that value into the `user_id` column on writes and reads. RLS policies exist in `0002_rls_policies.sql` but are not installed (migration not applied). The cloud database treats the hardcoded id as the sole user.
 - **Phase B (planned):** schema gate unchanged, runtime gate activated. Ship Supabase auth (`signInWithPassword` or similar), drop the hardcoded id, apply `0002_rls_policies.sql` so RLS is on. Every client request now carries a JWT; `auth.uid()` returns the authenticated user's id; the schema gate still appears identical from the outside.
 
+Side by side, the structural columns don't change — only the source of `user_id` and the activation state of RLS:
+
+```
+            Phase A (now)                       Phase B (later)
+   ┌──────────────────────────────┐    ┌──────────────────────────────┐
+   │ user_id = PHASE_A_USER_ID    │    │ user_id = auth.uid()         │ ◀ source flips
+   │   (hardcoded in client.ts)   │    │   (from JWT, real user)      │
+   │           ▼                  │    │           ▼                  │
+   │ schema gate (composite PK) ✓ │    │ schema gate (composite PK) ✓ │   unchanged
+   │           ▼                  │    │           ▼                  │
+   │ RLS staged, NOT installed    │    │ RLS installed, ENFORCED ✓     │ ◀ activated
+   │           ▼                  │    │           ▼                  │      (new!)
+   │ row returns                  │    │ row returns                  │
+   └──────────────────────────────┘    └──────────────────────────────┘
+     schema gate identical across both phases — only the runtime layer changes
+```
+
 The point of Phase A/B here is that the **schema didn't have to change between phases**. The composite-PK shape was correct from day one; only the runtime layer (RLS, JWT auth) gets added. If you've watched a team retrofit multi-tenancy onto a single-tenant schema, you know how expensive that is — column renames, FK rewrites, data migrations. The architecture absorbed the future activation cost as a one-time `ALTER TABLE` plus an auth flow, not a re-architecture.
 
 ### Defense in depth — why both gates
 
 If RLS is enough, why have the schema gate? Because RLS is a *policy*, not a *structural property*. Policies can have bugs (a misconfigured `USING` clause that returns rows it shouldn't), can be disabled accidentally (a future migration that forgets `ENABLE ROW LEVEL SECURITY`), can be bypassed by service-role keys. The schema gate doesn't depend on any of that — it depends on the relational model itself. If you're coming from frontend, this is the same shape as input sanitization plus output escaping: each layer is enough on its own under perfect conditions, and both together survive imperfect conditions. Concrete consequence: if a future PR mistakenly disables RLS, the user data isn't suddenly exposed — the composite key still makes the rows structurally invisible. The blast radius of "someone misconfigured RLS" stays bounded.
+
+Walking the failure modes side by side makes the redundancy concrete:
+
+```
+   failure scenario              schema gate only      RLS only           both layers
+   ─────────────────────────     ──────────────────    ────────────────   ─────────────
+   PR disables RLS               ✓  rows hidden        ✗  rows exposed    ✓  schema still
+                                    by composite PK       to wrong user      hides them
+   USING clause bug              ✓  composite PK        ✗  may return       ✓  composite PK
+   (policy returns wrong rows)      independent           wrong rows           catches it
+   service-role key leaks        ✗  if attacker         ✗  service role     ✗  both layers
+                                    knows composite       bypasses RLS         bypassed —
+                                    key                                        not covered
+   client lies about user_id     ✓  wrong (user_id,id)  ✓  policy filter    ✓  doubly blocked
+                                    pair doesn't exist    catches it
+```
+
+The schema gate covers what RLS bugs miss; RLS covers what an attacker would need the schema gate to fail to exploit. Both layers together leave one realistic gap — a leaked service-role key, which is the threat any layered defense at this scale shares.
 
 This is what defense in depth looks like in a real system — two independent mechanisms with different failure modes, layered so that one mechanism's bug doesn't compromise the other. People say "defense in depth" all the time; the rare version is shipping it on a system where both layers are real, both layers are testable, and both layers stay correct under future change. The full picture is below.
 
@@ -383,3 +470,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced bank-vault + two-locked-doors analogies with GitHub branch protection requiring review + status checks, and Stripe webhook signature + IP allowlist defense-in-depth). Both Move 1s were missed by the original triage agent; this re-scan caught them.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from whole-product references (GitHub branch protection, Stripe webhooks) to the level-1 primitive (two `WHERE` clauses on the same query); same swap on the Why care Move 5 summary. Added Move 1 mnemonic diagram (two-WHERE-clauses pipeline) + 4 Move 2 sub-section diagrams: composite-PK table shape, RLS client-vs-database query rewrite, Phase A/B side-by-side, and a failure-mode comparison table. Total: 5 new diagrams.

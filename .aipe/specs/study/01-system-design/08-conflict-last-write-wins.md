@@ -11,7 +11,7 @@
 
 ## Why care
 
-Open a Notion page on two devices, edit different paragraphs simultaneously, then watch what happens when the network catches up. Notion picks a winner — usually the more recent edit by their server's clock — and the other edit is lost without a merge attempt. CouchDB ships the same rule by default; Firebase Realtime Database does it; every CRDT-less sync system eventually has a moment where two writes claim the same field and one has to lose. The rule that's easiest to reason about: whoever wrote most recently wins, deterministically, by server-clock timestamp. It's brutal — one device's write disappears every time there's a conflict — but it terminates instantly, it's idempotent on replay, and it produces the same answer no matter which order you replay the events.
+You've got a `posts` table with `id` and `title` columns plus a `last_updated TIMESTAMP` column on every row. Client A fires `UPDATE posts SET title = 'Hello', last_updated = now() WHERE id = 123` at 14:32; client B fires `UPDATE posts SET title = 'Hi', last_updated = now() WHERE id = 123` at 14:35. Postgres MVCC has each transaction see its own snapshot, and whichever commit lands later overwrites the earlier one — the table's value at quiescence is whichever update had the higher `last_updated`. There's no merge of `'Hello'` and `'Hi'` into something both writers might want; the database picks one row's value and the other disappears. Firebase Realtime Database and CouchDB ship the same rule by default at network scale: timestamp the writes, take the bigger one, drop the loser silently.
 
 The question those concurrent edits answer is one any replicated store has to answer: when two writes claim the same row and neither side knows the other exists, who wins? Not "merge them" — that requires understanding what merging *means* for the data type, which is expensive. Not "ask the user" — that requires UI that doesn't exist on a background sync. The answer is *last-write-wins*: attach a timestamp to every row, compare on conflict, keep the bigger one.
 
@@ -38,21 +38,133 @@ The resolver is a referee that always blows the whistle the same way.
 
 Postgres MVCC + a `last_updated` timestamp is the canonical pattern. Two writes to the same row race; the row keeps the value of whichever write the server timestamped later. No negotiation, no merging, no "device A keeps half of the field and device B keeps the other half" — just pick the more recent timestamp. It's a brutal rule on purpose — fast, deterministic, easy to reason about. The cost is that one writer's value silently disappears every time there's a conflict; the win is that you never get stuck in a stalemate and replay always converges. CouchDB and Firebase Realtime Database both ship LWW as their default conflict resolver for the same reason.
 
+The resolver in one picture:
+
+```
+   local row                             cloud row
+   updated_at = "...14:32:18.000Z"       updated_at = "...14:35:00.000Z"
+              │                                       │
+              └─────────────────┬─────────────────────┘
+                                ▼
+                  chooseWinner(local, cloud)
+                                │
+                                ▼  ISO 8601 string compare
+                                │
+                ┌───────────────┴───────────────┐
+                ▼                               ▼
+         cloud > local                    local > cloud
+         → "cloud" (apply pull)           → "local" (skip;
+                                              push handles it)
+                tie or malformed
+                → "tie-cloud-wins"
+                (defensive convergence)
+```
+
+A pure function from two rows to a label — the four sub-sections below trace the purity contract, the ISO-string compare, the same-second tie rule, and the malformed-timestamp healing path.
+
 ### `chooseWinner` is pure — input rows in, label out
 
 `chooseWinner(local, cloud)` in `src/services/sync/conflict.ts` takes two rows and returns a string: `"local"`, `"cloud"`, or `"tie-cloud-wins"`. No side effects, no DB reads, no `Date.now()` call inside. The caller (`pull.ts`) is responsible for acting on the result. If you're coming from frontend, this is the same shape as a Redux reducer or a pure React selector: take the state, return the projection, don't reach for any external resource. Concrete consequence: every call to `chooseWinner(rowA, rowB)` with the same two rows returns the same answer forever — there's no race, no timestamp drift, no "this passed yesterday but fails today." Boundary: the purity only holds because the inputs are already typed (`updated_at` is an ISO string on the row). A malformed timestamp would make the parse return NaN, which the function handles explicitly.
+
+The pure-function signature in one shape:
+
+```
+   inputs                             chooseWinner                  output
+   ┌───────────────────────────┐      (pure function;             ┌──────────────────┐
+   │ local: SyncableRow         │      no side effects,           │ "local"          │
+   │   { updated_at, ... }      │ ──▶  no DB reads,         ──▶   │   or "cloud"     │
+   │ cloud: SyncableRow         │      no Date.now(),             │   or             │
+   │   { updated_at, ... }      │      no I/O)                    │ "tie-cloud-wins" │
+   └───────────────────────────┘                                  └──────────────────┘
+
+   caller in pull.ts acts on the label:
+     "local"            → skip (push handles it later)
+     "cloud"            → upsert locally, stamp synced_at = serverTime
+     "tie-cloud-wins"   → upsert locally (convergence bias)
+```
+
+Testing is one-line — `expect(chooseWinner(rowA, rowB)).toBe('cloud')` — because the function never reaches outside its arguments.
 
 ### The comparison rule — ISO string compare, not Date math
 
 `chooseWinner` compares `local.updated_at` and `cloud.updated_at` as ISO 8601 strings using string ordering. ISO 8601 (e.g. `"2026-05-10T14:32:18.000Z"`) is lexicographically sortable — string `>` produces the same result as `Date.parse(...) >`, but without the parse cost and without timezone footguns. If you're coming from frontend, this is the same trick `localStorage`-keyed records use when they want to sort by timestamp without parsing — the ISO string IS the sortable key. Concrete consequence: if local has `updated_at = "2026-05-10T14:32:18.000Z"` and cloud has `"2026-05-10T14:33:00.000Z"`, the string compare returns cloud > local → cloud wins. If cloud has the same string, the tie rule applies. Boundary: this assumes both sides write ISO strings; a future migration that changes the column format would break the comparator.
 
+The compare itself — annotated to show why string ordering works:
+
+```
+   local.updated_at  = "2026-05-10T14:32:18.000Z"
+   cloud.updated_at  = "2026-05-10T14:33:00.000Z"
+                          │           │
+                          │           └── seconds differ → '3' > '2'
+                          └── prefix identical up to here
+
+   string compare:   cloud.updated_at > local.updated_at   // true
+
+      same result as:  Date.parse(cloud.updated_at) > Date.parse(local.updated_at)
+                                    │
+                                    └── but Date.parse adds a parse step
+                                        and timezone-handling edge cases
+
+   ISO 8601 is lexicographically sortable by design — that's the trick.
+```
+
+The whole compare is one `>` operator with no allocations, no exceptions, no Intl machinery.
+
 ### Same-second tie → cloud wins (biased to converge)
 
 If `local.updated_at == cloud.updated_at` (same millisecond, identical strings), `chooseWinner` returns `"tie-cloud-wins"`. The bias toward cloud is deliberate: the path that calls `chooseWinner` is pull, and if cloud has a row with the same timestamp as local's, the cloud row probably arrived from a different device that's already converged on that value. Letting cloud win prevents an infinite ping-pong where two devices keep pulling the same row, each thinking their copy is fresher. Concrete consequence: device A writes `name='loopd'` at 14:32:18.000Z. Device B independently writes `name='loopd-app'` at exactly 14:32:18.000Z. Both push. Cloud now has one of them (last-write-wins on the server side via the upsert). On the next pull from device A, cloud's value comes back and the tie rule applies — cloud wins, A's local copy gets overwritten. The bias converges the cluster. Boundary: if two clocks are perfectly skewed and produce identical timestamps for genuinely different edits, the tie rule silently picks one. The fix is millisecond-grained timestamps and operational acceptance that ties are rare.
 
+Walking the ping-pong-that-doesn't-happen on a two-device tie:
+
+```
+   device A writes                  device B writes
+   "name=loopd"                     "name=loopd-app"
+   updated_at = "...18.000Z"        updated_at = "...18.000Z"   (same ms!)
+              │                                │
+              ▼                                ▼
+   both push to cloud
+              │  Supabase server-side LWW picks one (say B's)
+              ▼
+   cloud has: name="loopd-app", updated_at = "...18.000Z"
+              │
+              ▼  next pull from device A
+              │  chooseWinner(local_18, cloud_18) — strings equal
+              ▼
+   returns "tie-cloud-wins"
+              │
+              ▼  pull overwrites A's local with cloud value
+              ▼
+   both devices now have name="loopd-app"; cluster converged
+   no ping-pong (without the bias, both would think they're fresher)
+```
+
+The bias is a one-line defensive choice that buys eventual convergence on every tie.
+
 ### Malformed timestamp → cloud wins (defensive healing)
 
 If `Date.parse(local.updated_at)` returns NaN (or `cloud.updated_at` does), `chooseWinner` returns `"cloud"`. The reason: a malformed timestamp on local probably means the local DB has a corrupt row (manual edit, migration bug, JSON parse glitch); overwriting it with the cloud version is the desired healing direction. If you've ever shipped a feature that started writing dates as Unix timestamps instead of ISO strings and then had to recover, you know how valuable this is — the pull path heals the corruption automatically. Concrete consequence: a user opens the app after a bad migration that wrote `updated_at = "ABCDEF"` to several rows. Next pull: `chooseWinner("ABCDEF", "2026-05-10T14:32:18.000Z")` parses local to NaN, returns `"cloud"`. The corrupt local row gets overwritten with the cloud's well-formed version. The user never sees the bug. Boundary: this only heals one direction — corrupt rows on the cloud are dragged into local. The reverse is a real problem; the codebase trusts cloud writes to be well-formed because they go through the typed Supabase SDK.
+
+Walking the healing path:
+
+```
+   local.updated_at = "ABCDEF"     (corrupt — manual edit, bad migration)
+   cloud.updated_at = "2026-05-10T14:32:18.000Z"
+                                     │
+                                     ▼  Date.parse(local) === NaN  detected
+                                     │
+                                     ▼
+                       chooseWinner returns "cloud"
+                                     │
+                                     ▼  pull upserts cloud value to local
+                                     ▼
+                       local row's updated_at now valid
+                       user never sees the corruption
+                       healing direction: cloud → local only
+                       (cloud writes are trusted to be well-formed
+                        because they go through the typed Supabase SDK)
+```
+
+A single defensive branch buys automatic recovery from a whole class of "we accidentally wrote junk to the local store" bugs.
 
 This is what people mean by "convergent merge under a total order." Last-write-wins is the simplest converging algorithm — it's not the *best* in every dimension (you lose the loser's edits), but it's the cheapest one that always terminates and always produces an identical result on every replica. Every distributed system that has ever shipped under a "good-enough" merge has done some version of this: DNS records, CRDT LWW-Registers, Riak's last-write-wins bucket type, Dropbox's "keep one, mark the other as conflict." The boundary case — true concurrent edits that need to merge content — is where CRDTs and operational transforms become load-bearing. Until then, the timestamp wins. The full picture is below.
 
@@ -367,3 +479,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-children-with-toy analogies with Notion two-device concurrent edits + CouchDB/Firebase LWW + Postgres MVCC last_updated timestamp). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from a whole-product anchor (Notion two-device edits) down to a level-1 primitive (a `posts` table with `last_updated` and two UPDATE statements + Postgres MVCC). Kept How it works Move 1 anchor on Postgres MVCC (level-4 industry primitive); kept Firebase/CouchDB as level-4 examples. Added Move 1 mnemonic diagram (resolver decision tree) + 4 Move 2 sub-section diagrams: pure-function signature, ISO-string compare with annotation, ping-pong-prevented tie trace, malformed-timestamp healing trace. Total: 5 new diagrams.

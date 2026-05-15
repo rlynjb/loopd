@@ -11,7 +11,7 @@
 
 ## Why care
 
-Open Linear on your laptop, edit an issue, then close the laptop and open Linear on your phone. The phone shows the edit within seconds — but if both devices were offline at the moment of the edit, the change still landed locally and waited for the network. Linear isn't asking the cloud "what's the current state?" on every read; it's reading from a local store and using the cloud as a *mirror* that catches up via background sync. Notion does the same. Apple Photos with iCloud does the same. The local store is canonical; the cloud is durability and cross-device propagation, not the source of truth.
+You read a value from `localStorage.getItem('preferences')` on page load and write it back with `setItem(...)` on every change. The whole interaction runs synchronously in the browser; the network was never on the critical path. Now imagine the same value also has to exist somewhere durable across devices — your phone needs the same preferences your laptop just set. You add a background `fetch('/api/prefs', { method: 'POST', body: JSON.stringify(prefs) })` that fires after every `setItem`, plus a one-time `GET /api/prefs` on first launch of a new device. The reads still come from `localStorage`; the network call is purely durability and cross-device transfer — even if it fails forever, the laptop still works.
 
 The question those local-first apps answer is one any system with a cloud component has to answer: when there are two copies of every file, which one is authoritative — the one the user reads and writes, or the one that's durable and shareable? Not "the cloud, because it's the database" — that's the answer that makes the app stall on a loading spinner. The answer is a *replica-as-mirror flip*: the device is canonical, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer.
 
@@ -39,21 +39,134 @@ The cloud is a sync mirror, not the canonical source.
 
 Git's local repo + remote is the canonical pattern. The local `.git` directory is where every read, every commit, every branch-switch happens. The remote (`origin`) is a mirror that gets updated when you `git push` and consulted when you `git pull`. You can work entirely offline; the remote catches up when the network agrees. loopd uses the same shape — SQLite is `.git`, Supabase Postgres is `origin`, `schedulePush()` is `git push` on a debounced trigger. The mirror's job isn't to answer questions; it's to have a copy somewhere durable when the local store is lost.
 
+The sync-mirror shape in one picture:
+
+```
+   reads + writes (always local, synchronous)
+              │
+              ▼
+   ┌──────────────────────────────────┐
+   │ loopd.db (SQLite, canonical)     │
+   │   updated_at, synced_at on each  │
+   │   row; deleted_at for tombstones │
+   └──────────────┬───────────────────┘
+                  │
+                  │  background sync (push/pull, independent)
+                  ▼
+   ┌──────────────────────────────────┐
+   │ Supabase Postgres (mirror)       │  ◄── durability + cross-device
+   │   updated_at (no synced_at;      │      never on the user's read path
+   │   the dirty filter is local-only)│
+   └──────────────────────────────────┘
+```
+
+The local store handles every user-facing read and write; the mirror exists for durability and to feed other devices. The four sub-sections below trace the push/pull split, the upsert mechanics, the pull arbitration, and the server-time RPC that protects the cursor against device clock skew.
+
 ### Push and pull are independent flows over the same registry
 
 The codebase has two top-level orchestrators: `pushAll()` and `pullAll()` (both in `src/services/sync/orchestrator.ts`). Both walk the same `SyncableTable` registry — 10 tables defined at the top of the file — but they run independently. There's no "sync" operation that does both atomically; each fires on its own trigger (push on debounced write, pull on app boot or user-pull-to-refresh). If you're coming from frontend, this is the same shape as React Query's `useMutation` (writes) vs `useQuery` (reads) — two independent flows over the same resource, each with its own lifecycle. Concrete consequence: a user can be in a state where push succeeded but pull hasn't run yet — the cloud has the latest local writes, but the local copy is missing recent cloud-side updates from another device. The architecture is fine with that asymmetry. Boundary: this works because every row carries `updated_at` and `synced_at`; the dirty filter (`updated_at > synced_at`) is what makes each direction idempotent.
+
+The trigger-to-flow mapping:
+
+```
+   Trigger                         Flow
+   ─────────────────────           ──────────────────────────────
+   schedulePush() debounce  ──▶    pushAll()
+   (5s after last write)              │
+                                      ▼  walks SyncableTable registry
+                                      ▼  pushTable() per table
+
+   app boot                  ──▶    pullAll()
+   pull-to-refresh           ──▶       │
+                                      ▼  walks the same registry
+                                      ▼  pullTable() per table
+```
+
+No "sync" verb fires both at once — the two flows are decoupled, each with its own lifecycle. A user can be mid-push with the cloud ahead of their local state and that's a valid intermediate state.
 
 ### Push — batched upserts with on-conflict resolution
 
 `pushTable(table)` selects local rows where `updated_at > synced_at OR synced_at IS NULL`, batches them in groups of 50, and upserts to Supabase via `@supabase/supabase-js`'s `.upsert(rows, { onConflict: 'user_id,id' })`. On batch success, the function stamps `synced_at = now()` on each pushed row locally. On batch failure, it leaves `synced_at` alone — the next push naturally retries the same batch because the dirty filter still matches. Think of it like a typed Redux thunk that diffs `localState.modified` against `lastFlushedAt` and POSTs the delta to the server. Concrete consequence: user writes 8 entries on a plane. All 8 have `updated_at > synced_at` and `synced_at IS NULL`. On landing, the first push batches them into 50-or-fewer chunks (here, 8 in one batch), upserts via Supabase, stamps `synced_at` on each. On failure mid-batch (network blip after 4 succeeded), `synced_at` is `now` on the first 4 and `NULL` on the last 4; the next push retries only the last 4 because the dirty filter selects them. Boundary: at 50K dirty rows the batch loop becomes the bottleneck; the right move is parallel batches per table, but at this codebase's scale (single user) it never trips.
 
+Walking the dirty filter → upsert → stamp loop:
+
+```
+   local rows (SQLite)                       Supabase
+   ┌─────────────────────────────┐
+   │ SELECT *                    │
+   │ WHERE updated_at >          │
+   │       synced_at             │  ── 50 rows ──▶  upsert(rows, {
+   │   OR synced_at IS NULL      │                    onConflict:
+   └──────────────┬──────────────┘                    'user_id,id' })
+                  │                                      │
+                  │  on batch success                    │  row now in cloud
+                  ▼                                      │
+   UPDATE local rows                                     │
+   SET synced_at = now()        ◄───────────────────────┘
+                  │
+                  │  next push selects from same dirty filter
+                  ▼
+   rows no longer match (synced_at >= updated_at)
+   batch is naturally idempotent on retry
+```
+
+A mid-batch network blip leaves half the rows with stamped `synced_at` and half without; the next push retries only the half that's still dirty.
+
 ### Pull — cursor-paged reads with last-write-wins arbitration
 
 `pullTable(table)` selects cloud rows where `updated_at > sync_meta[table].last_pull_at` ordered by `updated_at ASC`, pages 200 at a time. For each cloud row, it loads the local counterpart (if any) and runs `chooseWinner` (last-write-wins by `updated_at`). If cloud wins, upserts locally and stamps `synced_at = serverTime`. If local wins (because the local copy was edited more recently and hasn't been pushed yet), skips — the dirty filter will handle it on the next push. If you're coming from frontend, this is the same shape as a typed pagination cursor with conflict resolution: each cloud row is a candidate, the local state is the existing value, and the arbiter is a pure function of `updated_at`. Concrete consequence: user edits entry e123 locally at 14:32 (push happens at 14:37). Meanwhile the cloud has e123 from yesterday at 09:15. The next pull sees cloud's e123 (`updated_at = 09:15`), compares to local (`updated_at = 14:32`), `chooseWinner` returns local, pull skips. The push at 14:37 then sends the local 14:32 version up. Cloud catches up. Boundary: LWW silently drops the loser's edits per conflict; if two devices edit the same row concurrently within seconds, one device's changes vanish.
 
+Walking the per-row arbitration:
+
+```
+   Supabase                              local SQLite
+   ┌─────────────────────────────┐
+   │ SELECT * WHERE              │
+   │   updated_at >              │
+   │   sync_meta.last_pull_at    │  ── page of 200 rows ──▶
+   │ ORDER BY updated_at ASC     │
+   └─────────────────────────────┘                  │
+                                                    ▼
+                                 for each cloud row:
+                                   load local counterpart (if any)
+                                   chooseWinner(local, cloud)
+                                     ├─ cloud wins → upsert locally,
+                                     │               stamp synced_at = serverTime
+                                     └─ local wins → skip
+                                                      (push will handle it
+                                                       on the next debounce)
+```
+
+The pull is read-only against the cloud — it never writes back; conflicts where the local version is newer are deferred to the next push instead of resolved during pull.
+
 ### Why server-time arbitration — local clock skew breaks `Date.now()`
 
 The pull stamps `synced_at = serverTime` rather than `synced_at = Date.now()`. `serverTime` is returned by a Postgres RPC (a stored procedure that returns `now()` on the server). The reason: a device with a clock that's 30 minutes ahead would stamp `synced_at` 30 minutes in the future; the next pull's cursor (`updated_at > last_pull_at`) would then skip every cloud row whose `updated_at` is below the device's optimistic future timestamp. If you've worked with `localStorage`-cached timestamps in a React app, you've seen this — the cache thinks it's been refreshed when it hasn't. Concrete consequence: a user with a misconfigured clock pulls; without the RPC, the next pull would silently skip new cloud rows for the duration of the clock-skew window. With the RPC, the cursor anchors to whatever the server thinks "now" is — clock skew on the device is invisible to the sync flow. Boundary: this introduces one extra round-trip per pull session (the RPC), which is the cheapest fix for the problem; alternatives like NTP sync are out of scope for a journaling app.
+
+Walking the same pull on a clock-skewed device, with and without the server-time RPC:
+
+```
+        Without RPC (Date.now)                    With RPC (server now())
+   ┌─────────────────────────────┐         ┌─────────────────────────────┐
+   │ device clock = 14:32         │         │ device clock = 14:32         │
+   │ (30 min ahead of real time)  │         │ server clock = 14:02         │
+   │ true time = 14:02            │         │                              │
+   │                              │         │ pull RPC returns server      │
+   │ pull arrives at 14:32        │         │   "now" = 14:02              │
+   │ stamps synced_at =           │         │                              │
+   │   Date.now() = 14:32          │         │ stamps synced_at = 14:02     │
+   │   (30 min in the future!)    │         │                              │
+   │                              │         │ next pull cursor:            │
+   │ next pull cursor:            │         │   updated_at > 14:02         │
+   │   updated_at > 14:32         │         │   correctly picks up new     │
+   │ skips every cloud row whose  │         │   cloud writes               │
+   │ updated_at < 14:32 until      │         │                              │
+   │ real time > 14:32             │         │                              │
+   └─────────────────────────────┘         └─────────────────────────────┘
+       clock skew → silent data loss              clock skew invisible
+```
+
+The cost is one extra round-trip per pull session; the alternative (silent data loss whenever a user's clock drifts) is unacceptable for a journaling app.
 
 This is what people mean by "the cloud is a sync mirror, not the canonical source." The cloud's job is durability, not authority — every read in the app hits SQLite, every write commits locally first, and the cloud catches up at its own pace. The pattern is everywhere — Dropbox does this between device and storage, Git does it between working tree and remote, Firebase's offline cache does it between RAM and Firestore. The discipline is keeping the boundary visible: the canonical store is local, period; the cloud is a backup that catches up. The full picture is below.
 
@@ -411,3 +524,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-cabinets-with-courier + photocopier-room analogies with Linear/Notion local-first sync + Apple Photos iCloud + git local repo and origin remote). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-product references (Linear / Notion / Apple Photos iCloud) to a level-1 primitive (`localStorage.getItem`/`setItem` + a background `fetch` for durability). Kept How it works Move 1 anchor on git (level-4 industry primitive). Added Move 1 mnemonic diagram (local-canonical + cloud-mirror shape) + 4 Move 2 sub-section diagrams: push-pull trigger split, push dirty-filter loop, pull arbitration flow, server-time-RPC side-by-side. Total: 5 new diagrams.

@@ -39,21 +39,146 @@ The migration history *is* the schema — never edit history, append corrections
 
 Git's published commit history is the canonical pattern. Every commit is dated, hashed, and immutable once pushed. If yesterday's commit has a bad change, you don't `git rebase -i` and rewrite history (that would break every teammate's clone) — you push a follow-up commit that explicitly reverts or corrects. Anyone who reads the repo from commit 0 forward sees the same sequence, in the same order, and arrives at the same final tree. Supabase migrations enforce the same shape at the schema layer: every migration file is numbered, dated, immutable; corrections come as new files, not edits to old ones.
 
+The append-only ledger shape in one picture:
+
+```
+   supabase/migrations/              _migrations (in Postgres)
+   ──────────────────────            ─────────────────────────
+   0001_initial.sql                  ┌────────────────────────┐
+   0002_rls.sql                      │ filename               │
+   0003_server_time.sql              ├────────────────────────┤
+   0004_relax_fks.sql                │ 0001_initial.sql       │ ◄── ledger of
+   0005_todo_meta_pinned.sql         │ 0002_rls.sql           │     applied files
+   0006_fix_typo.sql      ◄── never  │ 0003_server_time.sql   │
+                              edit   │ ...                    │
+                              0001;  └────────────────────────┘
+                              ship
+                              0006              │
+                              forward           │
+        │                                       │
+        ▼                                       ▼
+   every environment replays in numeric order  →  same schema
+   git's append-only commit history shape, applied to SQL.
+```
+
+The migration history IS the schema. The four sub-sections below trace the numbered convention, the runner that walks the ledger, the never-edit rule, and the convergence property that makes the discipline worth keeping.
+
 ### The numbered file convention — `NNNN_description.sql`
 
 Every schema change lives in `supabase/migrations/NNNN_<description>.sql`, where `NNNN` is a zero-padded sequence number. The codebase currently has `0001_initial_schema.sql` through `0005_todo_meta_pinned.sql`. The numbers are the canonical order; the filenames are documentation; the SQL inside is what actually runs. If you're coming from frontend, this is the same shape as a typed event-sourcing log or a Redux action history — events appended in order, the current state derived by replaying from the start. Concrete consequence: a fresh Supabase project runs `0001` through `0005` in order; an existing project that's already at `0004` runs only `0005`. The "current schema" is whatever the sum of all migrations produces — there's no separate `schema.sql` file claiming to be the truth. Boundary: this works because no two migrations carry the same number (the developer convention enforces uniqueness; the runner would error on collision).
+
+The numbered-file convention in the file tree:
+
+```
+   supabase/migrations/
+   ────────────────────────────────────────────────────
+     0001_initial_schema.sql       ◄── canonical order
+     0002_rls_policies.sql              is the number
+     0003_server_time_rpc.sql           (not the date,
+     0004_relax_fks.sql                  not git history)
+     0005_todo_meta_pinned.sql
+     ...
+     (current head: NNNN)
+
+   replay rules:
+     fresh project:        apply 0001 → 0002 → ... → NNNN
+     existing-at-N:        apply N+1 → ... → NNNN
+     already-up-to-date:   no-op
+
+   the "current schema" = the sum of all migrations replayed
+   there's no separate schema.sql claiming to be the truth
+```
+
+The number is the load-bearing part — filenames are documentation, SQL inside is what runs.
 
 ### The runner — `db-migrate.mjs` and the `_migrations` ledger
 
 `scripts/db-migrate.mjs` is the harness. It connects to Postgres using the `pg` library and `dotenv` for credentials, queries a `_migrations` table for the list of already-applied filenames, and runs every file in `supabase/migrations/` that's not in the ledger, in numeric order. After each successful file, it inserts a row into `_migrations` with the filename. If you've worked with `prisma migrate` or `knex migrate:latest`, the shape is the same — a ledger table records what's applied, the diff against the filesystem says what's pending, the runner walks the diff. Concrete consequence: run `node scripts/db-migrate.mjs --all-pending` on a fresh database. The runner sees `_migrations` is empty, reads the migrations directory, applies `0001` → inserts `('0001_initial_schema.sql', now)` → applies `0002` → inserts → and so on. On a database already at `0004`, the runner sees `0001`-`0004` in the ledger, skips them, applies only `0005`. Boundary: if a migration fails halfway through, the ledger doesn't record it; the next run retries the same file. This assumes Postgres transactionality around the migration body — if a migration is non-transactional (e.g. CREATE INDEX CONCURRENTLY), the recovery story gets more involved.
 
+The runner's logic in one flow:
+
+```
+   node scripts/db-migrate.mjs --all-pending
+                       │
+                       ▼
+   ┌──────────────────────────────────────────────────┐
+   │ 1. SELECT filename FROM _migrations               │  ◄── what's applied
+   │                                                    │
+   │ 2. ls supabase/migrations/*.sql                    │  ◄── what's on disk
+   │                                                    │
+   │ 3. pending = (on disk) − (in ledger)               │  ◄── what to run
+   │                                                    │
+   │ 4. for each pending file in NNNN order:            │
+   │      BEGIN;                                        │
+   │        run the file's SQL                          │
+   │        INSERT INTO _migrations (filename)          │
+   │      COMMIT;                                       │
+   └──────────────────────────────────────────────────┘
+                       │
+                       ▼  on failure mid-file
+   transaction rolls back; ledger not updated
+   next run retries the same file
+   (assumes the migration body is transactional)
+```
+
+Same ledger pattern as Prisma, Knex, Flyway — the runner is small precisely because the discipline does the work.
+
 ### Append-only means never edit `0001` — the discipline
 
 The rule: once a migration is committed and applied anywhere, it is permanent. If you discover a typo in `0001` two days later, you do NOT edit `0001`. You ship `0006_fix_the_typo.sql` that does the correction with `ALTER TABLE` or `ALTER COLUMN`. The reason: if `0001` is already in some environment's `_migrations` ledger, editing it doesn't re-run it — the ledger says "applied," so the runner skips it. The two environments are now diverging by exactly the size of the typo. If you're coming from frontend, this is the same shape as Git's rule against rewriting public history (`git push --force` to a shared branch): once others have a copy of the commit, you can only add on top. Concrete consequence: developer notices `0001` declared `entries.text TEXT` but it should have been `TEXT NOT NULL`. They write `0006_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL`. The fresh-project path now runs `0001` (text nullable) → `0006` (text not nullable). The already-running-project path runs only `0006`. Both converge on the same final schema. Boundary: this assumes the correction is expressible as an ALTER — schema changes that would require data backfill (e.g., the typo created data that's now misaligned) need their own DML migration in the same ledger.
 
+The two paths after discovering a typo:
+
+```
+                     WRONG: edit 0001 in place
+   ┌─────────────────────────────────────────────────────────┐
+   │ env A (already past 0001):                                │
+   │   _migrations has it; runner skips                         │
+   │   schema stays nullable                                    │
+   │ env B (fresh clone):                                      │
+   │   runner applies the new 0001 with NOT NULL                │
+   │ env A and env B now have different schemas for one         │
+   │ column — invisible in the file tree                        │
+   │   "works on my machine" bug                                │
+   └─────────────────────────────────────────────────────────┘
+
+                     RIGHT: ship 0006 forward
+   ┌─────────────────────────────────────────────────────────┐
+   │ add 0006_entries_text_not_null.sql:                       │
+   │   ALTER TABLE entries ALTER COLUMN text SET NOT NULL;     │
+   │ env A: applies 0006 → text now NOT NULL                   │
+   │ env B: applies 0001 (nullable) → 0006 (NOT NULL)          │
+   │ both converge on the same final schema                    │
+   └─────────────────────────────────────────────────────────┘
+```
+
+Editing `0001` is the same mistake as `git push --force` to a shared branch — silent divergence everywhere a copy already exists.
+
 ### Why the discipline matters — every environment converges on the same path
 
 The point of append-only isn't aesthetic. It's that *every environment runs the same sequence of files in the same order*. Production, staging, your local Supabase, a new contributor's Supabase clone — they all replay `0001` through `0005`. If the runner runs the same files in the same order on every environment, the schemas converge. The moment someone edits `0001`, environments that already applied the old `0001` carry one schema, and environments that haven't yet applied any migration apply the new `0001` and carry a different schema. Think of it like the determinism contract a build tool relies on (`make` rebuilds only what's changed; the build graph is the truth). Concrete consequence: a new contributor clones the repo, points at a fresh Supabase project, runs the migration runner. They get exactly the same schema production has. There's no "remember to also manually do X" step — the ledger is the only handoff. Boundary: a developer who edits `0001` on their machine and pushes the change breaks this contract. Code review catches it; the runner doesn't.
+
+Three environments, the same ledger sequence, the same end-state schema:
+
+```
+        Production              Staging              New contributor
+   ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+   │ _migrations:     │    │ _migrations:     │    │ _migrations:     │
+   │   0001 ✓         │    │   0001 ✓         │    │   0001 ✓         │
+   │   0002 ✓         │    │   0002 ✓         │    │   0002 ✓         │
+   │   0003 ✓         │    │   0003 ✓         │    │   0003 ✓         │
+   │   0004 ✓         │    │   0004 ✓         │    │   0004 ✓         │
+   │   0005 ✓         │    │   0005 ✓         │    │   0005 ✓         │
+   └──────────────────┘    └──────────────────┘    └──────────────────┘
+              │                       │                       │
+              └─────────────┬─────────┴───────────────────────┘
+                            │
+                            ▼
+              same sequence → same schema → same final state
+              (the ledger IS the handoff; no "remember to also manually do X")
+```
+
+Same files, same order, same outcome — that's the entire reason the discipline exists.
 
 This is what people mean by "schemas as event-sourced logs." The pattern is everywhere — Postgres migration tools (Flyway, Liquibase, Alembic), Rails migrations, Knex, Prisma, Sequelize — they all enforce the same discipline because the alternative is environments drifting into uniqueness, which is the source of "works on my machine" bugs that nobody can debug. Once you internalise that the migration history IS the schema, never editing the history becomes a one-line rule rather than a wishful aspiration. The full picture is below.
 
@@ -387,3 +512,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced accounting-ledger + branch-office-photocopies analogies with git log push-and-amend discipline + Postgres WAL + event sourcing). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-4 — git, Postgres WAL, event sourcing). Added Move 1 mnemonic diagram (migrations directory + ledger + git-like history shape) + 4 Move 2 sub-section diagrams: numbered-file replay rules, runner ledger-diff flow, wrong-vs-right path on a typo, three-env same-schema convergence. Total: 5 new diagrams.

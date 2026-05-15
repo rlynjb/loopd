@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open Vercel's Incremental Static Regeneration (ISR) docs and watch the flow. The first request to a page hits the origin, the response gets cached at the edge, and subsequent requests serve from cache until the page's `revalidate` window expires — at which point only the affected page rebuilds, not the whole site. Algolia exposes the same shape via `partialUpdateObject`: change one record, the index re-shards that record alone. Postgres's B-tree index does it on every `INSERT` / `UPDATE` / `DELETE` — the index follows the data, not a nightly rebuild clock. The cost of re-indexing rides along with the write, not against a separate timer.
+You've got a Postgres table with a B-tree index on `user_id`. When you `INSERT` a new row, Postgres updates the index automatically — it doesn't wait for a nightly rebuild. Same on `UPDATE` (the index entry moves), same on `DELETE` (the entry is removed). The index follows the data, three lifecycle paths, no clock. Compare this with a hypothetical "rebuild the index every midnight" approach: between writes and midnight the index is stale; the rebuild is expensive even when only one row changed; every developer would learn quickly to avoid it. Every database's primary key, every secondary index, every `REFRESH MATERIALIZED VIEW CONCURRENTLY` — they all ride the same incremental pattern. The cost of re-indexing rides along with the write, not against a separate timer.
 
 The implicit question is "should the index update on a clock or in response to writes?" Incremental indexing is the name for the second pattern — the index follows the data, three lifecycle paths (insert, update, delete) keep it current, and a one-time backfill seeds the index when the feature first ships. The full-rebuild pattern is a hold-over from indexes that couldn't be updated online; for editable corpora, it loses on freshness, cost, and write-architecture fit.
 
@@ -40,6 +38,54 @@ Two phases of the index live, and incremental indexing keeps both in sync:
 
 The index lags the data by some small window. The discipline of incremental indexing is keeping that window short and bounded.
 
+The three hooks + the one-time backfill in one picture:
+
+```
+   data (entries.text)                    index (entry_embeddings)
+   ──────────────────────                 ──────────────────────────
+                       │
+                       ▼ INSERT (new entry created)
+                       │
+                       ▼  hook 1: scheduleEmbed(entry.id)
+                       │  (fired from database.ts:writeEntry)
+                       │
+                       │           idle pass picks up:
+                       │             embed(text) → vec
+                       │             INSERT entry_embeddings(entry.id, vec)
+                       │
+                       ▼ UPDATE (text changed)
+                       │
+                       ▼  hook 2: mark embedding_stale_at = NOW()
+                       │  (in the SAME tx as the text update)
+                       │
+                       │           idle pass picks up:
+                       │             SELECT * WHERE
+                       │               embedding_stale_at > embedded_at
+                       │             re-embed; UPDATE entry_embeddings
+                       │
+                       ▼ DELETE (soft delete cascades)
+                       │
+                       ▼  hook 3: UPDATE entry_embeddings
+                       │            SET deleted_at = NOW()
+                       │            WHERE entry_id = ?
+                       │
+                       │           retrieval queries always include
+                       │             WHERE deleted_at IS NULL
+
+   one-time backfill (first launch after feature ships):
+                       │
+                       ▼  processEmbedRefresh()
+                       │    walks every entries row that lacks a
+                       │    corresponding entry_embeddings row;
+                       │    queues each for embedding.
+                       │
+                       ▼  after first run completes:
+                       │    backfill never runs again — incremental
+                       │    hooks handle every subsequent change.
+```
+
+The four sub-sections below trace the three lifecycle operations, why nightly rebuild fails for editable corpora, the one-time backfill exception, and three common failure modes.
+
 ### Three operations the index has to handle
 
 - **Insert** — new entry created. Embed the text, store the vector.
@@ -47,6 +93,34 @@ The index lags the data by some small window. The discipline of incremental inde
 - **Delete** — entry soft-deleted. Mark `deleted_at` on the embedding row; retrieval queries filter it out.
 
 If you're coming from frontend, this is the same shape as React Query's `invalidateQueries` + `refetch` lifecycle, or a database trigger that updates a materialised view on insert/update/delete. The index is a "view" of the data; the operations keep them in sync.
+
+The three operations and their hooks in code-flow form:
+
+```
+   operation        write site                     index hook
+   ─────────        ────────────────────────       ────────────────────────────
+   INSERT           database.ts:writeEntry()       scheduleEmbed(entry.id)
+                                                   → idle pass embeds + inserts
+                                                     entry_embeddings row
+   UPDATE           database.ts:writeEntry()        UPDATE entries
+   (text changed)   (same call path)                  SET ...text = ?,
+                                                          updated_at = NOW(),
+                                                          embedding_stale_at = NOW()
+                                                   → idle pass detects stale,
+                                                     re-embeds, UPDATE
+                                                     entry_embeddings.vec
+   DELETE           database.ts:softDeleteEntry()  cascades:
+                                                   UPDATE entry_embeddings
+                                                     SET deleted_at = NOW()
+                                                     WHERE entry_id = ?
+                                                   retrieval filters deleted_at
+                                                     IS NULL
+
+   the three hooks live in database.ts where the writes already happen.
+   miss any one and that operation's entries fall out of retrieval silently.
+```
+
+Three lifecycle paths, three named hooks in `database.ts` — same shape as `scheduleClassify` and `schedulePush`.
 
 ### Why "rebuild nightly" doesn't work for editable corpora
 
@@ -59,9 +133,72 @@ For loopd none of these hold: writes are frequent (autosave on keystroke), stale
 
 The practical consequence: every incremental update is much cheaper than the equivalent share of a full rebuild. 1 entry changed = 1 embed call. Full rebuild = 365 embed calls. The win compounds as the corpus grows.
 
+The cost of nightly rebuild vs incremental at three scales:
+
+```
+   scale          nightly rebuild cost              incremental cost
+   ───────────    ─────────────────────             ─────────────────
+   365 entries    365 embed calls × 1 night          ~5 embed calls/day
+   (loopd today)  = ~$0.005/year                     (only what changed)
+                   index up to 24h stale              = ~$0.0005/year
+                                                       index <1min stale
+   
+   50K entries    50K embed calls × 1 night          ~500 embed calls/day
+   (medium SaaS)  = ~$0.50/year                       = ~$0.005/year
+                   index up to 24h stale              index <1min stale
+   
+   1M entries     1M embed calls × 1 night           ~10K embed calls/day
+   (large)        = ~$10/year (small) /                = ~$0.10/year
+                   ~$25/year (large)                  index <1min stale
+                   index up to 24h stale              every day, instead of
+                                                       once per night
+
+   incremental wins on freshness AND cost,
+   the cost gap grows with corpus size.
+```
+
+Nightly rebuild loses on every dimension once the corpus is editable.
+
 ### Backfill — the one-time exception
 
 When you first ship embeddings to a codebase that already has data, you need a one-time backfill: embed all existing entries. After that, incremental indexing takes over. Backfill is the only non-incremental pass that ever runs in a well-designed system. In loopd, the backfill happens on first launch after Phase 2A ships: `processEmbedRefresh()` walks every `entries` row that lacks a corresponding `entry_embeddings` row and creates one.
+
+The first-launch backfill timeline:
+
+```
+   first launch after Phase 2A ships
+              │
+              ▼  app/_layout.tsx triggers processEmbedRefresh()
+              │  on cold start (one-time, gated by a SecureStore flag)
+              ▼
+   ┌───────────────────────────────────────────────────────┐
+   │ SELECT id, text FROM entries                            │
+   │  WHERE deleted_at IS NULL                               │
+   │    AND id NOT IN (                                       │
+   │      SELECT entry_id FROM entry_embeddings              │
+   │    )                                                     │
+   └─────────────────────┬───────────────────────────────────┘
+                         │  365 rows returned (everything pre-Phase 2A)
+                         ▼
+   ┌───────────────────────────────────────────────────────┐
+   │ for each row (rate-limited to MAX_CONCURRENT = 3):       │
+   │   vec = await embed(row.text)                           │
+   │   INSERT entry_embeddings(entry_id, vec, embedded_at)   │
+   │ → ~120 seconds total (365 calls / 3 parallel / ~1s ea.) │
+   └─────────────────────┬───────────────────────────────────┘
+                         │
+                         ▼
+   set SecureStore flag: embed_backfill_done = true
+   future cold starts: skip processEmbedRefresh entirely
+                         │
+                         ▼
+   from now on, incremental hooks handle EVERY change:
+     new entry → hook 1 fires
+     edit       → hook 2 marks stale, idle re-embeds
+     delete     → hook 3 cascades soft-delete
+```
+
+Backfill is the only non-incremental pass that ever runs — by design.
 
 ### Where it goes wrong
 
@@ -72,6 +209,32 @@ Three failure modes recur:
 2. **Backfill amnesia** — first launch after embedding ships, the backfill takes time. Users start searching before backfill finishes and get empty results. Fix: surface backfill progress in a banner, or block search behind "indexing complete."
 
 3. **Cost spike on bulk operations** — a sync-pull from cloud brings 50 entries down at once. Embedding 50 entries serially on the network would block for a long time. Fix: queue + batch (re-use existing `MAX_CONCURRENT=3` cap from `expand.ts`).
+
+The three failure modes with examples and fixes:
+
+```
+   failure mode             example                              fix
+   ─────────────────        ──────────────────────────────       ──────────────────
+   drift on missed          firstPull() inserts 50 entries        idle pass walks
+   writes                   from cloud during onboarding;         entries WHERE NO
+                            none triggered scheduleEmbed;         corresponding
+                            those 50 entries never get             embedding row exists
+                            embedded                              (not just stale ones)
+   
+   backfill amnesia         first cold start after Phase 2A;      surface "indexing
+                            user types search query before        N of 365" banner;
+                            processEmbedRefresh finishes;         OR block search
+                            empty results frustrate user          behind "indexing
+                                                                   complete" gate
+   
+   cost spike on bulk       firstPull brings 50 entries down      reuse expand.ts's
+   operations               at once; embedding 50 serially          MAX_CONCURRENT=3
+                            on the network = ~50 seconds          cap; rate-limit
+                            of network thrash                     embed calls per
+                                                                   batch
+```
+
+All three fixes live in the idle pass — it's the safety net that catches what the inline hooks miss.
 
 ### This is what people mean by "the index follows the data, not the schedule"
 
@@ -337,3 +500,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced bookstore-evening-reshelving analogy with Vercel ISR, Algolia partialUpdateObject, Postgres B-tree incremental updates).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: dropped Vercel ISR + Algolia partialUpdateObject (level-3/5 product anchors) from Why care Move 1; led with Postgres B-tree index on `INSERT`/`UPDATE`/`DELETE` (level-4 industry primitive). Added Move 1 mnemonic diagram (three hooks + backfill in one picture) + 4 Move 2 sub-section diagrams: three-operations write-site-to-index-hook table, nightly-vs-incremental cost at three scales, first-launch backfill timeline, three failure modes with examples. Total: 5 new diagrams.

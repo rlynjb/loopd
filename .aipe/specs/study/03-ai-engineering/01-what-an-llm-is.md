@@ -35,17 +35,124 @@ Tokens in, tokens out — every appearance of memory is code on the outside asse
 
 AWS Lambda's invocation model is the same shape: a request arrives, the handler runs, a response leaves, and the function gets no guaranteed memory of the previous invocation. Each call is independent — what looks like "session" from the outside is the caller assembling state and re-passing it on every request. A language model is the same: stateless input → stateless output, with the smarts baked into the model weights rather than the conversation. The only thing that varies is whose code you're invoking.
 
+The shape in one picture:
+
+```
+   single API call (stateless)
+   ────────────────────────────────────────────
+
+   tokens in:                              tokens out:
+   "The capital of France is "             "Paris."
+            │                                  ▲
+            ▼                                  │
+   ┌──────────────────────────────────────────────┐
+   │                LLM                            │
+   │     next-token predictor                      │
+   │     no memory between calls                   │
+   │     no I/O, no tools, no clock                │
+   └──────────────────────────────────────────────┘
+
+   second call two seconds later:
+   "What's the population of Paris?"
+            │
+            ▼
+   no memory of the first call.
+   the only "history" is what your code put back
+   into the next `messages` array.
+```
+
+The three sub-sections below trace the prediction loop, what the model is *not*, and why the stateless contract makes every AI surface in this codebase debuggable.
+
 ### The mechanic — next-token prediction in a loop
 
 The model accepts a sequence of tokens (your "prompt") and outputs a probability distribution over its vocabulary. A sampler picks one token (greedy, top-k, top-p, temperature — knobs that shape randomness). That token gets appended to the input; the loop runs again. The output ends when a stop token appears or the `max_tokens` budget is exhausted. If you're coming from frontend, this is the same shape as a pure reducer in a loop — `state = reduce(state, action)` where the action is "predict the next token" and the state is the growing prompt. Concrete consequence: a call to `claude-sonnet-4-6` with `"The capital of France is "` produces, roughly: P("Paris") = 0.92, P("Lyon") = 0.04, P("the") = 0.02, …; the sampler picks "Paris"; the loop appends it; the next iteration sees `"The capital of France is Paris"` and samples again, producing perhaps ".", which is a stop. Total: 1 round-trip, 1 returned string. Boundary: this is the algorithm regardless of model size or vendor — Claude, GPT, Llama, Gemini all do the same loop. The differences are in the training data, parameter count, and sampling defaults.
+
+Walking one prediction step:
+
+```
+   prompt = "The capital of France is "
+                       │
+                       ▼  feed into model
+   ┌──────────────────────────────────────────┐
+   │ output: probability over vocabulary       │
+   │   P("Paris") = 0.92                       │
+   │   P("Lyon")  = 0.04                       │
+   │   P("the")   = 0.02                       │
+   │   ...                                     │
+   └─────────────────┬───────────────────────┘
+                     │  sampler picks one
+                     ▼  (greedy / top-k / top-p / temperature)
+                  "Paris"
+                     │  append to prompt
+                     ▼
+   prompt = "The capital of France is Paris"
+                     │  loop runs again
+                     ▼
+   next sample: "." → stop token
+                     │
+                     ▼
+   return: "Paris."   (one round-trip from the caller's view)
+```
+
+The loop is pure `state = reduce(state, action)` — a reducer the reader has written for `useReducer` callbacks, applied to text instead of UI state.
 
 ### What the model is not — no memory, no senses, no clock
 
 Between calls, the model holds zero state. There is no "session" the server remembers. There is no clock the model can read; the date is whatever the prompt says it is. There is no internet access unless the codebase wraps the call with a tool-calling loop ([06-tool-calling](./06-tool-calling.md)). Think of it like calling a stateless backend handler — `(req) => resp` — where the handler has no database connection of its own; if you want it to "know" something, you put it in the request. Concrete consequence: this codebase's `summarize(date)` doesn't say "give me a summary for today" — it says "given the following journal text, produce JSON with these fields:" and pastes today's text into the prompt. The model has no way to access yesterday's text unless yesterday's text is in the prompt. If you call `summarize` twice in a row, the second call has no memory of the first — every call is its own universe. Boundary: features that look like memory (Claude "Projects," ChatGPT "Memory") are server-side context injection, not in-model state.
 
+What the model does NOT have, and what the caller has to provide instead:
+
+```
+   the model does NOT have:
+   ────────────────────────
+   ✗ memory between calls       → there is no "session" the server keeps
+   ✗ a clock                     → the date is whatever the prompt says
+   ✗ internet access             → unless wrapped in a tool-calling loop
+   ✗ files / database            → unless the prompt embeds the bytes
+
+   so summarize(date) in this codebase says:
+   ┌────────────────────────────────────────────────────────┐
+   │ "Given the following journal text, produce JSON:"        │
+   │                                                          │
+   │ "<entries.text for 2026-05-10>"   ◄── pasted by caller   │
+   │                                                          │
+   │ "Output schema: { clipOrder, filter, ... }"               │
+   └────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+   second call has no memory of the first.
+   every call is its own universe.
+```
+
+The caller assembles whatever state the call needs; the model receives a self-contained prompt every time.
+
 ### Why this framing matters — debuggability
 
 The stateless contract is the reason AI surfaces in this codebase are tractable. When `caption.ts` returns a wrong variant, you can grab the exact prompt that was sent, paste it into the API console, and reproduce the failure deterministically (modulo sampling randomness, which is controlled by `temperature`). If the model held hidden state, every bug would depend on call history — irreproducible, untestable. If you've debugged a stateful service with hidden session state, you know how much harder it is than debugging a pure function. Concrete consequence: when a user reports "the AI gave a weird caption today," the codebase can log the exact prompt that produced it, re-run the call against the same model + same temperature, and either reproduce the bug or prove the call is now correct. Boundary: prompt caching is a server-side optimisation that doesn't change the contract — same prompt, same output (within sampling). Caching is below the API; the contract above it stays pure.
+
+Debugging a stateful service vs a stateless call:
+
+```
+       Stateful service                             Stateless function
+   ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
+   │ bug report: "weird caption today" │    │ bug report: "weird caption today" │
+   │     │                              │    │     │                              │
+   │     ▼                              │    │     ▼                              │
+   │ can I reproduce? maybe — depends   │    │ log the exact prompt that         │
+   │   on the server's hidden state at  │    │   produced it                     │
+   │   the time                          │    │     │                              │
+   │     │                              │    │     ▼                              │
+   │     ▼                              │    │ paste it into the API console     │
+   │ test fixture has to capture the    │    │     │                              │
+   │   whole server-side state machine  │    │     ▼                              │
+   │     │                              │    │ reproduce deterministically       │
+   │     ▼                              │    │   (modulo temperature randomness) │
+   │ debug across call history;         │    │                                   │
+   │   race conditions in play          │    │ one prompt + one model + one temp │
+   └──────────────────────────────────┘    └──────────────────────────────────┘
+```
+
+Stateless contract = single-file repro every time. That's the load-bearing reason this codebase doesn't treat the model as an agent.
 
 This is what people mean by "treat the model as a pure function." Once you accept that contract, every AI feature in your codebase becomes a problem of "build the right prompt and parse the response" rather than "negotiate state with a service." Every framework that has ever tried to make LLMs feel stateful (LangChain memory modules, agent frameworks with "tools that persist") is just code on the outside of the call assembling the next prompt. The model itself is always pure. The full picture is below.
 
@@ -350,3 +457,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced conference-translator + vending-machine analogies with the Anthropic Console Playground's per-session-no-memory behaviour and AWS Lambda's invocation model). Why care WC1 was missed by the original triage; included in this pass.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-2/4 — Anthropic Console + curl + AWS Lambda invocation model; the ChatGPT reference in WC1 serves as a contrast example, not a primary anchor). Added Move 1 mnemonic diagram (stateless tokens-in-tokens-out shape) + 3 Move 2 sub-section diagrams: prediction-loop trace, what-the-model-isn't field list + summarize() prompt example, stateful-vs-stateless debug-flow side-by-side. Total: 4 new diagrams.

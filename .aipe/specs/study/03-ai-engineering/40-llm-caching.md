@@ -35,6 +35,53 @@ The semantic cache saves all the cost on hits; the prompt cache saves 90% on pre
 
 The two caches operate at different layers and answer different questions.
 
+The two caches and their interaction in one picture:
+
+```
+   incoming call:                  chain(input)
+                       │
+                       ▼  check #1: semantic cache (app-side)
+                       │
+   ┌────────────────────────────────────────────────────┐
+   │ Layer 1: semantic cache (your DB)                    │
+   │   key:   hash(input + chain_version)                 │
+   │   value: cached output (full markdown / full JSON)   │
+   │                                                       │
+   │   on HIT → return cached, skip model entirely          │
+   │             cost: 0 dollars, ~50ms                     │
+   │   on MISS → fall through to layer 2                    │
+   └────────────────────┬───────────────────────────────┘
+                        │  miss
+                        ▼
+                       check #2: prompt cache (provider-side)
+                       │
+   ┌────────────────────────────────────────────────────┐
+   │ Layer 2: prompt cache (Anthropic / OpenAI side)      │
+   │   provider stores the KV-cache for stable prefixes    │
+   │   (your SYSTEM_PROMPT marked with cache_control)      │
+   │                                                       │
+   │   on HIT → 10% of normal input-token cost for the     │
+   │             cached portion; output still full price    │
+   │             cost: ~$0.001-0.005, ~2-5s                 │
+   │   on MISS → full input + output cost                   │
+   │             cost: ~$0.01-0.03, ~2-5s                   │
+   └────────────────────┬───────────────────────────────┘
+                        │
+                        ▼
+                       save output to semantic cache
+                       (if the chain is semantic-cache-eligible)
+                       │
+                       ▼
+                       return output to caller
+
+   the two save different things:
+     semantic cache → ALL the cost on identical inputs
+     prompt cache   → 90% of input cost on identical prefixes
+                       (still pays output cost every time)
+```
+
+The four sub-sections below trace each layer, how they compose, and where prompt caching's threshold makes it silently no-op.
+
 ### Prompt caching (provider-side)
 
 Models compute attention over the input sequence token-by-token. The transformer's intermediate "KV cache" (key-value attention state) at each layer is expensive to compute the first time, cheap to reuse if you replay the same prefix.
@@ -45,11 +92,92 @@ For loopd: every chain has a static SYSTEM_PROMPT (~100-300 tokens). Wrapping it
 
 If you're coming from frontend, this is similar to a CDN cache for static assets — the static system prompt is your asset; the cache pays for storage; you get a discount on reads.
 
+Anthropic's prompt-cache markup, with what changes per call:
+
+```
+   first call (cache creation):
+   client.messages.create({
+     model: 'claude-sonnet-4-6',
+     system: [{
+       type: 'text',
+       text: LONG_SYSTEM_PROMPT,           ◄── ~2000 tokens
+       cache_control: { type: 'ephemeral' } ◄── mark as cacheable
+     }],
+     messages: [{ role: 'user', content: input }]
+   });
+   
+   response.usage = {
+     cache_creation_input_tokens: 2000,     ◄── paid full + 25% premium
+     cache_read_input_tokens: 0,             ◄── cache didn't exist yet
+     input_tokens: 50,                       ◄── the dynamic user input
+     output_tokens: 200
+   };
+   
+   subsequent call (cache hit):
+   (same call shape, same SYSTEM_PROMPT)
+   
+   response.usage = {
+     cache_creation_input_tokens: 0,
+     cache_read_input_tokens: 2000,          ◄── 90% discount on cached
+     input_tokens: 50,                       ◄── dynamic part full price
+     output_tokens: 200
+   };
+   
+   cache_read_input_tokens billed at ~10% of normal input rate.
+   90% saving on the 2000-token prefix, every call after the first.
+```
+
+The 90% discount compounds — once you're past the cache-creation premium, every call is mostly free on the input side.
+
 ### Semantic caching (application-side)
 
 For chains whose output is deterministic given the input (or where re-running gives slightly different output but the user wants the same one), cache `(input → output)` in your own DB. On second call with the same input, skip the model entirely.
 
 For loopd: `interpret(entry)` returns markdown the user reads. If they tap "interpret" on an unchanged entry twice, today you call the model twice — costing $0.01-0.03 per call. A semantic cache stores the markdown keyed by `(entry.text, entry.updated_at, chain_version)`. On second call with the same key, return cached. Free, instant.
+
+The `interpret_cache` table shape, with hit/miss/invalidate flow:
+
+```
+   interpret_cache table:
+   ┌──────────┬──────────────────┬───────────────────────────┬──────────────┐
+   │ entry_id │ entry_text_hash  │ markdown                  │ chain_version │
+   ├──────────┼──────────────────┼───────────────────────────┼──────────────┤
+   │ e-12     │ 'abc123...'      │ '## Today\n\nI worked...'  │ '2.1.0'      │
+   │ e-45     │ 'def789...'      │ '## Patterns\n\nThe...'     │ '2.1.0'      │
+   └──────────┴──────────────────┴───────────────────────────┴──────────────┘
+
+   user taps interpret on entry e-12:
+     ▼
+   compute hash(entry.text) = 'abc123...'
+     ▼
+   SELECT markdown FROM interpret_cache
+     WHERE entry_id = 'e-12'
+       AND entry_text_hash = 'abc123...'
+       AND chain_version   = '2.1.0';
+     ▼
+   ┌────────────────────────────────────────┐
+   │ HIT → return cached markdown            │
+   │   cost: 0, latency: ~50ms                │
+   │   no provider call                        │
+   ├────────────────────────────────────────┤
+   │ MISS → run interpret(entry.text)         │
+   │   cost: ~$0.005, latency: ~3-5s          │
+   │   INSERT into interpret_cache             │
+   └────────────────────────────────────────┘
+
+   invalidation:
+     user edits entry.text → hash changes
+       → next interpret() call: hash mismatch → MISS → re-compute
+       → old row stays until cleanup (cheap; rare)
+   
+   chain version bump (prompt change):
+     deploy with chain_version = '2.2.0'
+       → every entry's old cache row mismatches on chain_version
+       → next interpret() call → MISS → fresh markdown with new prompt
+       → old rows can be lazily evicted
+```
+
+The hash-on-input strategy makes invalidation free — the user edits text, the hash changes, the next call misses naturally.
 
 ### The two layers compose
 
@@ -80,6 +208,29 @@ Helps when:
 - System prompts are stable across calls (loopd: yes, every chain).
 - System prompts are long enough to matter — Anthropic's minimum cacheable prefix is ~1024 tokens for Sonnet 4.6, ~2048 for Haiku. Below the threshold, caching is silently skipped.
 - Volume is high enough to amortize the (small) cache-creation premium on the first call.
+
+The cacheable-prefix threshold per loopd chain:
+
+```
+   chain         current SYSTEM_PROMPT length    cacheable (Sonnet 4.6)?
+   ──────────    ─────────────────────────       ───────────────────────
+   summarize     ~1500 tokens                     YES (above 1024)
+   caption       ~600 tokens                       NO  (below 1024;
+                                                    silently skipped today)
+   classify      ~150 tokens                       NO  (below 1024)
+   expand        ~1200 tokens                      YES (above 1024)
+   interpret     ~2200 tokens                      YES (above 1024)
+
+   below-threshold rows: the cache_control marker is accepted
+   but silently has no effect — no cache_creation tokens, no
+   cache_read tokens, no discount.
+   
+   audit cost: 5 minutes per chain to count tokens via tiktoken.
+   the silent-skip is the trap — you THINK you're caching but
+   you aren't, until you check the response.usage fields.
+```
+
+Audit the prompt length before claiming the cache works; the threshold is the trap.
 
 Hurts when:
 - System prompts change frequently (rotation prompts, dynamic context). Every change invalidates the cache.
@@ -360,3 +511,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced coffee-shop-two-savings analogy with the Cloudflare edge cache + React Query cache split, plus the Anthropic Console prompt-cache stats panel).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (Why care + How it works Move 1 already at level-3/4 — Cloudflare edge cache + React Query cache + Anthropic Console are engineering surfaces, acceptable). Added Move 1 mnemonic diagram (two-layer cache flow: semantic-first then prompt-cache fallthrough; cost/latency per outcome) + 3 new Move 2 sub-section diagrams: Anthropic cache_control markup with usage-field changes between first vs subsequent calls, interpret_cache table shape with hit/miss/invalidate flow, prompt length threshold per chain showing which silently skip. Sub-section 3 already had a code-flow diagram. Total: 4 new diagrams.

@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-A bakery puts ten pastries in the window each morning and counts which ones get sold. By month's end the owner concludes the four loaves on the bottom shelf are unpopular and stops baking them. A customer overhears and says "I never even noticed those — they're at knee height; I was looking at the counter." Half the "unpopular" loaves were never seen; the rest were seen by people who already had bread at home or were in a rush or planned to come back tomorrow. The pretzel count is real; the unpopular-loaf count is mostly the absence of evidence, not evidence of absence.
+You're building a related-content rail in your React app — 10 cards rendered, each with an `onClick` handler that logs to analytics. Some users tap; most don't. You'd like to use that data as a quality signal: "this rail is showing relevant content because users tap the cards." But here's the thing: a user looking at 10 cards probably read only the top 3-4 before deciding; the bottom 6 didn't get a "no" vote — they got no vote at all. Treating untapped as "rejected" is the same mistake as treating a 404 response body as the user's stated preference: absence of evidence is not evidence of absence.
 
 The implicit question is "what does it mean when the user did nothing?" The "no-click is not a negative label" caveat is the answer for any system using implicit interaction as relevance signal — inaction has many causes, only one of which is "I judged it irrelevant." Treating absence as negative creates a structural 90/10 class imbalance, bakes in your current presentation policy, and confuses missing data with disagreement. The mitigation ladder is four rungs: precision-only (eval on tapped items), pair-comparison from clicks (A > B, A > C, nothing about B vs C), explicit feedback affordances ("is this helpful?"), and counterfactual propensity-scored evaluation.
 
@@ -37,11 +35,66 @@ Implicit feedback is signal AND noise — inaction has many causes, relevance is
 
 The mental model people start with: "if a user clicks/taps, they liked it; if they don't, they didn't." This is wrong in three correlated ways.
 
+The naive interpretation vs the honest one:
+
+```
+   user sees rail with 10 cards; taps card C; closes screen
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+   Naive interpretation:        Honest interpretation:
+   ┌─────────────────────┐    ┌────────────────────────────────┐
+   │ card A: REJECTED     │    │ card A: maybe unseen, maybe    │
+   │ card B: REJECTED     │    │   seen-and-deferred, maybe     │
+   │ card C: ACCEPTED ✓   │    │   relevant-but-not-this-task    │
+   │ card D: REJECTED     │    │ card B: same                    │
+   │ card E: REJECTED     │    │ card C: SEEN + chosen ✓        │
+   │ card F: REJECTED     │    │ card D: same as A,B            │
+   │ card G: REJECTED     │    │ ...                             │
+   │ card H: REJECTED     │    │ card J: probably never seen     │
+   │ card I: REJECTED     │    │   (bottom of list, user        │
+   │ card J: REJECTED     │    │    didn't scroll)               │
+   │ 90/10 imbalance      │    │ ONE positive label.             │
+   │ trained as labels    │    │ NINE unknown labels.            │
+   └─────────────────────┘    └────────────────────────────────┘
+
+   class imbalance the naive view creates: 90% "negative"
+   reality: at most ~30% are "seen and didn't tap"; rest are
+            "never seen" or "seen but had reasons unrelated to
+            relevance"
+```
+
+The four sub-sections below trace the three reasons no-click is bad signal (seen-vs-not-seen, tap-cost, class imbalance) and the four-rung mitigation ladder.
+
 ### Reason 1: Users don't see what they don't see
 
 A user looking at a list of 10 related entries might tap one — but they probably read only the top 3-4 before deciding. The bottom 6 didn't get a "no" vote; they got no vote at all. Treating those as negatives is treating "didn't scroll that far" as "judged irrelevant."
 
 If you're coming from frontend, this is the same shape as treating the bottom of an infinite-scroll feed as "rejected" when it just wasn't viewed.
+
+Position effects on click-through rate:
+
+```
+   card position in list           probability user even SAW the card
+   ────────────────────────       ──────────────────────────────────
+   position 1 (top)                ~95%
+   position 2                      ~85%
+   position 3                      ~70%
+   position 4                      ~50%
+   position 5                      ~35%
+   position 6                      ~25%
+   position 7                      ~15%
+   position 8                      ~10%
+   position 9                       ~7%
+   position 10                      ~5%
+
+   click rates compound: P(tap) ≈ P(seen) × P(tap | seen).
+   the bottom of the list has near-zero click rate because
+   it has near-zero impression rate — not because the
+   content is bad.
+```
+
+The bottom of the list is a black hole for click data — the items aren't being rejected; they aren't being seen.
 
 ### Reason 2: Tapping has costs beyond relevance
 
@@ -52,11 +105,74 @@ Even if a user sees an entry and finds it relevant, they might not tap because:
 
 In loopd specifically: the `[B2A.8]` related-entries rail surfaces entries the user MIGHT want to `#tag` to the current thread. A user might agree "yes that's related" but still not tap because they're in the middle of writing a different entry.
 
+The reasons users don't tap a relevant item:
+
+```
+   reason for not tapping             what the no-click data hides
+   ────────────────────────────       ────────────────────────────────
+   "I see it, I agree it's            relevance signal: positive
+   relevant, but I'm mid-edit          tap signal: negative
+   on a different entry"               (false negative)
+   
+   "I remember this entry; I           relevance signal: positive
+   don't need to re-read it"            (the user already knows it)
+                                        tap signal: negative
+   
+   "I'd tap if it weren't on a         relevance signal: positive
+   subway and the network                tap signal: negative
+   is flaky"                            (network is the cost)
+   
+   "I'm planning to come back           relevance signal: positive
+   to this tomorrow when I have         tap signal: negative
+   more time"                            (timing is the cost)
+   
+   "I genuinely don't think it's        relevance signal: negative
+   related"                              tap signal: negative
+                                          ◄── the only TRUE negative
+```
+
+Most "no-clicks" are false negatives — relevance signal positive, tap signal negative for reasons unrelated to content.
+
 ### Reason 3: Class imbalance is structural
 
 Users tap maybe 5-20% of shown items in any "related" feature. Treating tap-rate as a quality signal means baseline quality is ~10% — but if you treat untapped as negatives, you've created a 90/10 imbalance in your "training labels." Most ML pipelines on that ratio collapse toward the majority class.
 
 The practical consequence: the no-click data is *missing*, not *negative*. You don't know what the user thought.
+
+The 90/10 imbalance and what an ML pipeline does with it:
+
+```
+   100 cards shown over a week
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+   tapped:                     untapped:
+   ~10 cards                   ~90 cards
+                       │
+                       ▼
+   if you train a classifier with
+     positive = 10, negative = 90
+                       │
+                       ▼
+   ┌──────────────────────────────────────────────────────┐
+   │ majority-class baseline: predict "irrelevant" always   │
+   │   → 90% accuracy                                       │
+   │   → 0% recall on the actual positives                  │
+   │   → useless model                                      │
+   │                                                        │
+   │ even with class-weighting tricks, the model learns:    │
+   │   "high-impression positions = sometimes relevant"     │
+   │   "low-impression positions = never relevant"          │
+   │   feedback loop pushes low-impression items further    │
+   │   down → they get even fewer impressions → labelled    │
+   │   even more negative                                    │
+   │                                                        │
+   │ within a year: bottom-of-list items are unrankable;    │
+   │   only top-of-list items have any data.                 │
+   └──────────────────────────────────────────────────────┘
+```
+
+The class imbalance + position-feedback loop is a recipe for a model that's worse than the prompt it started from.
 
 ### What to do instead
 
@@ -71,6 +187,38 @@ Four mitigations, in increasing order of robustness:
 4. **Counterfactual evaluation.** Use propensity scoring to adjust for which items the user actually saw. Beyond loopd's scope at solo.
 
 For loopd's `[B2A.8]`: option 1 (treat no-click as missing) is the right starting point. Option 3 (add "this is related?" yes/no on each item) is a cheap second step that yields high-quality data quickly.
+
+The four-rung mitigation ladder, with cost and signal quality:
+
+```
+   rung   strategy                       cost                  signal quality
+   ───    ───────────────────────────    ──────────────        ────────────────
+   1      treat no-click as MISSING       no dev work; just     precision-only,
+          (eval only on tapped items)     change the eval        no recall claims
+                                          interpretation         (loopd starts here
+                                                                  for [B3.5] + [B2A.8])
+   2      pair-comparison from clicks     small infra change:    ranking signal
+          (tapped item beats all          log per-impression     ("A > B" only;
+          other items shown in same        which items were      not "B is bad")
+          session, but NOT the other       presented
+          items vs each other)
+   3      explicit feedback                UI change: add a      intentional negatives;
+          ("is this helpful? yes/no")     "yes / no" button     clean class balance;
+                                          per item               labels are honest
+   4      counterfactual / propensity      requires logging      eliminates position
+          scoring                          which items were      bias; requires more
+                                           shown + statistical    statistical machinery
+                                           weighting             than solo scale earns
+
+   loopd's plan:
+     [B3.5] retrieval eval:        rung 1 (hand-curated labels,
+                                            never inference)
+     [B2A.8] related-entries rail: rung 1 in v1 + rung 3 in v2
+                                   (add "is this related?" toggle
+                                    once basic precision is real)
+```
+
+Start at rung 1; climb as the signal-vs-cost trade earns it.
 
 ### This is what people mean by "implicit feedback is partial truth"
 
@@ -319,3 +467,6 @@ Answer: hand-curated (query, expected_entry_id) pairs. Pair-comparison from clic
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (bakery-window-bottom-shelf scenario → "what does it mean when the user did nothing" pattern naming → bolded "what depends on getting this right" with `[B3.5]` and `[B2A.8]` eval-design stakes → without/with bullets walking click-as-negative vs explicit-labels → one-line "inaction has many causes, relevance is only one" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from bakery-window-bottom-shelf physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitive (a React rail with 10 cards, each with an `onClick` logger; treating untapped as rejected = treating a 404 body as user preference). Kept How it works Move 1 abstract. Added Move 1 mnemonic diagram (naive vs honest interpretation of one user session) + 4 Move 2 sub-section diagrams: position-effects on click-through table, false-negative-reasons table, class-imbalance feedback-loop walked, four-rung mitigation ladder with cost / signal quality. Total: 5 new diagrams.

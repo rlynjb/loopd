@@ -9,11 +9,9 @@
 
 ---
 
-## Why care
+You've got a workflow that has to do five things — fetch data, transform it, validate it, persist it, send a notification. Option one: a typed sequence of five function calls in your code, each with a known input and output shape, each called in a fixed order. Option two: a `while` loop where each iteration asks the LLM "what should I do next?" and dispatches based on the model's answer — a tool-call here, another LLM round-trip there, until the model emits "done." The first option is what you write when you know the workflow. The second is what people call an "agent" — flexible, but five-to-twenty times slower per task, harder to debug (the LLM decided which step ran, so reproducing a bug means replaying the model's decision tree), and unpredictable in cost.
 
-A factory line runs four stations: punch, stamp, paint, pack. Each station does one operation; each output is typed; the line foreman knows what's leaving every minute and what every minute costs. Now picture replacing the line with one wandering worker who walks up and down with a clipboard, deciding at each step which tool to use next, occasionally turning around to redo the previous station, sometimes asking the punch press a clarifying question. The wandering worker is more flexible. The wandering worker is also five to twenty times slower, twenty times more expensive per unit, and impossible to monitor — when something goes wrong, you have to replay the entire walk to figure out which decision was the bad one.
-
-That wandering worker is what "agent" actually means at runtime: a `while` loop that re-prompts the same model with growing context until it emits a stop token or runs out of budget. The "no agents" stance names which factory this codebase runs — the stationed one, five chains, each with a fixed input and a typed output, no LLM-driven decisions about what to do next.
+That `while` loop is what "agent" actually means at runtime: re-prompt the same model with growing context until it emits a stop token or runs out of budget. The "no agents" stance names which shape this codebase runs — the typed sequence, five chains, each with a fixed input and a typed output, no LLM-driven decisions about what to do next.
 
 **What breaks without it:** cost predictability and the ability to diagnose any AI bug after the fact. The codebase ships five chains (`summarize`, `caption`, `classify`, `expand`, `interpret`) under `src/services/ai/` plus `classify` and `expand` under `src/services/todos/`. Each is one call: `buildContext` pre-fetches deterministically, prompt goes out, `validate.ts` checks the response, `database.ts` persists. The patterns surrounding the LLM (`heuristicClassify` in [05](./05-heuristic-before-llm.md), `scheduleClassify` fire-and-forget in [09](./09-async-classification.md), `validate.ts` gate in [08](./08-validation-gate.md), `user_overridden_type` lock in [10](./10-user-overridden-type-lock.md)) are all *typed application code that runs before or after the model* — never instead, never as a result of the model's decision. Replace any one chain with an agent loop and that chain's cost stops being a known constant ($0.001-$0.01 per call) and starts depending on how many tool-calls the model decided to make; latency stops being 600ms-4s and starts being 5-30s; debugging shifts from "this prompt produced wrong output" to "this prompt led to a tool call that led to a re-prompt that produced wrong output."
 
@@ -27,17 +25,70 @@ With the no-agents stance:
 - `validate.ts` accepts or rejects with one retry on malformed; cost per call is a known constant
 - Every chain is replayable: same prompt + same model + same sampler = same problem, fixable in code
 
-The cheapest agent is no agent — the factory line beats the wandering worker until features actually demand otherwise.
+The cheapest agent is no agent — a typed sequence of single-shot chains beats an LLM-driven dispatcher until features actually demand otherwise.
 
 ---
 
 ## How it works
 
-A factory line where each station does one operation and hands off to the next — punch, stamp, paint, pack. Nobody at the factory tries to be a one-person assembly; each station has a single job and a typed output. Compare this with an agent: one person who walks down the line making decisions about which station to use next, going back and forth, talking to whichever station seems useful. The factory is predictable, debuggable, and cheap. The wandering agent is flexible, slow, and hard to test. The codebase is a factory, deliberately.
+A fixed sequence of typed function calls in your code, each with a known input shape and a known output shape. No `while` loop asking the model what to do next; no tool-call dispatcher; no re-prompt with growing observations. Five chains in `src/services/ai/` each implement the same shape: build a prompt with pre-fetched data, call the LLM once, parse, validate, persist. The patterns that *surround* the model (heuristic-first, fire-and-forget, validate-then-persist, user-override-lock) are typed application code — they run before or after the model, never instead of it, never as a result of its decision.
+
+The two shapes side by side:
+
+```
+       Loopd today (single-shot chains)         Agent (NOT loopd)
+   ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
+   │ focus blur on journal text         │    │ user goal: "what's my mood        │
+   │     │                              │    │             this month?"          │
+   │     ▼                              │    │     │                              │
+   │ scanTodos(text)                    │    │     ▼                              │
+   │   → TodoItem[]                     │    │ while (model_says_continue) {     │
+   │     │                              │    │   prompt + observations            │
+   │     ▼                              │    │     → LLM                          │
+   │ reconcileTodoMetaForEntry(items)   │    │     ▼                              │
+   │     │                              │    │   LLM emits                        │
+   │     ▼  for ambiguous todos:        │    │     { tool: 'query_entries',       │
+   │ scheduleClassify(id, text)         │    │       input: { … } }               │
+   │     │  (async, one LLM call)       │    │     ▼                              │
+   │     ▼                              │    │   orchestrator dispatches tool     │
+   │ updateTodoMeta(id, type, conf)     │    │   observation added to context     │
+   │                                    │    │     │                              │
+   │ no LLM-driven decisions about       │    │     ▼  loop                       │
+   │ what to do next; every step is     │    │ }                                  │
+   │ application code with a known       │    │                                    │
+   │ shape                              │    │ 3–5 round-trips per task;          │
+   │                                    │    │ LLM decides what runs              │
+   └──────────────────────────────────┘    └──────────────────────────────────┘
+```
+
+The four sub-sections below trace the chain inventory, the absent agentic patterns, the patterns that surround the model, and why the no-agents stance is the right call at this scale.
 
 ### Loopd's shape — five single-shot chains, no orchestrator
 
 There are five chain files in the codebase: `summarize`, `caption`, `classify`, `expand`, `interpret`. Each runs in one call: build a prompt with pre-fetched data, call the LLM once, parse, validate, persist. No retry loop except `expand`'s single retry on malformed JSON ([08-validation-gate](./08-validation-gate.md)). No call from one chain into another. No "the chain decides what to do next." Think of it like five separate `useMutation` hooks in React Query — each owns its inputs, its mutation function, its onSuccess. None call into each other. Concrete consequence: when a user types a journal entry and focus-blurs, the codebase runs `scanTodos` → `reconcileTodoMetaForEntry` (which fires `scheduleClassify` for unsure todos) → `pushAll` 5s later. Zero LLM-driven decisions about what to do; every step is deterministic application code. Boundary: this works as long as the user-visible features can be served by predetermined chains. The day a feature needs "the LLM picks which sub-flow runs," the architecture has to grow.
+
+The chain inventory:
+
+```
+   chain         file                          shape
+   ──────────    ──────────────────────        ───────────────────────────
+   summarize     src/services/ai/              build prompt → LLM → JSON
+                 summarize.ts                  → validate → persist
+   caption       src/services/ai/              same shape
+                 caption.ts                    (4 tonal variants)
+   classify      src/services/todos/           same shape
+                 classify.ts                   (1 of 5 thinking modes)
+   expand        src/services/todos/           same shape + 1 retry on
+                 expand.ts                     malformed JSON
+   interpret     src/services/ai/              same shape but markdown
+                 interpret.ts                  out (not JSON)
+
+   no chain calls into another chain.
+   no chain has a loop or a planning step.
+   every chain has a known cost per call.
+```
+
+Five files, one shape each — no orchestration between them.
 
 ### What's NOT here — the orchestrator, the agent loop, the planning step
 
@@ -50,13 +101,91 @@ Notable absences:
 
 If you've worked with LangChain agents or OpenAI Assistants, the absences are precisely what makes those frameworks heavy and the codebase light. Concrete consequence: a new feature request like "let the user ask 'what was my mood last month?' as a free-form question" cannot be implemented in the current architecture without adding either (a) a new typed chain with a fixed input shape, or (b) an agentic shape (orchestrator + tool calls). The codebase forces the question — is this feature worth the agentic shape's cost? — instead of silently sliding into one. Boundary: the codebase's surface area (5 chains, all background or modal-triggered) doesn't need agents. The threshold is "the feature requires the model to choose what data to fetch at runtime"; until then, agents are overhead.
 
+The four absences and what they'd add if present:
+
+```
+   what's MISSING                       what it would add if present
+   ───────────────────────────────      ──────────────────────────────────
+   orchestrator that asks the LLM       a top-level dispatcher reading the
+   "what should I do next?"             model's output and routing to
+                                        sub-flows
+   agent loop                            a while-loop re-prompting with
+   (tool call → observation → re-       observations until the LLM emits
+   prompt)                              a stop signal
+   planning step                         a "produce a plan" prompt followed
+                                        by an "execute the plan" runner
+   multi-turn conversation memory       prompts that grow over a session;
+                                        model-side conversational state
+
+   each absence is a feature this codebase deliberately doesn't have.
+   the day a feature needs one, the architecture has to grow.
+```
+
+The codebase forces the question "is this feature worth the agentic shape's cost?" instead of silently sliding into one.
+
 ### The patterns that surround the LLM — app-code conventions, not orchestration
 
 There ARE patterns around the LLM calls: the heuristic-first gate ([05-heuristic-before-llm](./05-heuristic-before-llm.md)), the async fire-and-forget classifier ([09-async-classification](./09-async-classification.md)), the validation gate ([08-validation-gate](./08-validation-gate.md)), the user-override lock ([10-user-overridden-type-lock](./10-user-overridden-type-lock.md)). None of these are *agent patterns*. They're typed application code that runs before or after the model — never instead of the model, never as a result of the model's decision. Think of it like middleware around a single HTTP handler — the middleware enforces auth, validates input, formats output. The handler still does one job. Concrete consequence: `scheduleClassify(todoId, text)` runs `classifyTodo` (one LLM call), then writes the result via `updateTodoMeta` (one SQL write). The function is 15 lines; there's no loop, no model decision, no "let me retry with a different prompt." Boundary: these conventions scale to ~10 chains comfortably. Beyond that, the duplication starts to bite and an agentic shape becomes attractive.
 
+The middleware shape — app code wraps the model, never delegates control:
+
+```
+   ┌─ Application code (app-code conventions, NOT agentic) ───┐
+   │  heuristicClassify(text)                                   │
+   │     │  if 'todo' → done                                    │
+   │     │  if null → continue                                  │
+   │     ▼                                                       │
+   │  ┌─ The LLM call (one shot) ──────────────────────────┐    │
+   │  │  classifyTodo(text)                                  │    │
+   │  │    build prompt → LLM → response                     │    │
+   │  └────────────────┬──────────────────────────────────┘    │
+   │                   │                                          │
+   │                   ▼                                          │
+   │  validate.ts (typed schema check)                            │
+   │     │  reject malformed loudly                               │
+   │     ▼                                                         │
+   │  user_overridden_type lock check                              │
+   │     │  if true → skip write                                   │
+   │     ▼                                                         │
+   │  database.ts upsert + schedulePush()                          │
+   └───────────────────────────────────────────────────────────┘
+
+   the model runs in the middle; app-code conventions
+   surround it. the model never decides what step runs.
+```
+
+Middleware around a single handler — the handler still does one job.
+
 ### Why no agents is the right call here — predictability + cost
 
 Two reasons agents lose at this codebase's scale: predictability (typed JSON output beats free-form decisions; the codebase persists structured data, not chat transcripts) and cost (each agent loop iteration is another LLM round-trip, ~4× the calls of a one-shot). At single-user solo-dev scale, predictability + cost wins. If you've watched a team ship an "AI assistant" feature that worked great in demos and fell apart in production because the agent made unpredictable tool-call sequences, you know the failure mode. Concrete consequence: every chain in the codebase has a known cost per call (~$0.001 to $0.01), known latency (~600ms to 4s), known output shape (typed JSON). An agentic version would have variable cost (depending on the number of loop iterations), variable latency (5-30s for a complex flow), and unpredictable output (whatever the model decides to produce). Production diagnosis would shift from "this prompt produced wrong output" to "this prompt led to a tool call that led to a re-prompt that produced wrong output." Boundary: the day the codebase ships a feature where the user asks open-ended questions about their journal, agents stop being avoidable. The architecture buys time, not permanent immunity.
+
+The cost ledger by attribute:
+
+```
+   attribute                 single-shot chain          agent loop
+   ────────────────────      ──────────────────         ──────────────────
+   cost per call             $0.001 – $0.01             3–5× the calls
+                             (known constant)            (variable)
+   latency                   600ms – 4s                  5–30s
+                             (known constant)            (variable)
+   output shape              typed JSON                  whatever the
+                                                         model emits
+   debugging surface         one prompt → one output     one prompt →
+                                                         decisions →
+                                                         tool calls →
+                                                         re-prompts →
+                                                         output
+   bug repro                  curl with same prompt +     "the agent got
+                              same model + same temp     confused at
+                              = same problem              iteration 3"
+   right call when           the data the chain needs    the data the
+                             is known in advance         chain needs
+                                                         depends on the
+                                                         input at runtime
+```
+
+The architecture buys time, not permanent immunity — the threshold is "the feature requires the model to choose what data to fetch at runtime."
 
 This is what people mean by "the cheapest agent is no agent." Most AI features that look like they need agents actually need typed chains with thoughtful prompt builders. Agents earn their cost when the user's input space is so open that pre-building the chain is intractable; until then, the codebase's job is to know the data the model needs and fetch it deterministically. Every codebase that has ever shipped an LLM application without agentic shapes has stayed cheaper, more debuggable, and easier to iterate on. The full picture is below.
 
@@ -439,3 +568,6 @@ Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (factory-line vs wandering-worker-with-clipboard scenario → "agent is a while-loop, the codebase is the stationed factory" pattern naming → bolded stakes pivot to five-chain shape + surrounding patterns as middleware (`heuristicClassify`, `scheduleClassify`, `validate.ts`, `user_overridden_type`) → before/after bullets on agentic-expand vs one-shot expand → one-line "cheapest agent is no agent" metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 from the factory-line + wandering-worker physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitives (typed sequence of function calls vs `while` loop dispatching on LLM output). Same swap on Why care Move 5 ("typed sequence beats LLM-driven dispatcher"). Added Move 1 mnemonic diagram (typed-sequence vs while-loop side-by-side) + 4 Move 2 sub-section diagrams: 5-chain inventory table, four-absences with "what they'd add" annotations, middleware-around-handler shape, agent vs single-shot cost ledger by attribute. Total: 5 new diagrams.

@@ -37,6 +37,54 @@ Retry small failures; break on big ones — two patterns for two failure scales.
 
 The two patterns address opposite failure scales.
 
+The two patterns + their composition with the queue, in one picture:
+
+```
+   external call (e.g., classify → Haiku 4.5)
+                       │
+                       ▼  inside queue.enqueue:
+   ┌──────────────────────────────────────────────────────────┐
+   │ Step 1: wait for concurrency slot                          │
+   │   (from 42-rate-limiting-backpressure)                      │
+   └──────────────────────────┬───────────────────────────────┘
+                              ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │ Step 2: check circuit breaker state                         │
+   │                                                             │
+   │   ┌─ CLOSED  ──N=5 consecutive fails──▶  OPEN              │
+   │   │                                       │                 │
+   │   │  ◄── probe succeeds ── HALF-OPEN  ◄──T=120s elapsed     │
+   │   │                            │                            │
+   │   │                            └── probe fails ──▶  OPEN     │
+   │   │                                                          │
+   │   if OPEN → return BreakerOpenError immediately              │
+   │   if CLOSED or HALF-OPEN → continue                          │
+   └──────────────────────────┬───────────────────────────────┘
+                              ▼  state allows the call
+   ┌──────────────────────────────────────────────────────────┐
+   │ Step 3: retry with exponential backoff                      │
+   │                                                             │
+   │   attempt 1: call → fails (5xx / 429 / network)              │
+   │   wait 250ms + jitter                                       │
+   │   attempt 2: call → fails                                    │
+   │   wait 500ms + jitter                                       │
+   │   attempt 3: call → fails                                    │
+   │   wait 1000ms + jitter                                      │
+   │   attempt 4: give up; surface error to caller               │
+   │                                                             │
+   │   on 4xx (auth, bad request) → never retried                │
+   │   on success → return result, reset breaker counter         │
+   │   on exhaust → increment breaker failure counter             │
+   └──────────────────────────────────────────────────────────┘
+
+   the two layers compose:
+     retry handles transient blips (~30s of pain max)
+     breaker handles sustained outages (30 min or more)
+     queue wraps both with concurrency control
+```
+
+The five sub-sections below trace each layer, why they compose, where each goes wrong, and how they sit inside the queue.
+
 ### Retry with exponential backoff — for small, transient failures
 
 A single failed call usually means a transient hiccup: network jitter, provider-side blip, momentary rate-limit overshoot. Retry with backoff handles this:
@@ -98,6 +146,44 @@ Without the circuit breaker, the 30-minute outage scenario means *every chain ca
 - **Retry on the wrong errors** — 4xx errors are usually permanent (bad request, auth failure). Retrying them just wastes calls. Only retry 5xx, 429, and network errors.
 - **Breaker too sensitive** — opening on every transient burst causes false-positive outages. Tune N high enough to require sustained failure.
 - **No probe in half-open** — without a probe, the breaker can't recover; the system stays open forever.
+
+The retry-classification rules and the breaker-tuning failure modes:
+
+```
+   error class       should retry?     why
+   ───────────────   ──────────────    ────────────────────────────
+   network error     YES                transient by definition
+   timeout           YES                transient by definition
+   5xx (server)      YES                provider hiccup
+   429 (rate limit)  YES                with longer backoff
+   400 (bad req)     NO                 client bug; retry won't fix
+   401 (auth)        NO                 credential issue; retry wastes
+                                        attempts before the user sees
+                                        the real error
+   403 (forbidden)   NO                 permissions; retry won't fix
+   404 (not found)   NO                 doesn't exist; retry won't fix
+   
+   breaker tuning:
+   ┌────────────────────────────────────────────────────────────┐
+   │ N too low (e.g., 2):                                         │
+   │   breaker opens on any 2-failure transient burst             │
+   │   → false-positive outages; users see "AI unavailable"       │
+   │   on healthy provider
+   │                                                              │
+   │ N too high (e.g., 50):                                       │
+   │   breaker barely opens; during real outage, 50× failures     │
+   │   hammer the dying provider before breaker engages           │
+   │                                                              │
+   │ N=5 (loopd default):                                         │
+   │   tolerates transient bursts; engages on sustained failure   │
+   │                                                              │
+   │ no probe in half-open:                                       │
+   │   breaker opens; never sees a chance to close                │
+   │   → permanently broken; recovery requires manual reset       │
+   └────────────────────────────────────────────────────────────┘
+```
+
+Retry only on transient errors; tune N to the failure-rate distribution of the actual provider.
 
 ### How it composes with the queue
 
@@ -396,3 +482,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced house-electrical-panel-fuse-and-breaker analogy with Netflix Hystrix circuit breaker, AWS Lambda concurrency limits, react-query retry config, Cloudflare Workers circuit-breaker semantics).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3/4 — Netflix Hystrix + AWS Lambda + react-query + Cloudflare Workers are industry-standard primitives and engineering surfaces, acceptable). Added Move 1 mnemonic diagram (3-step queue-slot + breaker-check + retry-with-backoff flow) + 1 new Move 2 sub-section diagram (retry-classification table + breaker-tuning failure modes). Sub-sections "retry with backoff," "circuit breaker" (state diagrams), "why they compose," and "how it composes with the queue" already had ASCII diagrams. Total: 2 new diagrams.

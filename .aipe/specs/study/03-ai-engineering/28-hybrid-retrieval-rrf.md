@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Two judges at a contestant show each write their own top-10 lineup. Judge A scores in points-out-of-ten; Judge B scores in some star system from -1.5 to +1.5. To make a single combined ranking you can't just sum the scores — they're on different scales — and you can't pick "weight A 60%, B 40%" without an argument over who decided that. The simple, defensible move is to throw the scores away and use only the rank positions: rank 1 from each judge counts the same; rank 5 from each counts the same; a contestant who lands top-3 on both lists rises above one who lands top-1 on only one list.
+You've got two ranking functions that return ordered lists of the same items but in different score scales. Function A returns BM25 scores in the range `[0, ∞]`; Function B returns cosine similarities in `[-1, 1]`. You want one combined ranking. The naive moves all fail: `sum(scoreA, scoreB)` → A always wins because its magnitudes dwarf B's; min-max normalise → fragile when distributions are skewed; hand-weight `0.6 * A + 0.4 * B` → arbitrary and brittle when the next query has a different ratio. The robust move: ignore the scores entirely and use only the rank positions. Position 1 from each ranker counts equally; an item that lands top-3 on both lists rises above one that lands top-1 on only one.
 
 The implicit question is how to combine two lists when their scoring scales aren't comparable. Not normalisation, not learned weights — ranks-only fusion, where a constant smooths how aggressively rank-1 dominates.
 
@@ -28,13 +26,54 @@ With RRF:
 - Doc at rank 1 in both lanes gets ~0.033; doc at rank 1 in one lane only gets ~0.016
 - The fused list elevates docs that show up well in both lanes, not docs that score huge in one
 
-Two judges, two scales, one merged ranking — by position, not by score.
+Two ranking functions, two scales, one merged list — by rank position, not by score.
 
 ---
 
 ## How it works
 
 RRF treats both input rankings the same way: ignore the underlying scores; trust only the rank position.
+
+The fusion walked through one query:
+
+```
+   query: "Spice House review"
+              │
+        ┌─────┴─────┐
+        ▼           ▼
+   Dense lane   Sparse lane
+   (cosine)     (BM25)
+        │           │
+   returns:    returns:
+   [e-12,      [e-7,
+    e-45,       e-12,
+    e-7,        e-45,
+    e-31,       e-99,
+    ...]        ...]
+        │           │
+        └─────┬─────┘
+              ▼
+   RRF_score(doc) = Σ over rankings R: 1 / (60 + rank_R(doc))
+
+   ┌───────┬──────────────┬──────────────┬─────────────────────────┐
+   │ doc   │ dense rank   │ sparse rank  │ RRF score                │
+   ├───────┼──────────────┼──────────────┼─────────────────────────┤
+   │ e-12  │ 1            │ 2            │ 1/61 + 1/62 = 0.0326     │
+   │ e-7   │ 3            │ 1            │ 1/63 + 1/61 = 0.0322     │
+   │ e-45  │ 2            │ 3            │ 1/62 + 1/63 = 0.0320     │
+   │ e-31  │ 4            │ —            │ 1/64        = 0.0156     │
+   │ e-99  │ —            │ 4            │ 1/64        = 0.0156     │
+   └───────┴──────────────┴──────────────┴─────────────────────────┘
+              │
+              ▼  sorted by RRF_score descending:
+   final fused top-k:   e-12, e-7, e-45, e-31, e-99, ...
+
+   docs that landed top-3 in BOTH lanes (e-12, e-7, e-45) beat
+   docs that landed top-1 in only ONE lane (e-31, e-99).
+   that's the RRF effect.
+```
+
+The four sub-sections below trace the formula, why ignoring scores is the load-bearing move, why the smoothing constant is `k=60`, and what RRF deliberately doesn't do.
 
 ### The formula
 
@@ -55,15 +94,92 @@ Dense cosine scores live on [-1, 1]. BM25 scores live on [0, ∞] with magnitude
 
 The practical consequence: throwing away the scores and keeping the ranks is the move that makes the combination *robust* — RRF works the same way regardless of which dense model or which sparse algorithm you use.
 
+The four ways to combine, with their failure modes:
+
+```
+   approach                 problem
+   ────────────────────     ──────────────────────────────────────────
+   raw sum                   BM25 magnitudes (0..∞) drown cosine
+                             (-1..1) → sparse always wins
+   min-max normalise         depends on the min and max in THIS batch;
+                             a single outlier shifts the whole
+                             distribution
+   z-score normalise         requires enough data points to estimate
+                             the mean and stdev; fails on small
+                             batches (< 30 docs)
+   hand-weighted              "0.6 * dense + 0.4 * sparse" is an
+                             argument; tuned on queries you tested,
+                             breaks on the ones you didn't
+   ranks-only (RRF)          throws the scores away; uses ONLY positions
+                             → no normalisation needed, no weights to
+                             tune, works the same for any dense + sparse
+                             combination
+```
+
+RRF is the only approach where the combination is robust against the underlying scoring scales — that's the load-bearing move.
+
 ### Why k = 60?
 
 The k constant smooths out the influence of high ranks. With k=60, rank 1 contributes 1/61 ≈ 0.0164, rank 10 contributes 1/70 ≈ 0.0143, rank 100 contributes 1/160 ≈ 0.0063. Without smoothing (k=0), rank 1 contributes 1.0 and rank 100 contributes 0.01 — a 100× ratio, where one strong ranker can dominate. With k=60, the ratio is ~2.6× — strong ranks help, but neither ranker can completely override the other.
 
 The original paper picked k=60 empirically across many test collections. It rarely needs tuning.
 
+Rank-1 vs rank-100 contributions at three k values:
+
+```
+   k value      rank 1's       rank 100's      rank-1 vs rank-100
+                contribution    contribution    ratio (how much
+                                                rank 1 dominates)
+   ─────        ─────────────   ─────────────   ──────────────────
+   k = 0        1 / 1 = 1.000   1 / 100 = 0.010 100×
+                (no smoothing)                  → rank 1 in one
+                                                  lane crushes
+                                                  everything else
+   
+   k = 60       1 / 61 = 0.0164 1 / 160 = 0.0063 2.6×
+   (default)                                     → strong ranks
+                                                  help but neither
+                                                  lane dominates
+                                                  alone
+   
+   k = 1000     1 / 1001        1 / 1100         1.10×
+   (extreme    = 0.000999      = 0.000909        → almost no
+   smoothing)                                     difference
+                                                  between rank 1
+                                                  and rank 100
+```
+
+k = 60 is the empirical sweet spot — strong-rank-helps without strong-rank-dominates.
+
 ### What RRF doesn't do
 
 RRF doesn't know which ranker is better for which query. If sparse is better for proper-noun queries and dense is better for paraphrase, RRF gives them equal voice on every query. A more sophisticated system would learn to weight per query (learned-to-rank); RRF doesn't, and that's the trade for its simplicity.
+
+What RRF can vs can't do:
+
+```
+   capability                              RRF       learned-to-rank
+   ────────────────────────────────       ─────     ─────────────────
+   combine 2+ rankings with different
+   score scales                            yes        yes
+   work without tuning                     yes        no (requires
+                                                       training data)
+   adapt to query type
+   (sparse-friendly vs dense-friendly)     no         yes
+   require labelled training data          no         yes
+   work the same in zero-shot              yes        no
+   incremental update when adding a
+   new ranker                              one-line   re-train
+                                          add        the model
+   debuggability                           one        gradient
+                                          formula    descent
+
+   RRF's deliberate trade: simpler + zero-tune + lower ceiling than
+   learned-to-rank. for solo loopd scale (one user, dozens of
+   queries/day), simpler wins.
+```
+
+RRF leaves performance on the table in exchange for being the most defensible fusion choice you can ship today.
 
 ### This is what people mean by "ensemble in retrieval"
 
@@ -307,3 +423,6 @@ Answer: `rrfMerge()` in `src/services/ai/hybridRetrieve.ts` (target, not yet cre
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-judges-different-scales scenario, name the how-to-combine-incomparable-scores question, planned hybridRetrieve/rrfMerge stakes, before/after, single-line metaphor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 5 from two-judges-on-a-contestant-show physical-world analogy (banned per v1.31.0/v1.32.0) to level-1 primitive (two ranking functions returning lists with incomparable score scales; ranks-only fusion). Added Move 1 mnemonic diagram (full RRF walked through one query, 5 docs across both lanes with score computation) + 3 Move 2 sub-section diagrams: four combination approaches with failure modes, rank-1-vs-rank-100 contribution at three k values, RRF-vs-learned-to-rank capability comparison. Total: 4 new diagrams.

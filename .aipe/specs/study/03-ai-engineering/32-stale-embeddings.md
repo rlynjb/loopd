@@ -36,6 +36,52 @@ The vector is a fingerprint of one specific text — derived state lies until it
 
 The model is simple: every embedding is a fingerprint of one specific text. If the text changes, the fingerprint is wrong until you re-compute it. The engineering is making sure you don't forget.
 
+The mark-stale + re-embed loop in one picture:
+
+```
+   user types in entries.text editor (autosave on keystroke)
+                       │
+                       ▼  in the SAME transaction as the text write:
+   ┌──────────────────────────────────────────────────────────┐
+   │ writeEntry(entry) {                                        │
+   │   UPDATE entries SET text = ?, updated_at = NOW();         │
+   │   UPDATE entry_embeddings                                  │  ◄── mark
+   │     SET embedding_stale_at = NOW()                          │     stale
+   │     WHERE entry_id = ?;                                     │
+   │ }                                                          │
+   └──────────────────────────┬───────────────────────────────┘
+                              │  immediate; text written,
+                              │  embedding flagged but not yet
+                              │  recomputed
+                              ▼
+   ... user keeps typing, more writes, more mark-stales ...
+                              ▼
+   ... at some later moment (app foreground / idle timer) ...
+                              ▼
+   ┌──────────────────────────────────────────────────────────┐
+   │ processEmbedRefresh() runs periodically:                   │
+   │   SELECT entry_id, text FROM entries e                     │
+   │     JOIN entry_embeddings ee ON e.id = ee.entry_id          │
+   │     WHERE ee.embedding_stale_at IS NOT NULL                 │
+   │     ORDER BY ee.embedding_stale_at ASC                      │
+   │     LIMIT 5;                                                │
+   │                                                            │
+   │   for each stale entry:                                    │
+   │     newVec = await embed(entry.text);                      │
+   │     UPDATE entry_embeddings                                 │
+   │       SET embedding = newVec,                              │
+   │           embedding_stale_at = NULL,                       │
+   │           embedded_at = NOW()                              │
+   │       WHERE entry_id = ?;                                   │
+   │ }                                                          │
+   └──────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+   stale rows clear; retrieval converges on truth within minutes
+```
+
+The four sub-sections below trace the two halves of the loop, the mark-stale-on-write rule, why re-embed runs on idle not on edit, and the three concrete failures when staleness goes unchecked.
+
 ### Two halves: detection and re-embedding
 
 ```
@@ -59,6 +105,36 @@ The single highest-impact rule: *every write that changes embedded text must mar
 
 If you skip mark-stale on even one write path, that path's edits silently drift in retrieval. The fix is to centralise — every entry-write goes through one function, and that function marks stale.
 
+The write paths that need the mark-stale hook:
+
+```
+   write path                                  marks stale?    notes
+   ───────────────────────────────────         ──────────      ──────────────────
+   src/services/database.ts:writeEntry         YES              the single funnel
+                                                                from rule 01;
+                                                                stale-mark goes here
+   src/services/database.ts:upsertEntry        YES              same funnel
+   firstPull from cloud (new entry on this    YES              cloud inserts also
+   device)                                                       need re-embed
+                                                                (text didn't change
+                                                                on this device, but
+                                                                no embedding exists
+                                                                locally yet)
+   sync/conflict.ts: chooseWinner replaces    YES              text changed on
+   local row with cloud row                                     this device → mark
+                                                                stale
+   dev-only migration scripts that mutate     YES (manually)    one-off; either
+   entries.text directly                                        mark stale or run
+                                                                processEmbedRefresh
+                                                                after the migration
+
+   the centralisation rule: every write path goes through
+   database.ts; database.ts marks stale; new write paths
+   inherit the discipline automatically.
+```
+
+The mark-stale rule lives in the single funnel — same place as `schedulePush()` and `updated_at = NOW()`.
+
 ### Re-embed on idle — not on edit
 
 Re-embedding on the keystroke that marked stale is bad — autosave runs on every keystroke; you'd re-embed dozens of times during a single edit session. The right shape is "mark stale immediately, re-embed later when idle." Options for "later":
@@ -69,6 +145,41 @@ Re-embedding on the keystroke that marked stale is bad — autosave runs on ever
 
 The curriculum's `[B2A.4]` picks idle-pass shape. In loopd's existing async-classification pattern (`scheduleClassify`), there's already a model for "fire-and-forget the slow thing, write back when done" — re-embedding fits the same shape.
 
+The three re-embed trigger options compared:
+
+```
+   trigger              latency to fresh     cost                user-visible
+                        embedding             implication         impact
+   ───────────────      ──────────────────    ──────────────      ──────────────
+   on every edit         instant                expensive: re-      keystroke lag
+   (on keystroke)                               embed on every       (~500ms per
+                                                keystroke; ~50      char) → unusable
+                                                embeds per
+                                                typing burst
+   
+   on idle timer        seconds-minutes        cheap: ~1 embed     editor pause
+   (5s after last edit  after typing stops    per edit-session     spawns the
+   in editor)                                                       refresh; user
+                                                                    sees nothing
+   
+   on app foreground    minutes-hours          cheaper: batched     stale until
+   (after cold start +  after most recent     across foreground   next foreground;
+   idle period)         edit                   event                fine for
+                                                                    multi-day
+                                                                    queries
+   
+   on retrieval         per-query latency      worst: adds         user feels every
+   (lazy: re-embed       gain                  embed cost to       query slow;
+   when read)                                  every query that    no batching
+                                                touches a stale     possible
+                                                row
+
+   [B2A.4] picks "on idle timer + on app foreground" together —
+   responsive while editing, catches up after backgrounded sessions.
+```
+
+The idle-pass shape is the same `scheduleClassify` fire-and-forget pattern applied to embedding instead of classification.
+
 ### What "stale" actually corrupts
 
 The retrieval pipeline returns ranked entry IDs based on cosine similarity to the query. If the entry's vector represents *what it used to say*, the ranking is wrong by exactly the amount of drift. Three real cases:
@@ -76,6 +187,36 @@ The retrieval pipeline returns ranked entry IDs based on cosine similarity to th
 1. **Topic added** — entry now mentions "pivot" but vector doesn't reflect it. Query for "pivot" misses it.
 2. **Topic removed** — entry no longer mentions "Spice House" but vector still does. Query for "Spice House" surfaces an entry that no longer talks about it.
 3. **Tone shifted** — entry was negative, user edited it to positive. Query for "good days" still ranks it as a bad-day entry.
+
+The three real failure modes with concrete examples:
+
+```
+   case               example                                what the user sees
+   ────────────       ─────────────────────────────────      ──────────────────────
+   topic added         entry 47 today: edited to add a        search "pivot" →
+                       paragraph about pivoting the product   entry 47 ranks 23
+                       to enterprise customers                (below entries that
+                       embedding: from a week ago, before     never mentioned pivot)
+                       pivot was added
+                       
+   topic removed       entry 12: originally about a meal at   search "Spice House" →
+                       Spice House; user later deleted that   entry 12 still ranks
+                       paragraph because it was off-topic     #1 because vector still
+                       embedding: still has the Spice House   carries the deleted
+                       semantic signal                         topic
+                       
+   tone shifted        entry 22: started as a vent about a    search "good days" →
+                       hard day; user rewrote it that         entry 22 ranks low
+                       evening to focus on what went well      because vector still
+                       embedding: matches the original         carries negative tone
+                       negative tone
+                       
+   in all three cases, retrieval quality degrades silently — no
+   error is raised, no signal is surfaced, the user just sees
+   worse results over time.
+```
+
+The corruption is silent — the user has no signal that staleness is the cause.
 
 ### This is what people mean by "derived state must be invalidated"
 
@@ -326,3 +467,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced library-card-catalog-vs-rewritten-book analogy with React Query DevTools stale invalidation, Next.js revalidatePath, ETag headers, Postgres materialised views).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors at level-3/4 — React Query / Next.js revalidate / ETag / Postgres materialised views are engineering-surface and industry-standard primitives, acceptable). Added Move 1 mnemonic diagram (mark-stale-on-write + idle-pass re-embed loop) + 3 new Move 2 sub-section diagrams: write paths that need the mark-stale hook, three re-embed trigger options compared, three failure modes with concrete entry examples. Sub-section 1 already had a code block. Total: 4 new diagrams.

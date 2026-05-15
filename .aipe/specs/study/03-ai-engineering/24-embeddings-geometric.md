@@ -9,9 +9,7 @@
 
 ---
 
-## Why care
-
-Open the TensorFlow Embedding Projector at `projector.tensorflow.org` and load any prebuilt model. The visualisation shows thousands of words as dots in 3D space; `morning` and `evening` cluster together; `morning` and `antimatter` sit far apart. Pinecone's console shows the same view for any indexed namespace. OpenAI's embeddings documentation page renders a cosine-similarity heatmap on a small text corpus. Drop a query token onto any of these plots and you can see — geometrically — which tokens live near it. Same idea drives YouTube's "videos similar to this one" rail and Spotify's "users who liked X also liked Y."
+You've got a list of strings — journal entries, product descriptions, search queries — and you want to find similar ones. The naive shape: `array.filter(s => s.includes(query))`, which misses paraphrases ("went for a jog" doesn't match `"running"`). Option two: compute an embedding for each string — a fixed-length array of floats like `number[1536]` — and store the vectors. To find similar strings, compute the cosine angle between the query's vector and every stored vector; return the top-k closest. The strings now live in a 1536-dimensional coordinate space; "similar in meaning" becomes "near in space." You've seen this primitive if you've ever called OpenAI's `embeddings.create` endpoint or used `tensorflow.js`'s `universal-sentence-encoder` — text in, `Float32Array` out.
 
 The implicit question is how to make "similar in meaning" mean "near in space." Not a keyword index, not a thesaurus — coordinates assigned by a learned function, so distance becomes the similarity metric.
 
@@ -33,13 +31,65 @@ Meaning becomes coordinates, and similarity becomes distance.
 
 ## How it works
 
-Picture a room. Every English sentence ever spoken gets a tiny dot somewhere in that room. Sentences about *running* cluster in one corner; sentences about *cooking* in another; sentences about *cooking while running* somewhere on the line between them. The room has 1536 dimensions instead of 3, but the intuition is the same — meaning becomes position.
+A function that maps `string` to `number[1536]` via a learned model — same shape as the tokenizer but the output is a float vector of fixed dimension instead of an integer ID sequence. Common meanings cluster (jog-near-run-near-marathon); unrelated meanings stay far apart. The 1536 dimensions are *learned axes* that minimise reconstruction error during training; what each one represents is emergent and mostly uninterpretable — "sportiness" isn't a single dimension, it's a direction in the space.
+
+The function signature with a sample input/output:
+
+```
+   function embed(text: string): number[] {
+     /* learned model: text-embedding-3-small / text-embedding-ada-002
+        / OpenAI's text-embedding-3-large / Cohere v3 / etc. */
+   }
+
+   input:                                      output (length 1536):
+   "went for a jog this morning"               [ 0.012, -0.041, 0.083,
+                                                 0.005, -0.052, 0.117,
+                                                 ...,
+                                                 0.034, -0.009, 0.071 ]
+                                                 (1536 floats, ~-1..+1)
+
+   input:                                      output:
+   "did a 5k run before breakfast"             [ 0.014, -0.039, 0.081,   ◄── nearby
+                                                 0.007, -0.050, 0.119,       coordinates
+                                                 ...,                        (cosine
+                                                 0.031, -0.011, 0.069 ]      similarity
+                                                                              ≈ 0.92)
+
+   input:                                      output:
+   "ate breakfast and ran late to work"        [-0.082, 0.041, -0.013,   ◄── distant
+                                                 0.034, 0.121, -0.047,        ("running
+                                                 ...,                          late"
+                                                -0.005, 0.067, 0.013 ]         is idiom)
+```
+
+The same model embeds queries AND documents through the same function — that's what makes cosine-similarity between a query vector and document vectors meaningful. The five sub-sections below trace the learned compression, the distance metric, the fixed dimension, where the geometry breaks, and the worldview-is-the-model implication.
 
 ### The vector is a learned compression of the input
 
 If you're coming from frontend, you're used to thinking of a string as a sequence of UTF-16 code units. An embedding throws all of that away and replaces it with 1536 floats between roughly -1 and +1. The floats don't have names — there's no "dimension 47 = sportiness". The dimensions are *learned axes* that minimise reconstruction error during training; what each one represents is emergent and mostly uninterpretable.
 
 The practical consequence: two strings that are surface-different but mean similar things (`"went for a jog"` and `"did a 5k run"`) get nearby vectors. Two strings that share words but mean different things (`"I love running my mouth"` vs `"I love running marathons"`) get distant vectors. The model learned that "running my mouth" is an idiom and "running marathons" is exercise — and that lives in the geometry.
+
+Four sample pairs and what the geometry says:
+
+```
+   string A                       string B                       cosine sim
+   ─────────────────────────      ─────────────────────────      ──────────
+   "went for a jog"               "did a 5k run"                 ~0.91  ◄── meaning
+                                                                         similar
+   "wrote in my diary"            "reflected on my day"          ~0.88
+   
+   "I love running marathons"     "I love running my mouth"      ~0.42  ◄── idiom
+                                                                         apart from
+                                                                         exercise
+   "the weather was cold"         "antimatter physics"           ~0.10  ◄── unrelated
+
+   the model's training learned which words co-occur in meaning,
+   not just on the page. surface-similar / meaning-different
+   pairs end up surprisingly far apart.
+```
+
+The learned compression carries semantic structure that keyword matching can't see.
 
 ### Distance is the meaning of "similarity"
 
@@ -51,9 +101,60 @@ Once everything is a vector, similarity becomes a math problem. Three common dis
 
 In React you'd handle "find similar items" with `array.filter(item => keywordMatch(item, query))`. With embeddings, you handle it with `nearestNeighbours(queryVector, allVectors, k=10)` — and the result includes items that don't share a single word with the query.
 
+The three distance functions in code form:
+
+```
+   // cosine similarity — most common for text
+   function cosineSim(a: number[], b: number[]): number {
+     let dot = 0, magA = 0, magB = 0;
+     for (let i = 0; i < a.length; i++) {
+       dot  += a[i] * b[i];
+       magA += a[i] * a[i];
+       magB += b[i] * b[i];
+     }
+     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+     // returns -1 (opposite) to +1 (identical)
+   }
+
+   // dot product — cheapest; magnitude-sensitive
+   function dotProd(a: number[], b: number[]): number {
+     return a.reduce((s, v, i) => s + v * b[i], 0);
+   }
+
+   // euclidean distance — straight-line in 1536-D space
+   function euclidean(a: number[], b: number[]): number {
+     return Math.sqrt(a.reduce((s, v, i) => s + (v - b[i]) ** 2, 0));
+   }
+```
+
+For text, cosine similarity is the default — magnitude doesn't carry meaning, so ignoring it via the normalisation is what you want.
+
 ### The vector has the same dimension every time, for every input
 
 A 5-word query and a 5000-character document both produce a 1536-float vector. The model has learned a fixed-dimensional projection: whatever you give it, you get the same shape back. This is what makes batch operations possible — you can compare two vectors of any-original-length pair using one cosine-similarity call.
+
+Inputs of any length → vectors of the same length:
+
+```
+   input                                          embed output           cost
+   ────────────────────────────────────────       ─────────────────      ────────
+   "running"                                       number[1536]           ~1 token
+                                                                          embed
+   "I went for a 5k run this morning"              number[1536]           ~10 tokens
+                                                                          embed
+   <entire journal entry, 5000 chars>             number[1536]           ~1200 tokens
+                                                                          embed
+   <a 50,000-token document>                       number[1536]           50,000 tokens
+                                                                          embed (capped
+                                                                          at model's
+                                                                          context window)
+
+   the vector dimension is fixed; the cost varies with input length;
+   the COMPARISON cost (cosine) is constant regardless of original
+   input length.
+```
+
+Fixed-dimension output is what makes batched cosine search across millions of vectors a single matrix operation.
 
 ### Where the geometry breaks down
 
@@ -62,6 +163,37 @@ The geometry holds best for "topic similarity." It holds less well for:
 - **Negation** — "I love coffee" and "I don't love coffee" can end up close because their topic vectors are similar.
 - **Numerical reasoning** — "weighs 5kg" and "weighs 50kg" can embed near each other; embeddings don't reason about magnitude.
 - **Cross-language** — different languages occupy different regions of space unless the model was specifically trained multilingually.
+
+The three known weak spots, with example pairs that confuse the geometry:
+
+```
+   weakness         example pair                              what the model sees
+   ─────────        ──────────────────────────────────        ────────────────────
+   negation         "I love coffee"                            same topic (coffee)
+                    "I don't love coffee"                      vectors stay close
+                                                                ◄── retrieval may
+                                                                    surface both
+                                                                    when you want
+                                                                    only one
+   numeric          "the package weighs 5kg"                   same shape; numbers
+                    "the package weighs 50kg"                  don't reason
+                                                                ◄── you cannot
+                                                                    sort by quantity
+                                                                    in vector space
+   cross-language   "running marathons" (English)               separate regions of
+                    "courir des marathons" (French)             space unless model
+                                                                was multilingually
+                                                                trained
+                                                                ◄── pick a model
+                                                                    that explicitly
+                                                                    supports your
+                                                                    language mix
+
+   for these queries, embeddings can't replace a keyword filter
+   or an explicit numeric/structured field.
+```
+
+The geometry is a useful approximation, not a complete substitute for typed queries.
 
 ### This is what people mean by "vector space is the model's worldview"
 
@@ -324,3 +456,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced librarian-arranging-index-cards-on-a-flat-table analogy with TensorFlow Embedding Projector, Pinecone console, OpenAI embeddings docs heatmap, YouTube/Spotify similarity rails). How it works Move 1 left as-is (coordinate-space framing, not a physical-world anchor).
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from whole-product anchors (TF projector / Pinecone / OpenAI docs / YouTube / Spotify) to a level-1 primitive (`array.filter(s => s.includes(query))` vs `embed(s) → number[1536]` + `cosineSim` top-k). Swapped How it works Move 1 from "picture a room" physical-world analogy to `function embed(text): number[1536]` signature. Added Move 1 mnemonic diagram (embed() signature with three sample inputs showing clustering) + 5 Move 2 sub-section diagrams: meaning-similar-pair table, cosine/dot/euclidean code snippets, any-length-input → 1536-vector table, three known weak spots with example pairs. Total: 6 new diagrams.

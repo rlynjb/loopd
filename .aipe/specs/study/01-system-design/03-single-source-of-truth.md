@@ -37,21 +37,112 @@ Prose is the Redux store; every typed table is a selector — derived on read, n
 
 Redux's single store with one root reducer is the same shape. The store is `entries.text` — every drop the user typed, in the order they typed it. The derived selectors are `todos_json`, `todo_meta`, `nutrition`, `thread_mentions` — typed views the UI reads to render lists, counts, and charts. The rule is that the store is the only writable surface, and the selectors recompute from it whenever the underlying text changes. React Query's `queryClient` as a derived cache over server state works the same way: one canonical fetch, many cached projections.
 
+The store-and-selectors shape, applied to a journal entry:
+
+```
+        entries.text (canonical store)
+                │
+                │  scanners + reconcilers at commit boundary
+                ▼
+   ┌────────────┬────────────────┬──────────────┐
+   ▼            ▼                ▼              ▼
+ todos_json   thread_mentions  nutrition      (habits has NO
+   │          rows             rows            scanner — it's a
+   ▼                                           first-class entity)
+ todo_meta
+ (1:1 with each TodoItem)
+```
+
+Every typed table on the right is a *selector* in Redux terms — derived on commit, never written directly. The five sub-sections below trace each layer: the store, the scanner, the reconciler, when they run, and the two documented exceptions.
+
 ### The canonical surface — `entries.text`
 
 The user's keystrokes land in `entries.text`, a TEXT column on the `entries` table. Drops are encoded inline as markers: `[]` for todos, `** food N kcal` for nutrition, `#tag` for thread mentions. If you're coming from frontend, you're used to controlled inputs where state lives in `useState` and the rendered DOM mirrors that state — same idea here, except the React state is the SQLite column and the "DOM" is every derived row that exists downstream. If the user types `[] call mom` at t=0 and the autosave fires at t=1ms, the line is in `entries.text` immediately; nothing else has moved yet. The rule holds as long as there is exactly one writer for any given prose surface — multi-device editing of the same `entries.text` row would need CRDT semantics on the prose itself before the rest of the chain keeps working.
+
+What the user wrote, sitting in one TEXT column with every drop encoded inline:
+
+```
+entries
+┌────────┬───────────┬───────────────────────────────────────────┐
+│ id     │ user_id   │ text                                       │
+├────────┼───────────┼───────────────────────────────────────────┤
+│ e-1    │ user-A    │ "Morning notes\n                          │
+│        │           │  [] call mom\n                            │  ◄── todo marker
+│        │           │  ** banana 90 kcal\n                      │  ◄── nutrition marker
+│        │           │  thinking about #work-q4 reviews"          │  ◄── thread marker
+└────────┴───────────┴───────────────────────────────────────────┘
+```
+
+One column, the user's keystrokes verbatim, with sparse markers embedded in the prose. No derived row exists yet — that work happens later.
 
 ### The scanner — one function per prose-derived feature
 
 A scanner is a pure function over a prose string. `scanTodosFromText(text)` reads `entries.text`, walks every line, and returns an array of `TodoItem` objects. `parseTags(text)` does the same for `#tag`. `scanNutrition(text)` for `** food N kcal`. If you've ever written a custom parser for a React form field — extracting `@mentions` from a comment box, say — you've written this exact thing. The codebase has no parser-combinator library; the scanners are hand-written regex-plus-state-machine functions, ~100–200 lines each, because the marker grammar is sparse enough that a library would add weight without adding correctness. The concrete consequence: if a scanner has a bug, every wrong derived row points back at one named function — there's exactly one place to fix it.
 
+A scanner is a pure `(text) => array` function — same shape as a `.map()` callback the reader has written a hundred times:
+
+```
+   scanTodosFromText("Morning notes\n[] call mom\n[] write spec\n[x] book dentist")
+                                       │
+                                       ▼  walk lines, regex-match '[]' / '[x]'
+                                       │
+   returns: [
+     { id: "t-A", text: "call mom",     done: false, sourceLine: 1 },
+     { id: "t-B", text: "write spec",   done: false, sourceLine: 2 },
+     { id: "t-C", text: "book dentist", done: true,  sourceLine: 3 }
+   ]
+```
+
+Pure function, no side effects, no DB writes — the scanner only *produces* the array. The reconciler in the next sub-section is what merges it into the DB.
+
 ### The reconciler — diff scanner output against existing DB state
 
 A scanner produces an array; the reconciler takes that array and merges it into the DB. `reconcileTodoMetaForEntry(entry_id, items)` is the canonical example: it pulls the existing `todo_meta` rows for this entry, matches each scanner-produced item against them (via two-pass matching — see [04](./04-two-pass-matching.md)), inserts what's new, soft-deletes what's missing, and leaves matching rows alone. Think of it like React's reconciler diffing a new virtual DOM against the previous one to decide what to mount, update, and unmount — except here the "virtual DOM" is the scanner output and the "real DOM" is the SQLite rows. The concrete consequence: when a user deletes the line `[] call mom`, the scanner returns an array without that item, the reconciler diffs the ids, and the orphaned `todo_meta` row gets `deleted_at` stamped — no DELETE TODO code path, no button handler, no event listener. The todo went away because the prose did. Boundary: this fails if a contributor adds a write path that mutates `todo_meta` *without* a prior prose change — that would create a row the next scanner pass thinks is orphaned and soft-deletes immediately.
 
+Walking the diff when the user deletes the `[] call mom` line:
+
+```
+   existing todo_meta rows for entry e-1 (in DB):
+   ┌─────────┬────────────┬────────────────────┐
+   │ todoId  │ type       │ expanded_md         │
+   ├─────────┼────────────┼────────────────────┤
+   │ t-A     │ personal   │ "Mom's birthday..." │
+   │ t-B     │ work       │ "Spec for v2..."    │
+   └─────────┴────────────┴────────────────────┘
+                          │
+                          ▼  reconcileTodoMetaForEntry
+   today's scanner output (after user deleted "call mom" line):
+   ┌─────────┐
+   │ t-B     │   ◄── only t-B survives in the prose
+   └─────────┘
+                          │
+                          ▼  reconciler diffs by todoId
+   result:
+     t-A → orphan        → stamp deleted_at (soft-delete)
+     t-B → still present → leave row untouched (type, expanded_md preserved)
+```
+
+No "delete todo" handler exists in the codebase — the row vanished because the prose did.
+
 ### The commit boundary — when scanners run
 
 Scanners do not run on every keystroke. They run at *commit boundaries* — focus blur on the journal text input, screen leave (navigating away from `journal/[date]`), and a few explicit save events. In React terms, this is like deferring an expensive `useMemo` until a `useEffect` cleanup fires; the cheap path (keystroke → DB) stays cheap, and the expensive path (parse + diff + write) batches up the work. Concrete consequence: while the user is mid-burst typing, `todos_json` is stale by a few hundred milliseconds — but no UI surface reads `todos_json` during keystroke entry; the user is looking at the prose, not at the derived view. When they tab away or close the screen, the catch-up happens in one pass. The boundary breaks down if any UI surface starts reading derived state during the typing burst — at that point either the scanner runs more often or the UI reads from a different source.
+
+Walking what fires when, on a typing-then-blur timeline:
+
+```
+ Time      User action                          Scanner runs?
+   │         │                                     │
+   0ms       types '['                              ✗ keystroke autosave only
+   100ms     types '] call mom'                     ✗ still typing
+   500ms     types '[] write spec'                  ✗
+   1.5s      pauses (still focused on textarea)     ✗ focus not lost
+   2.0s      taps a different field (focus blur)    ✓ scanTodos fires
+   2.5s      taps back into journal, edits          ✗ resumed typing
+   5.0s      navigates away (screen leave)          ✓ scanTodos fires again
+```
+
+Scanners fire on the transitions where typing *stops* — never on the keystrokes themselves. That's how the keystroke path stays single-digit-millisecond cheap.
 
 ### The principled exceptions
 
@@ -61,6 +152,20 @@ Two carve-outs are documented in the spec:
 - **The manual-touch deviation** (see [12](./12-manual-touch-deviation.md)) — `toggleThreadTouchToday` writes a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id`. This is the one published exception to "every derived row points back at prose," scoped to a single function, capped at a budget of 1. The discipline isn't refusing to carve; it's making the carve named, bounded, and visible.
 
 If you're coming from frontend, both exceptions are familiar — they're the same shape as React's escape hatches (`useRef` for non-rendering state, `flushSync` for breaking the batching contract). The framework's discipline survives because each escape is in a named file, the reviewer can see it, and the carve-out itself is documented in `docs/spec.md` alongside the rule.
+
+Mapping every feature back to its source surface — the rule and the exceptions in one view:
+
+```
+   Feature              Source surface                     Prose canonical?
+   ──────────────       ──────────────────────────         ────────────────
+   todos                entries.text '[]' markers          ✓
+   nutrition            entries.text '** food N kcal'      ✓
+   thread_mentions      entries.text '#tag' markers        ✓  (with one carve-out below)
+   habits               user form fields in more/habits    ✗  first-class by design
+   thread touch         tap gesture on dashboard           ✗  documented deviation (1 of 1)
+```
+
+Two carve-outs in five features. Both are named, bounded, and visible in the spec — the rule survives because the exceptions don't hide.
 
 This is what people mean by "one writable surface, every other representation is a cache." Once you accept that constraint, the cost of every new derived feature is fixed — one scanner plus one reconciler — and "edit the line, the row updates" becomes a universal rule rather than a per-feature affordance you have to wire up by hand. The full picture is below.
 
@@ -387,3 +492,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-office-phone-lists + filing-cabinet-photocopies analogies with Redux single store + React Query queryClient as derived cache). Both Move 1s were missed by the original triage agent.
+
+---
+Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already use level-1 primitives: useState + Redux + React Query). Added Move 1 mnemonic diagram (store → derived selectors shape) + 5 Move 2 sub-section diagrams: canonical-surface table shape, scanner pure-function signature, reconciler diff trace, commit-boundary timeline, principled-exceptions feature mapping. Total: 6 new diagrams.
