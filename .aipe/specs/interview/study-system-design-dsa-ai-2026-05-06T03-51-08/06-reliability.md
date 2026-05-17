@@ -1,6 +1,6 @@
 # Chapter 6 — Reliability and error handling
 
-loopd is a single-user, offline-first app. The reliability target is "the user never loses data, even if every external dependency fails." The way the architecture meets that target is **stratified durability**: the device's SQLite is canonical, every write is synchronous to SQLite, and every external system (cloud sync, AI calls, network) is a *best-effort layer above the canonical store*. If the cloud is down, the user keeps using the app; the next push catches up. If the AI is down, compose fails gracefully and the user composes manually. If the user's network is gone for a week, nothing is lost.
+buffr is a single-user, offline-first app. The reliability target is "the user never loses data, even if every external dependency fails." The way the architecture meets that target is **stratified durability**: the device's SQLite is canonical, every write is synchronous to SQLite, and every external system (cloud sync, AI calls, network) is a *best-effort layer above the canonical store*. If the cloud is down, the user keeps using the app; the next push catches up. If the AI is down, compose fails gracefully and the user composes manually. If the user's network is gone for a week, nothing is lost.
 
 The error-handling style is consequently **fail-quiet-and-self-heal**, not fail-loud. Most failures log a warning to the console and let the next operation retry. The exceptions are user-initiated operations where a silent failure would be confusing — those surface an Alert.
 

@@ -318,7 +318,7 @@ Choosing two passes over one pass with a combined predicate isn't really a trade
 
 ### expo-sqlite — hard-delete for prose-bound rows
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db`. The cleanup phase runs `DELETE FROM nutrition WHERE id NOT IN (...usedIds)` — not a soft-delete. The row truly disappears.
+- **Codebase uses:** `expo-sqlite` against `buffr.db`. The cleanup phase runs `DELETE FROM nutrition WHERE id NOT IN (...usedIds)` — not a soft-delete. The row truly disappears.
 - **Why it's here:** unlike `todo_meta` (which carryover-preserves to maintain identity across prose edits), `nutrition` rows are 1:1 with their prose line — if the line is gone, the row is meaningless. Hard delete is the right call.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** native SQLite `DELETE` is the canonical disposal; no library needed; the cloud-sync layer above handles soft-delete semantics for the cross-device case.
@@ -405,7 +405,7 @@ verdict           strict shape matches "prose is        carryover doesn't fit nu
 ### The question candidates always dodge
 Q: Your `delete unmatched` semantics mean a user who removes a line by accident loses the row permanently. Is that the right default?
 
-A: It's the right default *given* loopd's larger contract that prose is canonical. Every other table (todos, threads, mentions) follows the same shape — if the prose says it's gone, it's gone. The mitigation is the journaling app's undo-via-edit: the user re-types `** banana 95 kcal` and a new row gets inserted with a new id, same value. The lost row is just the id and createdAt; nothing user-visible. The principled fix would be a soft-delete with a 5-minute reversal window — that's a real product feature and I haven't built it because nobody has hit the foot-gun yet. The day someone does, soft-delete is one column away.
+A: It's the right default *given* buffr's larger contract that prose is canonical. Every other table (todos, threads, mentions) follows the same shape — if the prose says it's gone, it's gone. The mitigation is the journaling app's undo-via-edit: the user re-types `** banana 95 kcal` and a new row gets inserted with a new id, same value. The lost row is just the id and createdAt; nothing user-visible. The principled fix would be a soft-delete with a 5-minute reversal window — that's a real product feature and I haven't built it because nobody has hit the foot-gun yet. The day someone does, soft-delete is one column away.
 
 ```
                   Path taken (hard delete on unmatch)  Suggested (soft-delete + 5-min undo)

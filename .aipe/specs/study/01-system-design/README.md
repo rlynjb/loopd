@@ -1,6 +1,6 @@
 # 01 — System design
 
-Architectural patterns in loopd, one file per concept. Each file opens with a diagram and ends with an Elaborate block.
+Architectural patterns in buffr, one file per concept. Each file opens with a diagram and ends with an Elaborate block.
 
 ## Index
 
@@ -17,7 +17,7 @@ Architectural patterns in loopd, one file per concept. Each file opens with a di
 | 09 | [Debounced push](./09-debounced-push.md) | **Write-behind / coalesced writes** *(industry standard)* | 5s timer collapses typing bursts into one push. |
 | 10 | [Bootstrap decision tree](./10-bootstrap-decision-tree.md) | **Cold-start bootstrap** *(language agnostic)* | Four-quadrant init: push, pull, no-op, or fallback. |
 | 11 | [Provider abstraction (LLM)](./11-provider-abstraction.md) | **Adapter / Strategy pattern** *(industry standard)* | Two providers, five chains, ten code paths. No unified interface. |
-| 12 | [Manual-touch deviation](./12-manual-touch-deviation.md) | *(no widely-used equivalent — loopd-internal)* | Documented exception to "mentions are derived from prose." |
+| 12 | [Manual-touch deviation](./12-manual-touch-deviation.md) | *(no widely-used equivalent — buffr-internal)* | Documented exception to "mentions are derived from prose." |
 | 13 | [Append-only migrations](./13-append-only-migrations.md) | **Append-only schema migrations** *(industry standard)* | Schema files are immutable once committed. |
 | 14 | [File-routed UI](./14-file-routed-ui.md) | **File-based routing** *(industry standard)* | `app/` tree IS the route tree. |
 | 15 | [Storage layer summary](./15-storage-layer-summary.md) | **Persistence layer / storage tier** *(industry standard)* | 5 storage layers, each with one job. |
@@ -26,7 +26,7 @@ Architectural patterns in loopd, one file per concept. Each file opens with a di
 ## Full system map
 
 ```
-                              loopd — Android-only daily-vlogging app
+                              buffr — Android-only daily-vlogging app
 ─────────────────────────────────────────────────────────────────────────────────────────
 
    ┌────────────────────────── Device (single Android phone) ───────────────────────────┐
@@ -42,8 +42,8 @@ Architectural patterns in loopd, one file per concept. Each file opens with a di
    │   │  habits/ · sync/ · ffmpeg.ts · exportPipeline.ts · fileManager.ts           │  │
    │   └────┬─────────────────────────────────────┬──────────────────────────────────┘  │
    │        ▼                                     ▼                                     │
-   │   ┌─ Local SQLite (loopd.db, WAL) ────┐  ┌─ Files (clips, exports) ────────────┐   │
-   │   │ 12 tables (10 synced + 2 local)   │  │ /document/loopd/clips, exports      │   │
+   │   ┌─ Local SQLite (buffr.db, WAL) ────┐  ┌─ Files (clips, exports) ────────────┐   │
+   │   │ 12 tables (10 synced + 2 local)   │  │ /document/buffr/clips, exports      │   │
    │   └────┬──────────────────────────────┘  └─────────────────────────────────────┘   │
    │        │                                 ┌─ SecureStore (Keystore-backed) ─────┐   │
    │        │ debounced 5s push               │ AI keys, Supabase config, flags     │   │

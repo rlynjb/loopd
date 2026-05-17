@@ -112,20 +112,20 @@ The whole compare is one `>` operator with no allocations, no exceptions, no Int
 
 ### Same-second tie → cloud wins (biased to converge)
 
-If `local.updated_at == cloud.updated_at` (same millisecond, identical strings), `chooseWinner` returns `"tie-cloud-wins"`. The bias toward cloud is deliberate: the path that calls `chooseWinner` is pull, and if cloud has a row with the same timestamp as local's, the cloud row probably arrived from a different device that's already converged on that value. Letting cloud win prevents an infinite ping-pong where two devices keep pulling the same row, each thinking their copy is fresher. Concrete consequence: device A writes `name='loopd'` at 14:32:18.000Z. Device B independently writes `name='loopd-app'` at exactly 14:32:18.000Z. Both push. Cloud now has one of them (last-write-wins on the server side via the upsert). On the next pull from device A, cloud's value comes back and the tie rule applies — cloud wins, A's local copy gets overwritten. The bias converges the cluster. Boundary: if two clocks are perfectly skewed and produce identical timestamps for genuinely different edits, the tie rule silently picks one. The fix is millisecond-grained timestamps and operational acceptance that ties are rare.
+If `local.updated_at == cloud.updated_at` (same millisecond, identical strings), `chooseWinner` returns `"tie-cloud-wins"`. The bias toward cloud is deliberate: the path that calls `chooseWinner` is pull, and if cloud has a row with the same timestamp as local's, the cloud row probably arrived from a different device that's already converged on that value. Letting cloud win prevents an infinite ping-pong where two devices keep pulling the same row, each thinking their copy is fresher. Concrete consequence: device A writes `name='buffr'` at 14:32:18.000Z. Device B independently writes `name='buffr-app'` at exactly 14:32:18.000Z. Both push. Cloud now has one of them (last-write-wins on the server side via the upsert). On the next pull from device A, cloud's value comes back and the tie rule applies — cloud wins, A's local copy gets overwritten. The bias converges the cluster. Boundary: if two clocks are perfectly skewed and produce identical timestamps for genuinely different edits, the tie rule silently picks one. The fix is millisecond-grained timestamps and operational acceptance that ties are rare.
 
 Walking the ping-pong-that-doesn't-happen on a two-device tie:
 
 ```
    device A writes                  device B writes
-   "name=loopd"                     "name=loopd-app"
+   "name=buffr"                     "name=buffr-app"
    updated_at = "...18.000Z"        updated_at = "...18.000Z"   (same ms!)
               │                                │
               ▼                                ▼
    both push to cloud
               │  Supabase server-side LWW picks one (say B's)
               ▼
-   cloud has: name="loopd-app", updated_at = "...18.000Z"
+   cloud has: name="buffr-app", updated_at = "...18.000Z"
               │
               ▼  next pull from device A
               │  chooseWinner(local_18, cloud_18) — strings equal
@@ -134,7 +134,7 @@ Walking the ping-pong-that-doesn't-happen on a two-device tie:
               │
               ▼  pull overwrites A's local with cloud value
               ▼
-   both devices now have name="loopd-app"; cluster converged
+   both devices now have name="buffr-app"; cluster converged
    no ping-pong (without the bias, both would think they're fresher)
 ```
 
@@ -203,7 +203,7 @@ This is what people mean by "convergent merge under a total order." Last-write-w
 LWW is the simplest conflict resolution rule in distributed systems. It's what Cassandra defaults to, what Riak ships out of the box, what DynamoDB uses for last-modified-by-time semantics. Its appeal is operational simplicity: no tombstones, no vectors, no metadata bloat.
 
 ### The deeper principle
-**Pick the simplest rule that solves your real conflict surface, not the imagined one.** Loopd's only conflict surface is the same person on two devices. Vector clocks and CRDTs would add complexity for a problem the app doesn't have.
+**Pick the simplest rule that solves your real conflict surface, not the imagined one.** Buffr's only conflict surface is the same person on two devices. Vector clocks and CRDTs would add complexity for a problem the app doesn't have.
 
 ### Where this breaks down
 - Two humans editing the same row at once. LWW silently drops one user's work.

@@ -303,7 +303,7 @@ JSON Schema vs hand-rolled validators wasn't a real choice for this codebase. Th
 
 ## Project exercises
 
-### [B1.1] Add Zod schemas for every AI input/output across loopd's 5 chains
+### [B1.1] Add Zod schemas for every AI input/output across buffr's 5 chains
 
 - **Exercise ID:** `[B1.1]`
 - **What to build:** Replace each hand-rolled validator (`validateSummary`, `parseAndValidate` in caption, `validateExpansion`, `cleanMarkdown`) with a Zod schema per chain. Schemas live in `src/services/ai/schemas/` and are imported by both the chain and the test fixtures.

@@ -75,7 +75,7 @@ Pseudocode (N+1 query — one query per thread):
 Execution trace (3 threads, 2 mentions each):
 
 ```
-  thread #loopd:    5 SQL roundtrips → lastMention, weekCount, linkedTodos, metas, activeDates
+  thread #buffr:    5 SQL roundtrips → lastMention, weekCount, linkedTodos, metas, activeDates
   thread #health:   5 SQL roundtrips
   thread #journal:  5 SQL roundtrips
   Total: 15 SQL roundtrips for 3 threads.
@@ -136,14 +136,14 @@ The insight: pull all aggregates in bulk SQL (one query each), then join in-memo
 (3 threads, 2 mentions each, today = 2026-05-07):
 
 ```
-  threads = [#loopd, #health, #journal]
-  lastMentionMap   = { loopd: "05-07T09:00", health: "05-04T18:00", journal: null }
-  activeDates      = { loopd: {05-07}, health: {}, journal: {} }      ← manual touches
-  weekRows         = { loopd: 1, journal: 0 }
-  todoIdsByThread  = { loopd: {t-1, t-2}, health: {}, journal: {t-9} }
+  threads = [#buffr, #health, #journal]
+  lastMentionMap   = { buffr: "05-07T09:00", health: "05-04T18:00", journal: null }
+  activeDates      = { buffr: {05-07}, health: {}, journal: {} }      ← manual touches
+  weekRows         = { buffr: 1, journal: 0 }
+  todoIdsByThread  = { buffr: {t-1, t-2}, health: {}, journal: {t-9} }
 
   Iterate:
-    #loopd:
+    #buffr:
       linked = {t-1, t-2}
       t-1 meta exists, not done → openTodos=1, push recent
       t-2 meta exists, done    → skip
@@ -160,7 +160,7 @@ The insight: pull all aggregates in bulk SQL (one query each), then join in-memo
   Sort:
     pinned all false → next key
     stalenessRank: fresh(0) < aging(1) < cold(3)
-    Result: [#loopd, #health, #journal]
+    Result: [#buffr, #health, #journal]
 ```
 
 **Complexity:** O(T + M + Q) time where T=threads, M=mentions, Q=todos · O(T + M + Q) space. SQL does the heavy work; JS does linear joins.
@@ -213,7 +213,7 @@ The "fetch in bulk, join in memory" pattern is older than ORMs — it's how ever
 
 ### Where this breaks down
 - Working sets that don't fit in memory. The dashboard's "all entries" assumption holds because the user has hundreds, not millions.
-- Cases where the joins need server-side filtering that SQL would do better. Loopd's joins are simple lookups; SQL doesn't add much.
+- Cases where the joins need server-side filtering that SQL would do better. Buffr's joins are simple lookups; SQL doesn't add much.
 
 ### What to explore next
 - DataLoader / GraphQL → the same pattern at request granularity.
@@ -281,7 +281,7 @@ The defensive skip on missing `meta` or `todo` isn't really a tradeoff — it's 
 
 ### expo-sqlite (WAL) + raw SQL
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db`. `getThreadCards` runs 4 small SQL queries through the `database.ts` connection — no ORM, no query builder, just typed SQL strings and row mappers.
+- **Codebase uses:** `expo-sqlite` against `buffr.db`. `getThreadCards` runs 4 small SQL queries through the `database.ts` connection — no ORM, no query builder, just typed SQL strings and row mappers.
 - **Why it's here:** the batched-bulk pattern depends on having control over the exact SQL — an ORM that auto-eagerloads would either over-fetch or fall back to N+1; hand-written SQL is what makes the 4-query shape predictable.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with Expo; raw SQL is the cheapest expression of the batched-then-join pattern at this scale; WAL gives stable read snapshots.
@@ -323,7 +323,7 @@ The probe is "do you know what an N+1 is and have you actually avoided one, or d
 ```
 [recents top-3 flow per thread]
 
-  linkedTodoIds for thread #loopd: {t-1, t-2, t-9, t-12}
+  linkedTodoIds for thread #buffr: {t-1, t-2, t-9, t-12}
         │
         ▼  iterate, skip closed + missing meta
   open candidates: [{t-1, "..."}, {t-9, "..."}, {t-12, "..."}]

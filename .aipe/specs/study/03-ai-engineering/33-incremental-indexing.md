@@ -13,7 +13,7 @@ You've got a Postgres table with a B-tree index on `user_id`. When you `INSERT` 
 
 The implicit question is "should the index update on a clock or in response to writes?" Incremental indexing is the name for the second pattern — the index follows the data, three lifecycle paths (insert, update, delete) keep it current, and a one-time backfill seeds the index when the feature first ships. The full-rebuild pattern is a hold-over from indexes that couldn't be updated online; for editable corpora, it loses on freshness, cost, and write-architecture fit.
 
-**What depends on getting this right:** index freshness for every query, total embed-API spend, and whether the architecture composes with loopd's existing write paths. For loopd the planned `scheduleEmbed()` hook in `src/services/database.ts:writeEntry()` and the `processEmbedRefresh()` idle pass in `src/services/ai/embedRefresh.ts` mirror the existing `schedulePush` / `scheduleClassify` shape — `[B2A.4]` adds three hooks (insert, update via stale, delete via cascade) plus a first-launch backfill. Miss any one hook and that operation's entries silently fall out of retrieval; ship them all and the index stays at most minutes behind the writes.
+**What depends on getting this right:** index freshness for every query, total embed-API spend, and whether the architecture composes with buffr's existing write paths. For buffr the planned `scheduleEmbed()` hook in `src/services/database.ts:writeEntry()` and the `processEmbedRefresh()` idle pass in `src/services/ai/embedRefresh.ts` mirror the existing `schedulePush` / `scheduleClassify` shape — `[B2A.4]` adds three hooks (insert, update via stale, delete via cascade) plus a first-launch backfill. Miss any one hook and that operation's entries silently fall out of retrieval; ship them all and the index stays at most minutes behind the writes.
 
 Without incremental indexing:
 - Pick "rebuild nightly" → 365 embed calls per user per night at solo scale (~$0.005/year), 36.5M calls at 100k users (~$500/year); index up to 24h stale; users edit and immediately search and see yesterday's vectors
@@ -129,7 +129,7 @@ Some applications get away with periodic full rebuilds — embed everything, dro
 - A few hours of staleness is acceptable.
 - The total embed cost of a full rebuild is bearable.
 
-For loopd none of these hold: writes are frequent (autosave on keystroke), staleness above a few minutes shows up in retrieval, and full rebuild of 365 entries × an embed call each is wasteful when only one entry changed.
+For buffr none of these hold: writes are frequent (autosave on keystroke), staleness above a few minutes shows up in retrieval, and full rebuild of 365 entries × an embed call each is wasteful when only one entry changed.
 
 The practical consequence: every incremental update is much cheaper than the equivalent share of a full rebuild. 1 entry changed = 1 embed call. Full rebuild = 365 embed calls. The win compounds as the corpus grows.
 
@@ -139,7 +139,7 @@ The cost of nightly rebuild vs incremental at three scales:
    scale          nightly rebuild cost              incremental cost
    ───────────    ─────────────────────             ─────────────────
    365 entries    365 embed calls × 1 night          ~5 embed calls/day
-   (loopd today)  = ~$0.005/year                     (only what changed)
+   (buffr today)  = ~$0.005/year                     (only what changed)
                    index up to 24h stale              = ~$0.0005/year
                                                        index <1min stale
    
@@ -161,7 +161,7 @@ Nightly rebuild loses on every dimension once the corpus is editable.
 
 ### Backfill — the one-time exception
 
-When you first ship embeddings to a codebase that already has data, you need a one-time backfill: embed all existing entries. After that, incremental indexing takes over. Backfill is the only non-incremental pass that ever runs in a well-designed system. In loopd, the backfill happens on first launch after Phase 2A ships: `processEmbedRefresh()` walks every `entries` row that lacks a corresponding `entry_embeddings` row and creates one.
+When you first ship embeddings to a codebase that already has data, you need a one-time backfill: embed all existing entries. After that, incremental indexing takes over. Backfill is the only non-incremental pass that ever runs in a well-designed system. In buffr, the backfill happens on first launch after Phase 2A ships: `processEmbedRefresh()` walks every `entries` row that lacks a corresponding `entry_embeddings` row and creates one.
 
 The first-launch backfill timeline:
 
@@ -304,7 +304,7 @@ Three lifecycle paths
 
 **Status:** Case B — no embedding pipeline today.
 
-The plan combines `[B2A.4]` (embed on commit, stale tracking, idle pass) with the existing loopd patterns: `schedulePush()` (the closest analogue, "fire-and-forget the slow thing"), `scheduleClassify` (the existing async-write-behind pattern), and the soft-delete contract (`deleted_at` cascades to derived tables).
+The plan combines `[B2A.4]` (embed on commit, stale tracking, idle pass) with the existing buffr patterns: `schedulePush()` (the closest analogue, "fire-and-forget the slow thing"), `scheduleClassify` (the existing async-write-behind pattern), and the soft-delete contract (`deleted_at` cascades to derived tables).
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, lives in `src/services/ai/embedRefresh.ts` with `scheduleEmbed()` triggers in `src/services/database.ts`)*
@@ -321,12 +321,12 @@ Incremental indexing is universal in production search and database systems. Pos
 Derived state should be updated in response to its source changing, not on a schedule. The schedule-based pattern is acceptable when incremental isn't tractable; it's a last resort, not a default.
 
 ### Where this breaks down
-Incremental indexing breaks when the cost of a single update exceeds the cost of a full rebuild divided by the rebuild interval. For very expensive index types (some neural rerankers, full-corpus statistics like IDF), incremental updates may not actually be cheaper than periodic rebuilds. For embedding-based vector indexes at loopd's scale, this trade strongly favors incremental.
+Incremental indexing breaks when the cost of a single update exceeds the cost of a full rebuild divided by the rebuild interval. For very expensive index types (some neural rerankers, full-corpus statistics like IDF), incremental updates may not actually be cheaper than periodic rebuilds. For embedding-based vector indexes at buffr's scale, this trade strongly favors incremental.
 
 ### What to explore next
 - [32-stale-embeddings](./32-stale-embeddings.md) → the update path's invariant
 - [30-vector-databases](./30-vector-databases.md) → where the index lives
-- loopd's `schedulePush` machinery in `src/services/sync/schedulePush.ts` — the closest existing pattern
+- buffr's `schedulePush` machinery in `src/services/sync/schedulePush.ts` — the closest existing pattern
 
 ---
 
@@ -357,7 +357,7 @@ Three things. First, three lifecycle hooks (insert/update/delete) instead of one
 Embedding-call volume. 365 entries × $0.000004 per embed × 365 days = $0.005 per year *per user*. Cheap at solo scale; meaningful at 100k users ($500/year just on rebuilds). Plus the index is up to 24 hours stale — every edit a user makes is invisible to retrieval until the next rebuild. For a journaling app where the user might write and immediately search, that's a real UX hit.
 
 ### Sub-block 3 — the breakpoint
-Full-rebuild starts winning if (a) per-update incremental cost exceeds amortised rebuild cost (only at very expensive index types, not embeddings), or (b) the corpus is genuinely read-mostly (some reference corpora). Neither holds for loopd or for most editable applications.
+Full-rebuild starts winning if (a) per-update incremental cost exceeds amortised rebuild cost (only at very expensive index types, not embeddings), or (b) the corpus is genuinely read-mostly (some reference corpora). Neither holds for buffr or for most editable applications.
 
 ### What wasn't actually a tradeoff
 "No index, embed on query" was never a real option. The latency of embedding every entry on every query is fatal: 365 entries × 500ms = three minutes per query.
@@ -369,7 +369,7 @@ Full-rebuild starts winning if (a) per-update incremental cost exceeds amortised
 ### Custom lifecycle hooks (target)
 
 - **Codebase uses:** target plan — three hooks in `database.ts`'s write paths, one idle-pass function.
-- **Why it's here:** the pattern composes naturally with loopd's existing write architecture (`schedulePush`, `scheduleClassify`).
+- **Why it's here:** the pattern composes naturally with buffr's existing write architecture (`schedulePush`, `scheduleClassify`).
 - **Leading today:** custom lifecycle hooks in service layer — `adoption-leading` for application-controlled indexing, 2026.
 - **Why it leads:** explicit, debuggable, doesn't require a separate worker process.
 - **Runner-up:** trigger-based (DB-level) hooks — `innovation-leading` for systems where the index lives close to the database; harder to debug; less common for embedding pipelines that need an external API call.
@@ -404,7 +404,7 @@ Full-rebuild starts winning if (a) per-update incremental cost exceeds amortised
 
 ## Summary
 
-Incremental indexing is the pattern of updating the search index in response to data changes — insert, update, delete — rather than on a periodic rebuild schedule. In loopd this is not yet implemented; `[B2A.4]` introduces three lifecycle hooks plus a one-time backfill that together keep the index a few minutes from current. The constraint that makes incremental the right call is loopd's edit frequency (autosave on every keystroke) and the small per-update cost (~$0.000004 per embed). The cost being paid is three lifecycle hooks instead of one scheduled rebuild — more places to make sure the hook fires, plus a backfill on first launch.
+Incremental indexing is the pattern of updating the search index in response to data changes — insert, update, delete — rather than on a periodic rebuild schedule. In buffr this is not yet implemented; `[B2A.4]` introduces three lifecycle hooks plus a one-time backfill that together keep the index a few minutes from current. The constraint that makes incremental the right call is buffr's edit frequency (autosave on every keystroke) and the small per-update cost (~$0.000004 per embed). The cost being paid is three lifecycle hooks instead of one scheduled rebuild — more places to make sure the hook fires, plus a backfill on first launch.
 
 Key points to remember:
 - Three operations: insert (embed on commit), update (mark stale, re-embed on idle), delete (cascade soft-delete).
@@ -432,7 +432,7 @@ Key points to remember:
   ```
 
   [senior] Q: Why not just rebuild the whole index nightly?
-  A: Three reasons. First, freshness — full rebuild leaves the index up to 24 hours stale. Users edit and search within minutes; daily rebuild doesn't fit. Second, cost — at 100k users, embedding all entries nightly costs $500/year in embed calls just on full rebuilds, vs ~pennies per user per year on incremental. Third, write-architecture fit — loopd already has the fire-and-forget pattern via `scheduleClassify`; incremental embed is the same shape and reuses the same primitives.
+  A: Three reasons. First, freshness — full rebuild leaves the index up to 24 hours stale. Users edit and search within minutes; daily rebuild doesn't fit. Second, cost — at 100k users, embedding all entries nightly costs $500/year in embed calls just on full rebuilds, vs ~pennies per user per year on incremental. Third, write-architecture fit — buffr already has the fire-and-forget pattern via `scheduleClassify`; incremental embed is the same shape and reuses the same primitives.
   Diagram:
   ```
   Picked: incremental                  Suggested: rebuild nightly

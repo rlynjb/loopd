@@ -38,7 +38,7 @@ The other version of this question is "what if the AI generates code you don't u
 
 Three things, ranked by impact on how I work now.
 
-**The cost of ambiguity in specs is much higher than I thought.** The AI follows the spec — if the spec is wrong, the code is wrong, but it ships fast and the wrongness compounds. I'm now much more rigorous about spec-then-build, and I've started writing explicit *rejection sections* in plans ("we are NOT building X because Y") because the AI will otherwise infer features into existence to fill gaps in the spec. Plans like [`docs/loopd-thinking-modes-spec.md`](../../../docs/loopd-thinking-modes-spec.md) include both what to build and what to deliberately skip.
+**The cost of ambiguity in specs is much higher than I thought.** The AI follows the spec — if the spec is wrong, the code is wrong, but it ships fast and the wrongness compounds. I'm now much more rigorous about spec-then-build, and I've started writing explicit *rejection sections* in plans ("we are NOT building X because Y") because the AI will otherwise infer features into existence to fill gaps in the spec. Plans like [`docs/buffr-thinking-modes-spec.md`](../../../docs/buffr-thinking-modes-spec.md) include both what to build and what to deliberately skip.
 
 **Heuristic-first is a real product decision, not just an optimization.** The cost of every LLM call adds up at scale, and the deterministic path lets you ship features that wouldn't survive on AI alone. I'd been treating AI as the path; building this taught me to treat AI as the fallback when the deterministic path abstains. That mental shift — heuristic *before* LLM, not LLM *with heuristic backup* — changed how I'd architect any AI feature now.
 

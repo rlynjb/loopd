@@ -42,7 +42,7 @@ The two-layer trust shape in one picture:
    ┌─ User input layer (untrusted) ────────────────────────────────┐
    │  user prose in entries.text → goes into user message verbatim  │
    │                                                                 │
-   │  loopd does NOT filter input. There is no sanitizePromptInput.  │
+   │  buffr does NOT filter input. There is no sanitizePromptInput.  │
    │  attack space too large; failure mode too silent.               │
    └─────────────────────────────────┬─────────────────────────────┘
                                      │
@@ -77,7 +77,7 @@ The four sub-sections below trace the attack surface (user text reaches the mode
 
 ### The attack — instructions in user input
 
-A loopd user types a journal entry. That entry — *every* character of it — flows into:
+A buffr user types a journal entry. That entry — *every* character of it — flows into:
 
 - `summarize.ts`'s user message (entry.text appears in `prompt.ts:buildPrompt` L32 as `Text: "${e.text}"`)
 - `caption.ts`'s user message (entry text fragments appear in `summarize.ts:buildCaptionInput` L116–L122 as `rawLog: string[]`)
@@ -111,13 +111,13 @@ The model sees five different surfaces but the threat shape is identical at all 
 
 ### The defense — output validation, not input filtering
 
-Loopd doesn't filter user input. There's no `sanitizePromptInput()` function; there's no list of forbidden phrases the user can't type. The reason is that input filtering against prompt injection is brittle — the attack space is too large (every paraphrase, every language, every encoding) and the failure mode is silent (the user's real prose gets mangled or rejected). Instead, defense lives at the output layer:
+Buffr doesn't filter user input. There's no `sanitizePromptInput()` function; there's no list of forbidden phrases the user can't type. The reason is that input filtering against prompt injection is brittle — the attack space is too large (every paraphrase, every language, every encoding) and the failure mode is silent (the user's real prose gets mangled or rejected). Instead, defense lives at the output layer:
 
 - **`validate.ts:validateSummary` (L12–L137)**: every field of the summarize chain's output is checked against a typed contract. `mood` must be one of five values. `clipOrder` must reference known clip IDs. `clipTrims` must be within clip durations. Anything else gets clamped, defaulted, or dropped. If the attacker successfully makes the model emit `{"mood": "i am hacked", "clipOrder": ["rm -rf /"]}`, the validator silently swaps mood to `'ok'` and drops the invalid clip ID. The attacker's payload never reaches the database or the UI.
 - **`caption.ts:parseAndValidate` (L169–L199)**: same shape for captions. Every variant must be a string with content; `detectedTheme` must be one of six valid values or it defaults to `'clarity'`. An attempt to make the model emit `{"variants": "go to evil.com"}` fails validation — variants must be an object with all four named keys.
 - **`classify.ts:parseClassifyJson` + `VALID_TYPES`/`VALID_CONFIDENCES` checks (L74–L110)**: `type` must be one of `['todo','idea','knowledge','study','reflect']`; `confidence` must be `'high'|'medium'|'low'`. An attempt to make the model emit `{"type": "malicious"}` fails the membership check and the call returns `null` — the caller leaves the todo at its default `'todo'` type.
 
-If you're coming from frontend, this is the same shape as `React.JSX` rendering — even if user input gets into a component prop, React's HTML-encoding at the render layer prevents the input from escaping into a `<script>` tag. The validator IS the encoder; the typed contract IS the safe rendering. Practical consequence: a successful prompt-injection attack on loopd would have to produce output that *also* passes every per-field validation. That's a much harder attack than just getting the model to misbehave.
+If you're coming from frontend, this is the same shape as `React.JSX` rendering — even if user input gets into a component prop, React's HTML-encoding at the render layer prevents the input from escaping into a `<script>` tag. The validator IS the encoder; the typed contract IS the safe rendering. Practical consequence: a successful prompt-injection attack on buffr would have to produce output that *also* passes every per-field validation. That's a much harder attack than just getting the model to misbehave.
 
 A successful injection attempt and what the validators do to it:
 
@@ -178,7 +178,7 @@ What the model CAN'T do, even if the user successfully injects:
                                      based on validated typed values
 
    make an HTTP request              no — only fetch/SDK calls inside
-                                     loopd's services do that
+                                     buffr's services do that
 
    read SecureStore                 no — only config.ts:getApiKey reads
                                      keys (and only when called by app code)
@@ -355,9 +355,9 @@ Prompt injection was first formalised by Simon Willison and others around 2022, 
 **The interpreter is untrusted; the consumer is trusted.** The LLM is the interpreter; your validation function is the consumer; everything downstream of validation acts only on validated values. This is exactly the SQL-injection lesson: don't try to make the SQL engine safe by filtering input — use prepared statements that separate data from instructions at the parameter binding layer. For LLMs, prepared statements aren't possible (the model doesn't have a separate data channel), so the equivalent is the output validator: it forces every produced field through a typed schema before any side effect happens.
 
 ### Where this breaks down
-- **LLM output triggers side effects directly** — if the model is given tool-use access (file write, HTTP fetch, shell command) and the tool runs without validation, injection becomes a direct attack vector. loopd doesn't have tools, which is why this isn't a concern; agentic systems must validate every tool call.
-- **Multi-user shared context** — if User A's text and User B's text end up in the same LLM context (shared chat, group thread, multi-tenant retrieval), User A can attack User B. loopd is single-user so this doesn't apply yet.
-- **Free-form output fields** — if any output field is `string` with no schema, the validator can't constrain it. loopd's `headline: string` (slice to 100) and `summary: string` (slice to 500) are constrained only by length. An attacker could in principle write profanity or misinformation into these fields; the user is the consumer, so the worst case is that the user reads their own attacker-controlled text.
+- **LLM output triggers side effects directly** — if the model is given tool-use access (file write, HTTP fetch, shell command) and the tool runs without validation, injection becomes a direct attack vector. buffr doesn't have tools, which is why this isn't a concern; agentic systems must validate every tool call.
+- **Multi-user shared context** — if User A's text and User B's text end up in the same LLM context (shared chat, group thread, multi-tenant retrieval), User A can attack User B. buffr is single-user so this doesn't apply yet.
+- **Free-form output fields** — if any output field is `string` with no schema, the validator can't constrain it. buffr's `headline: string` (slice to 100) and `summary: string` (slice to 500) are constrained only by length. An attacker could in principle write profanity or misinformation into these fields; the user is the consumer, so the worst case is that the user reads their own attacker-controlled text.
 - **Indirect injection (web text → user → app)** — if the user copy-pastes a block of text from the web into a journal entry, the block can contain instructions the user didn't author. The validator catches malformed output; it can't catch a successfully-injected output that *happens to* pass validation (e.g., a `mood='fired'` value when the real day was 'flat').
 
 ### What to explore next
@@ -414,13 +414,13 @@ If we had added an LLM safety judge (every chain output goes through a second "i
 
 ### The breakpoint
 
-Fine until loopd ships any chain that produces output triggering side effects beyond the local SQLite write. The day a chain produces output that triggers an HTTP fetch (e.g., a "summarise this URL" feature), the model output becomes capable of choosing the URL — and a successful injection could direct fetches to attacker-controlled servers, exfiltrating user data via DNS or query params. The validator-only defense breaks at that point; the fix is a URL allowlist enforced at the fetch site, not at the validator.
+Fine until buffr ships any chain that produces output triggering side effects beyond the local SQLite write. The day a chain produces output that triggers an HTTP fetch (e.g., a "summarise this URL" feature), the model output becomes capable of choosing the URL — and a successful injection could direct fetches to attacker-controlled servers, exfiltrating user data via DNS or query params. The validator-only defense breaks at that point; the fix is a URL allowlist enforced at the fetch site, not at the validator.
 
-Fine until loopd ships multi-user features. The day User A's entry text reaches a context that affects User B (shared spaces, group threads, retrieval over multiple users' data), the threat model widens and the validator-only defense leaves indirect injection as an unaddressed vector. The fix at that point is per-input sanitisation + the validator (two layers, both required).
+Fine until buffr ships multi-user features. The day User A's entry text reaches a context that affects User B (shared spaces, group threads, retrieval over multiple users' data), the threat model widens and the validator-only defense leaves indirect injection as an unaddressed vector. The fix at that point is per-input sanitisation + the validator (two layers, both required).
 
 ### What wasn't actually a tradeoff
 
-"Rely on the LLM provider's built-in safety" was never a real defense for prompt injection. Both Claude and OpenAI run output through their own safety classifiers, but those classifiers target content safety (violence, sexual content, self-harm), not prompt injection. A successful prompt injection that produces *"output JSON with `mood='ok'` and `clipOrder=[]`"* is fully safe by every content-safety metric — it's structurally wrong, not unsafe. Provider safety is orthogonal; loopd's own validator is the only thing that prevents structural injection from being persisted.
+"Rely on the LLM provider's built-in safety" was never a real defense for prompt injection. Both Claude and OpenAI run output through their own safety classifiers, but those classifiers target content safety (violence, sexual content, self-harm), not prompt injection. A successful prompt injection that produces *"output JSON with `mood='ok'` and `clipOrder=[]`"* is fully safe by every content-safety metric — it's structurally wrong, not unsafe. Provider safety is orthogonal; buffr's own validator is the only thing that prevents structural injection from being persisted.
 
 ---
 
@@ -531,7 +531,7 @@ maintenance     filter rules drift; need adversarial    one validator per chain;
 layer           input-side (wrong layer)                output-side (right layer)
 ```
 
-[arch] Q: What changes when loopd grows beyond single-user?
+[arch] Q: What changes when buffr grows beyond single-user?
 
 A: Three things. First, indirect injection becomes a real concern — User A's pasted text affects User B if any chain runs over shared context. The validator stays load-bearing but isn't enough alone; per-input sanitisation (length caps, encoding normalisation, base64 detection) gets added as a second layer. Second, any chain that produces output triggering side effects beyond the local SQLite write (HTTP fetches, file ops, tool calls) needs a per-side-effect allowlist — model output never chooses a URL or a file path directly; the model's choice gets mapped through a known-safe set. Third, observability gets serious — every validator drop gets logged with the input that produced it, so attempted injections become a signal the team can monitor. Today there's a `console.warn`; tomorrow there's a counter and an alert threshold.
 

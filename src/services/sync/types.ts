@@ -1,5 +1,5 @@
 // SyncableTable contract — every cloud-synced table implements this so the
-// orchestrator can run push/pull generically. See docs/loopd-cloud-sync-spec.md
+// orchestrator can run push/pull generically. See docs/buffr-cloud-sync-spec.md
 // §6.2.
 //
 // `TLocal` is the raw SQLite row shape (snake_case, JSON-stringified columns).

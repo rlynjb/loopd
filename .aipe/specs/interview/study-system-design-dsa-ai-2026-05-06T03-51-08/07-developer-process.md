@@ -16,7 +16,7 @@ The loop, every feature
                          ▼
   ┌──────────────────────────────────────────────────────┐
   │  2. Write the spec                                   │
-  │     Save to docs/loopd-<feature>-spec.md             │
+  │     Save to docs/buffr-<feature>-spec.md             │
   │     Sections: motivation, principles, schema,        │
   │     UX, edge cases, deviations from defaults.        │
   │     The spec is the contract before code exists.     │
@@ -25,7 +25,7 @@ The loop, every feature
                          ▼
   ┌──────────────────────────────────────────────────────┐
   │  3. Implement in Claude Code                         │
-  │     "Implement docs/loopd-<feature>-spec.md."        │
+  │     "Implement docs/buffr-<feature>-spec.md."        │
   │     Iterate at the file level, review every diff,    │
   │     reject changes that violate the spec.            │
   │     Run npx tsc --noEmit; manual e2e on device.      │
@@ -52,11 +52,11 @@ The interview point is: this isn't "I asked an AI to build the app." This is "I 
 
 **Failure mode.** Without `context.md`, every session starts cold. I'd have to explain the prose-is-canonical rule, the soft-delete invariant, the 1:1 between todos_json and todo_meta, every session. By the time I've described the architecture, I've burned 30 minutes of iteration time and the AI has a partial understanding because I forgot to mention the `user_overridden_type` lock. With the context file, the AI starts every session knowing the rules, and I can spend the session actually building.
 
-**Contrast.** The `docs/loopd-<feature>-spec.md` files are *session-specific*: they describe one feature, get implemented, and then the spec is folded into `docs/spec.md` (the canonical reference) which then informs future `context.md` updates. The constraint that distinguishes: per-feature specs are tactical (this is what we're building right now); `context.md` is strategic (this is what's true about the system).
+**Contrast.** The `docs/buffr-<feature>-spec.md` files are *session-specific*: they describe one feature, get implemented, and then the spec is folded into `docs/spec.md` (the canonical reference) which then informs future `context.md` updates. The constraint that distinguishes: per-feature specs are tactical (this is what we're building right now); `context.md` is strategic (this is what's true about the system).
 
 ## Concept 2 — Spec before code
 
-**Shape.** Three pieces: a Claude.ai brainstorming session that surfaces the design space, a written spec saved to `docs/loopd-<feature>-spec.md` covering motivation/schema/UX/edge cases, and a Claude Code session that implements the spec end-to-end with the spec as the contract.
+**Shape.** Three pieces: a Claude.ai brainstorming session that surfaces the design space, a written spec saved to `docs/buffr-<feature>-spec.md` covering motivation/schema/UX/edge cases, and a Claude Code session that implements the spec end-to-end with the spec as the contract.
 
 **Rule.** No feature gets implemented without a written spec. Every spec answers four questions: what's the user value, what's the data model, what's the UX flow, what are the edge cases I've thought through. The spec gets written *before* the code, not after.
 
@@ -66,7 +66,7 @@ The interview point is: this isn't "I asked an AI to build the app." This is "I 
 
 ## Concept 3 — `docs/spec.md` as the canonical refresh target
 
-**Shape.** Three pieces: per-feature spec files (`loopd-cloud-sync-spec.md`, `loopd-thinking-modes-spec.md`, `loopd-daily-schedule-grid-spec.md`, etc.), `docs/spec.md` (the canonical "this is what loopd is, end-to-end"), and the periodic "refresh spec.md from current code state" commits (commit `1fdb7a3` is the most recent).
+**Shape.** Three pieces: per-feature spec files (`buffr-cloud-sync-spec.md`, `buffr-thinking-modes-spec.md`, `buffr-daily-schedule-grid-spec.md`, etc.), `docs/spec.md` (the canonical "this is what buffr is, end-to-end"), and the periodic "refresh spec.md from current code state" commits (commit `1fdb7a3` is the most recent).
 
 **Rule.** After every meaningful feature lands, `docs/spec.md` gets refreshed. The per-feature specs are *historical artifacts* — they capture the intent at the time of writing. `spec.md` is *current* — it reflects what the code does today. The two diverge over time as features evolve; that's expected.
 
@@ -122,7 +122,7 @@ Five changes, in priority.
 
 First, **a real test suite.** Today's "manual e2e on device" works because I am the only person editing the code and I run the manual pass after every change. With a second engineer, their changes can't trigger my manual pass. I'd add Vitest with a fixture suite for the pure functions (`scanTodosFromText`, `chooseWinner`, `computeStaleness`, `cellStateFor`, the validators in `services/ai/validate.ts`), React Native Testing Library smoke tests on the top 3 screens (dashboard, journal, /todos), and a single Detox journey test ("create entry, type a `[]`, leave screen, return, see the todo on dashboard"). Gate merges on green CI.
 
-Second, **PRs replace direct-to-main commits.** The current repo has commits going straight to main because there's no one to review them. With two engineers, every change is a PR with a description that links to the relevant `docs/loopd-*-spec.md` or backlog entry, and is reviewed before merge. The review checklist is the implicit one I run on AI-generated diffs: "does this violate the spec? does this add a write site that skips `schedulePush`? does this read a synced table without `deleted_at IS NULL`?"
+Second, **PRs replace direct-to-main commits.** The current repo has commits going straight to main because there's no one to review them. With two engineers, every change is a PR with a description that links to the relevant `docs/buffr-*-spec.md` or backlog entry, and is reviewed before merge. The review checklist is the implicit one I run on AI-generated diffs: "does this violate the spec? does this add a write site that skips `schedulePush`? does this read a synced table without `deleted_at IS NULL`?"
 
 Third, **observability and crash reporting on the device.** Today's reliability story relies on me being the only user — when I crash, I see the redbox. With a second engineer also using the app, I need Sentry / PostHog so their crashes surface to me too. This converges with the production-readiness gap from Chapter 6.
 
@@ -143,7 +143,7 @@ The interesting question isn't "who wrote the lines" — it's "who would catch a
 The signals I'd point an interviewer at to verify the claim:
 
 1. **Every architectural principle is written down before the code that enforces it.** The 12 principles in `docs/spec.md §10`, the per-feature specs in `docs/`, the `.aipe/project/context.md` "what must not change" section. These are written by me, in my voice, and predate the code. The AI fills them in; I write them.
-2. **The deferred backlog (`docs/loopd-deferred-backlog.md`) lists things the AI didn't suggest.** Hard delete (vacuum), test suite, observability, multi-device CRDTs. These are gaps I identified by thinking about "what would break at scale" — the AI doesn't volunteer architectural gaps unless asked.
+2. **The deferred backlog (`docs/buffr-deferred-backlog.md`) lists things the AI didn't suggest.** Hard delete (vacuum), test suite, observability, multi-device CRDTs. These are gaps I identified by thinking about "what would break at scale" — the AI doesn't volunteer architectural gaps unless asked.
 3. **The bug history in `git log` reflects judgment calls the AI couldn't make.** The "manual-touch deviation" in `services/threads/touch.ts` — writing a `thread_mentions` row with NULL `entry_id` AND NULL `todo_id` to mark a thread "done today" — violates the otherwise-tight invariant that mentions are derived from prose. I made that decision; the AI would've followed the original invariant and produced a worse UX. The deviation is documented in `spec.md §10 Principle 11`.
 4. **The "what's deliberately kept simple" decisions are mine.** No event bus. No service container. No state management library. No automated tests. No backend. Each of these is a thing the AI would happily build if I asked it to; each is a thing I declined to build because it'd buy ceremony, not utility.
 

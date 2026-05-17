@@ -13,7 +13,7 @@ You've got two pieces of code that do the same job — find the most relevant it
 
 The implicit question is whether one model can do both jobs. Not faster embeddings, not bigger context — a fast wide-net first stage and a slow precise second stage, where the second stage only runs on what the first stage surfaced.
 
-**What depends on getting this right:** the quality ceiling on every planned retrieval feature once hybrid is in place. The recruiter stage maps to loopd's planned `hybridRetrieve()` (dense from `entry_embeddings` + sparse from FTS5 on `entries.text`, fused by RRF) — fast enough to run on every entry. The hiring-manager stage maps to a planned `rerank()` call: a cross-encoder model that takes the query and one candidate together per call and returns a precise relevance score. Without rerank, "the right entry is in top-20 about 90% of the time but only top-5 about 72% of the time" stays the plateau; with rerank, the top-5 catches the cases bi-encoders blur (negation: "love coffee" vs "don't love coffee" embed close; magnitudes: "5kg" vs "50kg" embed close). The cost is real: ~50–500ms per (query, doc) pair × 50 candidates is 2.5–25s of user-visible latency added — rerank is a quality lever, not a free one.
+**What depends on getting this right:** the quality ceiling on every planned retrieval feature once hybrid is in place. The recruiter stage maps to buffr's planned `hybridRetrieve()` (dense from `entry_embeddings` + sparse from FTS5 on `entries.text`, fused by RRF) — fast enough to run on every entry. The hiring-manager stage maps to a planned `rerank()` call: a cross-encoder model that takes the query and one candidate together per call and returns a precise relevance score. Without rerank, "the right entry is in top-20 about 90% of the time but only top-5 about 72% of the time" stays the plateau; with rerank, the top-5 catches the cases bi-encoders blur (negation: "love coffee" vs "don't love coffee" embed close; magnitudes: "5kg" vs "50kg" embed close). The cost is real: ~50–500ms per (query, doc) pair × 50 candidates is 2.5–25s of user-visible latency added — rerank is a quality lever, not a free one.
 
 Without reranking:
 - `hybridRetrieve()` returns top-20; right answer is in there at rank 7
@@ -141,7 +141,7 @@ The latency budget by candidate count and parallelism:
      - latency budget < 500ms (real-time autocomplete, etc.)
      - retrieval-only already passes your eval
      - corpus too small for two-stage to matter
-       (loopd at 365 entries: marginal benefit)
+       (buffr at 365 entries: marginal benefit)
 ```
 
 Rerank is the quality lever you reach for when retrieval plateaus and you can afford the latency — not the first thing you build.
@@ -226,7 +226,7 @@ The rerank stage's input is small (50 candidates) but each scoring call is heavy
 
 **Status:** Case B — no reranking today; depends on Phase 2A retrieval shipping first.
 
-The curriculum's `[B2A.11]` is explicitly conditional: *"Cross-encoder rerank on 'related entries'; measure hit@5; if no improvement, skip in 2B."* The cost-benefit at loopd scale is unclear — for a single-user corpus where retrieval already returns 50 candidates and the right answer is in top-5 most of the time, rerank may not earn its place. The build is "ship it once, measure, decide."
+The curriculum's `[B2A.11]` is explicitly conditional: *"Cross-encoder rerank on 'related entries'; measure hit@5; if no improvement, skip in 2B."* The cost-benefit at buffr scale is unclear — for a single-user corpus where retrieval already returns 50 candidates and the right answer is in top-5 most of the time, rerank may not earn its place. The build is "ship it once, measure, decide."
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, lives in `src/services/ai/rerank.ts:rerankCandidates()`)*
@@ -254,7 +254,7 @@ Reranking can't help if the right answer is *not in the retrieved top-K*. The re
 
 ## Tradeoffs
 
-### Comparison table — rerank vs no-rerank for loopd's likely scale
+### Comparison table — rerank vs no-rerank for buffr's likely scale
 
 ```
 ┌──────────────────────────┬──────────────────────┬──────────────────────────┐
@@ -277,7 +277,7 @@ Per-query latency rising by ~500-2000ms on hybrid retrieval. For interactive sea
 
 ### Sub-block 2 — what no-rerank would cost
 
-The hit@5 plateau. If first-stage hybrid retrieval lands the right answer in top-50 90% of the time but in top-5 only 72% of the time, that ~18-point gap is invisible without rerank — and visible-to-users as "I searched, the right thing wasn't at the top, I scrolled and found it manually." For loopd at solo scale this may not matter; at multi-user scale every percentage point of hit@5 affects perceived quality.
+The hit@5 plateau. If first-stage hybrid retrieval lands the right answer in top-50 90% of the time but in top-5 only 72% of the time, that ~18-point gap is invisible without rerank — and visible-to-users as "I searched, the right thing wasn't at the top, I scrolled and found it manually." For buffr at solo scale this may not matter; at multi-user scale every percentage point of hit@5 affects perceived quality.
 
 ### Sub-block 3 — the breakpoint
 Rerank stops being a clear "skip" when (a) hybrid first-stage hit@5 on `[B2A.9]`'s eval plateaus below ~80%, AND (b) recall@50 is meaningfully higher than that (proving the right answer is in candidates), AND (c) interactive latency budget allows +500ms. Below those conditions, the simpler choice (skip rerank, invest the engineering elsewhere) wins.
@@ -295,7 +295,7 @@ Running a cross-encoder on the entire corpus was never a real option. The latenc
 - **Why it's here:** managed reranker endpoint; one API call returns rescored top-K from a list of candidates.
 - **Leading today:** Cohere Rerank — `adoption-leading` for managed reranking, 2026.
 - **Why it leads:** purpose-built for retrieval reranking; well-documented; trained on diverse retrieval data; no infra to host.
-- **Runner-up:** self-hosted `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers) — `adoption-leading` for self-hosted; runs on CPU at acceptable latency for solo loopd scale; trades infra for vendor independence.
+- **Runner-up:** self-hosted `cross-encoder/ms-marco-MiniLM-L-6-v2` (sentence-transformers) — `adoption-leading` for self-hosted; runs on CPU at acceptable latency for solo buffr scale; trades infra for vendor independence.
 
 ### sentence-transformers cross-encoders
 
@@ -322,13 +322,13 @@ Running a cross-encoder on the entire corpus was never a real option. The latenc
 
 ## Summary
 
-Reranking is the two-stage retrieval pattern that uses a fast bi-encoder for recall and a slow cross-encoder for precision on the top candidates. In loopd this is not yet implemented; `[B2A.11]` is an explicitly conditional build — ship it on the related-entries feature first, measure the lift, decide whether to extend to other features. The constraint that may make rerank the wrong call for loopd is solo-scale corpus size: with 365 entries, hybrid retrieval may already plateau at acceptable quality, leaving no headroom for rerank to recover. The cost being paid if we ship is +500–2000ms per query and a new API dependency.
+Reranking is the two-stage retrieval pattern that uses a fast bi-encoder for recall and a slow cross-encoder for precision on the top candidates. In buffr this is not yet implemented; `[B2A.11]` is an explicitly conditional build — ship it on the related-entries feature first, measure the lift, decide whether to extend to other features. The constraint that may make rerank the wrong call for buffr is solo-scale corpus size: with 365 entries, hybrid retrieval may already plateau at acceptable quality, leaving no headroom for rerank to recover. The cost being paid if we ship is +500–2000ms per query and a new API dependency.
 
 Key points to remember:
 - Two stages: bi-encoder (fast recall) → cross-encoder (slow precision).
 - Cross-encoder sees query + doc together; bi-encoder sees them separately.
 - Rerank's ceiling is the first-stage recall — it can't conjure missing docs.
-- For loopd, the decision is eval-driven via `[B2A.11]`.
+- For buffr, the decision is eval-driven via `[B2A.11]`.
 - "We tried it and it didn't help" is a defensible interview answer.
 
 ---
@@ -350,7 +350,7 @@ Key points to remember:
   ```
 
   [senior] Q: Why might you decide NOT to rerank?
-  A: Three reasons. First, latency budget — adding 500-2000ms to query time may not be acceptable for interactive search. Second, the lift may not justify the cost if first-stage hit@5 is already high; if hybrid retrieval lands the right answer in top-5 80% of the time, rerank might push to 85% — measurable but maybe not worth the infrastructure. Third, the recall ceiling — if your first-stage recall@50 is the bottleneck, rerank can't help; you'd improve the retriever instead. For loopd, `[B2A.11]` is explicitly eval-driven: ship rerank on one feature, measure, decide.
+  A: Three reasons. First, latency budget — adding 500-2000ms to query time may not be acceptable for interactive search. Second, the lift may not justify the cost if first-stage hit@5 is already high; if hybrid retrieval lands the right answer in top-5 80% of the time, rerank might push to 85% — measurable but maybe not worth the infrastructure. Third, the recall ceiling — if your first-stage recall@50 is the bottleneck, rerank can't help; you'd improve the retriever instead. For buffr, `[B2A.11]` is explicitly eval-driven: ship rerank on one feature, measure, decide.
   Diagram:
   ```
   Picked: eval-driven decision         Suggested: rerank always
@@ -376,7 +376,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"Why didn't you fine-tune your own reranker?" The honest answer: fine-tuning a cross-encoder needs a labelled dataset (10k+ (query, doc, relevance) tuples at minimum) and a training pipeline. Off-the-shelf cross-encoders (Cohere rerank, ms-marco-MiniLM) are trained on broad retrieval data and generalise well to most domains. For solo loopd this is decisively the wrong investment.
+"Why didn't you fine-tune your own reranker?" The honest answer: fine-tuning a cross-encoder needs a labelled dataset (10k+ (query, doc, relevance) tuples at minimum) and a training pipeline. Off-the-shelf cross-encoders (Cohere rerank, ms-marco-MiniLM) are trained on broad retrieval data and generalise well to most domains. For solo buffr this is decisively the wrong investment.
 
 ```
 Picked: off-the-shelf rerank          Suggested: fine-tune our own
@@ -402,7 +402,7 @@ Right at solo scale                    Right at vertical-search startup scale
 Close the file and draw the two-stage pipeline: query → bi-encoder retrieval (top-50) → cross-encoder rerank → top-5. Label latencies on each stage.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the bi-encoder vs cross-encoder split, (b) the latency cost of cross-encoder, (c) when rerank helps and when it doesn't, (d) loopd's eval-driven decision in `[B2A.11]`.
+In under 90 seconds, explain: (a) the bi-encoder vs cross-encoder split, (b) the latency cost of cross-encoder, (c) when rerank helps and when it doesn't, (d) buffr's eval-driven decision in `[B2A.11]`.
 
 ### Level 3 — Apply it to a new scenario
 On the related-entries feature, hybrid retrieval has hit@5 of 76% and recall@50 of 92%. After adding rerank, hit@5 rises to 81%. Without looking, decide whether to ship rerank to the `[B2A.7]` interpret-this-week feature too, and defend your decision.

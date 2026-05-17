@@ -41,7 +41,7 @@ The function signature in one picture:
    }
 
    input:                          output:
-   "loopd uses Sonnet"             [14334, 67, 5829, 328, 86471]
+   "buffr uses Sonnet"             [14334, 67, 5829, 328, 86471]
         │                                ↑
         │  greedy BPE merge              │
         │  against vocabulary             │
@@ -118,7 +118,7 @@ Tokens aren't just a billing unit; they're the unit the model's actual computati
 
 ### Where the boundary cuts shape the model's behavior
 
-Tokenizers are case-sensitive: `"loopd"` and `"Loopd"` are usually different tokens. Whitespace is part of the token: `" the"` (with leading space) and `"the"` (without) are different tokens. This means *small textual edits can change tokenization significantly* — and the model's prior over what comes next is conditioned on the exact tokens, not the exact characters.
+Tokenizers are case-sensitive: `"buffr"` and `"Buffr"` are usually different tokens. Whitespace is part of the token: `" the"` (with leading space) and `"the"` (without) are different tokens. This means *small textual edits can change tokenization significantly* — and the model's prior over what comes next is conditioned on the exact tokens, not the exact characters.
 
 How small textual edits change the tokenization:
 
@@ -134,8 +134,8 @@ How small textual edits change the tokenization:
    "the !"                         [1820, 837]                 3 tokens (space-bang
                                                                 is its own entry)
 
-   "loopd"                         [9437, 67]                  rare brand → 2 tokens
-   "Loopd"                          [43, 9437, 67]              cap'd version → 3
+   "buffr"                         [9437, 67]                  rare brand → 2 tokens
+   "Buffr"                          [43, 9437, 67]              cap'd version → 3
                                                                  (one extra capital
                                                                   prefix)
 ```
@@ -154,7 +154,7 @@ Every model spec sheet lists context window in tokens. Every API bills in tokens
 Tokenization pipeline
 
 ┌─ Input ──────────────────────────────────────────────────┐
-│  "loopd uses Sonnet"                                     │
+│  "buffr uses Sonnet"                                     │
 └──────────────────────────────────────────────────────────┘
             │
             ▼  byte-pair encoder (BPE / tiktoken)
@@ -174,7 +174,7 @@ Tokenization pipeline
 └──────────────────────────────────────────────────────────┘
 ```
 
-The model never sees `"loopd uses Sonnet"`. It sees five integers. Every cost, every limit, every attention computation is denominated in those five integers.
+The model never sees `"buffr uses Sonnet"`. It sees five integers. Every cost, every limit, every attention computation is denominated in those five integers.
 
 ---
 
@@ -182,12 +182,12 @@ The model never sees `"loopd uses Sonnet"`. It sees five integers. Every cost, e
 
 **Status:** `learn-only` — no token-level instrumentation is built today.
 
-loopd makes ~30+ LLM calls on an active journaling day across five chains, but does not currently measure or log per-call token counts. The curriculum gates this concept as `learn-only` for two reasons:
+buffr makes ~30+ LLM calls on an active journaling day across five chains, but does not currently measure or log per-call token counts. The curriculum gates this concept as `learn-only` for two reasons:
 
-1. The dedicated build for tokenization visualisation lives in *reincodes* (the portfolio repo), not loopd.
-2. Token-economic instrumentation in loopd is `[B1.2]` (the `ai_call_log` table) and `[B1.8]` (the AI ops panel) — see [23-token-economics](./23-token-economics.md). Those exercises use the *output* of tokenization (the count) without requiring loopd to ship its own tokenizer.
+1. The dedicated build for tokenization visualisation lives in *reincodes* (the portfolio repo), not buffr.
+2. Token-economic instrumentation in buffr is `[B1.2]` (the `ai_call_log` table) and `[B1.8]` (the AI ops panel) — see [23-token-economics](./23-token-economics.md). Those exercises use the *output* of tokenization (the count) without requiring buffr to ship its own tokenizer.
 
-**File:** *(no implementation in loopd today)*
+**File:** *(no implementation in buffr today)*
 **Function / class:** *(deferred — see reincodes tokenization viz for the concept-builder)*
 **Line range:** *(n/a)*
 
@@ -205,8 +205,8 @@ The model's vocabulary is part of its training. You can't change it after the fa
 BPE struggles with non-Latin scripts that weren't well-represented in training data — Korean, Chinese, and code-heavy strings can shatter into many more tokens than their English-prose-equivalent. For users in those languages, "1k characters of context" is a much smaller window than for English speakers.
 
 ### What to explore next
-- [03-context-window](./03-context-window.md) → how loopd budgets the token window per chain
-- [23-token-economics](./23-token-economics.md) → why per-call token count is the unit of billing in loopd
+- [03-context-window](./03-context-window.md) → how buffr budgets the token window per chain
+- [23-token-economics](./23-token-economics.md) → why per-call token count is the unit of billing in buffr
 - The reincodes tokenization visualiser → for interactive intuition on where the cuts fall
 
 ---
@@ -237,7 +237,7 @@ BPE accepts that some inputs cost more than others. A 100-character UUID may cos
 Character-level tokenization makes cost perfectly uniform (1 token per byte) but multiplies sequence length by 5–10×. Because attention is O(n²), a character-level GPT-4 would be ~25–100× slower per call. The cost trade is hidden complexity (in BPE) vs hidden compute (in character-level).
 
 ### Sub-block 3 — the breakpoint
-BPE stops being the right choice when (a) your domain is non-Latin-script and existing tokenizers shatter your inputs catastrophically (Korean text in a model trained mostly on English), or (b) you need exact-character-level outputs (e.g., a programming-language code generator where token boundaries straddle syntactically-meaningful boundaries). Most production codebases — including loopd — never hit either.
+BPE stops being the right choice when (a) your domain is non-Latin-script and existing tokenizers shatter your inputs catastrophically (Korean text in a model trained mostly on English), or (b) you need exact-character-level outputs (e.g., a programming-language code generator where token boundaries straddle syntactically-meaningful boundaries). Most production codebases — including buffr — never hit either.
 
 ### What wasn't actually a tradeoff
 Custom-trained tokenizers are not a real option for an application developer. Tokenizers ship with the model; choosing a tokenizer means choosing a model.
@@ -248,7 +248,7 @@ Custom-trained tokenizers are not a real option for an application developer. To
 
 ### tiktoken (OpenAI)
 
-- **Codebase uses:** not used in loopd today; loopd talks to Claude (which uses Anthropic's own tokenizer) and OpenAI (which uses tiktoken).
+- **Codebase uses:** not used in buffr today; buffr talks to Claude (which uses Anthropic's own tokenizer) and OpenAI (which uses tiktoken).
 - **Why it's here:** the de facto standard library for measuring token counts before sending a request; mirrors the BPE used by GPT-3.5 / GPT-4 / GPT-4o.
 - **Leading today:** tiktoken — `adoption-leading` for OpenAI token counting, 2026.
 - **Why it leads:** maintained by OpenAI; matches the production tokenizer byte-for-byte; widely available in Python, JS, Go.
@@ -256,7 +256,7 @@ Custom-trained tokenizers are not a real option for an application developer. To
 
 ### Anthropic tokenizer
 
-- **Codebase uses:** not used in loopd today; Claude calls don't ship a public tokenizer the way OpenAI does — the `usage` field on the response is the post-hoc count.
+- **Codebase uses:** not used in buffr today; Claude calls don't ship a public tokenizer the way OpenAI does — the `usage` field on the response is the post-hoc count.
 - **Why it's here:** Claude's own BPE; not exposed as a standalone library but observable via the API response's `usage.input_tokens` / `usage.output_tokens`.
 - **Leading today:** Anthropic API `usage` field — `adoption-leading` for Claude cost measurement, 2026.
 - **Why it leads:** authoritative count from the model itself; no pre-flight tokenization needed.
@@ -266,7 +266,7 @@ Custom-trained tokenizers are not a real option for an application developer. To
 
 ## Project exercises
 
-**Status:** `learn-only` (Phase 1 — `[C1.1]` is tagged `learn-only — built in reincodes viz`). The build target lives in the reincodes portfolio repo; loopd consumes the *output* of tokenization (counts) without owning a tokenizer.
+**Status:** `learn-only` (Phase 1 — `[C1.1]` is tagged `learn-only — built in reincodes viz`). The build target lives in the reincodes portfolio repo; buffr consumes the *output* of tokenization (counts) without owning a tokenizer.
 
 The exercises that build tokenization intuition are:
 
@@ -279,11 +279,11 @@ The exercises that build tokenization intuition are:
 - **Done when:** the visualizer is published to the reincodes portfolio; ASCII art of the merge sequence is reproducible from the interactive view.
 - **Estimated effort:** `1–2 days`.
 
-### (loopd) Consume the count, not the tokenizer
+### (buffr) Consume the count, not the tokenizer
 
 - **Exercise ID:** `[B1.2]` (token usage logging) — primary target is [23-token-economics](./23-token-economics.md).
-- **What to build:** loopd's `ai_call_log` table records `prompt_tokens` and `completion_tokens` from the Anthropic/OpenAI response. No client-side tokenizer needed.
-- **Why it earns its place:** the count is what matters in production; the tokenizer is what matters in pedagogy. loopd doesn't need both.
+- **What to build:** buffr's `ai_call_log` table records `prompt_tokens` and `completion_tokens` from the Anthropic/OpenAI response. No client-side tokenizer needed.
+- **Why it earns its place:** the count is what matters in production; the tokenizer is what matters in pedagogy. buffr doesn't need both.
 - **Files to touch:** see [23-token-economics](./23-token-economics.md).
 - **Done when:** see [23-token-economics](./23-token-economics.md).
 - **Estimated effort:** `1–4hr`.
@@ -292,14 +292,14 @@ The exercises that build tokenization intuition are:
 
 ## Summary
 
-Tokenization is the deterministic process that maps a byte string into a sequence of integer IDs from a fixed ~50k-entry vocabulary. In loopd it is not directly implemented — the model providers tokenize internally and report `input_tokens` / `output_tokens` in their responses, which `[B1.2]` logs into `ai_call_log`. The constraint that makes this the right call here is that loopd doesn't need to pre-flight tokenize for budgeting; the post-hoc count is sufficient for cost panels and rate limiting. The cost is that we can't enforce a hard token cap *before* the call — we discover oversized prompts when the API rejects them rather than when we build them.
+Tokenization is the deterministic process that maps a byte string into a sequence of integer IDs from a fixed ~50k-entry vocabulary. In buffr it is not directly implemented — the model providers tokenize internally and report `input_tokens` / `output_tokens` in their responses, which `[B1.2]` logs into `ai_call_log`. The constraint that makes this the right call here is that buffr doesn't need to pre-flight tokenize for budgeting; the post-hoc count is sufficient for cost panels and rate limiting. The cost is that we can't enforce a hard token cap *before* the call — we discover oversized prompts when the API rejects them rather than when we build them.
 
 Key points to remember:
 - BPE = ~50k learned sub-word units; common English fragments are 1 token, rare strings shatter.
 - Token count is the unit of billing, the unit of attention compute, and the unit of context-window measurement — all three at once.
 - 1k chars of English prose ≈ 250 tokens; 1k chars of UUIDs ≈ 800+ tokens. Non-uniform by design.
 - Tokenizers are per-model; choosing a model chooses a tokenizer.
-- loopd consumes counts from the API response; it does not run a client-side tokenizer.
+- buffr consumes counts from the API response; it does not run a client-side tokenizer.
 
 ---
 
@@ -314,12 +314,12 @@ Key points to remember:
   A: A token is an integer ID drawn from a fixed vocabulary the model was trained with — usually ~50k entries for modern LLMs. Common English sub-word fragments are one token each (`ization`, `the`, `loop`); rare strings get shattered into many tokens (a UUID is ~one token per character). The model never sees characters; it sees the integer sequence. That's why you can't equate "1k characters" with "1k tokens" in any reliable way.
   Diagram:
   ```
-  "loopd uses Sonnet"  →  [14334, 67, 5829, 328, 86471]  →  model
+  "buffr uses Sonnet"  →  [14334, 67, 5829, 328, 86471]  →  model
   17 characters                  5 tokens
   ```
 
   [senior] Q: Why does pasting a code block cost more tokens than the equivalent prose?
-  A: BPE was trained on a corpus dominated by natural-language text, so its learned merges optimise for English (and similar) prose. Code contains many strings that aren't in the merge table — variable names, hex strings, indentation patterns — and these get cut into smaller, sometimes character-level tokens. A function signature like `getUserByIdSafe(uuid: string)` is ~10–14 tokens; the same character count of prose is ~6–8. In loopd specifically, this matters most for the `expand` chain when the user's todos include code-like content.
+  A: BPE was trained on a corpus dominated by natural-language text, so its learned merges optimise for English (and similar) prose. Code contains many strings that aren't in the merge table — variable names, hex strings, indentation patterns — and these get cut into smaller, sometimes character-level tokens. A function signature like `getUserByIdSafe(uuid: string)` is ~10–14 tokens; the same character count of prose is ~6–8. In buffr specifically, this matters most for the `expand` chain when the user's todos include code-like content.
   Diagram:
   ```
   Prose:  "the user logged in"      ≈ 5 tokens
@@ -328,17 +328,17 @@ Key points to remember:
                                      no learned merge for "Uuid" or "(uuid"
   ```
 
-  [arch] Q: What changes at 10× scale — say, 100k users on loopd?
+  [arch] Q: What changes at 10× scale — say, 100k users on buffr?
   A: Two things. First, the cost per chain becomes the dominant operational cost, and the non-uniformity of token cost across users (Korean-speaking users pay 2–3× per character) becomes a fairness issue worth surfacing. Second, the lack of a pre-flight tokenizer becomes a real problem — at 100k users you can't afford the API rejecting oversized prompts as a budgeting signal; you need to refuse on the client. The fix is adding tiktoken (or Claude's equivalent) at the chain layer for input estimation.
   Diagram:
   ```
   Today (solo)        →  send → API rejects oversize  → degrade gracefully
   At 100k users       →  estimate client-side → refuse early → no wasted call
-                            ↑ this layer doesn't exist in loopd today
+                            ↑ this layer doesn't exist in buffr today
   ```
 
 ### The question candidates always dodge
-"How does Claude's tokenizer differ from OpenAI's, and why does that matter for your code?" Most candidates say "they're both BPE" and stop. The real answer is that *the vocabularies are different and not portable*. A prompt that's 1k tokens on Sonnet might be 1.2k on GPT-4o because their merges learned different fragments. In a provider-abstracted codebase like loopd's, this means budget calculations done against one tokenizer are wrong for the other. Today loopd dodges the problem by using post-hoc counts from each provider's `usage` response — but a pre-flight client-side estimator would need to maintain *two* tokenizers.
+"How does Claude's tokenizer differ from OpenAI's, and why does that matter for your code?" Most candidates say "they're both BPE" and stop. The real answer is that *the vocabularies are different and not portable*. A prompt that's 1k tokens on Sonnet might be 1.2k on GPT-4o because their merges learned different fragments. In a provider-abstracted codebase like buffr's, this means budget calculations done against one tokenizer are wrong for the other. Today buffr dodges the problem by using post-hoc counts from each provider's `usage` response — but a pre-flight client-side estimator would need to maintain *two* tokenizers.
 
 ```
 Claude tokenizer       OpenAI tokenizer (tiktoken)
@@ -364,7 +364,7 @@ Pre-flight estimation needs both libraries.
 ## Validate your understanding
 
 ### Level 1 — Reconstruct the diagram
-Close this file and draw the tokenization pipeline diagram from memory: input string → BPE → vocabulary lookup → integer ID sequence → model. Label the 5-token example for `"loopd uses Sonnet"`.
+Close this file and draw the tokenization pipeline diagram from memory: input string → BPE → vocabulary lookup → integer ID sequence → model. Label the 5-token example for `"buffr uses Sonnet"`.
 
 ✓ Pass: your diagram shows the byte-pair encoder, the vocabulary lookup, and the integer output.
 ✗ Fail: re-read "How it works" and try again.
@@ -373,18 +373,18 @@ Close this file and draw the tokenization pipeline diagram from memory: input st
 Explain tokenization in under 90 seconds. Did you say: (a) BPE makes a ~50k vocabulary by greedy merging, (b) common fragments are one token and rare strings shatter, (c) the model sees integers not text, (d) cost-per-character is non-uniform?
 
 ### Level 3 — Apply it to a new scenario
-A loopd user starts journaling in Korean. They notice their per-day token spend is 3× higher than an English-only user with the same character count. Without looking at the file, explain why — and propose one mitigation.
+A buffr user starts journaling in Korean. They notice their per-day token spend is 3× higher than an English-only user with the same character count. Without looking at the file, explain why — and propose one mitigation.
 
 Open this file and check your answer against the "Where this breaks down" section.
 
 ### Level 4 — Defend the decision you'd change
-Today loopd has no client-side tokenizer. If you were starting today, would you ship one from day 1, or stay with post-hoc counts? Answer in 3–5 sentences, referencing the cost dimension you'd prioritise.
+Today buffr has no client-side tokenizer. If you were starting today, would you ship one from day 1, or stay with post-hoc counts? Answer in 3–5 sentences, referencing the cost dimension you'd prioritise.
 
 ### Quick check — code reference test
-- What loopd file does this concept live in?
+- What buffr file does this concept live in?
 - What function logs the token count today?
 
-Answer: tokenization itself is not implemented in loopd; the `usage` count is consumed by `[B1.2]`'s planned `ai_call_log` table — no implementation yet.
+Answer: tokenization itself is not implemented in buffr; the `usage` count is consumed by `[B1.2]`'s planned `ai_call_log` table — no implementation yet.
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (clerk-with-phrasebook scenario, name the what-is-the-bill-unit question, MAX_INPUT_CHARS/prompt-cost stakes, before/after, single-line metaphor).

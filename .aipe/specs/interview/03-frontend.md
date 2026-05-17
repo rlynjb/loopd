@@ -2,7 +2,7 @@
 
 > **The home turf.** As a frontend specialist transitioning to senior roles, this chapter is where I should sound most fluent and where the interviewer's questions will go deepest. The state model is the heart of it.
 
-The frontend in loopd is React Native + Expo, file-routed via `expo-router`. Anyone with React experience reads it without trouble — most of the patterns transfer one-for-one. What's not standard is the state model. Most apps put input values in `useState` and call it a day. loopd doesn't, because that pattern lost data in past versions of this app.
+The frontend in buffr is React Native + Expo, file-routed via `expo-router`. Anyone with React experience reads it without trouble — most of the patterns transfer one-for-one. What's not standard is the state model. Most apps put input values in `useState` and call it a day. buffr doesn't, because that pattern lost data in past versions of this app.
 
 The model is three-tier. Refs hold ephemeral state — the cursor position, the "did the user just type a character" flag, the live text mid-typing. React state holds what needs to render — the entry list, the filter chips, the modal open/closed state. SQLite holds what needs to be durable — the actual bytes of every journal entry. These three layers update on every keystroke, but they update in a deliberate order: refs and SQLite first, React state last. When focus cleanup races an idle timer, the bytes have already landed in SQLite, so even if the React tree unmounts mid-word, nothing is lost.
 

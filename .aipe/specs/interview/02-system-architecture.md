@@ -2,7 +2,7 @@
 
 > **Read second.** Get the request flow straight before you talk about anything else. If you can sketch the diagram below from memory, you can survive any system-design question on this codebase.
 
-When a new engineer clones loopd and opens the project, the first thing they should look at is `src/services/` — that's where the work happens. The UI in `app/` is mostly file-routed Expo screens that call into hooks in `src/hooks/`, which call into services. This is layered architecture done deliberately: each layer only depends on the ones below it, and the boundaries are obvious from the import graph alone.
+When a new engineer clones buffr and opens the project, the first thing they should look at is `src/services/` — that's where the work happens. The UI in `app/` is mostly file-routed Expo screens that call into hooks in `src/hooks/`, which call into services. This is layered architecture done deliberately: each layer only depends on the ones below it, and the boundaries are obvious from the import graph alone.
 
 The interesting part isn't the layering. The interesting part is the *commit-time split* — the design decision that everything else falls out of. When the user types in the journal, every keystroke writes to SQLite immediately, no React state involved. The bytes are durable from keystroke one. When the user blurs the input or navigates away, *that's* when the parsers run and the AI fires and the cloud-sync push gets debounced. The save path and the derive-state path are separate by design. Past data-loss bugs came from React state being out of sync with what the user typed when navigation interrupted, and the keystroke-to-DB write fixed that whole class of bug.
 
@@ -146,7 +146,7 @@ Supabase. Notion was the answer until commit `dc8483a` deleted that integration;
 
 The mitigation is the same architectural principle as before — local SQLite is canonical (Principle 12). If Supabase disappears entirely, every existing piece of data is intact locally, every read path filters `WHERE deleted_at IS NULL` against local, and the user keeps using the app offline-first. The cloud sync layer is the safety net you opt into; it isn't on the read path. Edits durably hit SQLite from keystroke one (the commit-time split discussed above); Supabase lags by 5s via the debounced push.
 
-What I'd lose if Supabase went away: the cross-device replication path (Phase B's reason to exist), and any data that was created on a device that subsequently dies before pulling locally. The clip files (`Documents/loopd/clips/<date>/*.mp4`) aren't in Supabase Storage anyway — they're a known gap (see [docs/backlog.md](../../../docs/backlog.md)) — so Supabase's outage doesn't make that worse.
+What I'd lose if Supabase went away: the cross-device replication path (Phase B's reason to exist), and any data that was created on a device that subsequently dies before pulling locally. The clip files (`Documents/buffr/clips/<date>/*.mp4`) aren't in Supabase Storage anyway — they're a known gap (see [docs/backlog.md](../../../docs/backlog.md)) — so Supabase's outage doesn't make that worse.
 
 I'm proud of the local-canonical decision because it survived a backend swap. The same architecture that previously protected against Notion changing their API now protects against Supabase changing theirs. The cost is the same: I write all the merge logic by hand. The benefit is the same: every cloud is replaceable. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
 

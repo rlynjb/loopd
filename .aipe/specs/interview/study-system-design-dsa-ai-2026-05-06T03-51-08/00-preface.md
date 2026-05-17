@@ -1,6 +1,6 @@
 # Preface — What this project is really about
 
-loopd looks, on the surface, like a journaling app with a video editor bolted on. That's not what it is. The interesting part of loopd is that it is a **derived-state engine that hides behind a textbox.**
+buffr looks, on the surface, like a journaling app with a video editor bolted on. That's not what it is. The interesting part of buffr is that it is a **derived-state engine that hides behind a textbox.**
 
 The user types a single block of prose into the day's entry. From that prose, the app extracts:
 
@@ -17,7 +17,7 @@ What this shows about the engineer:
 
 1. **I know how to pick a single source of truth and defend it.** Two competing canonical stores would give two slightly-different bug reports per feature. I picked one (SQLite locally; prose for derived shapes) and made sure no code path violates it.
 2. **I know when to ship a sync engine instead of a sync feature.** The Supabase mirror landed as 12 files (`src/services/sync/*.ts` + 10 per-table modules in `tables/`). Generic push, generic pull, `chooseWinner` for last-write-wins, and a per-table `SyncableTable` definition. Adding the 11th synced table would be ~70 lines.
-3. **I know what AI is for.** loopd uses Claude Sonnet 4.6 for compose-the-day (structured `AISummary` JSON), Claude Haiku 4.5 for the cheap todo classifier, and a separate caption call that emits four tonal variants (`clean` / `smoother` / `reflective` / `punchy`) from the same raw log. Each call is single-purpose. None of them are in the hot path of the UI. None of them block the user.
+3. **I know what AI is for.** buffr uses Claude Sonnet 4.6 for compose-the-day (structured `AISummary` JSON), Claude Haiku 4.5 for the cheap todo classifier, and a separate caption call that emits four tonal variants (`clean` / `smoother` / `reflective` / `punchy`) from the same raw log. Each call is single-purpose. None of them are in the hot path of the UI. None of them block the user.
 4. **I know what I deferred.** Hard delete (vacuum) — deferred. RLS enforcement — disabled in Phase A; the schema gate is composite `(user_id, id)` PK on every cloud table. Test suite — none; manual end-to-end on the connected Android device. Each of those is a deliberate non-decision, not an oversight, and I can defend each.
 
 What an interviewer should walk away with after the first 10 minutes: this is a person who designed a system instead of assembling one. The AI wrote a lot of the lines; I wrote every rule. The chapters that follow are how to tell that apart under pressure.

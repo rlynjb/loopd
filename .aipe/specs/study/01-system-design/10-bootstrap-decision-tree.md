@@ -234,13 +234,13 @@ This is what people mean by "design the cold-start path as an explicit decision 
 ## Elaborate
 
 ### Where this pattern comes from
-Any sync engine has a bootstrap problem: "what if the local and remote disagree about who has data?" Most engines either force "cloud wins" (which loses fresh local writes) or "local wins" (which loses everything pre-existing in cloud). Loopd uses the four-quadrant explicit choice because each quadrant has a clearly correct answer except the both-populated case.
+Any sync engine has a bootstrap problem: "what if the local and remote disagree about who has data?" Most engines either force "cloud wins" (which loses fresh local writes) or "local wins" (which loses everything pre-existing in cloud). Buffr uses the four-quadrant explicit choice because each quadrant has a clearly correct answer except the both-populated case.
 
 ### The deeper principle
 **Initial state is its own problem; don't try to handle it in the steady-state code.** Steady-state sync (push/pull) assumes both sides have a shared history (the `last_pull_at` watermark). Bootstrap establishes that watermark. Mixing the two would make the steady-state code carry conditional branches forever.
 
 ### Where this breaks down
-- The both-populated case in Phase A's silent-push fallback can quietly overwrite cloud data. A user who switched devices and reconfigured cloud would expect the cloud to win, but loopd will push the new device's empty-ish local over it. Mitigation: the warning log surfaces in the dev menu.
+- The both-populated case in Phase A's silent-push fallback can quietly overwrite cloud data. A user who switched devices and reconfigured cloud would expect the cloud to win, but buffr will push the new device's empty-ish local over it. Mitigation: the warning log surfaces in the dev menu.
 - Slow networks where the cloud-existence check times out. The fallback assumption (cloud=no when uncertain) could trigger an unwanted initial-push.
 
 ### What to explore next
@@ -417,7 +417,7 @@ At 3+ devices coming online in non-fresh-install order:
 ```
 
 ### The question candidates always dodge
-Q: Your "both populated" branch silently picks local and pushes. Walk me through the case where a user replaces their phone, restores their loopd database from a stale backup, and turns cloud sync on for the first time after the restore.
+Q: Your "both populated" branch silently picks local and pushes. Walk me through the case where a user replaces their phone, restores their buffr database from a stale backup, and turns cloud sync on for the first time after the restore.
 
 A: This is the case where the design hurts most. The restored backup is two weeks stale; cloud has the user's current data from their old phone. Bootstrap sees `local=yes, cloud=yes`, runs the fallback initial-push, and overwrites cloud with the stale local rows. The user's last two weeks of work, which existed only on cloud, are now gone. The mitigation today is the warning log — the user has to know to check it. The proper fix is the prompt I mentioned: detect ambiguity and ask. I haven't shipped it because the case requires the user to actively migrate data, which is a Phase B onboarding flow that doesn't exist yet. Phase A's user (me) doesn't restore from backups — when I switch devices, I install fresh and let `first-pull` populate. The honest answer is the design is correct for the workflow that exists and wrong for the one that doesn't, and I haven't built that workflow yet.
 
@@ -472,7 +472,7 @@ If you skipped any: you described it, you didn't understand it.
 ### Level 3 — Apply it to a new scenario
 Answer this without looking at the file:
 
-A user replaces their phone, restores their loopd backup from two weeks ago (so local SQLite has 14-day-stale data), and turns cloud sync on for the first time after the restore. Cloud has the user's current real data from their old phone. Walk what happens on the next cold start: which quadrant fires, what `cloud_initial_push_done` ends up at, and what does the user *see* — what data is preserved and what is lost?
+A user replaces their phone, restores their buffr backup from two weeks ago (so local SQLite has 14-day-stale data), and turns cloud sync on for the first time after the restore. Cloud has the user's current real data from their old phone. Walk what happens on the next cold start: which quadrant fires, what `cloud_initial_push_done` ends up at, and what does the user *see* — what data is preserved and what is lost?
 
 Write your answer. 3–5 sentences minimum. Then open `src/services/sync/bootstrap.ts` L59–L96 to verify.
 

@@ -13,7 +13,7 @@ You've got a production incident in a microservice app. The user clicked a butto
 
 The implicit question is "after the fact, can the team reconstruct what happened during this LLM call, with evidence rather than memory?" LLM observability is the answer — every chain invocation gets a trace_id, every sub-step (prompt build, provider call, JSON parse, validator) gets a span, every span carries timestamp + duration + input + output + model + tokens + error. The shape borrows from distributed tracing (OpenTelemetry, Jaeger); the LLM-specific additions are prompt/response capture and model-version tagging.
 
-**What depends on getting this right:** the ability to answer "the classifier got my todo wrong — show me the trace" with a SQL query instead of a guess, plus regression detection ("which calls produced null in the last 24h?") and post-eval replay. For loopd the planned `ai_trace` table (per `[B3.11]`) and the `traceCall(name, parentSpanId, fn)` wrapper in `src/services/ai/trace.ts` make every span queryable; `[B3.14]` evaluates Langfuse as the team-scale upgrade; `[B3.15]` documents the first regression caught — receipt, not a claim. Skip observability and every user-reported issue becomes a fresh investigation with no chain of custody.
+**What depends on getting this right:** the ability to answer "the classifier got my todo wrong — show me the trace" with a SQL query instead of a guess, plus regression detection ("which calls produced null in the last 24h?") and post-eval replay. For buffr the planned `ai_trace` table (per `[B3.11]`) and the `traceCall(name, parentSpanId, fn)` wrapper in `src/services/ai/trace.ts` make every span queryable; `[B3.14]` evaluates Langfuse as the team-scale upgrade; `[B3.15]` documents the first regression caught — receipt, not a claim. Skip observability and every user-reported issue becomes a fresh investigation with no chain of custody.
 
 Without observability:
 - User reports "classifier got my todo wrong" → you read the entry text but can't see the prompt that was sent, the response, or the validator path
@@ -146,16 +146,16 @@ Three options:
 2. **Managed service** — Langfuse (self-hosted or managed), LangSmith, Phoenix/Arize. OpenTelemetry-compatible. Vendor handles storage, search, and dashboards.
 3. **Hybrid** — local for development, managed for production.
 
-For loopd: at solo scale, local SQLite is sufficient — the `ai_trace` table from `[B3.11]`. The interface stays the same regardless of where traces eventually live.
+For buffr: at solo scale, local SQLite is sufficient — the `ai_trace` table from `[B3.11]`. The interface stays the same regardless of where traces eventually live.
 
 The three storage options compared:
 
 ```
-   option                what loopd would pay              when it's right
+   option                what buffr would pay              when it's right
    ──────────────────    ──────────────────────────       ────────────────────
-   local SQLite           + zero new services               loopd today
+   local SQLite           + zero new services               buffr today
    (ai_trace in           + SQL joins with entries          (~30 calls/day,
-   loopd.db)              + sync via existing                solo scale,
+   buffr.db)              + sync via existing                solo scale,
                             schedulePush                     ~30KB/day)
                           - prompt/response = bytes
                             grow with traffic
@@ -177,7 +177,7 @@ The three storage options compared:
                           - sample rate often differs
                             between environments
 
-   loopd today: option 1. the interface (traceCall, ai_trace schema)
+   buffr today: option 1. the interface (traceCall, ai_trace schema)
    stays identical when the team graduates to option 2 or 3.
 ```
 
@@ -279,7 +279,7 @@ LLM observability borrows directly from distributed-tracing primitives (OpenTele
 Async pipelines benefit disproportionately from structured tracing because their causal chain spans process boundaries. A scheduled-but-not-yet-executed classify call is invisible without trace propagation; with it, the trace links back to the entry-commit that scheduled it.
 
 ### Where this breaks down
-Naive prompt-and-response capture stores PII verbatim. Production deployments need redaction or encryption-at-rest. For loopd at solo scale this is your own data, but at multi-user scale this becomes mandatory.
+Naive prompt-and-response capture stores PII verbatim. Production deployments need redaction or encryption-at-rest. For buffr at solo scale this is your own data, but at multi-user scale this becomes mandatory.
 
 ### What to explore next
 - [23-token-economics](./23-token-economics.md) → the token-count subset of full observability
@@ -309,14 +309,14 @@ Naive prompt-and-response capture stores PII verbatim. Production deployments ne
 
 ### Sub-block 1 — what local `ai_trace` gives up
 
-A managed UI. Local SQLite is queryable via SQL but lacks the dashboards, flame-graph UI, and built-in analytics that Langfuse or LangSmith provide. For solo loopd this is fine — most queries are one-offs done at the SQL prompt. At multi-user scale the UI starts mattering.
+A managed UI. Local SQLite is queryable via SQL but lacks the dashboards, flame-graph UI, and built-in analytics that Langfuse or LangSmith provide. For solo buffr this is fine — most queries are one-offs done at the SQL prompt. At multi-user scale the UI starts mattering.
 
 ### Sub-block 2 — what print-logs-only would cost
 
 The inability to answer "show me all the traces where X happened" — you'd have to grep, and `console.log` output isn't structured or queryable. The first time you try to debug a class of failures across many calls, you reinvent observability.
 
 ### Sub-block 3 — the breakpoint
-Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (search becomes slow), (b) you need shared access (multi-developer team), or (c) you need cross-service correlation (microservices). For loopd, none of these apply.
+Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (search becomes slow), (b) you need shared access (multi-developer team), or (c) you need cross-service correlation (microservices). For buffr, none of these apply.
 
 ### What wasn't actually a tradeoff
 "Just rely on the model provider's logs" was never an option. Providers see only the model call; they don't see your parsing, your validator, your downstream writes. The full trace exists only in your application.
@@ -328,7 +328,7 @@ Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (sear
 ### Local SQLite (target — `ai_trace`)
 
 - **Codebase uses:** target for `[B3.11]`.
-- **Why it's here:** integrates with loopd's local-first architecture; no new service.
+- **Why it's here:** integrates with buffr's local-first architecture; no new service.
 - **Leading today:** local SQL traces — `adoption-leading` for solo applications, 2026.
 - **Why it leads:** zero new infra; queryable; uses existing storage layer.
 - **Runner-up:** OpenTelemetry SDK with local backend — `innovation-leading` for codebases planning to grow into multi-service; standard format eases later migration.
@@ -358,7 +358,7 @@ Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (sear
 
 - **Exercise ID:** `[B3.14]`
 - **What to build:** Self-host Langfuse for a week. Wire one chain (suggest: caption) to write spans to Langfuse via OpenTelemetry. Compare the dashboard UX vs the local SQL workflow. Decide: stay local or migrate.
-- **Why it earns its place:** the discipline-level question is whether managed tooling beats local SQL for loopd's actual queries. The answer is empirical.
+- **Why it earns its place:** the discipline-level question is whether managed tooling beats local SQL for buffr's actual queries. The answer is empirical.
 - **Files to touch:** new docker-compose for Langfuse; instrument caption chain.
 - **Done when:** the comparison is documented; decision is recorded; if "stay local," Langfuse infra is dismantled.
 - **Estimated effort:** `1–2 days`.
@@ -366,7 +366,7 @@ Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (sear
 ### [B3.15] Document one regression caught
 
 - **Exercise ID:** `[B3.15]`
-- **What to build:** A short writeup `loopd/.aipe/specs/eval/caught-regression.md` documenting one regression that traces helped catch — what changed, how trace inspection identified the cause, how it would have been invisible without traces.
+- **What to build:** A short writeup `buffr/.aipe/specs/eval/caught-regression.md` documenting one regression that traces helped catch — what changed, how trace inspection identified the cause, how it would have been invisible without traces.
 - **Why it earns its place:** the interview-quality story. "I built observability" is a claim; "here's the regression it caught" is a receipt.
 - **Files to touch:** new doc file.
 - **Done when:** the writeup exists; the regression is named; the trace query that found it is shown.
@@ -376,7 +376,7 @@ Local `ai_trace` stops being right when (a) trace volume exceeds ~100k/day (sear
 
 ## Summary
 
-LLM observability records prompts, responses, latencies, models, and parsing outcomes for every call so you can reconstruct what happened later. In loopd this is not yet implemented; `[B3.11]` adds a local `ai_trace` table; `[B3.14]` evaluates Langfuse as a possible upgrade; `[B3.15]` documents the first regression caught. The constraint that makes local SQLite the right starting call is solo scale + loopd's local-first architecture — managed services aren't justified yet. The cost being paid is the lack of a managed UI; SQL queries fill the gap for now.
+LLM observability records prompts, responses, latencies, models, and parsing outcomes for every call so you can reconstruct what happened later. In buffr this is not yet implemented; `[B3.11]` adds a local `ai_trace` table; `[B3.14]` evaluates Langfuse as a possible upgrade; `[B3.15]` documents the first regression caught. The constraint that makes local SQLite the right starting call is solo scale + buffr's local-first architecture — managed services aren't justified yet. The cost being paid is the lack of a managed UI; SQL queries fill the gap for now.
 
 Key points to remember:
 - Traces capture inputs, outputs, latency, and metadata per span.

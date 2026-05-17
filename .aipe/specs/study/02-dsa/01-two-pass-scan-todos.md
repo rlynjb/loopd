@@ -285,7 +285,7 @@ Choosing case-insensitive exact match in Pass 1 (`text.toLowerCase()`) wasn't a 
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db` — the existing `TodoItem[]` and `sourceLine` values that Pass 1/2 read against live in the `entries.todos_json` JSON column and `todo_meta.text`/`todo_meta.sourceLine` rows.
+- **Codebase uses:** `expo-sqlite` against `buffr.db` — the existing `TodoItem[]` and `sourceLine` values that Pass 1/2 read against live in the `entries.todos_json` JSON column and `todo_meta.text`/`todo_meta.sourceLine` rows.
 - **Why it's here:** the "before" snapshot the algorithm matches against is whatever the previous commit wrote to SQLite. WAL mode guarantees readers see a consistent snapshot while the next commit is being prepared.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; WAL mode gives readers stable snapshots; mirrors the SQLite C API directly.

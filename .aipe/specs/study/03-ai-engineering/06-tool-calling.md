@@ -1,4 +1,4 @@
-# Tool calling — not used in loopd
+# Tool calling — not used in buffr
 
 **Industry name(s):** Tool calling, function calling
 **Type:** Industry standard
@@ -33,12 +33,12 @@ The cheapest agent is no agent — pre-fetch the data deterministically and let 
 
 ## How it works
 
-A loop where the model emits tool calls and your code runs them and feeds the results back — same shape as driving a JavaScript generator (`function*`) with `next()`, except the `yield` points come from an LLM emitting `{ tool: 'X', input: { ... } }` instead of a `yield` keyword, and the loop driver decides when to stop. Loopd's AI calls don't do this — every call is one-shot, prompt-in-JSON-out, no orchestrator, no loop. The pattern is documented here because understanding what loopd *doesn't* do is the load-bearing distinction.
+A loop where the model emits tool calls and your code runs them and feeds the results back — same shape as driving a JavaScript generator (`function*`) with `next()`, except the `yield` points come from an LLM emitting `{ tool: 'X', input: { ... } }` instead of a `yield` keyword, and the loop driver decides when to stop. Buffr's AI calls don't do this — every call is one-shot, prompt-in-JSON-out, no orchestrator, no loop. The pattern is documented here because understanding what buffr *doesn't* do is the load-bearing distinction.
 
 The loop the codebase DOES NOT use, side by side with the one it does:
 
 ```
-       Tool-calling loop (NOT loopd)              One-shot (loopd today)
+       Tool-calling loop (NOT buffr)              One-shot (buffr today)
    ┌────────────────────────────────┐         ┌────────────────────────────────┐
    │ prompt + tool schemas           │         │ prompt with all data inlined   │
    │           │                      │         │ (buildContext fetched it       │
@@ -64,7 +64,7 @@ The loop the codebase DOES NOT use, side by side with the one it does:
    └────────────────────────────────┘
 ```
 
-The three sub-sections below trace the loop itself, why loopd opted out, and what one-shot gives up that an agent could provide.
+The three sub-sections below trace the loop itself, why buffr opted out, and what one-shot gives up that an agent could provide.
 
 ### The tool-calling loop — model emits a tool call, orchestrator runs it, re-prompts
 
@@ -98,14 +98,14 @@ Walking the loop on a hypothetical "what was my sickest workout last month?" age
 
 The model owns "what to ask for"; the orchestrator owns "how to fulfill." Neither one alone is enough.
 
-### Why loopd doesn't do this — every chain is one-shot
+### Why buffr doesn't do this — every chain is one-shot
 
 Every AI chain in this codebase is single-shot: build a prompt with all the data the model needs, call the LLM once, parse the response, persist. No tool-calling loop, no orchestrator, no "let me check on that." The data the chain needs is fetched from SQLite *before* the prompt is built — see `buildContext` per chain in [03-context-window](./03-context-window.md). The model sees the data inline; it doesn't ask for it. Think of it like the difference between a stateless backend handler that gets everything it needs in the request body vs an agentic handler that calls out to other services mid-request. The codebase deliberately picks the former. Concrete consequence: when `expand(todoId)` runs, the codebase reads the todo text, the last 3 days of summaries, the 5 sibling todos — all from SQLite — packs them into a prompt, calls Claude once, parses ~400 tokens of expansion JSON. One round-trip, predictable cost, deterministic shape. An agentic version would have the model say "give me todos from the past week" → orchestrator runs SQL → "give me yesterday's summary" → orchestrator runs SQL → "give me sibling todos" → orchestrator runs SQL → final answer. Four round-trips for the same data the one-shot version assembled deterministically in code. Boundary: the one-shot pattern works because the codebase knows in advance what data the chain needs. When the data needed depends on the input in unpredictable ways (e.g. an open-ended Q&A), agentic shapes become unavoidable.
 
 The `expand(todoId)` call under both arrangements:
 
 ```
-       One-shot (loopd today)                Agentic (NOT loopd)
+       One-shot (buffr today)                Agentic (NOT buffr)
    ┌───────────────────────────────┐    ┌───────────────────────────────┐
    │ expand(todoId)                 │    │ expand(todoId)                 │
    │   ▼                             │    │   ▼                             │
@@ -131,12 +131,12 @@ When the codebase knows what data the chain needs in advance, fetching it determ
 
 ### What the one-shot path gives up — open-ended queries
 
-The cost of one-shot is that the codebase can't support "ask the AI anything about your journal" features. The model can only see what the prompt builder chose to include; novel cross-cutting queries ("show me the days where I mentioned both `loopd` and `gym`") need their own chain with their own data-fetch logic. An agentic shape would let the model improvise the data fetch — `query_entries(filter: "mentions thread X AND thread Y")` — without a new chain. If you've worked with the difference between typed REST endpoints and a GraphQL backend that lets the client compose queries, this is the same shape — typed endpoints are predictable and cheap; GraphQL is flexible and harder to constrain. Concrete consequence: the codebase has 5 chains for 5 specific jobs. A user who wants a 6th job (e.g. "summarise my last 3 trips") would need either a new chain or an interpret-like generic chain. The agentic version could handle ad-hoc queries without code changes — but at 4× the cost-per-call and a much wider failure surface (the model picks the wrong tool, the orchestrator dispatches wrong, the loop never terminates). Until then, one-shot wins.
+The cost of one-shot is that the codebase can't support "ask the AI anything about your journal" features. The model can only see what the prompt builder chose to include; novel cross-cutting queries ("show me the days where I mentioned both `buffr` and `gym`") need their own chain with their own data-fetch logic. An agentic shape would let the model improvise the data fetch — `query_entries(filter: "mentions thread X AND thread Y")` — without a new chain. If you've worked with the difference between typed REST endpoints and a GraphQL backend that lets the client compose queries, this is the same shape — typed endpoints are predictable and cheap; GraphQL is flexible and harder to constrain. Concrete consequence: the codebase has 5 chains for 5 specific jobs. A user who wants a 6th job (e.g. "summarise my last 3 trips") would need either a new chain or an interpret-like generic chain. The agentic version could handle ad-hoc queries without code changes — but at 4× the cost-per-call and a much wider failure surface (the model picks the wrong tool, the orchestrator dispatches wrong, the loop never terminates). Until then, one-shot wins.
 
 The cost ledger for adding a 6th capability — typed chain vs agentic:
 
 ```
-        Typed chain (loopd's pattern)              Agentic chain
+        Typed chain (buffr's pattern)              Agentic chain
    ┌──────────────────────────────────────┐   ┌──────────────────────────────────────┐
    │ writer's time:                        │   │ writer's time:                        │
    │   build one new chain file            │   │   define tool schemas + dispatcher    │
@@ -170,7 +170,7 @@ This is what people mean by "the cheapest agent is no agent." Tool-calling loops
 ## Tool calling — diagram
 
 ```
-  Every loopd AI call:                  An agent with tools (NOT loopd):
+  Every buffr AI call:                  An agent with tools (NOT buffr):
   ────────────────────────              ────────────────────────────────
 
   ┌─ App layer ──────────┐              ┌─ App / orchestrator ──────────────┐
@@ -189,9 +189,9 @@ This is what people mean by "the cheapest agent is no agent." Tool-calling loops
 
 ## When tools would matter
 
-If the user asked "find me the day I was sickest last month" and the answer required searching entries, that's where tool calling fits. The model emits `{tool: "search_entries", input: {query: "sickest"}}`, the app runs SQL, replies, the model summarises. Loopd doesn't have that surface today.
+If the user asked "find me the day I was sickest last month" and the answer required searching entries, that's where tool calling fits. The model emits `{tool: "search_entries", input: {query: "sickest"}}`, the app runs SQL, replies, the model summarises. Buffr doesn't have that surface today.
 
-The closest cousin loopd does have is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work.
+The closest cousin buffr does have is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work.
 
 ---
 
@@ -220,7 +220,7 @@ Tool calling came out of the ReAct paper (2022) and was popularised by ChatGPT p
 - Tool loops without budget caps can run away. Production tool agents need timeouts, max iterations, cost ceilings.
 
 ### What to explore next
-- [12-why-no-agents](./12-why-no-agents.md) → loopd's explicit decision against multi-step.
+- [12-why-no-agents](./12-why-no-agents.md) → buffr's explicit decision against multi-step.
 - [07-rag](./07-rag.md) → the alternative when context is too big.
 
 ---
@@ -289,7 +289,7 @@ Function calling (the API mechanism) vs tool calling (the architectural pattern)
 ### Anthropic tool use
 
 - **Codebase uses:** not implemented — named as the provider-specific mechanism that would be used if tool calling were added (tool-use blocks in the Anthropic API).
-- **Why it's here:** the file frames loopd's deliberate no-tools decision against Anthropic's tool-use API as the concrete alternative.
+- **Why it's here:** the file frames buffr's deliberate no-tools decision against Anthropic's tool-use API as the concrete alternative.
 - **Leading today:** Anthropic tool use — `adoption-leading`, 2026.
 - **Why it leads:** parallel tool calls, streaming tool results, multi-turn tool use with native SDK support; reliable structured tool-call parsing.
 - **Runner-up:** OpenAI function calling — older, broader ecosystem; less reliable for parallel calls; both APIs now converge in feature surface.
@@ -297,7 +297,7 @@ Function calling (the API mechanism) vs tool calling (the architectural pattern)
 ### OpenAI function calling
 
 - **Codebase uses:** not implemented — named as the alternative provider mechanism alongside Anthropic tool-use blocks.
-- **Why it's here:** the file names both Anthropic tool-use and OpenAI function calling as the APIs that would unlock the loop pattern loopd deliberately avoids.
+- **Why it's here:** the file names both Anthropic tool-use and OpenAI function calling as the APIs that would unlock the loop pattern buffr deliberately avoids.
 - **Leading today:** Anthropic tool use — `adoption-leading`, 2026.
 - **Why it leads:** see the Anthropic tool use subsection above.
 - **Runner-up:** OpenAI function calling (this tech) — broad ecosystem adoption, well-documented, JSON-schema-driven tool definitions; older but widely used in production agent systems.
@@ -306,13 +306,13 @@ Function calling (the API mechanism) vs tool calling (the architectural pattern)
 
 ## Project exercises
 
-**Status:** `learn-only` for loopd. The curriculum's Phase 4 (Agents and tool use) recommends Path C anchored to contrl-mo, not loopd. loopd's existing Path B option (`[B4B.1]`–`[B4B.5]` — classifier → mini-agent loop) remains an option but is currently deferred; the loopd-side interview defense is "why no tool calls" (see [12-why-no-agents.md](./12-why-no-agents.md)).
+**Status:** `learn-only` for buffr. The curriculum's Phase 4 (Agents and tool use) recommends Path C anchored to contrl-mo, not buffr. buffr's existing Path B option (`[B4B.1]`–`[B4B.5]` — classifier → mini-agent loop) remains an option but is currently deferred; the buffr-side interview defense is "why no tool calls" (see [12-why-no-agents.md](./12-why-no-agents.md)).
 
 ### Optional — Path B: classifier mini-agent loop (deferred)
 
-- **Exercise ID:** `[B4B.1]`–`[B4B.5]` *(Phase 4 — deferred for loopd; build only if interview targeting demands an agent surface in loopd specifically)*
+- **Exercise ID:** `[B4B.1]`–`[B4B.5]` *(Phase 4 — deferred for buffr; build only if interview targeting demands an agent surface in buffr specifically)*
 - **What to build:** Wrap `classifyTodo` in a mini-loop — classify → if `classifier_confidence < 0.7`, retrieve via Phase 2A RAG → re-classify with retrieved context → finalize. Tools: `retrieve_similar_todos`, `get_user_override_history`. Termination: confidence ≥ 0.7 or 2 iterations.
-- **Why it earns its place:** would turn loopd's heuristic-first cascade into a true agent loop with retrieval. Only earns its place after Phase 2A ships — otherwise there's nothing to retrieve.
+- **Why it earns its place:** would turn buffr's heuristic-first cascade into a true agent loop with retrieval. Only earns its place after Phase 2A ships — otherwise there's nothing to retrieve.
 - **Files to touch:** `src/services/todos/classify.ts` (wrap), new `src/services/todos/classifyAgent.ts`. Depends on the embedding pipeline from Phase 2A.
 - **Done when:** confidence < 0.7 paths route through retrieval; eval on 50 ambiguous todos shows lift over single-shot classify; termination is bounded.
 - **Estimated effort:** `≥1 week` (requires Phase 2A complete).
@@ -321,7 +321,7 @@ Function calling (the API mechanism) vs tool calling (the architectural pattern)
 
 ## Summary
 
-Tool calling is the pattern that wires a stateless text model to a stateful outside world: the model emits a structured request, the app runs it, the result is fed back as an observation, and the loop continues until the model returns a final answer. This codebase deliberately does not implement it — every chain in `src/services/ai/` returns on the first response, the closest cousin being `scheduleClassify` which is app code firing an LLM call, not the model asking the app to do work. The constraint that drove it is that every loopd feature is a one-shot transformation (text → JSON for four chains, text → markdown for `interpret`) where the data the model needs is already in hand at call time via `buildContext()`. The cost is that features genuinely needing navigation — "find me the day I was sickest last month" — can't be expressed as a single chain and would require a new service file with iteration caps and timeouts.
+Tool calling is the pattern that wires a stateless text model to a stateful outside world: the model emits a structured request, the app runs it, the result is fed back as an observation, and the loop continues until the model returns a final answer. This codebase deliberately does not implement it — every chain in `src/services/ai/` returns on the first response, the closest cousin being `scheduleClassify` which is app code firing an LLM call, not the model asking the app to do work. The constraint that drove it is that every buffr feature is a one-shot transformation (text → JSON for four chains, text → markdown for `interpret`) where the data the model needs is already in hand at call time via `buildContext()`. The cost is that features genuinely needing navigation — "find me the day I was sickest last month" — can't be expressed as a single chain and would require a new service file with iteration caps and timeouts.
 
 Key points to remember:
 - Every chain is one-shot: prompt → output → done. There is no observation step.
@@ -343,7 +343,7 @@ Key points to remember:
       A: It means every call returns on the first response. `summarize`, `caption`, `classify`, `expand`, and `interpret` all hand the model a prompt, get back a string (JSON for the first four, markdown for interpret), parse or clean it, and persist or render. Nowhere in the codebase does the model emit something like `{tool: "search_entries"}` and the app run a SQL query and feed the result back. The closest cousin is `scheduleClassify` — but that's app code firing an LLM call, not the LLM asking the app to do work. The control flow is always: app decides → LLM responds → app persists or renders.
 
 ```
-[every loopd chain — uniform shape]
+[every buffr chain — uniform shape]
 
   app decides to call (commit / button tap / scan finishes null)
         │
@@ -359,8 +359,8 @@ Key points to remember:
   (no observation step, no tool dispatch, no loop)
 ```
 
-[senior] Q: Is there a feature in loopd today where adding tool calling would be a clear win?
-         A: Not today. Every feature is a one-shot transformation: "summarise this day", "caption this day", "classify this line", "expand this todo". The data the model needs is already in hand at call time, packed into the prompt by `buildContext()`. Tool calling pays off when the model needs to *navigate* — search a corpus, query a DB, hit an external API — and the cost of stuffing every possibility into the prompt is too high. Loopd's prompts are small and the corpus is one user's journal. Nothing to navigate.
+[senior] Q: Is there a feature in buffr today where adding tool calling would be a clear win?
+         A: Not today. Every feature is a one-shot transformation: "summarise this day", "caption this day", "classify this line", "expand this todo". The data the model needs is already in hand at call time, packed into the prompt by `buildContext()`. Tool calling pays off when the model needs to *navigate* — search a corpus, query a DB, hit an external API — and the cost of stuffing every possibility into the prompt is too high. Buffr's prompts are small and the corpus is one user's journal. Nothing to navigate.
 
 ```
                   Path taken (one-shot chains)         Alternative (tool loop available)
@@ -441,7 +441,7 @@ fit               framing — capability without a       that don't have it is t
 ## Validate your understanding
 
 ### Level 1 — Reconstruct the diagram
-Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory (the "loopd's call" vs "an agent with tools" contrast). Label every box and every arrow.
+Close this file. Open a blank document or whiteboard. Draw the primary diagram from memory (the "buffr's call" vs "an agent with tools" contrast). Label every box and every arrow.
 
 Open the file. Compare.
 
@@ -449,7 +449,7 @@ Open the file. Compare.
 ✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
 
 ### Level 2 — Explain it out loud
-Explain "no tool calling in loopd" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+Explain "no tool calling in buffr" to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
 
 Checkpoints — did you:
 - Name the specific file or function?  → `src/services/ai/summarize.ts` and the absence of any orchestrator/agent file
@@ -507,7 +507,7 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
 
 ---
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (telephone-hotline-with-callouts metaphor opening / 3 layered sub-sections — the tool-calling loop, why loopd doesn't, what one-shot gives up — each with frontend bridges and concrete consequences / principle paragraph on "the cheapest agent is no agent").
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (telephone-hotline-with-callouts metaphor opening / 3 layered sub-sections — the tool-calling loop, why buffr doesn't, what one-shot gives up — each with frontend bridges and concrete consequences / principle paragraph on "the cheapest agent is no agent").
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (hotel-concierge-on-hold scenario → "model as concierge, app code as dispatcher, every step another round-trip" pattern naming → bolded stakes pivot to `buildContext` pre-fetching for `expand` vs 4-round-trip agentic alternative → before/after bullets on tool-loop vs one-shot → one-line "cheapest agent is no agent" metaphor).

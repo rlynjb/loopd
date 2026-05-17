@@ -1,8 +1,8 @@
 # 07 — Reliability and error handling
 
-> **Three patterns instead of locking.** loopd avoids global mutexes by leaning on idempotent writes, self-healing reconciliation, and a single rate-limited choke point for external calls.
+> **Three patterns instead of locking.** buffr avoids global mutexes by leaning on idempotent writes, self-healing reconciliation, and a single rate-limited choke point for external calls.
 
-The reliability story in loopd is shaped by what *isn't* there. There are no transactions wrapping the scanner-and-reconcile pipeline. There are no per-entry mutexes. There's no retry middleware. What there is, instead, are three deliberate patterns that combine to make the system robust without any of those mechanisms.
+The reliability story in buffr is shaped by what *isn't* there. There are no transactions wrapping the scanner-and-reconcile pipeline. There are no per-entry mutexes. There's no retry middleware. What there is, instead, are three deliberate patterns that combine to make the system robust without any of those mechanisms.
 
 The first pattern is **DB-first writes**. Every keystroke in the journal writes to SQLite *before* React state updates. Even if the app crashes mid-word, the bytes are durable. This is documented in [CLAUDE.md](../../../CLAUDE.md) as principle 3 — "Save to DB on every keystroke" — and it's the lesson from past data-loss bugs where focus-cleanup effects raced idle timers. The fix wasn't more locking; it was inverting the order of writes.
 
@@ -90,7 +90,7 @@ The Notion sync that previously held this slot was deleted in commit `dc8483a`; 
 
 The mitigation is the same architectural principle that previously protected me from Notion: **local SQLite is canonical** (Architectural Principle 12 — "cloud is a sync mirror, never the canonical source"). Reads always hit local; writes always commit local first; the cloud lags by 5s via the debounced push. If Supabase goes away entirely, every existing piece of data is intact locally, every read path filters `WHERE deleted_at IS NULL` against local, and the user keeps using the app offline-first. The cloud sync layer is the safety net you opt into; it isn't on the read path.
 
-What I'd lose if Supabase disappeared: the cross-device replication path (Phase B's reason to exist) and any data that was created on a device that subsequently dies before pulling locally. The clip files (`Documents/loopd/clips/<date>/*.mp4`) aren't in Supabase Storage anyway — they're a known gap (see [`docs/backlog.md`](../../../docs/backlog.md)) — so a Supabase outage doesn't make that worse.
+What I'd lose if Supabase disappeared: the cross-device replication path (Phase B's reason to exist) and any data that was created on a device that subsequently dies before pulling locally. The clip files (`Documents/buffr/clips/<date>/*.mp4`) aren't in Supabase Storage anyway — they're a known gap (see [`docs/backlog.md`](../../../docs/backlog.md)) — so a Supabase outage doesn't make that worse.
 
 I'm proudest of the local-canonical decision because it survived a backend swap. The same architecture that previously protected against Notion changing their API now protects against Supabase changing theirs. The cost is the same: I write all the merge logic by hand. The benefit is the same: every cloud is replaceable. That tradeoff is the kind of thing I want any future architecture I work on to make explicitly, not by accident.
 
@@ -112,7 +112,7 @@ What makes it tolerable as a deviation rather than a bug: it's documented inline
 
 Cloud sync is the backup story now — every synced table (entries, todos with their meta, habits, threads, mentions, nutrition, ai_summaries, projects, vlogs, day_meta) round-trips through Supabase. If SQLite goes, a fresh install + first-pull restores all of it. The dev menu has a "Reset Local From Cloud" button that performs exactly this: wipe local synced tables, run `firstPullAll()` to rehydrate from Postgres.
 
-The honest gap is the **video clips**. Clip files live at `Documents/loopd/clips/<date>/*.mp4`; they're not in Supabase Storage. Cloud sync round-trips `entries.clips_json` (the path references) but not the bytes. If local FS dies, the videos are unrecoverable — phones save the original imports to the camera roll, which the OS-level photo backup typically protects, but the 1080p proxies loopd transcodes from those originals are device-local. This is logged in [`docs/backlog.md`](../../../docs/backlog.md) as a known gap pending a Supabase Storage push pipeline.
+The honest gap is the **video clips**. Clip files live at `Documents/buffr/clips/<date>/*.mp4`; they're not in Supabase Storage. Cloud sync round-trips `entries.clips_json` (the path references) but not the bytes. If local FS dies, the videos are unrecoverable — phones save the original imports to the camera roll, which the OS-level photo backup typically protects, but the 1080p proxies buffr transcodes from those originals are device-local. This is logged in [`docs/backlog.md`](../../../docs/backlog.md) as a known gap pending a Supabase Storage push pipeline.
 
 What I'd add for a multi-user product: clip backup behind an opt-in toggle (it's bandwidth-expensive), a periodic SQLite snapshot to user-visible storage as a belt-and-suspenders defense, and a clearer recovery UI that walks the user through "your data is safe, here's how to restore." Today's recovery flow is the dev menu, which is fine for solo Phase A and inadequate for any non-technical user.
 

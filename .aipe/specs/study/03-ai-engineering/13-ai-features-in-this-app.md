@@ -136,7 +136,7 @@ The model split with cost per call and per-day total:
                  GPT-4o                          (rare, user-
                                                   triggered)
                                                                       ─────────
-                                                  loopd day total:    ~$0.037
+                                                  buffr day total:    ~$0.037
 
    if classify had been built on Sonnet:
      ~$0.010 × 10 calls/day = $0.10/day
@@ -289,7 +289,7 @@ We traded a unified AI service (one chain that does many jobs) for five purpose-
 
 ### What we gave up
 
-We gave up shared prompt logic and any economy of scale on prompt maintenance. Each chain has its own SYSTEM_PROMPT — caption is the most opinionated at 80+ lines (specifying 4 named voices and universal rules); interpret is the longest at 32 lines (structural template with emoji H2 headings); classify is the shortest at ~13 lines (5-mode taxonomy). When the writing style of one needs updating, it's a per-chain change. There's no shared "loopd voice" prompt fragment that propagates everywhere — each chain decides its own tone.
+We gave up shared prompt logic and any economy of scale on prompt maintenance. Each chain has its own SYSTEM_PROMPT — caption is the most opinionated at 80+ lines (specifying 4 named voices and universal rules); interpret is the longest at 32 lines (structural template with emoji H2 headings); classify is the shortest at ~13 lines (5-mode taxonomy). When the writing style of one needs updating, it's a per-chain change. There's no shared "buffr voice" prompt fragment that propagates everywhere — each chain decides its own tone.
 
 We pay for 4 per-type expand sub-chains (idea / knowledge / study / reflect — `'todo'` is non-expandable). Each has its own SYSTEM_PROMPT and required-fields schema in `expandPrompts.ts`. When the taxonomy reduced from 6 to 4 types in 2026-05-10 (bug / question / decision / content dropped), each removed type also removed its prompt + schema. The maintenance cost scales linearly with type count, which is why the doc explicitly warns "the doc is a snapshot."
 

@@ -4,9 +4,9 @@
 
 Most candidates learn DSA from LeetCode and arrive at interviews able to solve the problem but unable to explain *why* a pattern matters. The reason is that LeetCode problems are abstract — they're decoupled from the systems where the patterns earn their weight. This chapter inverts that. Every problem here is drawn from a real file in `src/services/`. The pattern is named, the file is cited, and the brute-force-vs-optimal contrast is shown with execution traces against actual data shapes.
 
-Five DSA patterns carry the bulk of the algorithmic work in loopd: HashMap-backed two-pass matching (the scanner reconcile pattern), multi-key sorting (the rank function), Set-based deduplication (the tag parser), dense integer rebase (the position-assigner), and threshold lookup (the staleness computation). Each one has a brute-force version that "works" and an optimal version that scales. The brute-force version usually shows up first when someone implements the feature without thinking about cardinality; the optimal version is the one that survives a refactor under load.
+Five DSA patterns carry the bulk of the algorithmic work in buffr: HashMap-backed two-pass matching (the scanner reconcile pattern), multi-key sorting (the rank function), Set-based deduplication (the tag parser), dense integer rebase (the position-assigner), and threshold lookup (the staleness computation). Each one has a brute-force version that "works" and an optimal version that scales. The brute-force version usually shows up first when someone implements the feature without thinking about cardinality; the optimal version is the one that survives a refactor under load.
 
-What this chapter is not: it is not a comprehensive textbook. It does not cover trees, graphs, dynamic programming, or string-matching beyond what the codebase actually uses. If a senior interviewer wants to drill down on DP or graph traversal, that's a different study guide (`docs/dsa-study-guide.md` covers the broader set). What this chapter *is*: a tight, honest read on the algorithms that make loopd work, written in the voice I'd use to explain them on a whiteboard.
+What this chapter is not: it is not a comprehensive textbook. It does not cover trees, graphs, dynamic programming, or string-matching beyond what the codebase actually uses. If a senior interviewer wants to drill down on DP or graph traversal, that's a different study guide (`docs/dsa-study-guide.md` covers the broader set). What this chapter *is*: a tight, honest read on the algorithms that make buffr work, written in the voice I'd use to explain them on a whiteboard.
 
 ---
 
@@ -288,7 +288,7 @@ Yes — that's bucket sort with a constant number of buckets, O(N) time, and wou
 
 **Problem statement.** Given a multiline text string, find all `#tag` mentions. Each mention is `(slug, tagText, lineIndex)`. If the same slug appears multiple times on the same line, collapse to one. Across different lines, both occurrences are kept.
 
-Example: `#loopd shipped #loopd today\nbut not #git` → 2 mentions: `(loopd, line 0)`, `(git, line 1)`. The second `#loopd` on line 0 is dropped.
+Example: `#buffr shipped #buffr today\nbut not #git` → 2 mentions: `(buffr, line 0)`, `(git, line 1)`. The second `#buffr` on line 0 is dropped.
 
 ### Brute force
 
@@ -320,19 +320,19 @@ function brute(text: string): ParsedTag[] {
 
 ### Brute force trace
 
-Input: `"#loopd shipped #loopd today\nbut not #git"`
+Input: `"#buffr shipped #buffr today\nbut not #git"`
 
 ```
-Line 0: "#loopd shipped #loopd today"
-  matches: [#loopd, #loopd]
-  match 0 (#loopd): out=[]. no dupe. push {slug:loopd, lineIndex:0}.
-                    out=[{loopd,0}]
-  match 1 (#loopd): scan out. existing={loopd,0}, same line+slug → dupe. skip.
+Line 0: "#buffr shipped #buffr today"
+  matches: [#buffr, #buffr]
+  match 0 (#buffr): out=[]. no dupe. push {slug:buffr, lineIndex:0}.
+                    out=[{buffr,0}]
+  match 1 (#buffr): scan out. existing={buffr,0}, same line+slug → dupe. skip.
 
 Line 1: "but not #git"
   matches: [#git]
-  match 0 (#git): scan out. {loopd,0} → diff slug. no dupe. push {git,1}.
-                  out=[{loopd,0}, {git,1}]
+  match 0 (#git): scan out. {buffr,0} → diff slug. no dupe. push {git,1}.
+                  out=[{buffr,0}, {git,1}]
 
 Total iterations of dupe check: 1 + 1 = 2.
 At 200 lines × 5 tags/line × 1000 final mentions = 1,000,000 inner ops worst case.
@@ -368,14 +368,14 @@ function optimal(text: string): ParsedTag[] {
 Same input.
 
 ```
-Line 0: "#loopd shipped #loopd today"
-  match 0 (#loopd): key='0::loopd'. seenPerLine.has → false.
-                    add. push {loopd,0}. seen={'0::loopd'}
-  match 1 (#loopd): key='0::loopd'. seenPerLine.has → true. skip.
+Line 0: "#buffr shipped #buffr today"
+  match 0 (#buffr): key='0::buffr'. seenPerLine.has → false.
+                    add. push {buffr,0}. seen={'0::buffr'}
+  match 1 (#buffr): key='0::buffr'. seenPerLine.has → true. skip.
 
 Line 1: "but not #git"
   match 0 (#git): key='1::git'. seenPerLine.has → false.
-                  add. push {git,1}. seen={'0::loopd','1::git'}
+                  add. push {git,1}. seen={'0::buffr','1::git'}
 
 Total: 4 Set operations, all O(1).
 ```

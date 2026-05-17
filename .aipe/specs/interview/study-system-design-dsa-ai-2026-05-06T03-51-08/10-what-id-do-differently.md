@@ -42,7 +42,7 @@ What I'd build alongside the migration: prompt caching markers in the system pro
 
 Soft delete via `deleted_at` is the correct primitive. The vacuum that turns 30-day-old tombstones into hard deletes is *additionally* correct, but only with a proven multi-device tombstone protocol. I haven't built that protocol because I have one device and one user.
 
-At multi-device scale (the user has loopd on both phone and tablet, or with collaboration, multiple users), the vacuum needs: per-user vacuum logs with high-water-mark timestamps, vacuum-aware sync where pulling a row that the cloud has hard-deleted plus locally still has triggers a local hard-delete (not a re-push), clock-skew-tolerant tombstone TTLs (probably server-time-anchored). This is genuinely hard distributed-systems work. I'd revisit it when the per-user storage cost compounds enough to justify the engineering.
+At multi-device scale (the user has buffr on both phone and tablet, or with collaboration, multiple users), the vacuum needs: per-user vacuum logs with high-water-mark timestamps, vacuum-aware sync where pulling a row that the cloud has hard-deleted plus locally still has triggers a local hard-delete (not a re-push), clock-skew-tolerant tombstone TTLs (probably server-time-anchored). This is genuinely hard distributed-systems work. I'd revisit it when the per-user storage cost compounds enough to justify the engineering.
 
 What I'd resist: shipping a naive vacuum that "looks right" at solo scale. The failure mode of "naive vacuum on a device that hasn't synced for 31 days" is data loss across devices, which is the worst-class error a data-management app can have. Soft-delete-forever is genuinely fine until storage growth is a problem.
 

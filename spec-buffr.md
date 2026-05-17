@@ -1,6 +1,6 @@
-# spec-loopd
+# spec-buffr
 
-**loopd** — a solo-dev, native-Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking-mode" classifier + per-type expansion for todos, a `#tag` thread system for project attribution, a daily-schedule weekday grid on the dashboard, and a Supabase Postgres cloud-sync mirror with local SQLite as the canonical source.
+**buffr** — a solo-dev, native-Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking-mode" classifier + per-type expansion for todos, a `#tag` thread system for project attribution, a daily-schedule weekday grid on the dashboard, and a Supabase Postgres cloud-sync mirror with local SQLite as the canonical source.
 
 This document is the top-level reference. Deeper, longer-form material:
 
@@ -20,7 +20,7 @@ A single Android user runs the app. Throughout the day they open the journal for
 | `** food N kcal` | a row in `nutrition` |
 | `#projectname` | a row in `thread_mentions` joining the entry / todo to a `thread` (auto-created if unknown) |
 
-At commit time the prose is scanned by three independent passes (todos, nutrition, threads). Marked lines flow into typed records *without* leaving the prose. End of day, the editor auto-composes a vlog (clip order, trims, text overlays, 4-variant tonal caption) which the user tweaks and exports to `DCIM/loopd/`. Local SQLite is canonical; Supabase Postgres backs it up via a 5s-debounced push.
+At commit time the prose is scanned by three independent passes (todos, nutrition, threads). Marked lines flow into typed records *without* leaving the prose. End of day, the editor auto-composes a vlog (clip order, trims, text overlays, 4-variant tonal caption) which the user tweaks and exports to `DCIM/buffr/`. Local SQLite is canonical; Supabase Postgres backs it up via a 5s-debounced push.
 
 ---
 
@@ -32,7 +32,7 @@ At commit time the prose is scanned by three independent passes (todos, nutritio
 | Framework | Expo SDK 55 · React Native 0.83.2 · React 19.2.0 |
 | Language | TypeScript 5.9.2 (strict; `npx tsc --noEmit` must pass before any commit) |
 | Router | `expo-router` 55 (file-based; `app/` tree) |
-| Local DB | `expo-sqlite` 55.0.11 (`loopd.db`, WAL journal mode) |
+| Local DB | `expo-sqlite` 55.0.11 (`buffr.db`, WAL journal mode) |
 | Cloud | `@supabase/supabase-js` v2.105+ + `react-native-url-polyfill` |
 | AI | `@anthropic-ai/sdk` ^0.90 (Claude Sonnet 4.6 / Haiku 4.5) + raw fetch to OpenAI (GPT-4o / 4o-mini) |
 | Media | `@wokcito/ffmpeg-kit-react-native` 6.1.2 (transcode + export) · `react-native-video` 6.19.1 |
@@ -90,7 +90,7 @@ Three tabs under a draggable preview pane:
 - **TEXT** — overlay selector with a 4-variant tonal caption chip group (`clean` / `smoother` / `reflective` / `punchy`). Older cached rows still render the legacy 3-chip group (`PRIMARY` / `ALT` / `SUMMARY`) until the next regenerate upgrades them.
 - **FILTER** — single active filter preset (none / moody / cool / film / muted).
 
-Auto-compose on mount. Export pipeline: text overlays render to a Skia canvas → FFmpeg transcode → writes to `exports/[date]/…mp4` and `DCIM/loopd/` → `Sharing.shareAsync`.
+Auto-compose on mount. Export pipeline: text overlays render to a Skia canvas → FFmpeg transcode → writes to `exports/[date]/…mp4` and `DCIM/buffr/` → `Sharing.shareAsync`.
 
 ### `app/todos.tsx` — drops (flat list)
 Title literal: **drops**. All todos across all entries, joined with their `todo_meta` row.
@@ -121,7 +121,7 @@ CRUD hubs. Habits editor: name + time-of-day chip picker + cadence-type selector
 
 ## 5. Data model
 
-12 SQLite tables in `loopd.db`. 10 mirror to Supabase Postgres; the other 2 are local-only.
+12 SQLite tables in `buffr.db`. 10 mirror to Supabase Postgres; the other 2 are local-only.
 
 **Synced entity tables (mirrored to Supabase):**
 
@@ -194,7 +194,7 @@ The Interpret chain is the only one that emits markdown rather than JSON. It's a
 
 | Path | Purpose |
 |---|---|
-| `database.ts` | Single mouth to `loopd.db`. Owns schema + every backfill migration; exposes typed CRUD; every write to a synced table calls `sync/schedulePush()`. Reads always filter `WHERE deleted_at IS NULL`. |
+| `database.ts` | Single mouth to `buffr.db`. Owns schema + every backfill migration; exposes typed CRUD; every write to a synced table calls `sync/schedulePush()`. Reads always filter `WHERE deleted_at IS NULL`. |
 | `ai/` | 5 chains: `summarize` · `caption` (4-variant) · `compose` (AISummary → editor types) · `validate` (clamping + round-trip) · `interpret` (long-form markdown) · `config` (SecureStore-backed keys). |
 | `todos/` | `scanTodos` (extract `[]` lines) · `reconcileMeta` (keep `todo_meta` 1:1 with `todos_json`) · `heuristicClassify` · `classify` · `expand` + `expandPrompts` + `expandSerialize` · `rank` · `crud` (round-trips into prose). |
 | `threads/` | `scanThreads` (extract `#tag`) · `crud` · `getThreadCards` · `getThreadDetail` · `staleness` · `touch` (manual deviation). |
@@ -235,7 +235,7 @@ Single hardcoded `user_id = '00000000-0000-0000-0000-000000000001'` in [`sync/cl
 
 **Phase B** (deferred): flip RLS on, add Supabase Auth, payment (RevenueCat or Stripe). Plan in [`docs/backlog.md`](./docs/backlog.md).
 
-**Known gap** — clip files (`Documents/loopd/clips/<date>/*.mp4`) are NOT in Supabase Storage. Only the path references in `entries.clips_json` round-trip.
+**Known gap** — clip files (`Documents/buffr/clips/<date>/*.mp4`) are NOT in Supabase Storage. Only the path references in `entries.clips_json` round-trip.
 
 ---
 

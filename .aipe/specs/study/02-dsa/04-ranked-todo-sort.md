@@ -198,7 +198,7 @@ The actual sort used by `/todos` and the dashboard is documented in [11-pinned-f
 **Sort priority is just a sequence of fall-through comparisons.** Each key gets one chance to decide the ordering; if equal, fall through. This composes elegantly and is easy to extend or reorder.
 
 ### Where this breaks down
-- Sorts where you want some keys ascending and others descending — the comparator gets verbose. Loopd handles it inline (`a.done ? +1 : -1`).
+- Sorts where you want some keys ascending and others descending — the comparator gets verbose. Buffr handles it inline (`a.done ? +1 : -1`).
 - Sorts where the key derivation is expensive. The comparator runs O(n log n) times so each derivation runs many times. A `decorate-sort-undecorate` pattern (Schwartzian transform) helps.
 
 ### What to explore next

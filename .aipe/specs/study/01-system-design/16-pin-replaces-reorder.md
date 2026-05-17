@@ -36,7 +36,7 @@ Find the cheapest version of the same affordance and ship that.
 
 ## How it works
 
-A `BOOLEAN pinned` column on the table plus `ORDER BY pinned DESC, created_at DESC` on every read. That's the whole pattern. The JS equivalent is the one-line comparator every reader has written before: `arr.sort((a, b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)`. loopd's `todo_meta.pinned` boolean is this exact shape applied to a SQLite column — one column to flag what matters today, recency as the tiebreak for everything else — and the drag-handle UI machinery the user never asked for never gets built.
+A `BOOLEAN pinned` column on the table plus `ORDER BY pinned DESC, created_at DESC` on every read. That's the whole pattern. The JS equivalent is the one-line comparator every reader has written before: `arr.sort((a, b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)`. buffr's `todo_meta.pinned` boolean is this exact shape applied to a SQLite column — one column to flag what matters today, recency as the tiebreak for everything else — and the drag-handle UI machinery the user never asked for never gets built.
 
 The before/after of the schema + UI swap in one picture:
 
@@ -333,7 +333,7 @@ Dropping `position` and `stage` from the schema wasn't on the table at ship time
 
 ### expo-sqlite (WAL) + Supabase Postgres
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db` plus `@supabase/supabase-js` against managed Supabase Postgres. `todo_meta.pinned BOOLEAN` lives on both sides; `todo_meta.position INTEGER NULL` is dead-but-kept on both.
+- **Codebase uses:** `expo-sqlite` against `buffr.db` plus `@supabase/supabase-js` against managed Supabase Postgres. `todo_meta.pinned BOOLEAN` lives on both sides; `todo_meta.position INTEGER NULL` is dead-but-kept on both.
 - **Why it's here:** the schema move had to land in both stores without a destructive migration — the additive `pinned` column was applied locally via `database.ts` schema bump and to Supabase via `supabase/migrations/0005_todo_meta_pinned.sql`. The dual-store mirror is what made "additive only" non-negotiable.
 - **Leading today:** Supabase — `adoption-leading` for Postgres-as-a-service in 2026; `expo-sqlite` — `adoption-leading` for Expo local storage.
 - **Why it leads:** Supabase's PostgREST upsert with `onConflict` handles the round-trip for both columns transparently; the `position` column becoming NULL on writes costs zero migration work.

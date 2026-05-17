@@ -1,6 +1,6 @@
 // Debounced push trigger. Any write site can call schedulePush() — the
 // timer resets each call, and pushAll() fires once N seconds after the
-// last call. See docs/loopd-cloud-sync-spec.md §4.3.
+// last call. See docs/buffr-cloud-sync-spec.md §4.3.
 //
 // Dynamic-imports the orchestrator to avoid a circular dependency
 // (database.ts → schedulePush → orchestrator → tables/*.ts → database.ts).
@@ -31,7 +31,7 @@ async function fire(): Promise<void> {
     const { pushAll } = await import('./orchestrator');
     await pushAll();
   } catch (err) {
-    console.warn('[loopd sync] debounced push failed:', err instanceof Error ? err.message : err);
+    console.warn('[buffr sync] debounced push failed:', err instanceof Error ? err.message : err);
   } finally {
     pushing = false;
   }

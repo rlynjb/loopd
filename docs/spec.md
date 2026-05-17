@@ -1,4 +1,4 @@
-# loopd — Product & Technical Spec
+# buffr — Product & Technical Spec
 
 Last updated: 2026-05-04
 
@@ -6,11 +6,11 @@ A solo-dev, native Android daily-vlogging app. Combines a journal (text + habits
 
 Operational setup, build, and deploy instructions live in [`README.md`](../README.md). This doc is the "what the app does and how it's put together" reference for new contributors and future-me. Companion documents:
 
-- [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) — full cloud-sync design.
-- [`docs/loopd-cloud-sync-plan.md`](./loopd-cloud-sync-plan.md) — 7-milestone migration plan (M0–M7 shipped 2026-05-02 → 2026-05-03).
+- [`docs/buffr-cloud-sync-spec.md`](./buffr-cloud-sync-spec.md) — full cloud-sync design.
+- [`docs/buffr-cloud-sync-plan.md`](./buffr-cloud-sync-plan.md) — 7-milestone migration plan (M0–M7 shipped 2026-05-02 → 2026-05-03).
 - [`docs/relatable-caption-spec.md`](./relatable-caption-spec.md) — second-LLM-call design for the vlog caption pass.
-- [`docs/loopd-thinking-modes-spec.md`](./loopd-thinking-modes-spec.md) — todo classification + expansion architecture.
-- [`docs/loopd-today-habits-threads-spec.md`](./loopd-today-habits-threads-spec.md) — daily-schedule tracker design.
+- [`docs/buffr-thinking-modes-spec.md`](./buffr-thinking-modes-spec.md) — todo classification + expansion architecture.
+- [`docs/buffr-today-habits-threads-spec.md`](./buffr-today-habits-threads-spec.md) — daily-schedule tracker design.
 - [`docs/backlog.md`](./backlog.md) — deferred / nice-to-have work with trigger conditions.
 - [`docs/media-pipeline.md`](./media-pipeline.md) — clip transcode + export pipeline.
 
@@ -18,13 +18,13 @@ Operational setup, build, and deploy instructions live in [`README.md`](../READM
 
 ## 1. Purpose & Shape
 
-loopd turns everyday captures (short clips, text jots, habit checkmarks, marked-up todos, nutrition lines, project tags) into a per-day archive with a one-tap vlog render. Core loop:
+buffr turns everyday captures (short clips, text jots, habit checkmarks, marked-up todos, nutrition lines, project tags) into a per-day archive with a one-tap vlog render. Core loop:
 
 1. Throughout the day: open the journal for today's date, jot text, check off habits, capture/import clips, and tag actionable lines with simple inline markers (`[] task`, `** food 320 kcal`, `#projectname`).
 2. At commit time the prose is scanned by three independent passes: marked lines flow into typed records (todos in `todos_json` + `todo_meta`, nutrition in its own table, mentions in `thread_mentions`) without leaving the prose itself.
 3. Todos get a thinking-mode classification (heuristic-first, LLM fallback). Non-todo modes (idea / bug / question / decision / knowledge / content) gain a tap-to-expand affordance that produces structured AI output via per-type prompts.
 4. End of day: tap into the editor — AI auto-composes clip order, trims, and text overlays from the day's entries, plus a relatable 2–4 line caption from a second LLM pass.
-5. Tweak in the editor (timeline / text / filter tabs), pick a caption variant (PRIMARY / ALT / SUMMARY), export to MP4 (saved to `DCIM/loopd/` and sharable).
+5. Tweak in the editor (timeline / text / filter tabs), pick a caption variant (PRIMARY / ALT / SUMMARY), export to MP4 (saved to `DCIM/buffr/` and sharable).
 6. Cloud sync (Supabase Postgres) backs every table up automatically. Local SQLite stays canonical; sync runs on boot and on a 5s debounce after every edit.
 
 Native-only (React Native / Expo), runs on a development build — not Expo Go, not web. **Android only** — the prebuilt `android/` directory is committed; iOS is not currently supported.
@@ -67,7 +67,7 @@ Each drop type has a **one-time backfill migration** (SecureStore-gated) that ru
 
 Nutrition / Habits / Threads CRUD live under `/more/{nutrition,habits,threads}`. The dashboard's `DAILY SCHEDULE` section (§4) and the per-thread detail page at `/threads/[id]` provide in-context entry points so the More tab is a management hub, not the daily-use surface.
 
-The global `HomeHeader` ([src/components/home/HomeHeader.tsx](../src/components/home/HomeHeader.tsx)) renders the `loopd` logotype and a single gear icon → `/settings`. Cloud sync is silent — no spinner, no header banner; status lives at `Settings → Cloud Sync`.
+The global `HomeHeader` ([src/components/home/HomeHeader.tsx](../src/components/home/HomeHeader.tsx)) renders the `buffr` logotype and a single gear icon → `/settings`. Cloud sync is silent — no spinner, no header banner; status lives at `Settings → Cloud Sync`.
 
 ---
 
@@ -119,7 +119,7 @@ Three tabs under a resizable preview (`windowHeight * 0.45` default, draggable 1
 - **TEXT**: selects an overlay → `TextOverlaySheet`. Header row: **REGENERATE WITH AI** button + a **variant chip group** (`PRIMARY` / `ALT` / `SUMMARY`) that swaps which body text fills the active overlay. PRIMARY and ALT only render when the cached `AISummary` carries the relatable-caption fields (older summaries pre-dating that feature show only SUMMARY); SUMMARY is always present and acts as the escape hatch when the relatable caption doesn't feel authentic. Active chip is highlighted in amber. Driven by `captionVariant` state + `handleSelectCaptionVariant`, which rewrites every text overlay's `text` (preserving the day-title + blank-line prefix) and re-resets to `'primary'` on regenerate / auto-compose.
 - **FILTER**: single active filter (brightness / contrast / saturate preset).
 
-Auto-compose on mount; export pipeline renders text overlays to a Skia canvas → FFmpeg transcode → writes to `exports/[date]/…mp4` and `DCIM/loopd/` → offers `Sharing.shareAsync`.
+Auto-compose on mount; export pipeline renders text overlays to a Skia canvas → FFmpeg transcode → writes to `exports/[date]/…mp4` and `DCIM/buffr/` → offers `Sharing.shareAsync`.
 
 ### `app/todos.tsx` — global todos (flat chronological)
 All todos across all entries, joined with their `todo_meta` row. Layout:
@@ -191,7 +191,7 @@ List of all threads (active + archived tabs). Editor sheet exposes name, slug (a
 
 ### SQLite (expo-sqlite) — [src/services/database.ts](../src/services/database.ts)
 
-Twelve tables in `loopd.db` — eleven entity tables plus the local-only `sync_meta` ledger.
+Twelve tables in `buffr.db` — eleven entity tables plus the local-only `sync_meta` ledger.
 
 | Table | PK | Columns (notable) | Purpose |
 |---|---|---|---|
@@ -223,7 +223,7 @@ Ten synced tables mirrored to Supabase (the local-only `sync_meta` and deprecate
 - `0003_server_time_rpc.sql` — `get_server_time()` Postgres function called once per pull; backs the clock-skew-safe `last_pull_at` cursor.
 - `0004_relax_fks.sql` — drops the strict FKs from 0001 because local SQLite enforces no FKs; the over-strict cloud constraints rejected legitimate soft-orphan rows on push.
 
-Migrations are applied via `node scripts/db-migrate.mjs --all-pending` — a tiny tracker that records applied migrations in a `loopd_migrations` table so the runner is idempotent.
+Migrations are applied via `node scripts/db-migrate.mjs --all-pending` — a tiny tracker that records applied migrations in a `buffr_migrations` table so the runner is idempotent.
 
 ### Key TypeScript types — [src/types/](../src/types/)
 
@@ -308,10 +308,10 @@ A lightweight project-attribution layer. `#tag` mentions in journal prose or tod
 
 **Marker rules** ([scanThreads.ts](../src/services/threads/scanThreads.ts)):
 - Pattern: `#[a-zA-Z][a-zA-Z0-9-]*` (must start with a letter; alphanumerics + hyphens after).
-- Case-insensitive — `#Loopd`, `#loopd`, `#LOOPD` all resolve to slug `loopd`.
+- Case-insensitive — `#Buffr`, `#buffr`, `#BUFFR` all resolve to slug `buffr`.
 - Detected anywhere on a line (prose mid-sentence, the start of a `[]` todo line, etc.).
 - Code spans / fenced blocks are masked before regex application so `` `git #branch` `` doesn't register.
-- Per-line per-slug deduplication (multiple `#loopd` on the same line collapse to one mention).
+- Per-line per-slug deduplication (multiple `#buffr` on the same line collapse to one mention).
 
 **Auto-create on save.** Unknown slugs **auto-create** a Thread row at scan time using the literal-as-typed `tagText` as the display name and the lowercased text as the slug. The inline `+ create` chip on the autocomplete still works as the immediate-feedback path.
 
@@ -338,7 +338,7 @@ Header has `‹` / week-label / `›` nav controls. Past-week navigation is wire
 
 Tap a habit name → `/more/habits` (CRUD list). Tap a thread name → `/threads/[id]` (detail page). Tap today's pending or done cell → toggle the day's check-in / manual touch. The off-day toggle and a five-swatch legend sit below the grid; the toggle persists to SecureStore as `daily_schedule_offday_mode`.
 
-`manage →` link at the section header routes to `/more`. Full design in [docs/loopd-daily-schedule-grid-spec.md](./loopd-daily-schedule-grid-spec.md); 8-milestone implementation plan in [docs/loopd-daily-schedule-grid-plan.md](./loopd-daily-schedule-grid-plan.md).
+`manage →` link at the section header routes to `/more`. Full design in [docs/buffr-daily-schedule-grid-spec.md](./buffr-daily-schedule-grid-spec.md); 8-milestone implementation plan in [docs/buffr-daily-schedule-grid-plan.md](./buffr-daily-schedule-grid-plan.md).
 
 ### 6.8 Vlog Editor
 Implementation details:
@@ -360,7 +360,7 @@ Both calls cache the merged `AISummary` (with caption fields appended) into the 
 Full details in [docs/media-pipeline.md](./media-pipeline.md). 1080p H.264 proxy transcode on import (CRF 23) via `@wokcito/ffmpeg-kit-react-native`. Parallel-transcode + in-order-commit.
 
 ### 6.11 Cloud Sync (Supabase Postgres)
-Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and the working plan in [`docs/loopd-cloud-sync-plan.md`](./loopd-cloud-sync-plan.md). Local SQLite stays canonical (Architectural Principle 12); Supabase is a sync mirror.
+Full design in [`docs/buffr-cloud-sync-spec.md`](./buffr-cloud-sync-spec.md) and the working plan in [`docs/buffr-cloud-sync-plan.md`](./buffr-cloud-sync-plan.md). Local SQLite stays canonical (Architectural Principle 12); Supabase is a sync mirror.
 
 - **Push** — every write to a synced table calls `schedulePush()` which fires a 5s-debounced `pushAll()`. Per-table batched upsert (50/batch) with `ON CONFLICT (user_id, id) DO UPDATE`; stamps local `synced_at` on success. Push order respects FK intent (parents before children: entries → projects → day_meta → vlogs → ai_summaries → todo_meta → nutrition → habits → threads → thread_mentions).
 - **Pull** — incremental, paginated by `updated_at ASC`. `last_pull_at` is set from a `get_server_time()` Postgres RPC to avoid clock skew. Conflict resolution is last-write-wins by `updated_at` via the pure [`chooseWinner`](../src/services/sync/conflict.ts). Pull order differs from push (habits + threads pulled before todo_meta / nutrition / thread_mentions so child rows land after their parents exist).
@@ -369,7 +369,7 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 - **First-pull recovery** — `firstPullAll()` resets `sync_meta` and pulls every cloud row from epoch. Backs the **RESET LOCAL FROM CLOUD** dev menu action — the corruption-recovery path.
 - **Tables synced** — every entity table from §5: `entries`, `projects`, `vlogs`, `day_meta`, `ai_summaries`, `nutrition`, `habits`, `todo_meta`, `threads`, `thread_mentions`. The local `sync_meta` ledger is local-only.
 - **Phase A** — single hardcoded `user_id = '00000000-0000-0000-0000-000000000001'` in [`sync/client.ts`](../src/services/sync/client.ts), RLS disabled. Phase B (paid tier) flips RLS on (policies authored in `0002_rls_policies.sql`) and adds Supabase Auth.
-- **Known gap** — clip files (`Documents/loopd/clips/<date>/*.mp4`) are NOT in Supabase Storage. Only `entries.clips_json` (the path references) round-trips. See [docs/backlog.md](./backlog.md) for the eventual storage-pipeline work.
+- **Known gap** — clip files (`Documents/buffr/clips/<date>/*.mp4`) are NOT in Supabase Storage. Only `entries.clips_json` (the path references) round-trips. See [docs/backlog.md](./backlog.md) for the eventual storage-pipeline work.
 
 ### 6.12 OTA Updates
 `expo-updates` checks on every app open. Background fetch + restart prompt. Configured against EAS Update (project ID in `app.json`); no bundles published yet — current dev workflow rebuilds + sideloads release APKs. See [docs/backlog.md](./backlog.md) for the OTA setup recipe.
@@ -435,7 +435,7 @@ Full design in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) and
 | OpenAI | `fetch` to `api.openai.com`, `gpt-4o` (primary) / `gpt-4o-mini` (classifier) | Alt provider |
 | Supabase | `@supabase/supabase-js` (v2.105+) + `react-native-url-polyfill` | Cloud sync (Postgres mirror of every synced table; `get_server_time` RPC for clock-skew-safe pulls) |
 | FFmpeg | `@wokcito/ffmpeg-kit-react-native` (v6.1.2) | 1080p proxy transcode + final export |
-| DCIM | `expo-media-library` | Save exports to `DCIM/loopd/` |
+| DCIM | `expo-media-library` | Save exports to `DCIM/buffr/` |
 | Camera roll | `expo-image-picker` / `expo-document-picker` / `expo-media-library` | Clip import |
 | Secrets | `expo-secure-store` | AI keys, backfill flags, `cloud_initial_push_done` flag |
 | OTA | `expo-updates` (configured against EAS Update; no bundles published yet) | Future JS-only update path |

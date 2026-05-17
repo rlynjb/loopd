@@ -1,16 +1,16 @@
-# loopd — Feature Spec: Thinking Modes for Todos
+# buffr — Feature Spec: Thinking Modes for Todos
 
 Last updated: 2026-04-26 · revision 5
 
-An expansion of loopd's existing `[]` todos feature. Every `[]` line in journal prose gets classified into one of seven thinking modes (lifted from [buffr § 5](./buffr-build-upon-agent-spec.md#5-prompt-library)). Plain action items stay as plain checkboxes; ambiguous lines get an "expand" affordance that opens a side-panel modal with structured AI output. The `/todos` page stays a single flat chronological list — categories are *visible* on each row but don't reorganize the list. Bidirectional Notion sync extends the existing `syncAllTodos` to push/pull the new fields.
+An expansion of buffr's existing `[]` todos feature. Every `[]` line in journal prose gets classified into one of seven thinking modes (lifted from [buffr § 5](./buffr-build-upon-agent-spec.md#5-prompt-library)). Plain action items stay as plain checkboxes; ambiguous lines get an "expand" affordance that opens a side-panel modal with structured AI output. The `/todos` page stays a single flat chronological list — categories are *visible* on each row but don't reorganize the list. Bidirectional Notion sync extends the existing `syncAllTodos` to push/pull the new fields.
 
-This spec extends [`spec.md`](./spec.md). It assumes familiarity with the existing todos feature (Section 6.3), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of loopd.
+This spec extends [`spec.md`](./spec.md). It assumes familiarity with the existing todos feature (Section 6.3), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of buffr.
 
 ---
 
 ## 1. Purpose & Origin
 
-This is the fifth revision of how to bring buffr's [Build Upon thinking-agent feature](./buffr-build-upon-agent-spec.md) into loopd. Earlier revisions explored a separate `>>` marker, a separate `/drops` page, and a category-grouped accordion. This revision lands on the simplest shape: **one marker, one flat list, categories as labels not sections.**
+This is the fifth revision of how to bring buffr's [Build Upon thinking-agent feature](./buffr-build-upon-agent-spec.md) into buffr. Earlier revisions explored a separate `>>` marker, a separate `/drops` page, and a category-grouped accordion. This revision lands on the simplest shape: **one marker, one flat list, categories as labels not sections.**
 
 The reasoning: grouping by category creates an organizational tax. Every glance at the page asks the user "where did the AI put my thought?" instead of "what did I capture today?" A flat chronological list keeps the journaling rhythm intact — recent captures are right there in order, and the category badge is information you can act on without restructuring the view.
 
@@ -295,7 +295,7 @@ export function getUserMessage(todo: TodoItem, meta: TodoMeta, context: Expansio
 
 ### 7.5 Context shape
 
-Adapted from buffr § 4 to loopd's data model:
+Adapted from buffr § 4 to buffr's data model:
 
 ```typescript
 interface ExpansionContext {
@@ -515,12 +515,12 @@ Existing Notion DBs without the new properties continue to work — sync detects
 
 ### 11.2 Source-of-truth rules
 
-Loopd is **prose-canonical** — the `[]` line in `entries.text` is the source for `text`. Notion is a sync mirror.
+Buffr is **prose-canonical** — the `[]` line in `entries.text` is the source for `text`. Notion is a sync mirror.
 
 | Field | Source of truth | Pull-down behavior on conflict |
 |---|---|---|
 | `text` | Local (prose) | **Ignore** Notion edits to Title. Log a warning in dev mode. The user shouldn't edit the title in Notion; if they do, it gets overwritten on next push. |
-| `done` | Bidirectional | Standard `last_edited_time` merge per loopd's existing pattern. |
+| `done` | Bidirectional | Standard `last_edited_time` merge per buffr's existing pattern. |
 | `type` | Local | Notion changes pull down (treated like a manual override → sets `user_overridden_type = 1`). |
 | `expanded_md` | Local (when present) | Notion changes pull down. |
 | `model`, `classifier_confidence`, `user_overridden_type` | Local | Notion changes pull down. |

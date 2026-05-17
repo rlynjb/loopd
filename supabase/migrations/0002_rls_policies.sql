@@ -1,5 +1,5 @@
--- loopd cloud sync — RLS policies (DISABLED in Phase A)
--- See docs/loopd-cloud-sync-spec.md §3.6.
+-- buffr cloud sync — RLS policies (DISABLED in Phase A)
+-- See docs/buffr-cloud-sync-spec.md §3.6.
 --
 -- Phase A (single developer, hardcoded user_id) does not need RLS — the
 -- anon key + dummy UUID is the entire access boundary. These policies are

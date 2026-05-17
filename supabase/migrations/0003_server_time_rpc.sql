@@ -1,5 +1,5 @@
 -- Server-time RPC used by the pull half of the cloud sync layer.
--- See docs/loopd-cloud-sync-spec.md §4.7.
+-- See docs/buffr-cloud-sync-spec.md §4.7.
 --
 -- The pull flow calls this RPC before the data query, then stamps
 -- sync_meta.last_pull_at with the returned value. Eliminates clock-skew

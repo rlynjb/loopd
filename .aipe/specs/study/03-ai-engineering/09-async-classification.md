@@ -31,7 +31,7 @@ Optimistic UI with eventual reconciliation — the local commit is instant, the 
 
 ## How it works
 
-`setState` followed by an `await`-less `fetch()` is the canonical pattern. Commit local state first; fire the network call in the background; trust that the network will either confirm or update again when reality disagrees. React Query's `mutation.mutate()` with `optimisticData` ships exactly this shape — local state commits immediately, the underlying request runs in the background, `onSuccess` lands when (and if) the server agrees. loopd's `reconcileTodoMetaForEntry` runs the same arrangement for AI classification: heuristic + insert + `scheduleClassify` without await, then a `CLASSIFY_PROGRESS_EVENT` updates the UI when the LLM call returns.
+`setState` followed by an `await`-less `fetch()` is the canonical pattern. Commit local state first; fire the network call in the background; trust that the network will either confirm or update again when reality disagrees. React Query's `mutation.mutate()` with `optimisticData` ships exactly this shape — local state commits immediately, the underlying request runs in the background, `onSuccess` lands when (and if) the server agrees. buffr's `reconcileTodoMetaForEntry` runs the same arrangement for AI classification: heuristic + insert + `scheduleClassify` without await, then a `CLASSIFY_PROGRESS_EVENT` updates the UI when the LLM call returns.
 
 The shape in one timeline:
 
@@ -256,7 +256,7 @@ Fire-and-forget is the classic responsiveness pattern in UI code — kick off th
 
 ### Where this breaks down
 - Errors are silenced — the user sees a row stuck at `type='todo'` and might not realise the LLM call failed. Mitigation: dev-mode logs, /todos banner.
-- Async fires with no concurrency cap could overwhelm the model. Loopd doesn't currently cap classify concurrency (one per `null` heuristic), but the per-entry count is bounded by entry size.
+- Async fires with no concurrency cap could overwhelm the model. Buffr doesn't currently cap classify concurrency (one per `null` heuristic), but the per-entry count is bounded by entry size.
 
 ### What to explore next
 - [05-heuristic-before-llm](./05-heuristic-before-llm.md) → the cheap gate that decides whether to fire.
@@ -343,7 +343,7 @@ Polling vs event-based UI updates wasn't a real choice. Polling would have meant
 
 ## Project exercises
 
-**Status:** `learn-only` (codebase-specific pattern). The fire-and-forget classify pattern is loopd's solution to editor-commit latency; the curriculum doesn't tag a specific `[Bx.y]` to it because async LLM annotation isn't a discipline-level concept the curriculum names separately. The pattern's quality is exercised indirectly by:
+**Status:** `learn-only` (codebase-specific pattern). The fire-and-forget classify pattern is buffr's solution to editor-commit latency; the curriculum doesn't tag a specific `[Bx.y]` to it because async LLM annotation isn't a discipline-level concept the curriculum names separately. The pattern's quality is exercised indirectly by:
 
 - `[B1.2]` (token logging) — every async classify call lands in `ai_call_log` for observability.
 - `[B3.13]` (drift detection — applies to ML side; for LLM-side async classify the analog is "stuck `type='todo'` rate") — see Phase 3 exercises in [38-llm-observability.md](./38-llm-observability.md).
@@ -450,7 +450,7 @@ At 100 ambiguous todos in one entry (10× normal volume):
 ### The question candidates always dodge
 Q: Your error path is "log a warning and move on." A user with a flaky network could have their entire `/todos` screen showing `type='todo'` forever and you'd never alert them. Isn't that just hiding bugs?
 
-A: Yes, and that's a deliberate trade I make for this app. Single user, sporadic use, AI is annotation not canonical data — the cost of a false alarm ("AI failed!" toast every time the train goes through a tunnel) is higher than the cost of silent under-annotation. The mitigation is that `getClassifyInFlight()` exists and the `/todos` banner shows "X classifying…", so a user paying attention sees the count fail to drop. In a multi-user product or one where AI annotation was load-bearing, I'd add explicit error surfacing — a row badge "classify failed, tap to retry", a per-day error count, a settings-panel diagnostic. Today neither cost-benefit calculation flips. The principle is: silent best-effort is fine when AI is best-effort; it stops being fine when AI is canonical. None of loopd's AI is canonical.
+A: Yes, and that's a deliberate trade I make for this app. Single user, sporadic use, AI is annotation not canonical data — the cost of a false alarm ("AI failed!" toast every time the train goes through a tunnel) is higher than the cost of silent under-annotation. The mitigation is that `getClassifyInFlight()` exists and the `/todos` banner shows "X classifying…", so a user paying attention sees the count fail to drop. In a multi-user product or one where AI annotation was load-bearing, I'd add explicit error surfacing — a row badge "classify failed, tap to retry", a per-day error count, a settings-panel diagnostic. Today neither cost-benefit calculation flips. The principle is: silent best-effort is fine when AI is best-effort; it stops being fine when AI is canonical. None of buffr's AI is canonical.
 
 ```
                   Path taken (silent log)              Suggested (loud per-failure UI)

@@ -13,10 +13,10 @@ You've got a controlled `<input>` in React that gets its initial value from a `d
 
 That flag-with-stickiness is the user override lock. Not "the system is smarter," not "the latest edit always wins" — a single boolean, set when the user acts, read by every automated path before any write. Naming the flag separately from the value it locks is what keeps user intent durable across every future automation sweep.
 
-**What breaks without it:** trust in the AI surface. The codebase puts `user_overridden_type BOOLEAN` on `todo_meta`, default `false`. When the user picks a type from the picker, the handler writes `updateTodoMeta(id, { type: 'idea', user_overridden_type: true })` — both columns set in one SQL statement so an async classifier landing between two writes can't sneak in. Every AI write path then consults the flag: `scheduleClassify`'s success handler reads the meta before writing and skips when `user_overridden_type=true` (the Haiku call still ran, the result is discarded); the catch-up classifier that fills `classifier_confidence IS NULL` rows reads the flag and skips locked rows. Drop the flag and the user's Monday correction of `loopd` from `todo` to `idea` gets silently reverted by Tuesday's reclassify sweep — the user fixes it twice, then concludes the AI doesn't listen, then stops using the type picker.
+**What breaks without it:** trust in the AI surface. The codebase puts `user_overridden_type BOOLEAN` on `todo_meta`, default `false`. When the user picks a type from the picker, the handler writes `updateTodoMeta(id, { type: 'idea', user_overridden_type: true })` — both columns set in one SQL statement so an async classifier landing between two writes can't sneak in. Every AI write path then consults the flag: `scheduleClassify`'s success handler reads the meta before writing and skips when `user_overridden_type=true` (the Haiku call still ran, the result is discarded); the catch-up classifier that fills `classifier_confidence IS NULL` rows reads the flag and skips locked rows. Drop the flag and the user's Monday correction of `buffr` from `todo` to `idea` gets silently reverted by Tuesday's reclassify sweep — the user fixes it twice, then concludes the AI doesn't listen, then stops using the type picker.
 
 Without the override lock:
-- User picks `idea` for `[] loopd architecture`; meta row now has `type='idea'` `classifier_confidence='user'`
+- User picks `idea` for `[] buffr architecture`; meta row now has `type='idea'` `classifier_confidence='user'`
 - Wednesday's catch-up classifier re-runs Haiku, gets `study`, overwrites the row
 - User opens dashboard; the type is back to a model guess; the user fixes it again, then loses trust
 
@@ -137,7 +137,7 @@ Three places where the codebase respects the lock:
 2. **The catch-up classifier** — a migration-style job that fills `null` types on existing rows. Reads the flag, skips locked rows.
 3. **Any future "retroactive re-classify" feature** — must read the flag in the same shape. This is a discipline encoded in code review, not enforced by the type system.
 
-If you're coming from frontend, this is the same shape as a `useEffect` cleanup that checks a `isMounted` ref before calling `setState` — the side-effect always checks the gate before writing. Concrete consequence: user pins `loopd` as an idea on Monday. Tuesday morning, a catch-up sweep that re-classifies all `confidence=null` rows runs; it reads `user_overridden_type=true` on the loopd row and skips. The user's choice survives the sweep. Boundary: a new AI write path that *forgets* to read the flag is the only failure mode — and the rule is loud enough that the failure would be caught in code review before shipping.
+If you're coming from frontend, this is the same shape as a `useEffect` cleanup that checks a `isMounted` ref before calling `setState` — the side-effect always checks the gate before writing. Concrete consequence: user pins `buffr` as an idea on Monday. Tuesday morning, a catch-up sweep that re-classifies all `confidence=null` rows runs; it reads `user_overridden_type=true` on the buffr row and skips. The user's choice survives the sweep. Boundary: a new AI write path that *forgets* to read the flag is the only failure mode — and the rule is loud enough that the failure would be caught in code review before shipping.
 
 The three AI write paths and what each does with the flag:
 
@@ -323,7 +323,7 @@ Locking on every write vs locking on user-confirmed writes wasn't a real choice.
 
 - **Exercise ID:** `[B1.9]`
 - **What to build:** A repo-wide grep audit identifying every site that writes `todo_meta.type` (the protected field) and confirming each one checks `user_overridden_type` before clobbering. Then promote the pattern: any future AI-driven field that should be user-overridable gets a parallel `user_overridden_<field>` column, documented in `docs/spec.md` as the canonical pattern.
-- **Why it earns its place:** the lock is one of loopd's named invariants (Principle 9 in `docs/spec.md`). Auditing every write site is the only way to know the invariant holds; promoting the pattern is the work that makes it durable for future AI-assigned attributes (e.g., the future `mood` field on AISummary).
+- **Why it earns its place:** the lock is one of buffr's named invariants (Principle 9 in `docs/spec.md`). Auditing every write site is the only way to know the invariant holds; promoting the pattern is the work that makes it durable for future AI-assigned attributes (e.g., the future `mood` field on AISummary).
 - **Files to touch:** new `docs/user-override-lock-audit.md`; cross-reference from `docs/spec.md` Principle 9.
 - **Done when:** the audit doc names every write site for `todo_meta.type`; `scheduleClassify`'s success handler, `migrateMeta.ts` L71 and L111 are all confirmed honoring the lock; the doc names one or two candidate future fields where the same pattern would apply.
 - **Estimated effort:** `1–4hr`.

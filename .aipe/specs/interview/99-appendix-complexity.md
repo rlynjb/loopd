@@ -1,6 +1,6 @@
 # 99 — Appendix: complexity cheat sheet
 
-Per-operation Big-O for everything significant in loopd. Use this in coding-round-style questions where the interviewer asks "and what's the complexity of that?" or "where does this break at scale?"
+Per-operation Big-O for everything significant in buffr. Use this in coding-round-style questions where the interviewer asks "and what's the complexity of that?" or "where does this break at scale?"
 
 *N* = total entries, *T* = total todos across all entries, *M* = total `todo_meta` rows (= *T*), *Th* = total threads, *Mn* = total `thread_mentions` rows.
 

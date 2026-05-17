@@ -1,6 +1,6 @@
 # Feature Spec — Interpret
 
-**App:** loopd
+**App:** buffr
 **Feature:** AI journal interpretation — "Interpret" button
 **Type:** New AI chain feature
 **Status:** Ready to implement
@@ -291,7 +291,7 @@ has result   [Regenerate]     + "Interpreted [time]"
 
 ```
 Read .aipe/specs/features/interpret.md
-then implement the Interpret feature in loopd.
+then implement the Interpret feature in buffr.
 Do not modify any files not listed in the
 "What changes" section.
 ```

@@ -169,7 +169,7 @@ interpret is the only chain that's already at the intended setting; the other fo
 The three sampling dials and where each one fits:
 
 ```
-   dial        what it does                     loopd uses    when to add
+   dial        what it does                     buffr uses    when to add
    ──────────  ──────────────────────────       ──────────    ──────────────────
    temperature divides logits before softmax;   yes (one      always — every
                higher = more randomness         chain;        chain should set
@@ -274,7 +274,7 @@ This is what people mean by "sampling is half the function." The model weights a
 ```
 
 ```
-                Where each loopd chain currently sits
+                Where each buffr chain currently sits
 
   ┌─ Provider default (temperature = 1) ────────────────────┐
   │  classify.ts        — should be 0 (deterministic 5-mode)│
@@ -365,7 +365,7 @@ What we got back: code that looks like the SDK examples in the docs. New contrib
 
 If we had set `temp=0` on every structured chain at the start, the code would carry an extra constant + two extra lines per chain (~15 total). Onboarding wouldn't have suffered — the parameter is well-known. The classifier would have been more reliable from day one. The cost is essentially zero; we paid an attention cost (every chain author has to remember the parameter exists) we did not need to pay.
 
-If we had set `top_p=0.9` alongside, the chains would have an extra dimension of variance control. For a single-user app this is overkill — nucleus sampling shines when serving heterogeneous traffic where some queries want determinism and others want variance. loopd's traffic is one user's chains, each with one job.
+If we had set `top_p=0.9` alongside, the chains would have an extra dimension of variance control. For a single-user app this is overkill — nucleus sampling shines when serving heterogeneous traffic where some queries want determinism and others want variance. buffr's traffic is one user's chains, each with one job.
 
 ### The breakpoint
 
@@ -393,7 +393,7 @@ Fine until a classifier failure becomes visible to the user — e.g., the same t
 - **Why it's here:** the alternate provider; chosen for raw `fetch` rather than the SDK to avoid carrying both `openai` and `@anthropic-ai/sdk` packages on a React Native runtime where bundle size matters.
 - **Leading today:** OpenAI's Chat Completions API — `adoption-leading`, 2026.
 - **Why it leads:** the original "messages array + temperature + response_format" shape every other provider mimics; tooling support across every framework is widest here.
-- **Runner-up:** OpenAI's Responses API (newer, structured around tools) — `innovation-leading` for agent-shaped workloads; loopd doesn't use agents so it sticks with Chat Completions.
+- **Runner-up:** OpenAI's Responses API (newer, structured around tools) — `innovation-leading` for agent-shaped workloads; buffr doesn't use agents so it sticks with Chat Completions.
 
 ---
 
@@ -403,7 +403,7 @@ Fine until a classifier failure becomes visible to the user — e.g., the same t
 
 - **Exercise ID:** `[B1.3]`
 - **What to build:** Verify the existing `recentCaptions` anti-repetition pattern works on the 4-variant caption chain (it was built for legacy single captions), then introduce *deliberate* temperature variance per variant — e.g., `clean=0.5`, `smoother=0.7`, `reflective=0.9`, `punchy=1.1` — and measure how often each variant repeats yesterday's phrasing. The experiment turns "we use default sampling" into a documented sampling policy with evidence.
-- **Why it earns its place:** the only chain in loopd that actually has user-noticeable variance pressure is caption. Every other chain has a structured output the user doesn't read as prose. This is the one place where temperature *should* matter — and right now it's running on autopilot.
+- **Why it earns its place:** the only chain in buffr that actually has user-noticeable variance pressure is caption. Every other chain has a structured output the user doesn't read as prose. This is the one place where temperature *should* matter — and right now it's running on autopilot.
 - **Files to touch:** `src/services/ai/caption.ts` (read existing `recentCaptions` plumbing, then add per-variant temperature in the call payload); new `scripts/measure-caption-repetition.mjs` for the eval.
 - **Done when:** per-variant temperature is configurable (constants at top of `caption.ts`), the script measures repetition rate against last-5-captions across 30 entries, and the result either confirms current defaults are fine or motivates a change with numbers.
 - **Estimated effort:** `1–4hr` for the wiring, `1–2 days` end-to-end with the eval script.
@@ -462,7 +462,7 @@ discovery cost  bug surfaces only via user            never surfaces
                 noticing inconsistent expand
 ```
 
-[arch] Q: How would the sampling story change if loopd grew to serve 10,000 users with personalised chains?
+[arch] Q: How would the sampling story change if buffr grew to serve 10,000 users with personalised chains?
 
 A: At single-user scale, every chain is a one-shot call with no contention; defaults are mostly fine. At 10k users, three things change. First, you'd want `temp=0` on every chain that has a typed output to make malformed JSON a non-event (each malformed response is now a user-visible bug, not a developer console warning). Second, you'd combine `temp=0.7 + top_p=0.9` on creative chains to control the tail — `temp=0.7` alone can still pick implausible tokens; `top_p=0.9` truncates the unlikely tail. Third, you'd add per-chain telemetry on output-distribution diversity (caption-text similarity, classifier-type entropy) so a sampling regression shows up before the user reports it.
 

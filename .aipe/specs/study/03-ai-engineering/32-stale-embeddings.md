@@ -15,7 +15,7 @@ Open React Query DevTools and watch what happens when you mutate data. The cache
 
 The implicit question is "when the source changes, how does the derived fingerprint know it needs to be recomputed?" The stale-embedding problem is the name for that gap, and the answer is the same shape as every other derived-state invalidation: mark the derived row stale at the moment of write, recompute it on a separate pass. Without an invalidation channel, the vector silently drifts from the text it's supposed to represent.
 
-**What breaks without it:** retrieval quality on every edited entry, slowly and silently. For loopd the planned `entry_embeddings.embedding_stale_at` column carries the invariant: `[B2A.4]` adds a mark-stale hook inside `src/services/database.ts:writeEntry()` and an idle pass `processEmbedRefresh()` in `src/services/ai/embedRefresh.ts`. Forget the mark on even one write path and that path's edits drift forever — a search for "pivot" against an entry that added the word last week returns nothing, and there's no error to surface.
+**What breaks without it:** retrieval quality on every edited entry, slowly and silently. For buffr the planned `entry_embeddings.embedding_stale_at` column carries the invariant: `[B2A.4]` adds a mark-stale hook inside `src/services/database.ts:writeEntry()` and an idle pass `processEmbedRefresh()` in `src/services/ai/embedRefresh.ts`. Forget the mark on even one write path and that path's edits drift forever — a search for "pivot" against an entry that added the word last week returns nothing, and there's no error to surface.
 
 Without the invalidation channel:
 - User adds a paragraph about "pivot" to entry 47 at t=0 → autosave updates `entries.text`, leaves `entry_embeddings.embedding` stale
@@ -101,7 +101,7 @@ If you're coming from frontend, this is the same shape as React Query's `staleTi
 
 ### Mark-stale-on-write — the load-bearing rule
 
-The single highest-impact rule: *every write that changes embedded text must mark the embedding stale*. In loopd that's every path that mutates `entries.text` — currently the autosave on every keystroke (DB-first, see Principle 3 in `docs/spec.md`). The mark itself is cheap: one UPDATE per entry per edit-session, gated by some debounce.
+The single highest-impact rule: *every write that changes embedded text must mark the embedding stale*. In buffr that's every path that mutates `entries.text` — currently the autosave on every keystroke (DB-first, see Principle 3 in `docs/spec.md`). The mark itself is cheap: one UPDATE per entry per edit-session, gated by some debounce.
 
 If you skip mark-stale on even one write path, that path's edits silently drift in retrieval. The fix is to centralise — every entry-write goes through one function, and that function marks stale.
 
@@ -143,7 +143,7 @@ Re-embedding on the keystroke that marked stale is bad — autosave runs on ever
 2. **On idle timer** — fire a re-embed pass after N seconds of editor inactivity. More responsive; harder to test.
 3. **On retrieval** — re-embed any stale entry lazily right before a query needs it. Worst — adds latency to every query.
 
-The curriculum's `[B2A.4]` picks idle-pass shape. In loopd's existing async-classification pattern (`scheduleClassify`), there's already a model for "fire-and-forget the slow thing, write back when done" — re-embedding fits the same shape.
+The curriculum's `[B2A.4]` picks idle-pass shape. In buffr's existing async-classification pattern (`scheduleClassify`), there's already a model for "fire-and-forget the slow thing, write back when done" — re-embedding fits the same shape.
 
 The three re-embed trigger options compared:
 
@@ -288,12 +288,12 @@ Stale-derived-state invalidation is one of the oldest patterns in computer scien
 Any "compute once, read many" derived state needs an invalidation channel. The principle generalises beyond embeddings: image thumbnails, search snippets, recommendation models, summary caches — all of them silently lie if you don't invalidate.
 
 ### Where this breaks down
-Mark-stale doesn't help if your write path doesn't actually trigger it. In loopd, autosave-on-keystroke means every keystroke writes; the stale mark needs to be inside the write path, not at editor-blur — otherwise an app crash mid-edit can leave a fresh text with a stale vector. The fix is mark-stale-with-text-update in one transaction.
+Mark-stale doesn't help if your write path doesn't actually trigger it. In buffr, autosave-on-keystroke means every keystroke writes; the stale mark needs to be inside the write path, not at editor-blur — otherwise an app crash mid-edit can leave a fresh text with a stale vector. The fix is mark-stale-with-text-update in one transaction.
 
 ### What to explore next
 - [33-incremental-indexing](./33-incremental-indexing.md) → the re-embed pass mechanics
 - [30-vector-databases](./30-vector-databases.md) → where the stale flag lives
-- loopd's existing `synced_at` pattern in `sync_meta` — the closest existing analogue
+- buffr's existing `synced_at` pattern in `sync_meta` — the closest existing analogue
 
 ---
 
@@ -323,10 +323,10 @@ A short window of staleness — edits made in the last few minutes may still be 
 
 ### Sub-block 2 — what re-embed-on-every-edit would have cost
 
-Embed-call volume. loopd's autosave fires on every keystroke; embedding on every write would mean dozens of LLM provider round-trips per edit session, at non-trivial cost and latency. The first edit fires an embed; the second edit invalidates the in-flight embed and fires another. The pattern fights the existing autosave architecture.
+Embed-call volume. buffr's autosave fires on every keystroke; embedding on every write would mean dozens of LLM provider round-trips per edit session, at non-trivial cost and latency. The first edit fires an embed; the second edit invalidates the in-flight embed and fires another. The pattern fights the existing autosave architecture.
 
 ### Sub-block 3 — the breakpoint
-Mark-stale + idle pass stops being right when (a) retrieval latency tolerance hits zero (real-time UX), or (b) the staleness window starts causing visible "search misses" complaints. Neither holds for loopd.
+Mark-stale + idle pass stops being right when (a) retrieval latency tolerance hits zero (real-time UX), or (b) the staleness window starts causing visible "search misses" complaints. Neither holds for buffr.
 
 ### What wasn't actually a tradeoff
 Skipping stale tracking entirely was never an option once embeddings ship. The drift would compound silently and undo every retrieval-quality investment.
@@ -338,10 +338,10 @@ Skipping stale tracking entirely was never an option once embeddings ship. The d
 ### Custom mark-stale + idle pass
 
 - **Codebase uses:** target plan.
-- **Why it's here:** integrates with loopd's existing patterns (autosave write paths, fire-and-forget async-classification, `schedulePush`).
+- **Why it's here:** integrates with buffr's existing patterns (autosave write paths, fire-and-forget async-classification, `schedulePush`).
 - **Leading today:** custom invalidation in your own service layer — `adoption-leading` for application-controlled freshness, 2026.
 - **Why it leads:** colocated with the write path; debuggable in your own logs; no separate service.
-- **Runner-up:** event-stream-based invalidation (CDC) — `innovation-leading` for multi-service architectures where the embed pipeline lives in a separate service; overkill for loopd.
+- **Runner-up:** event-stream-based invalidation (CDC) — `innovation-leading` for multi-service architectures where the embed pipeline lives in a separate service; overkill for buffr.
 
 ### Postgres `tsvector` for the BM25 sparse half
 
@@ -367,7 +367,7 @@ Skipping stale tracking entirely was never an option once embeddings ship. The d
 
 ## Summary
 
-Stale embeddings are the invariant-breaking gap between an entry's current text and its current vector. In loopd this is not yet implemented; `[B2A.4]` introduces the standard mark-stale-on-write + idle re-embed pattern, mirroring loopd's existing `synced_at`/`deleted_at` shape. The constraint that makes this the right call is loopd's autosave-on-keystroke architecture — re-embedding on every keystroke is wasteful; mark-stale-then-refresh-later is the right shape. The cost being paid is a short window of staleness (minutes) during which retrieval may use the previous vector.
+Stale embeddings are the invariant-breaking gap between an entry's current text and its current vector. In buffr this is not yet implemented; `[B2A.4]` introduces the standard mark-stale-on-write + idle re-embed pattern, mirroring buffr's existing `synced_at`/`deleted_at` shape. The constraint that makes this the right call is buffr's autosave-on-keystroke architecture — re-embedding on every keystroke is wasteful; mark-stale-then-refresh-later is the right shape. The cost being paid is a short window of staleness (minutes) during which retrieval may use the previous vector.
 
 Key points to remember:
 - Every editable embedded text needs an invalidation mechanism.
@@ -399,7 +399,7 @@ Key points to remember:
   ```
 
   [senior] Q: Why not re-embed on every edit?
-  A: Three reasons. First, loopd autosaves on every keystroke — embedding per keystroke would mean dozens of LLM provider calls per edit session. Second, it fights the autosave architecture: the first edit fires an embed; the second invalidates the first; you have in-flight calls that you have to cancel. Third, the cloud sync layer would push every intermediate vector. Mark-stale-then-refresh-on-idle batches the work into one embed per edit *session* instead of one per *keystroke* — orders-of-magnitude less work for negligible UX cost.
+  A: Three reasons. First, buffr autosaves on every keystroke — embedding per keystroke would mean dozens of LLM provider calls per edit session. Second, it fights the autosave architecture: the first edit fires an embed; the second invalidates the first; you have in-flight calls that you have to cancel. Third, the cloud sync layer would push every intermediate vector. Mark-stale-then-refresh-on-idle batches the work into one embed per edit *session* instead of one per *keystroke* — orders-of-magnitude less work for negligible UX cost.
   Diagram:
   ```
   Picked: mark-stale + idle pass     Suggested: re-embed every edit

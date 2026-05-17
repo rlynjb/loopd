@@ -15,7 +15,7 @@ You read a value from `localStorage.getItem('preferences')` on page load and wri
 
 The question those local-first apps answer is one any system with a cloud component has to answer: when there are two copies of every file, which one is authoritative — the one the user reads and writes, or the one that's durable and shareable? Not "the cloud, because it's the database" — that's the answer that makes the app stall on a loading spinner. The answer is a *replica-as-mirror flip*: the device is canonical, the cloud is an asynchronously-updated copy that exists for durability and cross-device transfer.
 
-**What depends on getting this right:** whether every screen renders instantly from local data or waits for a network round-trip, and whether the app stays useful when the network is gone. In this codebase the local store is `loopd.db` (SQLite); the mirror is Supabase Postgres. Push and pull are independent flows in `src/services/sync/orchestrator.ts` over the same 10-table `SyncableTable` registry. `pushTable()` selects `WHERE updated_at > synced_at OR synced_at IS NULL`, batches in 50s, upserts via `@supabase/supabase-js` with `onConflict: 'user_id,id'`, then stamps `synced_at = now()` on success. `pullTable()` selects cloud rows where `updated_at > sync_meta[table].last_pull_at`, pages 200 at a time, and runs `chooseWinner` (LWW) per row against the local copy. The dirty filter (`updated_at > synced_at`) is what makes each direction idempotent — a failed push just leaves `synced_at` alone and gets retried on the next pass.
+**What depends on getting this right:** whether every screen renders instantly from local data or waits for a network round-trip, and whether the app stays useful when the network is gone. In this codebase the local store is `buffr.db` (SQLite); the mirror is Supabase Postgres. Push and pull are independent flows in `src/services/sync/orchestrator.ts` over the same 10-table `SyncableTable` registry. `pushTable()` selects `WHERE updated_at > synced_at OR synced_at IS NULL`, batches in 50s, upserts via `@supabase/supabase-js` with `onConflict: 'user_id,id'`, then stamps `synced_at = now()` on success. `pullTable()` selects cloud rows where `updated_at > sync_meta[table].last_pull_at`, pages 200 at a time, and runs `chooseWinner` (LWW) per row against the local copy. The dirty filter (`updated_at > synced_at`) is what makes each direction idempotent — a failed push just leaves `synced_at` alone and gets retried on the next pass.
 
 Without the flip (cloud is authoritative, device is a view):
 - Dashboard mounts; fires a HTTPS GET to fetch today's entries
@@ -37,7 +37,7 @@ The cloud is a sync mirror, not the canonical source.
 
 ## How it works
 
-Git's local repo + remote is the canonical pattern. The local `.git` directory is where every read, every commit, every branch-switch happens. The remote (`origin`) is a mirror that gets updated when you `git push` and consulted when you `git pull`. You can work entirely offline; the remote catches up when the network agrees. loopd uses the same shape — SQLite is `.git`, Supabase Postgres is `origin`, `schedulePush()` is `git push` on a debounced trigger. The mirror's job isn't to answer questions; it's to have a copy somewhere durable when the local store is lost.
+Git's local repo + remote is the canonical pattern. The local `.git` directory is where every read, every commit, every branch-switch happens. The remote (`origin`) is a mirror that gets updated when you `git push` and consulted when you `git pull`. You can work entirely offline; the remote catches up when the network agrees. buffr uses the same shape — SQLite is `.git`, Supabase Postgres is `origin`, `schedulePush()` is `git push` on a debounced trigger. The mirror's job isn't to answer questions; it's to have a copy somewhere durable when the local store is lost.
 
 The sync-mirror shape in one picture:
 
@@ -46,7 +46,7 @@ The sync-mirror shape in one picture:
               │
               ▼
    ┌──────────────────────────────────┐
-   │ loopd.db (SQLite, canonical)     │
+   │ buffr.db (SQLite, canonical)     │
    │   updated_at, synced_at on each  │
    │   row; deleted_at for tombstones │
    └──────────────┬───────────────────┘
@@ -300,7 +300,7 @@ LWW via `chooseWinner` is the resolution rule, and at single-writer scale it's c
 
 If we had treated the cloud as canonical and the device as a view, every read would be a network round-trip — typical Supabase rtt is 80–250 ms over LTE. The dashboard load (~30 SQL queries) would go from 30 ms total to 2.4–7.5 seconds, every time. Autosave on every keystroke would mean a network write on every keystroke — either we throttle and lose data on crash, or we send everything and pay the round-trip per character.
 
-The offline story would collapse. The user opens loopd on the subway, can't read yesterday's entry, can't write today's. Every "syncs across devices" SaaS app has solved this problem the same way we did — but a cloud-canonical version saves the ~12 files in `src/services/sync/`, the `synced_at` column, and the entire `sync_meta` ledger. It's a real codebase saving if the user could tolerate the latency. They can't.
+The offline story would collapse. The user opens buffr on the subway, can't read yesterday's entry, can't write today's. Every "syncs across devices" SaaS app has solved this problem the same way we did — but a cloud-canonical version saves the ~12 files in `src/services/sync/`, the `synced_at` column, and the entire `sync_meta` ledger. It's a real codebase saving if the user could tolerate the latency. They can't.
 
 ### The breakpoint
 
@@ -467,7 +467,7 @@ If you skipped any: you described it, you didn't understand it.
 ### Level 3 — Apply it to a new scenario
 Answer this without looking at the file:
 
-A user opens loopd on a second device for the first time after using device A for two weeks. Cloud has 14 days of entries. Walk what happens between launch and the first dashboard render: which sync function fires first, what does it select, what's `last_pull_at` set to before vs after, and what does the user see while it's running?
+A user opens buffr on a second device for the first time after using device A for two weeks. Cloud has 14 days of entries. Walk what happens between launch and the first dashboard render: which sync function fires first, what does it select, what's `last_pull_at` set to before vs after, and what does the user see while it's running?
 
 Write your answer. 3–5 sentences minimum. Then open `src/services/sync/bootstrap.ts` L59–L96 and `src/services/sync/pull.ts` L34–L117 to verify.
 

@@ -258,7 +258,7 @@ Per-call branches (all 5 callsites follow this exact shape):
 ## Elaborate
 
 ### Where this pattern comes from
-LangChain's `BaseChatModel` is the unified-interface alternative. It works for the lowest common denominator. Loopd chose the opposite — explicit branches that stay honest about what each SDK can do.
+LangChain's `BaseChatModel` is the unified-interface alternative. It works for the lowest common denominator. Buffr chose the opposite — explicit branches that stay honest about what each SDK can do.
 
 ### The deeper principle
 **Honest duplication beats dishonest abstraction.** When the abstraction lies (papering over real differences), every reader has to remember the differences anyway. Writing the branch out makes the differences visible.

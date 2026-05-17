@@ -1,6 +1,6 @@
 # 10 — Data structures and algorithms
 
-> **Three coding problems derived from real loopd operations.** Each problem cites the file:line where the pattern lives, gives both brute-force and optimal solutions in TypeScript, and shows step-by-step ASCII traces of the algorithms running.
+> **Three coding problems derived from real buffr operations.** Each problem cites the file:line where the pattern lives, gives both brute-force and optimal solutions in TypeScript, and shows step-by-step ASCII traces of the algorithms running.
 
 The pattern across all three problems is the same insight: when you see a nested loop searching a list for a key, reach for a hashmap. Every interesting algorithm in this codebase is some variation of "build the lookup once, then iterate the second collection in linear time."
 
@@ -8,7 +8,7 @@ If you're studying this chapter for a coding round, internalize the *insight* of
 
 ## Problem 1 — Sparse-position reorder
 
-### Where this lives in loopd
+### Where this lives in buffr
 
 [`src/services/todos/reorder.ts`](../../../src/services/todos/reorder.ts) — when the user reorders a todo via the up/down arrows in `/todos`, the page rebuilds visible-sort positions and persists them. The actual production code does an adjacent swap; this problem generalizes the primitive to "apply a target order received from a drag-drop gesture."
 
@@ -122,7 +122,7 @@ In production code I'd ignore unknown IDs (the `if (item)` guard handles it) bec
 
 ## Problem 2 — Tree-flatten with hash-join
 
-### Where this lives in loopd
+### Where this lives in buffr
 
 [`app/todos.tsx`](../../../app/todos.tsx) — building the row list for the screen. `Entry[]` is loaded; each entry has nested `todos: TodoItem[]`. Separately, `TodoMeta[]` is loaded from `todo_meta`. The render layer needs a flat array of rows where each todo carries its parent's `entryDate` plus its meta. This is a tree-flatten plus hash-join in one pass.
 
@@ -221,7 +221,7 @@ At that volume the JS-side flatten becomes a render-time cliff. Three steps. (1)
 
 ## Problem 3 — Two-pass identity-preserving record matching
 
-### Where this lives in loopd
+### Where this lives in buffr
 
 [`src/services/todos/scanTodos.ts:63-88`](../../../src/services/todos/scanTodos.ts#L63-L88) — when a user types `[] foo` then edits it to `[] bar`, the scanner must recognize that the same todo got renamed (preserve `id`, `done`, `createdAt`) rather than treating it as delete + insert. Same pattern applies to nutrition lines.
 
@@ -360,7 +360,7 @@ Final:
 
 The trace shows what makes two-pass non-trivial: `e2` and the renamed `e1` both have content `"bar"` after the edit, but Pass 1 deterministically picks the *unclaimed* one (which is `e2`), leaving `e1` to fall through to Pass 2 — where it doesn't find a sourceLine match (line 0 is now `"bar"`, owned by e2; line 1 is the new `"bar"` that fell through). So `e1` becomes an orphan and the user's edit at line 0 is correctly recognized as creating a brand-new row, not preserving the old `e1`'s identity.
 
-The pathological case in the trace also reveals a real limitation: when the user duplicates a string in their prose, identity preservation is best-effort. In the loopd app this happens almost never; in a real tradeoff conversation I'd say so plainly.
+The pathological case in the trace also reveals a real limitation: when the user duplicates a string in their prose, identity preservation is best-effort. In the buffr app this happens almost never; in a real tradeoff conversation I'd say so plainly.
 
 ### Why optimal wins
 
@@ -372,7 +372,7 @@ Three pieces.
 
 3. **Claimed-set is the trick.** When two new lines have the same content, you don't want both to claim the same existing todo. The `Set` ensures one-to-one mapping; the second occurrence falls through to Pass 2.
 
-This is the connection to classical algorithms: it's a degenerate case of bipartite matching, where the two passes are a heuristic instead of running Hungarian. For loopd's scale, the heuristic is correct often enough that we never need the full algorithm.
+This is the connection to classical algorithms: it's a degenerate case of bipartite matching, where the two passes are a heuristic instead of running Hungarian. For buffr's scale, the heuristic is correct often enough that we never need the full algorithm.
 
 ### Follow-up an interviewer asks
 

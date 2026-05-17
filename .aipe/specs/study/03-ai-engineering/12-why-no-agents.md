@@ -36,7 +36,7 @@ A fixed sequence of typed function calls in your code, each with a known input s
 The two shapes side by side:
 
 ```
-       Loopd today (single-shot chains)         Agent (NOT loopd)
+       Buffr today (single-shot chains)         Agent (NOT buffr)
    ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
    │ focus blur on journal text         │    │ user goal: "what's my mood        │
    │     │                              │    │             this month?"          │
@@ -63,7 +63,7 @@ The two shapes side by side:
 
 The four sub-sections below trace the chain inventory, the absent agentic patterns, the patterns that surround the model, and why the no-agents stance is the right call at this scale.
 
-### Loopd's shape — five single-shot chains, no orchestrator
+### Buffr's shape — five single-shot chains, no orchestrator
 
 There are five chain files in the codebase: `summarize`, `caption`, `classify`, `expand`, `interpret`. Each runs in one call: build a prompt with pre-fetched data, call the LLM once, parse, validate, persist. No retry loop except `expand`'s single retry on malformed JSON ([08-validation-gate](./08-validation-gate.md)). No call from one chain into another. No "the chain decides what to do next." Think of it like five separate `useMutation` hooks in React Query — each owns its inputs, its mutation function, its onSuccess. None call into each other. Concrete consequence: when a user types a journal entry and focus-blurs, the codebase runs `scanTodos` → `reconcileTodoMetaForEntry` (which fires `scheduleClassify` for unsure todos) → `pushAll` 5s later. Zero LLM-driven decisions about what to do; every step is deterministic application code. Boundary: this works as long as the user-visible features can be served by predetermined chains. The day a feature needs "the LLM picks which sub-flow runs," the architecture has to grow.
 
@@ -194,7 +194,7 @@ This is what people mean by "the cheapest agent is no agent." Most AI features t
 ## Single chain vs agent — diagram
 
 ```
-  Loopd (single chain):              Hypothetical agent:
+  Buffr (single chain):              Hypothetical agent:
   ─────────────────────              ────────────────────
 
    summarize(date)                    planAVlog(week)
@@ -219,7 +219,7 @@ This is what people mean by "the cheapest agent is no agent." Most AI features t
 
 ## When to add an agent
 
-If a feature ever needs multi-step LLM reasoning, the place to add an agent is **a new service file**, not a modification to summarize/caption/classify/expand. Each of those four files is intentionally one-job, and the principle 12 list (DB-first, prose-canonical, etc.) doesn't change because of AI — those constraints apply equally well to whatever loopd ships next.
+If a feature ever needs multi-step LLM reasoning, the place to add an agent is **a new service file**, not a modification to summarize/caption/classify/expand. Each of those four files is intentionally one-job, and the principle 12 list (DB-first, prose-canonical, etc.) doesn't change because of AI — those constraints apply equally well to whatever buffr ships next.
 
 The criteria for adding an agent:
 - The task genuinely needs multi-step reasoning (planning, critique, revise).
@@ -247,15 +247,15 @@ _Agents not implemented — intentionally absent._ The five AI service files are
 "Build the simplest thing that works" is the canonical engineering rule. Agents are seductive (they can do anything!) but they're hard to debug, hard to budget, and hard to test. Single chains stay close to the canonical "prompt → JSON" model.
 
 ### The deeper principle
-**Add complexity only when the simpler model fails.** Loopd's jobs are simple jobs. They don't need agents. Adding an agent because "agents are cool" would burn budget for no quality gain.
+**Add complexity only when the simpler model fails.** Buffr's jobs are simple jobs. They don't need agents. Adding an agent because "agents are cool" would burn budget for no quality gain.
 
 ### Where this breaks down
 - Tasks where single-chain quality plateaus and multi-step is the only way forward. When that day comes, the agent goes in a new file.
-- Tasks where the model could navigate richly (large unstructured corpora, code generation). Loopd doesn't have these.
+- Tasks where the model could navigate richly (large unstructured corpora, code generation). Buffr doesn't have these.
 
 ### What to explore next
 - [06-tool-calling](./06-tool-calling.md) → the tool-loop pattern that agents use.
-- [02-single-purpose-chains](./02-single-purpose-chains.md) → the pattern loopd does use.
+- [02-single-purpose-chains](./02-single-purpose-chains.md) → the pattern buffr does use.
 - LangGraph / LlamaIndex agents → for the multi-step alternative.
 
 ---
@@ -290,7 +290,7 @@ We traded the capability ceiling of multi-step agent loops (planning, critique, 
 │                  │ across 5 services              │ when does it stop?" — 4 new    │
 │                  │                                │ questions per feature          │
 │ Quality gain     │ baseline — good prompts +      │ +5-15% on complex tasks; ~0%   │
-│                  │ structured output suffice for  │ on one-shot tasks (loopd's     │
+│                  │ structured output suffice for  │ on one-shot tasks (buffr's     │
 │                  │ knowable steps                  │ are all knowable)              │
 └──────────────────┴────────────────────────────────┴────────────────────────────────┘
 ```
@@ -349,15 +349,15 @@ Chain-with-retry (expand's pattern) vs agent loop wasn't a real choice. `expand.
 
 ## Project exercises
 
-**Status:** `learn-only` (curriculum's Phase 4 — `[C4.9]` "when *not* to use an agent" is the conceptual anchor here). The defense is the build; the curriculum's recommendation for Phase 4 is Path C anchored to contrl-mo, not loopd. loopd's contribution to Phase 4's "when not to" answer is this file plus a written defense.
+**Status:** `learn-only` (curriculum's Phase 4 — `[C4.9]` "when *not* to use an agent" is the conceptual anchor here). The defense is the build; the curriculum's recommendation for Phase 4 is Path C anchored to contrl-mo, not buffr. buffr's contribution to Phase 4's "when not to" answer is this file plus a written defense.
 
 ### [B4.6] Write the "when *not* to" section
 
 - **Exercise ID:** `[B4.6]`
-- **What to build:** A standalone section — either as a Phase 4 proof artifact (when that phase lands) or as a 1-pager `loopd/docs/why-no-agents.md` — that names the conditions under which an agent loop is the wrong tool. Concrete loopd evidence: five chains, no chain has a "decide what to do next" question, every job is knowable in advance, retry budget is bounded by `MAX_CONCURRENT=3`.
+- **What to build:** A standalone section — either as a Phase 4 proof artifact (when that phase lands) or as a 1-pager `buffr/docs/why-no-agents.md` — that names the conditions under which an agent loop is the wrong tool. Concrete buffr evidence: five chains, no chain has a "decide what to do next" question, every job is knowable in advance, retry budget is bounded by `MAX_CONCURRENT=3`.
 - **Why it earns its place:** the "when not to" answer is what separates senior candidates from candidates who default to agents because they're fashionable. Having a written, evidence-grounded answer turns the interview question into a story.
-- **Files to touch:** new `loopd/docs/why-no-agents.md` OR a section inside `<phase-4-project>/.aipe/specs/features/agent-architecture.md` when Path C lands.
-- **Done when:** the section names three conditions (jobs are knowable in advance, retry budget can't compound, observability matters more than autonomy) and walks each one through loopd's chain evidence.
+- **Files to touch:** new `buffr/docs/why-no-agents.md` OR a section inside `<phase-4-project>/.aipe/specs/features/agent-architecture.md` when Path C lands.
+- **Done when:** the section names three conditions (jobs are knowable in advance, retry budget can't compound, observability matters more than autonomy) and walks each one through buffr's chain evidence.
 - **Estimated effort:** `1–4hr`.
 
 ---
@@ -406,7 +406,7 @@ Key points to remember:
 ```
 
 [senior] Q: What's an example of a feature you considered, then explicitly chose not to build as an agent?
-         A: "Plan a vlog from a week of entries with self-critique." The naive agent shape is: outline → critique outline → refine → render plan, with each step a separate LLM call and the model deciding when it's good enough. I chose not to build it because (a) loopd is a single-day app — the editor commits one day's structured composition, and weekly planning doesn't fit the data model; (b) the cost would be 3-4× the per-call cost of summarize at ~$0.04 each, with no quality ceiling I'd hit with a single chain plus better prompts; (c) the failure modes balloon — what does "step 2 returned malformed JSON" recover to? Single-chain summarise plus a future "weekly digest" feature as another single chain handles 95% of what the agent would deliver, at a fraction of the cost and complexity.
+         A: "Plan a vlog from a week of entries with self-critique." The naive agent shape is: outline → critique outline → refine → render plan, with each step a separate LLM call and the model deciding when it's good enough. I chose not to build it because (a) buffr is a single-day app — the editor commits one day's structured composition, and weekly planning doesn't fit the data model; (b) the cost would be 3-4× the per-call cost of summarize at ~$0.04 each, with no quality ceiling I'd hit with a single chain plus better prompts; (c) the failure modes balloon — what does "step 2 returned malformed JSON" recover to? Single-chain summarise plus a future "weekly digest" feature as another single chain handles 95% of what the agent would deliver, at a fraction of the cost and complexity.
 
 ```
                   Path taken (single chain summarize)   Alternative (planAVlog agent)
@@ -564,7 +564,7 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
 
 ---
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (factory-line metaphor opening / 4 layered sub-sections — loopd's 5-chain shape, what's NOT here, surrounding patterns as middleware not orchestration, why no-agents is right at this scale — each with frontend bridges and concrete consequences / principle paragraph on "cheapest agent is no agent").
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (factory-line metaphor opening / 4 layered sub-sections — buffr's 5-chain shape, what's NOT here, surrounding patterns as middleware not orchestration, why no-agents is right at this scale — each with frontend bridges and concrete consequences / principle paragraph on "cheapest agent is no agent").
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (factory-line vs wandering-worker-with-clipboard scenario → "agent is a while-loop, the codebase is the stationed factory" pattern naming → bolded stakes pivot to five-chain shape + surrounding patterns as middleware (`heuristicClassify`, `scheduleClassify`, `validate.ts`, `user_overridden_type`) → before/after bullets on agentic-expand vs one-shot expand → one-line "cheapest agent is no agent" metaphor).

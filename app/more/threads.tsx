@@ -276,7 +276,7 @@ function ThreadEditor({ editing, onChange, onSave, onCancel }: EditorProps) {
           <TextInput
             value={t.name}
             onChangeText={setName}
-            placeholder="e.g. loopd"
+            placeholder="e.g. buffr"
             placeholderTextColor={colors.textDim}
             style={editorStyles.input}
           />

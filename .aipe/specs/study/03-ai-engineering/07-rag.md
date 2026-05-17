@@ -1,9 +1,9 @@
-# RAG — not used in loopd, but the seed exists
+# RAG — not used in buffr, but the seed exists
 
 **Industry name(s):** Retrieval-augmented generation (RAG)
 **Type:** Industry standard
 
-> Retrieval Augmented Generation: embed user data, vector-search, stuff results into the prompt. Loopd uses hand-picked retrieval instead.
+> Retrieval Augmented Generation: embed user data, vector-search, stuff results into the prompt. Buffr uses hand-picked retrieval instead.
 
 **See also:** → [03-context-window](./03-context-window.md) · → [06-tool-calling](./06-tool-calling.md)
 
@@ -33,7 +33,7 @@ RAG is a tradeoff, not a requirement — the corpus shape decides.
 
 ## How it works
 
-Vector-similarity search applied to text: every chunk gets embedded into a 1024-or-so-dimensional vector at write time, the vectors live in an index, and at query time the user's question gets embedded the same way and the index returns the top-k chunks closest in meaning — not the top-k by filename match, not the top-k by `grep`. RAG generalises that pattern across any corpus. Loopd doesn't have that retrieval step because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what loopd *doesn't* do is what makes the decision visible.
+Vector-similarity search applied to text: every chunk gets embedded into a 1024-or-so-dimensional vector at write time, the vectors live in an index, and at query time the user's question gets embedded the same way and the index returns the top-k chunks closest in meaning — not the top-k by filename match, not the top-k by `grep`. RAG generalises that pattern across any corpus. Buffr doesn't have that retrieval step because it doesn't need one — the codebase already knows which entries are relevant (last 5 captions, last 3 days) and grabs them by date, not by meaning. The pattern is documented here because understanding what buffr *doesn't* do is what makes the decision visible.
 
 The five stages of RAG in one picture:
 
@@ -62,13 +62,13 @@ The five stages of RAG in one picture:
                           ▼
                      final answer
 
-   loopd's alternative (when corpus is small + time-shaped):
+   buffr's alternative (when corpus is small + time-shaped):
    SELECT * FROM entries WHERE date > NOW() - 3 days
      LIMIT 3                ◄── microseconds, no vectors,
                                  no embedding model
 ```
 
-The three sub-sections below trace the RAG pipeline, what loopd does instead, and why the corpus shape decides which one wins.
+The three sub-sections below trace the RAG pipeline, what buffr does instead, and why the corpus shape decides which one wins.
 
 ### The RAG pipeline — embed, index, query, stuff, answer
 
@@ -102,9 +102,9 @@ The five stages with cost-per-stage annotation:
 
 Five places to misconfigure; the embedding model + top-k tuning are the two most common sources of "the retrieval is wrong" bugs.
 
-### What loopd does instead — hand-picked deterministic retrieval
+### What buffr does instead — hand-picked deterministic retrieval
 
-Loopd's chains know exactly which past data is relevant: `caption.ts` always wants the last 5 captions (anti-repetition), `expand.ts` always wants the last 3 days of entries plus their cached summaries. These are time-based predicates against SQLite, not similarity searches. Think of it like a typed SQL query that always knows its `WHERE created_at > NOW() - INTERVAL '3 days' LIMIT 5` — deterministic, fast, no separate ML pipeline. Concrete consequence: `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3`. The query takes microseconds, costs zero, returns exactly the rows the chain knows it needs. No embedding model, no vector DB, no top-k tuning, no "is this similar enough?" judgment call. Boundary: this only works because the codebase *knows in advance* what context each chain needs. The day a chain needs "the most relevant entries about topic X" — where the topic is supplied at runtime — RAG becomes the load-bearing approach.
+Buffr's chains know exactly which past data is relevant: `caption.ts` always wants the last 5 captions (anti-repetition), `expand.ts` always wants the last 3 days of entries plus their cached summaries. These are time-based predicates against SQLite, not similarity searches. Think of it like a typed SQL query that always knows its `WHERE created_at > NOW() - INTERVAL '3 days' LIMIT 5` — deterministic, fast, no separate ML pipeline. Concrete consequence: `expand.ts:buildContext` runs `SELECT * FROM entries WHERE date >= today - 3 days ORDER BY date DESC LIMIT 3`. The query takes microseconds, costs zero, returns exactly the rows the chain knows it needs. No embedding model, no vector DB, no top-k tuning, no "is this similar enough?" judgment call. Boundary: this only works because the codebase *knows in advance* what context each chain needs. The day a chain needs "the most relevant entries about topic X" — where the topic is supplied at runtime — RAG becomes the load-bearing approach.
 
 The codebase's retrieval rules in one view:
 
@@ -129,7 +129,7 @@ The codebase's retrieval rules in one view:
 
 Every chain knows in advance what context it needs; the retrieval rule is a fixed SQL filter, not a learned similarity match.
 
-### Why loopd can skip RAG — the corpus shape
+### Why buffr can skip RAG — the corpus shape
 
 The user's journal is *small and time-shaped*. A heavy month is 50 entries; an active year is ~365. RAG's value scales with corpus size — at 50 entries, top-k vector search doesn't outperform "give me the last 5"; at 50,000 entries, RAG's similarity match becomes essential because nobody can scroll-find what they want. The codebase's corpus profile is "small enough that recency + thread tags do the relevance job." If you've worked with a search bar that just queries `LIKE %query%` for small datasets and only graduates to Elasticsearch when the dataset crosses some threshold, this is the same instinct — the cheap shape works as long as the corpus stays small. Concrete consequence: at 365 entries × 200 words = ~75K tokens of full corpus, the entire journal could fit in Claude's context window twice over. The choice between "stuff the whole corpus" and "retrieve relevant chunks" isn't pressing yet. Boundary: the codebase's threshold for adding RAG is "the day a chain needs query-time relevance over a corpus too large to stuff." Until then, hand-picked retrieval wins.
 
@@ -138,8 +138,8 @@ The decision matrix by corpus size:
 ```
    corpus size            time-shaped relevance?    right pattern
    ──────────────────     ──────────────────────    ──────────────────────
-   ~50 entries            yes (last-N matters)       hand-picked SQL (loopd)
-   (today's loopd)
+   ~50 entries            yes (last-N matters)       hand-picked SQL (buffr)
+   (today's buffr)
    
    ~365 entries           yes                        hand-picked SQL still wins
    (1-year active user)                              entire corpus fits in
@@ -165,7 +165,7 @@ This is what people mean by "RAG is a tradeoff, not a requirement." The pattern 
 ## RAG — diagram
 
 ```
-  RAG pattern (NOT loopd):                     What loopd does instead:
+  RAG pattern (NOT buffr):                     What buffr does instead:
   ──────────────────────                       ─────────────────────────
 
   ┌─ App layer ──────────────┐                 ┌─ App layer ───────────────────────┐
@@ -225,8 +225,8 @@ RAG came out of dense-retrieval research (DPR, REALM) and was popularised in 202
 **Use retrieval when the corpus exceeds the context budget; use hand-picked context when it doesn't.** Vector search is a retrieval mechanism — it's only worth the complexity when there's too much data to send everything.
 
 ### Where this breaks down
-- Tiny corpora where vector search is overkill (loopd today).
-- Cases where keyword/SQL retrieval is more precise than embeddings (structured filters, dates, tags). Loopd's hand-picked retrieval is essentially this.
+- Tiny corpora where vector search is overkill (buffr today).
+- Cases where keyword/SQL retrieval is more precise than embeddings (structured filters, dates, tags). Buffr's hand-picked retrieval is essentially this.
 
 ### What to explore next
 - [03-context-window](./03-context-window.md) → the cap structure that hand-picked retrieval lives inside.
@@ -323,9 +323,9 @@ The current file describes the "hand-picked, no RAG" decision. The curriculum's 
 ### [B1.4] Update principle #11 via /aipe:refactor
 
 - **Exercise ID:** `[B1.4]`
-- **What to build:** A `loopd/.aipe/specs/refactor/principle-11-update.md` produced via `/aipe:refactor`. Replaces the current "No RAG" wording with the updated principle: *"RAG above threshold. The expand chain stays hand-picked (recency-based, ≤ 1000 chars per source) because the corpus is bounded by today. The interpret chain at week/month scope and the 'find related entries' feature on threads use embeddings + cosine search. The threshold is documented per-feature; default is no RAG until a feature provably needs it."*
+- **What to build:** A `buffr/.aipe/specs/refactor/principle-11-update.md` produced via `/aipe:refactor`. Replaces the current "No RAG" wording with the updated principle: *"RAG above threshold. The expand chain stays hand-picked (recency-based, ≤ 1000 chars per source) because the corpus is bounded by today. The interpret chain at week/month scope and the 'find related entries' feature on threads use embeddings + cosine search. The threshold is documented per-feature; default is no RAG until a feature provably needs it."*
 - **Why it earns its place:** unblocks every Phase 2A build item. Until the principle is updated, the codebase reads as "we don't do RAG"; after the update, the reader knows exactly which chains stay hand-picked and which earn RAG.
-- **Files to touch:** new `loopd/.aipe/specs/refactor/principle-11-update.md`; eventual edit of `loopd/docs/spec.md` §10 Principle 11.
+- **Files to touch:** new `buffr/.aipe/specs/refactor/principle-11-update.md`; eventual edit of `buffr/docs/spec.md` §10 Principle 11.
 - **Done when:** the refactor spec exists; `docs/spec.md` Principle 11 is updated; this file's Tradeoffs breakpoint is rephrased to match.
 - **Estimated effort:** `1–4hr`.
 
@@ -333,7 +333,7 @@ The current file describes the "hand-picked, no RAG" decision. The curriculum's 
 
 - **Exercise ID:** `[B2A.7]`
 - **What to build:** A 7-day-scope variant of `interpret` that takes a week of entries, retrieves the top-k semantically-similar entries from the rest of the corpus (via embeddings from `[B2A.1]`), and feeds both into the interpret prompt. UI: a "this week" entry point alongside the existing per-entry interpret modal.
-- **Why it earns its place:** this is the *first* feature in loopd that crosses the bounded-corpus threshold — a week is too big to hand-pick. It's the smallest possible buildable surface that justifies the entire Phase 2A RAG pipeline.
+- **Why it earns its place:** this is the *first* feature in buffr that crosses the bounded-corpus threshold — a week is too big to hand-pick. It's the smallest possible buildable surface that justifies the entire Phase 2A RAG pipeline.
 - **Files to touch:** new `src/services/ai/interpretWeek.ts`; depends on `entry_embeddings` table from `[B2A.2]`; UI entry in `app/journal/[date].tsx` or a new `app/interpret/week.tsx`.
 - **Done when:** the feature ships end-to-end on device; eval set from `[B2A.9]` shows top-k hits include at least 3 thematically-relevant entries per week-scope query on the 20-30 (query, expected entry ID) pairs.
 - **Estimated effort:** `≥1 week`.
@@ -342,7 +342,7 @@ The current file describes the "hand-picked, no RAG" decision. The curriculum's 
 
 - **Exercise ID:** `[B2A.8]`
 - **What to build:** A "related entries" rail on the thread-detail screen that surfaces entries semantically similar to the thread's prose mentions but not yet `#tag`-linked. Uses the same embedding pipeline as `[B2A.7]`.
-- **Why it earns its place:** loopd's `#tag` system is already a *graph* over entries; adding semantic neighbours turns it into a real GraphRAG-shaped surface. The interview answer "tell me about a GraphRAG you shipped" becomes concrete.
+- **Why it earns its place:** buffr's `#tag` system is already a *graph* over entries; adding semantic neighbours turns it into a real GraphRAG-shaped surface. The interview answer "tell me about a GraphRAG you shipped" becomes concrete.
 - **Files to touch:** `app/threads/[id].tsx`, `src/services/threads/getThreadDetail.ts`, new `getRelatedEntries.ts`.
 - **Done when:** the rail renders; user can tap a related entry to add a `#tag` link to that thread; the action propagates through soft-delete and sync.
 - **Estimated effort:** `1–2 days`.
@@ -537,7 +537,7 @@ Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pair
 Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
 
 ---
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (librarian-with-meaning-catalogue metaphor opening / 3 layered sub-sections — the RAG pipeline, what loopd does instead, why loopd can skip RAG — each with frontend bridges and concrete consequences / principle paragraph on RAG-as-tradeoff-not-requirement).
+Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (librarian-with-meaning-catalogue metaphor opening / 3 layered sub-sections — the RAG pipeline, what buffr does instead, why buffr can skip RAG — each with frontend bridges and concrete consequences / principle paragraph on RAG-as-tradeoff-not-requirement).
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (small-filing-cabinet vs city-library scenario → "RAG is the librarian-with-topic-catalogue" pattern naming → bolded stakes pivot to date-shaped `getRecentAISummaries` and `buildContext` slicing at the current corpus scale → before/after bullets on embed-pipeline vs hand-picked → one-line "corpus shape decides" metaphor).
@@ -546,4 +546,4 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced filing-cabinet + library-meaning-catalogue analogies with grep at small vs large scale, Sourcegraph semantic code search, ChatGPT "ask your codebase").
 
 ---
-Updated: 2026-05-14 — v1.32.0 pass: dropped "ChatGPT's ask-your-codebase" + Sourcegraph from How it works Move 1 (level-5 whole-product references) and led with the abstract pattern (vector-similarity search applied to text). Kept Why care Move 1's `grep -r` anchor (level-2 dev primitive). Added Move 1 mnemonic diagram (5-stage RAG pipeline + loopd's SQL alternative) + 3 Move 2 sub-section diagrams: 5-stage cost table, chain-by-chain retrieval-rule table, corpus-size decision matrix. Total: 4 new diagrams.
+Updated: 2026-05-14 — v1.32.0 pass: dropped "ChatGPT's ask-your-codebase" + Sourcegraph from How it works Move 1 (level-5 whole-product references) and led with the abstract pattern (vector-similarity search applied to text). Kept Why care Move 1's `grep -r` anchor (level-2 dev primitive). Added Move 1 mnemonic diagram (5-stage RAG pipeline + buffr's SQL alternative) + 3 Move 2 sub-section diagrams: 5-stage cost table, chain-by-chain retrieval-rule table, corpus-size decision matrix. Total: 4 new diagrams.

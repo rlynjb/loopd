@@ -36,7 +36,7 @@ export type ThreadMention = {
   entryDate: string;
   todoId: string | null;
   sourceLine: number;
-  tagText: string;     // literal text as typed (case preserved): "loopd", "Loopd"
+  tagText: string;     // literal text as typed (case preserved): "buffr", "Buffr"
   createdAt: string;
 };
 

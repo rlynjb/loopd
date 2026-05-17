@@ -42,7 +42,7 @@ The four sections in one picture:
    ────────────────────────────────────────────────────────────
    ┌─ Section 1: Role ──────────────────────────────────────┐
    │   "You are composing a daily vlog summary for a         │
-   │    personal journal app called loopd."                  │
+   │    personal journal app called buffr."                  │
    │   (1 line; the "you are")                               │
    └─────────────────────────────────────────────────────────┘
    ┌─ Section 2: Task ──────────────────────────────────────┐
@@ -71,24 +71,24 @@ The four sections in one picture:
    (no behaviour rules here; this is just the input)
 ```
 
-The six sub-sections below trace each of the four sections, the user-message split, and how loopd's prompts have evolved across chains.
+The six sub-sections below trace each of the four sections, the user-message split, and how buffr's prompts have evolved across chains.
 
 ### Section 1 — Role (the "you are")
 
-The role section names what the model is supposed to be in this call. It's the first thing the system prompt says. For loopd's chains:
+The role section names what the model is supposed to be in this call. It's the first thing the system prompt says. For buffr's chains:
 
-- **summarize.ts** (`prompt.ts` L4): *"You are composing a daily vlog summary for a personal journal app called loopd."*
+- **summarize.ts** (`prompt.ts` L4): *"You are composing a daily vlog summary for a personal journal app called buffr."*
 - **caption.ts** L24: *"You generate four variant captions for a daily vlog from the user's raw log."*
 - **classify.ts** L12: *"You classify short personal thoughts into one of five thinking modes."*
 - **interpret.ts** L19: *"You are an emotionally intelligent journal interpreter."*
 
 If you're coming from frontend, this is the same shape as the first line of a function's JSDoc comment — `/* @description Render a single todo item with check toggle */` — a one-line statement of purpose that frames everything that follows. Practical consequence: when the model gets confused mid-generation (the chain output drifts into a different shape), the role sentence is what pulls it back. The classifier with role *"You classify ... into one of five thinking modes"* is far less likely to write a chatty multi-sentence response than the same prompt without the role.
 
-The role line across loopd's five chains:
+The role line across buffr's five chains:
 
 ```
    summarize.ts L4    "You are composing a daily vlog summary for a
-                       personal journal app called loopd."
+                       personal journal app called buffr."
    caption.ts   L24   "You generate four variant captions for a daily
                        vlog from the user's raw log."
    classify.ts  L12   "You classify short personal thoughts into one
@@ -128,7 +128,7 @@ Loose phrasing gets ignored; tight phrasing is what the validator can later conf
 
 ### Section 3 — Constraints (the "never / always")
 
-Constraints are the negative space — what the model must not do. In loopd's chains these are sometimes inline with the task (the caption prompt's `UNIVERSAL RULES` block at L73–L82 is constraints; the interpret prompt's `Voice rules` block at L38–L46 is constraints). The distinction from "task" is subtle: task says *what success looks like*; constraints say *what failure looks like*. Examples:
+Constraints are the negative space — what the model must not do. In buffr's chains these are sometimes inline with the task (the caption prompt's `UNIVERSAL RULES` block at L73–L82 is constraints; the interpret prompt's `Voice rules` block at L38–L46 is constraints). The distinction from "task" is subtle: task says *what success looks like*; constraints say *what failure looks like*. Examples:
 
 - caption.ts L75: *"First-person implied — never write 'I' / 'you' / 'we'."*
 - caption.ts L76: *"No hashtags. No emojis. No 'today I…' / 'Today was…' framings."*
@@ -224,7 +224,7 @@ What's in the system prompt vs the user message:
 
 Behaviour and data have separate edit surfaces; the prompt diff maps to which one changed.
 
-### Move 2.5 — How loopd's prompts have evolved
+### Move 2.5 — How buffr's prompts have evolved
 
 **Phase A (caption, summarize, classify, expand):** four-section system prompt + payload user message. All four chains follow the same shape.
 
@@ -305,7 +305,7 @@ This is what people mean by "treat the prompt like code." A prompt with sections
 ```
 
 ```
-              loopd's five chains by section, side by side
+              buffr's five chains by section, side by side
 
   Chain      Role                Task          Constraints   Output
   ─────────  ──────────────────  ────────────  ───────────   ──────────────
@@ -415,7 +415,7 @@ Fine until the prompt grows past ~600 tokens or until the constraints section gr
 
 ### What wasn't actually a tradeoff
 
-"No system prompt at all" was never a real option. Both Claude and OpenAI infer a default persona when the system prompt is empty, and that default is "helpful chatbot assistant" — a persona that adds friendly preamble, asks clarifying questions, and refuses ambiguous requests. Every loopd chain would have failed under that default; the system prompt is non-negotiable.
+"No system prompt at all" was never a real option. Both Claude and OpenAI infer a default persona when the system prompt is empty, and that default is "helpful chatbot assistant" — a persona that adds friendly preamble, asks clarifying questions, and refuses ambiguous requests. Every buffr chain would have failed under that default; the system prompt is non-negotiable.
 
 ---
 
@@ -445,15 +445,15 @@ Fine until the prompt grows past ~600 tokens or until the constraints section gr
 
 - **Exercise ID:** `[B1.7]` — primary anchor is the *aipe* repo, included here because aipe's templates are the most concentrated example of the four-section prompt shape applied at meta level.
 - **What to build:** A `template-style-guide.md` in the aipe repo documenting the prompt engineering principles encoded across the 11 templates (`/aipe:feature`, `/aipe:refactor`, `/aipe:study`, `/aipe:audit`, `/aipe:debugging`, etc.). Each template is a production prompt with its own role / task / constraints / output sections — the guide names the shape and the recurring sub-patterns (e.g., "every template has an UPDATE MODE", "every template has a STOP-and-confirm step").
-- **Why it earns its place:** prompt engineering as a discipline is `[C1.7]`. loopd has five concrete chains; aipe has eleven concrete templates that *teach the discipline*. The style guide is the proof artifact for the discipline track.
+- **Why it earns its place:** prompt engineering as a discipline is `[C1.7]`. buffr has five concrete chains; aipe has eleven concrete templates that *teach the discipline*. The style guide is the proof artifact for the discipline track.
 - **Files to touch:** new `aipe/template-style-guide.md`; cross-reference from aipe's own README.
 - **Done when:** the guide names the four-section shape, points at one concrete template per section as an example, and lists the recurring meta-patterns across all 11 templates.
 - **Estimated effort:** `1–4hr`.
 
-### Audit loopd's 5 chains against the four-section shape
+### Audit buffr's 5 chains against the four-section shape
 
 - **Exercise ID:** *cross-cutting (Phase 1)*
-- **What to build:** A short audit of each of loopd's 5 chain SYSTEM_PROMPTs against the four-section structure described in this file. Score each chain: does it have an explicit role line? a single task statement? a constraints section (explicit "never" rules)? an output section that matches the validator?
+- **What to build:** A short audit of each of buffr's 5 chain SYSTEM_PROMPTs against the four-section structure described in this file. Score each chain: does it have an explicit role line? a single task statement? a constraints section (explicit "never" rules)? an output section that matches the validator?
 - **Why it earns its place:** the file claims "all 5 chains use the same four-section shape" — the audit is the receipt. Likely uncovers one chain where role/task are conflated or where the output section drifts from the actual validator.
 - **Files to touch:** read `src/services/ai/{summarize,caption,classify,expand,interpret}.ts`; output a `prompt-shape-audit.md` (gitignored or under `docs/`).
 - **Done when:** every chain has a passed/failed mark per section; failures have a one-line "what to fix" note.
@@ -470,7 +470,7 @@ Key points to remember:
 - The system prompt holds the four sections; the user message holds only payload.
 - Negative constraints ("never write 'I'") are more effective than positive preferences ("prefer third-person").
 - The output section earns the strictest phrasing — fighting the model's prior to add preamble.
-- All five loopd chains use the same shape; `interpret` is the only one whose output section permits markdown rather than enforcing JSON.
+- All five buffr chains use the same shape; `interpret` is the only one whose output section permits markdown rather than enforcing JSON.
 
 ---
 
@@ -517,13 +517,13 @@ removing it     output drifts to a different shape    forbidden patterns reappea
 
 [arch] Q: What if you needed to ship 20 new chains in the next quarter — does the four-section shape still hold?
 
-A: It still holds, but the prompts themselves need to factor. At 5 chains each prompt being a self-contained string is fine; at 20 you'd want shared building blocks — a shared role-of-loopd block, a shared "JSON only, no preamble" output footer, a shared constraints list for "never use clinical language." Each chain becomes the concatenation of its specific sections plus the shared ones. The pattern doesn't change; the implementation does. The Anthropic and OpenAI APIs both allow this — system can be a long string composed from template parts — and the codebase would extract a `lib/promptParts.ts` to hold them.
+A: It still holds, but the prompts themselves need to factor. At 5 chains each prompt being a self-contained string is fine; at 20 you'd want shared building blocks — a shared role-of-buffr block, a shared "JSON only, no preamble" output footer, a shared constraints list for "never use clinical language." Each chain becomes the concatenation of its specific sections plus the shared ones. The pattern doesn't change; the implementation does. The Anthropic and OpenAI APIs both allow this — system can be a long string composed from template parts — and the codebase would extract a `lib/promptParts.ts` to hold them.
 
 ```
 At 20 chains:
 
   ┌─ Shared prompt parts (lib/promptParts.ts) ─┐
-  │ LOOPD_CONTEXT — shared role context        │
+  │ BUFFR_CONTEXT — shared role context        │
   │ JSON_OUTPUT_FOOTER — "JSON only..."        │
   │ CLINICAL_LANGUAGE_BAN — shared constraints │
   └─────────────────────────────────────────────┘
@@ -531,7 +531,7 @@ At 20 chains:
                        ▼  composed into each chain's system prompt
   ┌─ Per-chain prompt files ───────────────────┐
   │ classify.ts  → CLASSIFY_ROLE + CLASSIFY_TASK│  ◀── BREAKS FIRST if shared
-  │              + LOOPD_CONTEXT                │     parts drift unsynced
+  │              + BUFFR_CONTEXT                │     parts drift unsynced
   │ summarize.ts → SUMMARIZE_ROLE + ...         │     across chain files
   │ ...                                         │
   └─────────────────────────────────────────────┘

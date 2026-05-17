@@ -1,5 +1,5 @@
 // Daily Schedule weekly grid — 7-column weekday layout for habits AND threads.
-// See docs/loopd-daily-schedule-grid-spec.md (with the §13 deviation: per
+// See docs/buffr-daily-schedule-grid-spec.md (with the §13 deviation: per
 // user direction, threads share the grid bucketed by time_of_day instead of
 // rendering as a separate strip below).
 //

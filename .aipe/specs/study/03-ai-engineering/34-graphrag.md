@@ -13,10 +13,10 @@ You've got two ways to retrieve rows in your service. Way one: a SQL query with 
 
 The implicit question is "should the lookup traverse explicit relationships, score by learned similarity, or both?" GraphRAG is the name for the third answer — combine graph traversal with vector retrieval so each stage handles the access pattern it's good at. Three composition shapes: pre-filter by graph then vector-rank, vector-search then expand via graph, or graph as a re-ranker on vector candidates. The architecture is "use both signals because both exist" — throwing away explicit edges to embed everything as text is leaving authoritative information on the table.
 
-**What depends on getting this right:** retrieval precision on questions that mix structured and unstructured intent, and whether existing graphs in the codebase earn their keep. For loopd the planned `src/services/threads/getRelatedEntries.ts` for `[B2A.8]` filters via the existing `thread_mentions` table (graph: entries NOT yet linked to this thread) and ranks the candidates via planned `entry_embeddings` (cosine to the thread's prose). The graph half is already real, maintained by two-pass reconciliation; skip the filter and the "related entries" rail surfaces entries the user has already tagged — useless suggestions dressed as helpful ones.
+**What depends on getting this right:** retrieval precision on questions that mix structured and unstructured intent, and whether existing graphs in the codebase earn their keep. For buffr the planned `src/services/threads/getRelatedEntries.ts` for `[B2A.8]` filters via the existing `thread_mentions` table (graph: entries NOT yet linked to this thread) and ranks the candidates via planned `entry_embeddings` (cosine to the thread's prose). The graph half is already real, maintained by two-pass reconciliation; skip the filter and the "related entries" rail surfaces entries the user has already tagged — useless suggestions dressed as helpful ones.
 
 Without GraphRAG:
-- Thread detail page renders "related entries" by cosine alone → top-5 includes entries already tagged `#loopd`, plus near-duplicates
+- Thread detail page renders "related entries" by cosine alone → top-5 includes entries already tagged `#buffr`, plus near-duplicates
 - User reads the rail, recognises every suggestion as something they already filed, dismisses the feature
 - Vector-only treats `thread_mentions` as decoration; the ground-truth edge gets approximated, badly, by similarity
 
@@ -37,20 +37,20 @@ The fundamental observation: structured data and unstructured data answer differ
 The three GraphRAG composition shapes in one picture:
 
 ```
-   user question: "entries about anxiety, scoped to #loopd thread"
+   user question: "entries about anxiety, scoped to #buffr thread"
                        │
                        ▼
    ┌────────────────────────────────────────────────────────────┐
    │ Pattern 1: pre-filter by graph, then vector-search          │
    │                                                              │
    │   SELECT entry_id FROM thread_mentions                      │
-   │     WHERE thread_id = #loopd                                 │
+   │     WHERE thread_id = #buffr                                 │
    │   → ~30 entries                                              │
    │             │                                                │
    │             ▼  embed query "anxiety"                         │
    │             │  cosine vs those 30                            │
    │             ▼                                                │
-   │   top-5 anxiety-related entries within #loopd                 │
+   │   top-5 anxiety-related entries within #buffr                 │
    │                                                              │
    │   precise on the filter; semantic on the rank                │
    └────────────────────────────────────────────────────────────┘
@@ -82,12 +82,12 @@ The three GraphRAG composition shapes in one picture:
    └────────────────────────────────────────────────────────────┘
 ```
 
-The four sub-sections below trace loopd's existing graph, the three GraphRAG patterns, why `[B2A.8]` is one of them, and where each signal earns its keep.
+The four sub-sections below trace buffr's existing graph, the three GraphRAG patterns, why `[B2A.8]` is one of them, and where each signal earns its keep.
 
-### loopd's existing graph
+### buffr's existing graph
 
 ```
-The graph that already exists in loopd
+The graph that already exists in buffr
 
   threads ──────► thread_mentions ◄────── entries
   ─────                   │                ─────
@@ -98,7 +98,7 @@ The graph that already exists in loopd
                     (or todo_id, thread_id)
 
   Examples:
-    thread #loopd mentioned in entries 247, 289, 301
+    thread #buffr mentioned in entries 247, 289, 301
     thread #journal mentioned in entries 247, 312, 401
     entries 247, 289 both mention multiple threads
 ```
@@ -107,32 +107,32 @@ If you're coming from frontend, this is the same shape as React Context's compon
 
 ### Three GraphRAG patterns
 
-1. **Pre-filter by graph, then vector-search the filtered set.** "Find entries about anxiety, scoped to the #loopd project." Step 1: graph traversal pulls entries linked to #loopd (~30 entries). Step 2: vector search on those 30. Cheap; precise on the filter; semantically smart on the result.
+1. **Pre-filter by graph, then vector-search the filtered set.** "Find entries about anxiety, scoped to the #buffr project." Step 1: graph traversal pulls entries linked to #buffr (~30 entries). Step 2: vector search on those 30. Cheap; precise on the filter; semantically smart on the result.
 
 2. **Vector-search, then expand via graph.** "Find entries semantically like this, plus their thread-neighbours." Step 1: vector search returns top-5 entries. Step 2: graph walk finds threads those entries mention, plus other entries in those threads. The result is a *cluster*, not a list.
 
 3. **Graph as a re-ranker.** Vector search returns 50 candidates; rerank by "how many threads in common with the query's threads?" Boosts the candidates that share structural context.
 
-### The practical consequence — loopd's `[B2A.8]` is GraphRAG
+### The practical consequence — buffr's `[B2A.8]` is GraphRAG
 
 `[B2A.8]` ships a "related entries" feature on the thread detail screen — surface entries semantically similar to a thread's prose, *but limited to entries not yet `#tag`-linked to that thread.* That's pattern 1 (graph as filter) plus pattern 2 (vector search to find candidates) combined. It's textbook GraphRAG, even though the file uses the more pedestrian word "related."
 
 The `[B2A.8]` query walked through both stages:
 
 ```
-   user opens thread #loopd → screen wants "related entries" rail
+   user opens thread #buffr → screen wants "related entries" rail
                        │
                        ▼  Stage 1: graph filter
    SELECT e.id, e.text
      FROM entries e
      WHERE e.id NOT IN (
        SELECT entry_id FROM thread_mentions
-        WHERE thread_id = #loopd
+        WHERE thread_id = #buffr
      )
      AND e.deleted_at IS NULL
    ─────────────────────────────────────────
    → ~335 candidate entries (of 365 total;
-     30 already tagged to #loopd, excluded)
+     30 already tagged to #buffr, excluded)
                        │
                        ▼  Stage 2: vector rank
    threadVec = embed( thread.slug + thread.title +
@@ -149,7 +149,7 @@ The `[B2A.8]` query walked through both stages:
    graph grows; next query reflects the new edge
 ```
 
-Without the graph filter, every cosine top-5 would include entries already tagged `#loopd` — useless suggestions. The graph stage makes the rail show new connections, not existing ones.
+Without the graph filter, every cosine top-5 would include entries already tagged `#buffr` — useless suggestions. The graph stage makes the rail show new connections, not existing ones.
 
 ### Where graph helps, where vectors help
 
@@ -160,7 +160,7 @@ Question type                          Graph wins?   Vector wins?
 "All friends of Alice"                  ✓             ✗
 "Entries semantically like this one"    ✗             ✓
 "Entries about feeling stuck"           ✗             ✓
-"Stuck entries in the loopd project"    Both          Both
+"Stuck entries in the buffr project"    Both          Both
 "What have I been thinking lately?"     Both          Both
 ```
 
@@ -168,7 +168,7 @@ The bottom two question types are why GraphRAG exists.
 
 ### Where it breaks down
 
-GraphRAG presumes the graph is well-maintained. In loopd specifically, two-pass matching builds the `thread_mentions` graph from prose mentions — and the staleness mechanic for that graph (`thread_mentions` reconciliation) has to keep up. If the graph drifts (a `#tag` was renamed; old mentions point to nothing), GraphRAG's graph-side filter starts returning empty results for valid queries.
+GraphRAG presumes the graph is well-maintained. In buffr specifically, two-pass matching builds the `thread_mentions` graph from prose mentions — and the staleness mechanic for that graph (`thread_mentions` reconciliation) has to keep up. If the graph drifts (a `#tag` was renamed; old mentions point to nothing), GraphRAG's graph-side filter starts returning empty results for valid queries.
 
 ### This is what people mean by "structure is information"
 
@@ -179,9 +179,9 @@ A graph of relationships you've already built is *free signal* that pure vector 
 ## GraphRAG — diagram
 
 ```
-loopd's "related entries on thread" — pattern 1 + 2 combined
+buffr's "related entries on thread" — pattern 1 + 2 combined
 
-  User on thread detail page for #loopd
+  User on thread detail page for #buffr
             │
             ▼  query: thread.prose (slug + recent mentions)
   ┌─ Graph stage (filter) ──────────────────────────────┐
@@ -204,7 +204,7 @@ loopd's "related entries on thread" — pattern 1 + 2 combined
   └─────────────────────────────────────────────────────┘
             │
             ▼  top 5 "candidate" entries
-       User: "I want to tag this #loopd"
+       User: "I want to tag this #buffr"
             │
             ▼  insertThreadMention(entry, thread)
        Graph grows; next query reflects the new edge
@@ -253,18 +253,18 @@ GraphRAG as a named pattern emerged in 2023-2024 (Microsoft's "GraphRAG" paper a
 Existing structure in your data is free signal. Throwing it away to embed everything as text is leaving information on the table. The principle generalises beyond retrieval: in classification, in recommendation, in any ML system, "what known relationships exist?" is a question worth asking before "what can the model learn?"
 
 ### Where this breaks down
-GraphRAG depends on the graph being well-maintained. If the relationships are stale, ambiguous, or sparse, the graph half adds noise instead of signal. For loopd, the `thread_mentions` graph is well-maintained via two-pass reconciliation — but a new structural feature with weaker maintenance would not earn this kind of architectural use.
+GraphRAG depends on the graph being well-maintained. If the relationships are stale, ambiguous, or sparse, the graph half adds noise instead of signal. For buffr, the `thread_mentions` graph is well-maintained via two-pass reconciliation — but a new structural feature with weaker maintenance would not earn this kind of architectural use.
 
 ### What to explore next
 - [28-hybrid-retrieval-rrf](./28-hybrid-retrieval-rrf.md) → another way to combine two retrieval signals
-- loopd's two-pass `thread_mentions` reconciliation in `src/services/threads/` — the graph maintenance
+- buffr's two-pass `thread_mentions` reconciliation in `src/services/threads/` — the graph maintenance
 - Microsoft GraphRAG paper — the canonical reference for the named pattern
 
 ---
 
 ## Tradeoffs
 
-### Comparison table — vector-only vs GraphRAG for loopd's related-entries
+### Comparison table — vector-only vs GraphRAG for buffr's related-entries
 
 ```
 ┌─────────────────────────┬───────────────────┬────────────────────────┐
@@ -309,11 +309,11 @@ Throwing away the existing `thread_mentions` graph and storing everything as emb
 
 ### Microsoft GraphRAG (LLM-extracted entities)
 
-- **Codebase uses:** not relevant; loopd's graph is already explicit.
+- **Codebase uses:** not relevant; buffr's graph is already explicit.
 - **Why it's here:** the canonical "build the graph automatically from prose using an LLM" pattern. Useful when the corpus has implicit structure that's worth surfacing.
 - **Leading today:** Microsoft GraphRAG — `innovation-leading` for implicit-graph extraction, 2026.
 - **Why it leads:** automates the most expensive part of GraphRAG (building the graph) for corpora that don't already have explicit relationships.
-- **Runner-up:** explicit-graph systems (loopd's `#tag` system, Roam, Obsidian) — `adoption-leading` for tools where users create the graph themselves.
+- **Runner-up:** explicit-graph systems (buffr's `#tag` system, Roam, Obsidian) — `adoption-leading` for tools where users create the graph themselves.
 
 ---
 
@@ -329,7 +329,7 @@ Throwing away the existing `thread_mentions` graph and storing everything as emb
   4. Returns top-5.
 
   Tap on a related entry → user can confirm "tag this entry to thread" → calls `insertThreadMention()` and the rail re-renders without that entry.
-- **Why it earns its place:** loopd's first true GraphRAG feature. Surfaces the interview answer "I shipped a system that combines graph traversal with vector retrieval." Concrete, user-visible, and uses both Phase 2A's vector pipeline and the existing thread system.
+- **Why it earns its place:** buffr's first true GraphRAG feature. Surfaces the interview answer "I shipped a system that combines graph traversal with vector retrieval." Concrete, user-visible, and uses both Phase 2A's vector pipeline and the existing thread system.
 - **Files to touch:** new `src/services/threads/getRelatedEntries.ts`; UI rail in `app/threads/[id].tsx`; depends on `[B2A.2]` `entry_embeddings`.
 - **Done when:** the rail renders on device; tapping an entry shows the confirmation; the action propagates through soft-delete and sync; eval set shows the surfaced entries are thematically related (rubric judge or manual review on 20 cases).
 - **Estimated effort:** `1–2 days`.
@@ -338,13 +338,13 @@ Throwing away the existing `thread_mentions` graph and storing everything as emb
 
 ## Summary
 
-GraphRAG is the family of patterns that combines graph traversal with vector retrieval — using explicit structure alongside semantic similarity. In loopd this is not yet implemented; `[B2A.8]` will be loopd's first GraphRAG feature, combining the existing `thread_mentions` graph (filter stage) with the planned `entry_embeddings` vectors (rank stage). The constraint that makes GraphRAG the right call is that the graph already exists, well-maintained by two-pass reconciliation, and using it costs only a SQL JOIN. The cost being paid is cognitive: future contributors have to remember that retrieval combines structured and unstructured signals.
+GraphRAG is the family of patterns that combines graph traversal with vector retrieval — using explicit structure alongside semantic similarity. In buffr this is not yet implemented; `[B2A.8]` will be buffr's first GraphRAG feature, combining the existing `thread_mentions` graph (filter stage) with the planned `entry_embeddings` vectors (rank stage). The constraint that makes GraphRAG the right call is that the graph already exists, well-maintained by two-pass reconciliation, and using it costs only a SQL JOIN. The cost being paid is cognitive: future contributors have to remember that retrieval combines structured and unstructured signals.
 
 Key points to remember:
 - Graphs answer "traverse from a known starting point"; vectors answer "find similar."
 - Many real queries need both.
 - Three patterns: pre-filter by graph; expand via graph; graph as re-ranker.
-- loopd's `#tag` system is already a graph — use it.
+- buffr's `#tag` system is already a graph — use it.
 - The graph half must be well-maintained; stale graphs add noise instead of signal.
 
 ---
@@ -357,7 +357,7 @@ Key points to remember:
 ### Likely questions
 
   [mid] Q: What's GraphRAG?
-  A: GraphRAG is the family of retrieval patterns that combines graph traversal with vector similarity. The graph holds explicit relationships (entities, edges, hierarchies); the vectors hold semantic meaning. Many real questions need both — "find anxiety entries scoped to the loopd project" is graph (project membership) plus vector (semantic similarity). The three patterns are: filter-by-graph-then-rank, vector-search-then-expand-via-graph, and graph-as-reranker.
+  A: GraphRAG is the family of retrieval patterns that combines graph traversal with vector similarity. The graph holds explicit relationships (entities, edges, hierarchies); the vectors hold semantic meaning. Many real questions need both — "find anxiety entries scoped to the buffr project" is graph (project membership) plus vector (semantic similarity). The three patterns are: filter-by-graph-then-rank, vector-search-then-expand-via-graph, and graph-as-reranker.
   Diagram:
   ```
   question type                  graph?    vector?
@@ -366,7 +366,7 @@ Key points to remember:
   "anxiety in project X"         both      both
   ```
 
-  [senior] Q: Why is loopd a natural GraphRAG case?
+  [senior] Q: Why is buffr a natural GraphRAG case?
   A: Because the graph already exists. `thread_mentions` is a real SQL table maintained by two-pass scanning of prose — every `#tag` mention creates an edge, and the graph is queryable. For the `[B2A.8]` related-entries feature on thread detail pages, GraphRAG composes naturally: filter entries to "not yet linked to this thread" (graph), then rank the remainder by cosine to the thread's prose (vector). Vector-only would surface entries already in the thread as top results — noise.
   Diagram:
   ```
@@ -378,7 +378,7 @@ Key points to remember:
   ```
 
   [arch] Q: When does GraphRAG break?
-  A: When the graph half is unreliable. If `thread_mentions` reconciliation breaks (a `#tag` is renamed and old mentions point to nothing, or two threads with the same slug collide), the graph filter starts returning empty or wrong results. The mitigation in loopd is the slug-as-local-canonical rule plus the two-pass reconciliation that already runs on commit. The architectural rule: GraphRAG is only as good as the graph; invest in graph maintenance before adding more GraphRAG features.
+  A: When the graph half is unreliable. If `thread_mentions` reconciliation breaks (a `#tag` is renamed and old mentions point to nothing, or two threads with the same slug collide), the graph filter starts returning empty or wrong results. The mitigation in buffr is the slug-as-local-canonical rule plus the two-pass reconciliation that already runs on commit. The architectural rule: GraphRAG is only as good as the graph; invest in graph maintenance before adding more GraphRAG features.
   Diagram:
   ```
   ┌─ Service layer ─────────────────┐
@@ -407,7 +407,7 @@ Right when graph exists             Right when graph doesn't exist
 ### One-line anchors
 - Graphs say "this IS connected"; vectors say "this might be similar."
 - Use both when both apply.
-- loopd's `#tag` system is a real graph — use it.
+- buffr's `#tag` system is a real graph — use it.
 - The graph must be maintained; stale graphs add noise.
 - GraphRAG is composing, not replacing.
 
@@ -419,7 +419,7 @@ Right when graph exists             Right when graph doesn't exist
 Close the file and draw the related-entries flow: thread → graph filter → candidate set → vector rank → top-5. Annotate which layer (graph vs vector) does what.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the three GraphRAG patterns, (b) why loopd is a natural GraphRAG case (existing `thread_mentions`), (c) what breaks if the graph is stale, (d) the related-entries feature `[B2A.8]`.
+In under 90 seconds, explain: (a) the three GraphRAG patterns, (b) why buffr is a natural GraphRAG case (existing `thread_mentions`), (c) what breaks if the graph is stale, (d) the related-entries feature `[B2A.8]`.
 
 ### Level 3 — Apply it to a new scenario
 A user asks "show me entries about anxiety related to my work project." Without looking, design the GraphRAG query: which stage uses graph, which uses vector, in what order.
@@ -430,7 +430,7 @@ Open the diagram and check whether your design composes the two stages correctly
 Today the plan for `[B2A.8]` is graph-filter-first, vector-rank-second. If you were starting today, would you do vector-rank-first then graph-filter (pattern 2)? Defend your answer naming one specific failure mode.
 
 ### Quick check — code reference test
-- What existing table is loopd's graph?
+- What existing table is buffr's graph?
 - What new table is the vector half?
 
 Answer: `thread_mentions` (already in production). `entry_embeddings` (target — `[B2A.2]`).

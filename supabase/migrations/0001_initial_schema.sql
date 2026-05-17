@@ -1,5 +1,5 @@
--- loopd cloud sync — initial Postgres schema
--- See docs/loopd-cloud-sync-spec.md and docs/loopd-cloud-sync-plan.md (M0).
+-- buffr cloud sync — initial Postgres schema
+-- See docs/buffr-cloud-sync-spec.md and docs/buffr-cloud-sync-plan.md (M0).
 --
 -- Mirrors the local SQLite schema in src/services/database.ts modulo:
 --   - user_id UUID NOT NULL on every table (Phase A: dummy user)

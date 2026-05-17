@@ -36,7 +36,7 @@ The tombstone is just an edit that says "I'm not here anymore."
 
 ## How it works
 
-A `deleted_at TIMESTAMP NULL` column on every table, plus a discipline that every read filters `WHERE deleted_at IS NULL`. That's the whole pattern. The row stays in storage; the application stops seeing it; sync treats it as just-another-edit. A future cleanup job (loopd's 30-day vacuum, deferred) hard-removes the row once nothing depends on it. The shape is what every distributed system that survives a partition does — Cassandra's tombstones, Git's deleted-file commits, S3's versioned-delete markers — all the same column plus the same read filter.
+A `deleted_at TIMESTAMP NULL` column on every table, plus a discipline that every read filters `WHERE deleted_at IS NULL`. That's the whole pattern. The row stays in storage; the application stops seeing it; sync treats it as just-another-edit. A future cleanup job (buffr's 30-day vacuum, deferred) hard-removes the row once nothing depends on it. The shape is what every distributed system that survives a partition does — Cassandra's tombstones, Git's deleted-file commits, S3's versioned-delete markers — all the same column plus the same read filter.
 
 The pattern in one picture, from delete gesture to other-device propagation:
 
@@ -67,7 +67,7 @@ No special "delete protocol" — the same `updated_at` dirty filter that ships e
 
 ### The deletion gesture — UPDATE, not DELETE
 
-When the user "deletes" anything in this app — an entry, a todo, a habit — the SQL that runs is `UPDATE … SET deleted_at = now, updated_at = now`, not `DELETE FROM`. If you're coming from frontend, this is like a Redux reducer that marks an item as `{ archived: true }` instead of removing it from the array — the array length doesn't change but the consumer sees the item differently. Concrete consequence: a user deletes journal entry e123 at 14:32. `UPDATE entries SET deleted_at='2026-05-10T14:32', updated_at='2026-05-10T14:32' WHERE id='e123'`. The row is still in `loopd.db`; its `deleted_at` is set. The next `SELECT * FROM entries WHERE deleted_at IS NULL` returns 24 entries instead of 25. The user's experience is identical to a real delete; the data is intact. Boundary: this only works as long as every read carries `WHERE deleted_at IS NULL` — a query that forgets the filter would resurrect ghosts.
+When the user "deletes" anything in this app — an entry, a todo, a habit — the SQL that runs is `UPDATE … SET deleted_at = now, updated_at = now`, not `DELETE FROM`. If you're coming from frontend, this is like a Redux reducer that marks an item as `{ archived: true }` instead of removing it from the array — the array length doesn't change but the consumer sees the item differently. Concrete consequence: a user deletes journal entry e123 at 14:32. `UPDATE entries SET deleted_at='2026-05-10T14:32', updated_at='2026-05-10T14:32' WHERE id='e123'`. The row is still in `buffr.db`; its `deleted_at` is set. The next `SELECT * FROM entries WHERE deleted_at IS NULL` returns 24 entries instead of 25. The user's experience is identical to a real delete; the data is intact. Boundary: this only works as long as every read carries `WHERE deleted_at IS NULL` — a query that forgets the filter would resurrect ghosts.
 
 Walking the SQL the delete actually fires:
 
@@ -81,7 +81,7 @@ Walking the SQL the delete actually fires:
     WHERE id = 'e123'
                   │
                   ▼
-   row in loopd.db still exists; deleted_at column populated
+   row in buffr.db still exists; deleted_at column populated
                   │
                   ▼
    next SELECT … WHERE deleted_at IS NULL
@@ -141,7 +141,7 @@ A deletion travelled phone → cloud → tablet via the same machinery that ship
 
 ### The deferred vacuum — hard delete after 30 days
 
-Hard delete is reserved for a future "vacuum" job: walk every synced table, hard-delete rows where `deleted_at < now - 30 days`, run on both sides. The 30-day window gives undo, gives sync time to converge, gives a forensic trail if a delete was accidental. If you're coming from frontend, this is the same pattern as a "trash" folder that empties itself after a month — the immediate experience is "gone," the storage cost is delayed until the cleanup runs. The vacuum job is **not yet built** because the row volume in a single-user journaling app doesn't warrant the operational overhead. Concrete consequence: today, a row deleted in 2026-05-10 is still in `loopd.db` and Supabase on 2027-05-10, hidden but present. The DB grows monotonically. Boundary: at the project's scale (single user, ~30 entries per month), this is invisible — a year of soft-deletes might add a few MB. At 100K users it would matter; the vacuum job becomes table stakes.
+Hard delete is reserved for a future "vacuum" job: walk every synced table, hard-delete rows where `deleted_at < now - 30 days`, run on both sides. The 30-day window gives undo, gives sync time to converge, gives a forensic trail if a delete was accidental. If you're coming from frontend, this is the same pattern as a "trash" folder that empties itself after a month — the immediate experience is "gone," the storage cost is delayed until the cleanup runs. The vacuum job is **not yet built** because the row volume in a single-user journaling app doesn't warrant the operational overhead. Concrete consequence: today, a row deleted in 2026-05-10 is still in `buffr.db` and Supabase on 2027-05-10, hidden but present. The DB grows monotonically. Boundary: at the project's scale (single user, ~30 entries per month), this is invisible — a year of soft-deletes might add a few MB. At 100K users it would matter; the vacuum job becomes table stakes.
 
 Timeline from delete gesture to (future) hard removal:
 
@@ -149,7 +149,7 @@ Timeline from delete gesture to (future) hard removal:
    Time                Row state                         Storage
    ─────               ─────────────                     ──────────
    t = 0               user deletes e123                  row + deleted_at
-                       UPDATE deleted_at = t              in loopd.db
+                       UPDATE deleted_at = t              in buffr.db
                             │
    t + 5s              pushAll picks it up                row + deleted_at
                        push to Supabase                   in both stores
@@ -313,7 +313,7 @@ A: `deleteEntry` in `database.ts` runs `UPDATE entries SET deleted_at = now, upd
         │     updated_at = now
         │   schedulePush()
         ▼
-  loopd.db  (row still present, tombstoned)
+  buffr.db  (row still present, tombstoned)
         │
         ▼  reads filter WHERE deleted_at IS NULL → UI hides it
   UI re-renders without the row
@@ -359,7 +359,7 @@ At 1M entries (10× today's row count assumption):
   │                                             │     on (deleted_at) WHERE NULL)
   └─────────────────────────────────────────────┘
               │
-  ┌─ Storage layer (loopd.db / Postgres) ───────┐
+  ┌─ Storage layer (buffr.db / Postgres) ───────┐
   │ monotonic growth — tombstones never reaped  │  ◀── needs vacuum
   │                                             │     (cloud-first, then local,
   │                                             │     with resurrection guard)

@@ -60,7 +60,7 @@ The four sub-sections below trace the per-call cost unit, the provider response 
 
 Provider dashboards aggregate at the API-key level by day. That's useful for noticing a regression ("yesterday cost 2× normal") but useless for diagnosing *which feature* caused the regression. If you're coming from frontend, this is the same problem as having one big "JS bundle size" number without per-route attribution: you know the answer at the wrong granularity.
 
-The practical consequence: to attribute spend, you log every call with `chain_name`, `input_tokens`, `output_tokens`, `model`, `timestamp`, `user_id` (always 1 today; matters when loopd grows to multi-tenant). The provider responses ship the token counts for free in their `usage` field — you just have to read them and write them to a local table.
+The practical consequence: to attribute spend, you log every call with `chain_name`, `input_tokens`, `output_tokens`, `model`, `timestamp`, `user_id` (always 1 today; matters when buffr grows to multi-tenant). The provider responses ship the token counts for free in their `usage` field — you just have to read them and write them to a local table.
 
 The planned `ai_call_log` table shape:
 
@@ -109,7 +109,7 @@ Anthropic response shape (relevant fields)
   }
 ```
 
-OpenAI's response shape is similar but renames fields (`prompt_tokens`, `completion_tokens`). In a provider-abstracted codebase like loopd, normalising these into one `ai_call_log` row per call is two lines per provider arm.
+OpenAI's response shape is similar but renames fields (`prompt_tokens`, `completion_tokens`). In a provider-abstracted codebase like buffr, normalising these into one `ai_call_log` row per call is two lines per provider arm.
 
 The two provider response shapes mapped to one row:
 
@@ -145,7 +145,7 @@ Two lines per provider arm, one shared `insertAICallLog` helper — the rest is 
 
 Three patterns recur in real codebases:
 
-1. **The cheap chain that ran 100×.** A heuristic-gated chain (classify in loopd) is cheap per-call but fires on every new todo. If the heuristic skip-rate drops from 70% to 40% after a content shift, classify spend triples silently. The fix isn't "make the chain cheaper" — it's *re-tuning the heuristic*, which you can only do if you can see the per-chain skip rate.
+1. **The cheap chain that ran 100×.** A heuristic-gated chain (classify in buffr) is cheap per-call but fires on every new todo. If the heuristic skip-rate drops from 70% to 40% after a content shift, classify spend triples silently. The fix isn't "make the chain cheaper" — it's *re-tuning the heuristic*, which you can only do if you can see the per-chain skip rate.
 
 2. **The expensive chain that ran on context you didn't notice.** `expand.ts` ships ~3 days of entry context plus 5 sibling todos. If a user writes long entries, the expand prompt grows. You'd never notice the per-call cost creep without per-chain p50/p95 input-token logging.
 
@@ -232,7 +232,7 @@ Per-call token logging pipeline
 
 **Status:** Case B — concept not yet implemented.
 
-loopd makes 30+ LLM calls on an active journaling day across five chains, but the only place spend is visible today is the provider's own console (aggregated, not per-chain). The curriculum's `[B1.2]` adds the `ai_call_log` table and the wrapper; `[B1.8]` adds the surface that reads from it.
+buffr makes 30+ LLM calls on an active journaling day across five chains, but the only place spend is visible today is the provider's own console (aggregated, not per-chain). The curriculum's `[B1.2]` adds the `ai_call_log` table and the wrapper; `[B1.8]` adds the surface that reads from it.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, would land as `src/services/ai/aiCallLog.ts` consumed by every chain's call site)*
@@ -251,7 +251,7 @@ Token-economics observability is inherited directly from API-cost observability 
 You optimise what you measure. Without per-chain attribution, every cost decision is a guess. The principle generalises beyond LLMs: it's the same reason you instrument route-level latency in a web framework, query-level cost in a database, and bundle-route attribution in a frontend.
 
 ### Where this breaks down
-Per-call logging adds a few ms of overhead per chain — acceptable for ~30 calls/day, possibly not for a high-volume API where calls happen in tight loops. At loopd's solo scale this is invisible; at 100k QPS it would need batching or sampling.
+Per-call logging adds a few ms of overhead per chain — acceptable for ~30 calls/day, possibly not for a high-volume API where calls happen in tight loops. At buffr's solo scale this is invisible; at 100k QPS it would need batching or sampling.
 
 ### What to explore next
 - [05-heuristic-before-llm](./05-heuristic-before-llm.md) → the cost-saving pattern that this instrumentation makes visible
@@ -285,13 +285,13 @@ A new local-only table (`ai_call_log`) with five-ish columns and a no-op wrapper
 
 ### Sub-block 2 — what dashboard-only would have cost
 
-Continued blindness on the question "which chain costs the most?" Today loopd has a justified-but-untested belief that classify is cheap (heuristic gates 60–70%) and `interpret` is expensive (Sonnet, 2k input tokens). Without per-chain logging, that belief is unfalsifiable — and the moment a chain regresses (model drift, prompt change, longer entries), the regression is invisible until the monthly bill arrives.
+Continued blindness on the question "which chain costs the most?" Today buffr has a justified-but-untested belief that classify is cheap (heuristic gates 60–70%) and `interpret` is expensive (Sonnet, 2k input tokens). Without per-chain logging, that belief is unfalsifiable — and the moment a chain regresses (model drift, prompt change, longer entries), the regression is invisible until the monthly bill arrives.
 
 ### Sub-block 3 — the breakpoint
-The provider-dashboard-only choice stops being acceptable the moment loopd's monthly LLM spend exceeds a meaningful number — anywhere from $20/mo (solo dev hobby threshold) to $5k/mo (small-team production threshold). For loopd today the spend is small; the discipline isn't being built for cost-control but for *practice* — to learn the observability pattern on a system where the cost of getting it wrong is small.
+The provider-dashboard-only choice stops being acceptable the moment buffr's monthly LLM spend exceeds a meaningful number — anywhere from $20/mo (solo dev hobby threshold) to $5k/mo (small-team production threshold). For buffr today the spend is small; the discipline isn't being built for cost-control but for *practice* — to learn the observability pattern on a system where the cost of getting it wrong is small.
 
 ### What wasn't actually a tradeoff
-Real-time alerting (Slack pings when a chain spikes) was never considered for loopd's scale. It belongs in Phase 5 once there are users beyond solo.
+Real-time alerting (Slack pings when a chain spikes) was never considered for buffr's scale. It belongs in Phase 5 once there are users beyond solo.
 
 ---
 
@@ -310,7 +310,7 @@ Real-time alerting (Slack pings when a chain spikes) was never considered for lo
 - **Codebase uses:** not used.
 - **Why it's here:** managed LLM observability — traces, spans, cost attribution. The Datadog of LLM calls.
 - **Leading today:** Langfuse — `innovation-leading` for self-hosted LLM observability, 2026.
-- **Why it leads:** open source, self-hostable, OpenTelemetry-compatible. Fits loopd's local-first stance better than SaaS alternatives.
+- **Why it leads:** open source, self-hostable, OpenTelemetry-compatible. Fits buffr's local-first stance better than SaaS alternatives.
 - **Runner-up:** LangSmith — `adoption-leading` for managed observability if you're already in the LangChain ecosystem; bigger feature surface but vendor lock-in.
 
 ---
@@ -339,7 +339,7 @@ Real-time alerting (Slack pings when a chain spikes) was never considered for lo
 
 ## Summary
 
-Token economics is the discipline of measuring LLM cost at call-site granularity so you can attribute spend to specific chains, features, or users. In loopd this is not yet implemented — the only spend visibility today is the provider's aggregate dashboard, which can't answer "which chain spent that?". The constraint that makes per-call logging the right call is that loopd's heuristic-first cost pattern is unfalsifiable without measurement: every cost claim in this codebase is currently a belief, not a number. The cost to pay is one new local-only table, a wrapper at every chain call site, and ~1–5ms of overhead per call — invisible against the 2–5s network round-trip.
+Token economics is the discipline of measuring LLM cost at call-site granularity so you can attribute spend to specific chains, features, or users. In buffr this is not yet implemented — the only spend visibility today is the provider's aggregate dashboard, which can't answer "which chain spent that?". The constraint that makes per-call logging the right call is that buffr's heuristic-first cost pattern is unfalsifiable without measurement: every cost claim in this codebase is currently a belief, not a number. The cost to pay is one new local-only table, a wrapper at every chain call site, and ~1–5ms of overhead per call — invisible against the 2–5s network round-trip.
 
 Key points to remember:
 - Input and output are billed separately; output is ~5× the input rate on every modern model.
@@ -367,7 +367,7 @@ Key points to remember:
                                                        SQL → settings/ai.tsx
   ```
 
-  [senior] Q: Which chain in loopd costs the most? How would you optimise it?
+  [senior] Q: Which chain in buffr costs the most? How would you optimise it?
   A: Without `[B1.2]` shipped, I'm guessing — but the educated guess is `interpret` (Sonnet 4.6, ~2k input tokens, ~1k output tokens) because it runs at the high price per token and skips no calls. `caption` is second because of the rotation block adding ~500 tokens per call. Classify is the cheapest by absolute spend even though it has the highest call rate, because Haiku 4.5 is cheap and the heuristic skip-rate gates 60–70% of calls. The optimisation order would be: ship `[B1.2]` to verify the ranking; then ship `[B5.2]` prompt caching for the system-prompt portion of interpret and caption; then ship `[B5.8]` semantic cache for interpret specifically.
   Diagram:
   ```

@@ -33,7 +33,7 @@ The composite PK is the structural gate; RLS is the runtime gate. Same shape as 
 
 ## How it works
 
-Two `WHERE` clauses on the same query, both required, evaluated by different mechanisms. The composite PK (`(user_id, id)`) is the structural gate — it doesn't ask who you are; it just makes the row appear to not exist if your scope doesn't include it. RLS (`auth.uid() = user_id`) is the runtime gate — it consults the JWT, evaluates a policy, and rejects unauthorised reads. Today only the structural gate is active in loopd; the runtime gate is scaffolded (migration 0002) but disabled in Phase A. Two independent mechanisms, layered — either one alone would still narrow the rows correctly under perfect conditions, and together they survive imperfect ones.
+Two `WHERE` clauses on the same query, both required, evaluated by different mechanisms. The composite PK (`(user_id, id)`) is the structural gate — it doesn't ask who you are; it just makes the row appear to not exist if your scope doesn't include it. RLS (`auth.uid() = user_id`) is the runtime gate — it consults the JWT, evaluates a policy, and rejects unauthorised reads. Today only the structural gate is active in buffr; the runtime gate is scaffolded (migration 0002) but disabled in Phase A. Two independent mechanisms, layered — either one alone would still narrow the rows correctly under perfect conditions, and together they survive imperfect ones.
 
 The mental model in one picture:
 
@@ -239,7 +239,7 @@ We traded a real authentication surface for time-to-data-layer — the schema ga
 
 The Supabase anon key is functionally a password. Anyone holding it can read every row in every cloud table, because the runtime gate (RLS) isn't on. We mitigate by storing keys in Android Keystore via `expo-secure-store` and shipping no public API surface, but the mitigation is "the key is hard to steal," not "stealing the key is harmless."
 
-The device-loss case is uncovered. The app has no PIN, no biometric gate on launch, no encryption on `loopd.db` beyond what Android offers at the OS level. If a borrowed phone is unlocked, the journal is readable. That's the explicit cost of skipping the auth UI in Phase A; the threat model says "the target user is me, my phone has fingerprint lock" and stops there.
+The device-loss case is uncovered. The app has no PIN, no biometric gate on launch, no encryption on `buffr.db` beyond what Android offers at the OS level. If a borrowed phone is unlocked, the journal is readable. That's the explicit cost of skipping the auth UI in Phase A; the threat model says "the target user is me, my phone has fingerprint lock" and stops there.
 
 Migration 0002 sitting in the repo with `policies not installed` is a footgun. A future contributor (or future-me) running migrations against a Phase B branch could enable RLS without also shipping the auth UI, and every read would return zero rows because `auth.uid()` is NULL. The mitigation is the migration filename + a comment, but the failure mode is real.
 
@@ -365,13 +365,13 @@ At Phase B (1 → N users, real auth):
 ### The question candidates always dodge
 Q: You're shipping a journaling app with no end-user auth and you're calling that acceptable. What about a user who installs your APK on a borrowed phone, writes for a week, then loses the phone — everything they wrote is now on a stranger's device with no password. Defend that.
 
-A: Honestly, the device-loss case isn't covered. The app has no PIN, no biometric gate on launch, no encryption on `loopd.db` beyond what Android offers at the OS level. If the borrowed phone is unlocked, the journal is readable. I accepted that because Phase A's target user is me — solo developer using my own device — and adding a launch-screen lock would be three days of work that nobody is asking for yet. The honest mitigation is "it's on my phone, my phone has a fingerprint lock." The day I onboard a non-me user, the launch-screen lock and at-rest encryption are blockers; I won't pretend they're optional. The schema gate doesn't help here because the threat isn't cross-user reads — it's a stranger reading the only user's data.
+A: Honestly, the device-loss case isn't covered. The app has no PIN, no biometric gate on launch, no encryption on `buffr.db` beyond what Android offers at the OS level. If the borrowed phone is unlocked, the journal is readable. I accepted that because Phase A's target user is me — solo developer using my own device — and adding a launch-screen lock would be three days of work that nobody is asking for yet. The honest mitigation is "it's on my phone, my phone has a fingerprint lock." The day I onboard a non-me user, the launch-screen lock and at-rest encryption are blockers; I won't pretend they're optional. The schema gate doesn't help here because the threat isn't cross-user reads — it's a stranger reading the only user's data.
 
 ```
                   Path taken (no launch lock,           Suggested (launch lock + at-rest
                   no at-rest encryption)                encryption from day 1)
                   ──────────────────────────────────    ──────────────────────────────────
-device-loss       fully exposed — unlocked phone        gated by PIN/biometric; loopd.db
+device-loss       fully exposed — unlocked phone        gated by PIN/biometric; buffr.db
  exposure         reads journal verbatim                encrypted at rest
 build cost        0 (current)                           ~3 days (PIN UI + SQLCipher
                                                         integration + key rotation)

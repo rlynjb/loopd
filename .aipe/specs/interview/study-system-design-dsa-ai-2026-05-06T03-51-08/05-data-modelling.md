@@ -3,7 +3,7 @@
 The data model is **12 SQLite tables, 10 of which mirror to Supabase Postgres, with a 1:1 application-enforced invariant between `entries.todos_json` and `todo_meta`**. There is no ORM. Every table has its own typed CRUD functions in `src/services/database.ts` and its own `SyncableTable<TLocal, TCloud>` definition in `src/services/sync/tables/<name>.ts`. The schema is deliberately denormalized in places (todos live in JSON inside `entries`) and deliberately normalized in others (each thread mention is its own row). Every choice has a reason; every reason is a workload.
 
 ```
-                 SQLite (loopd.db, WAL mode)
+                 SQLite (buffr.db, WAL mode)
   ┌────────────────────────────────────────────────────┐
   │  ENTRIES        ◄── canonical for prose            │
   │   id, date, text, habits_json, todos_json,         │

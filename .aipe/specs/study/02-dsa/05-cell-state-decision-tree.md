@@ -175,7 +175,7 @@ Pure render functions are fundamental to React (and to spreadsheet recalc engine
 **Pure functions in the render path turn rendering into recalculation.** A cell that depends on `(habit, date, today, checkedDates)` will only re-render when one of those inputs changes. Impure functions break this contract.
 
 ### Where this breaks down
-- States that genuinely require I/O. Loopd's solution is to materialise the I/O result at the parent (the `checkedDatesByHabit` map) and pass it down as data.
+- States that genuinely require I/O. Buffr's solution is to materialise the I/O result at the parent (the `checkedDatesByHabit` map) and pass it down as data.
 - States that depend on time. The grid passes `todayStr` from a parent that ticks on a 1-minute interval — explicit, controllable.
 
 ### What to explore next

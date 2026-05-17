@@ -1,15 +1,15 @@
 # Media Pipeline
 
-Technical specification for how loopd handles video clips — from capture
+Technical specification for how buffr handles video clips — from capture
 through preview, editing, and export — and how they're stored for backup
 and cross-device migration.
 
 ## Principles
 
 - **Originals stay untouched.** The user's master footage lives in the
-  system gallery (DCIM on Android, Photos on iOS). loopd never moves,
+  system gallery (DCIM on Android, Photos on iOS). buffr never moves,
   overwrites, or deletes it.
-- **One working copy per clip.** On capture, loopd transcodes to a
+- **One working copy per clip.** On capture, buffr transcodes to a
   standardized 1080p H.264 MP4 "proxy" that becomes the sole reference
   for every in-app operation (preview, trim, filters, text overlays,
   export).
@@ -18,12 +18,12 @@ and cross-device migration.
   "drop it in and re-index".
 - **Social-optimized, not archival.** 1080p matches what TikTok /
   Instagram / Reels export at. If a user wants the 4K master they open
-  it from their camera roll; loopd is deliberately lossy on import.
+  it from their camera roll; buffr is deliberately lossy on import.
 
 ## Storage Layout
 
 ```
-{DocumentsDir}/loopd/
+{DocumentsDir}/buffr/
 ├─ media/                         # flat, all proxies, shared across dates
 │  ├─ m-{ts}-{rand}.mp4           # one file per captured clip
 │  └─ m-{ts}-{rand}.mp4
@@ -36,7 +36,7 @@ and cross-device migration.
 - `media/` is **flat** — no date subdirs. Filenames use `generateId('m')`
   which produces `m-{base36-timestamp}-{base36-rand6}`. This is the
   durable clip ID; the DB references clips by full file URI
-  (`file://…/loopd/media/m-xxx.mp4`).
+  (`file://…/buffr/media/m-xxx.mp4`).
 - `exports/` remains date-keyed for user discoverability.
 - `temp/` is disposable; wiped at the start/end of each export.
 
@@ -48,7 +48,7 @@ ImagePicker.launchCameraAsync / launchImageLibraryAsync
         ▼
 ImagePickerAsset { uri, duration }
         │
-        ├─ recordClip only: MediaLibrary.createAssetAsync → DCIM/loopd
+        ├─ recordClip only: MediaLibrary.createAssetAsync → DCIM/buffr
         │  (preserves untouched master — original stays at camera quality)
         │
         ▼
@@ -62,7 +62,7 @@ transcodeToProxy(assetUri)                       ← src/services/fileManager.ts
         │   -movflags +faststart
         │
         ▼
-file://{docs}/loopd/media/{clipId}.mp4
+file://{docs}/buffr/media/{clipId}.mp4
         │
         ▼
 Entry.clips[].uri = <proxy uri>                  ← stored in SQLite
@@ -106,24 +106,24 @@ smaller, closer to what users expect from TikTok-class apps.
 Because `media/` is flat and self-contained:
 
 **Backup**
-- User copies `{DocumentsDir}/loopd/media/` off the device (cloud, USB,
+- User copies `{DocumentsDir}/buffr/media/` off the device (cloud, USB,
   adb pull, whatever). It's just a folder of MP4 files.
 - SQLite DB backup (existing feature: Settings → Export Database)
   carries the clip URIs that reference those files.
 
 **Restore on a new install / new phone**
-1. User installs loopd on the target device.
+1. User installs buffr on the target device.
 2. User imports the DB backup via Settings.
-3. User drops the `media/` folder into `{DocumentsDir}/loopd/media/`
+3. User drops the `media/` folder into `{DocumentsDir}/buffr/media/`
    (same path on the new device).
 4. App launches — URIs resolve, clips load.
 
 **Path portability note.** `{DocumentsDir}` resolves to a different
-absolute path on each install, but loopd stores clip URIs as full
+absolute path on each install, but buffr stores clip URIs as full
 `file://…` strings. If the app's sandbox path changes (e.g.
 reinstalled, different Android user profile), clips will appear
 "missing". The current mitigation is the in-UI "re-import" option per
-clip. A follow-up would be to store a path relative to `{docs}/loopd/`
+clip. A follow-up would be to store a path relative to `{docs}/buffr/`
 and resolve at load time — see **Future Work** below.
 
 ## What's Captured vs. Discarded
@@ -138,23 +138,23 @@ and resolve at load time — see **Future Work** below.
 | Original at DCIM               | Yes    | For camera captures; untouched          |
 
 Anyone wanting a pristine original opens it from the camera roll —
-that's the "archival" path and it's outside loopd's concern.
+that's the "archival" path and it's outside buffr's concern.
 
 ## Failure Modes
 
 `transcodeToProxy` falls back to returning the source URI if FFmpeg
 fails. The editor still works but loses the double-buffer benefit (and
-on slow sources, transitions stutter). Failures log with `[loopd]
+on slow sources, transitions stutter). Failures log with `[buffr]
 Transcode failed` and the last FFmpeg log lines for diagnosis.
 
 ## Migration From Old Layout
 
 Pre-proxy clips (captured before this change) live at
-`{docs}/loopd/clips/{YYYY-MM-DD}/{filename}.mp4`. Their URIs are still
+`{docs}/buffr/clips/{YYYY-MM-DD}/{filename}.mp4`. Their URIs are still
 stored in the DB and still work — `PreviewPlayer` and `exportPipeline`
 treat them identically. No forced migration is performed. A later
 "re-encode older clips" pass could walk the DB and transcode any clip
-whose URI is outside `/loopd/media/`, but this is not currently
+whose URI is outside `/buffr/media/`, but this is not currently
 implemented.
 
 ## Export Pipeline (Reference)
@@ -169,14 +169,14 @@ input, so each pass works against the already-1080p material:
 4. **Text** overlays — one PNG overlay per text, composited in
    sequential passes
 
-Output: `{docs}/loopd/exports/{date}/vlog-{date}.mp4`, then optionally
+Output: `{docs}/buffr/exports/{date}/vlog-{date}.mp4`, then optionally
 saved into DCIM via `MediaLibrary.createAssetAsync` and handed to the
 system share sheet.
 
 ## Future Work
 
 - **Relative path storage.** Replace absolute `file://` URIs in the DB
-  with paths relative to `{docs}/loopd/` so restores survive sandbox
+  with paths relative to `{docs}/buffr/` so restores survive sandbox
   path changes without re-import.
 - **Background transcode queue.** For bulk imports, queue multiple
   transcodes so the UI doesn't block for each one sequentially.

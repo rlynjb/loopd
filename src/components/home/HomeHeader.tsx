@@ -29,7 +29,7 @@ export function HomeHeader({ dayStarted, dateLabel, onBack }: Props) {
         </Pressable>
       )}
       <View style={styles.logoBlock}>
-        <Text style={styles.logo}>loopd</Text>
+        <Text style={styles.logo}>buffr</Text>
         <Text style={styles.slogan}>Plan. Capture. Reflect. Think.</Text>
       </View>
       <View style={styles.headerRight}>

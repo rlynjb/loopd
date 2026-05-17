@@ -37,7 +37,7 @@ const REGISTRY: AnySyncable[] = [
 
 export async function pushAll(): Promise<PushResult[]> {
   if (!isCloudConfigured()) {
-    console.log('[loopd sync] pushAll skipped: cloud not configured');
+    console.log('[buffr sync] pushAll skipped: cloud not configured');
     return [];
   }
   const ordered = [...REGISTRY].sort((a, b) => a.pushOrder - b.pushOrder);
@@ -47,11 +47,11 @@ export async function pushAll(): Promise<PushResult[]> {
       const r = await pushTable(table);
       results.push(r);
       if (r.succeeded > 0 || r.failed > 0) {
-        console.log(`[loopd sync] push ${r.tableName}: ${r.succeeded} ok, ${r.failed} failed`);
+        console.log(`[buffr sync] push ${r.tableName}: ${r.succeeded} ok, ${r.failed} failed`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[loopd sync] push ${table.tableName} threw:`, msg);
+      console.warn(`[buffr sync] push ${table.tableName} threw:`, msg);
       results.push({ tableName: table.tableName, attempted: 0, succeeded: 0, failed: 0, error: msg });
     }
   }
@@ -60,7 +60,7 @@ export async function pushAll(): Promise<PushResult[]> {
 
 export async function pullAll(): Promise<PullResult[]> {
   if (!isCloudConfigured()) {
-    console.log('[loopd sync] pullAll skipped: cloud not configured');
+    console.log('[buffr sync] pullAll skipped: cloud not configured');
     return [];
   }
   const ordered = [...REGISTRY].sort((a, b) => a.pullOrder - b.pullOrder);
@@ -70,11 +70,11 @@ export async function pullAll(): Promise<PullResult[]> {
       const r = await pullTable(table);
       results.push(r);
       if (r.applied > 0 || r.fetched > 0) {
-        console.log(`[loopd sync] pull ${r.tableName}: ${r.applied} applied, ${r.skipped} skipped (of ${r.fetched})`);
+        console.log(`[buffr sync] pull ${r.tableName}: ${r.applied} applied, ${r.skipped} skipped (of ${r.fetched})`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[loopd sync] pull ${table.tableName} threw:`, msg);
+      console.warn(`[buffr sync] pull ${table.tableName} threw:`, msg);
       results.push({ tableName: table.tableName, fetched: 0, applied: 0, skipped: 0, error: msg });
     }
   }

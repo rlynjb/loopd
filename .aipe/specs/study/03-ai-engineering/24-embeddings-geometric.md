@@ -13,7 +13,7 @@ You've got a list of strings — journal entries, product descriptions, search q
 
 The implicit question is how to make "similar in meaning" mean "near in space." Not a keyword index, not a thesaurus — coordinates assigned by a learned function, so distance becomes the similarity metric.
 
-**What depends on getting this right:** every retrieval feature loopd hasn't built yet but the Phase 2A roadmap schedules. Today the codebase has no `embed.ts`, no `entry_embeddings` table, no vector store — interpret reads the day's entries by date, and expand reads ~3 days plus 5 sibling todos via hand-picked `buildContext` (in `expand.ts`). When the corpus grows past what fits in a single prompt — when interpret wants "all your prior reflect entries that touch this theme" rather than "today's entries" — those features need a coordinate per entry. The planned shape: an `embed(text) → number[1536]` call writing to `entry_embeddings(entry_id, vec)` rows, with `nearestNeighbours(queryVec, k=10)` replacing today's date-filter. Without the geometric intuition, the team picks a model on price alone and ships a system whose worldview doesn't match the user's prose ("running marathons" and "running my mouth" land in the same cluster).
+**What depends on getting this right:** every retrieval feature buffr hasn't built yet but the Phase 2A roadmap schedules. Today the codebase has no `embed.ts`, no `entry_embeddings` table, no vector store — interpret reads the day's entries by date, and expand reads ~3 days plus 5 sibling todos via hand-picked `buildContext` (in `expand.ts`). When the corpus grows past what fits in a single prompt — when interpret wants "all your prior reflect entries that touch this theme" rather than "today's entries" — those features need a coordinate per entry. The planned shape: an `embed(text) → number[1536]` call writing to `entry_embeddings(entry_id, vec)` rows, with `nearestNeighbours(queryVec, k=10)` replacing today's date-filter. Without the geometric intuition, the team picks a model on price alone and ships a system whose worldview doesn't match the user's prose ("running marathons" and "running my mouth" land in the same cluster).
 
 Without geometric embeddings:
 - Retrieval is keyword + date. "Reflect entries about money" misses entries that say "rent" but not "money."
@@ -246,7 +246,7 @@ The pipeline
 
 **Status:** Case B — concept not yet implemented.
 
-loopd does no embedding today. Every retrieval is hand-picked SQL: `getRecentAISummaries(date, 5)` for captions, `expand.ts:buildContext()` for sibling todos. The corpus is small (~365 entries/year for a daily journal) and bounded by recency, so hand-picked has been sufficient. Phase 2A's principle update (`[B1.4]`) reframes this as "RAG above threshold" — features at week/month scope will need embeddings; features at day scope will not.
+buffr does no embedding today. Every retrieval is hand-picked SQL: `getRecentAISummaries(date, 5)` for captions, `expand.ts:buildContext()` for sibling todos. The corpus is small (~365 entries/year for a daily journal) and bounded by recency, so hand-picked has been sufficient. Phase 2A's principle update (`[B1.4]`) reframes this as "RAG above threshold" — features at week/month scope will need embeddings; features at day scope will not.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, the embedder lives at `src/services/ai/embed.ts`; vector storage at `src/services/sync/tables/entryEmbeddings.ts`)*
@@ -266,7 +266,7 @@ Embeddings turn "search for meaning" into "search in geometry." Any task that ca
 Embeddings encode *what the model learned* — biases, training-data distribution, and missing concepts all live in the geometry. A model trained mostly on English will under-cluster Korean. A model trained pre-2023 won't represent COVID-era concepts well. The space isn't neutral; it's a snapshot of training data.
 
 ### What to explore next
-- [25-embedding-models](./25-embedding-models.md) → which embedding model to pick for loopd
+- [25-embedding-models](./25-embedding-models.md) → which embedding model to pick for buffr
 - [30-vector-databases](./30-vector-databases.md) → where to store these vectors at scale
 - [27-dense-vs-sparse](./27-dense-vs-sparse.md) → the BM25 counterpart that handles keyword cases embeddings miss
 
@@ -293,7 +293,7 @@ Embeddings encode *what the model learned* — biases, training-data distributio
 
 ### Sub-block 1 — what embeddings would give up
 
-A new pipeline: embedding call on every commit, a vector column or table, a similarity-search function, a stale-embedding tracker. ~200–400 LOC across `src/services/ai/embed.ts`, `entry_embeddings` schema, `src/services/sync/tables/entryEmbeddings.ts`, and the read paths in features that consume them. Storage is small at loopd's scale but non-zero: 1536 floats × 4 bytes × 365 entries ≈ 2 MB local + same cloud-side. Plus a recurring cost: every entry text edit means a re-embed.
+A new pipeline: embedding call on every commit, a vector column or table, a similarity-search function, a stale-embedding tracker. ~200–400 LOC across `src/services/ai/embed.ts`, `entry_embeddings` schema, `src/services/sync/tables/entryEmbeddings.ts`, and the read paths in features that consume them. Storage is small at buffr's scale but non-zero: 1536 floats × 4 bytes × 365 entries ≈ 2 MB local + same cloud-side. Plus a recurring cost: every entry text edit means a re-embed.
 
 ### Sub-block 2 — what hand-picked-only would have cost
 
@@ -303,7 +303,7 @@ Continued blindness on any query that needs *semantic* recall instead of *recenc
 Embeddings become non-optional when (a) a feature requires retrieval over an unbounded scope (week or month, as `[B2A.7]` demands), or (b) a feature requires semantic similarity rather than `#tag` co-occurrence (as `[B2A.8]` related-entries demands). Both are in the Phase 2A roadmap.
 
 ### What wasn't actually a tradeoff
-Training a custom embedding model was never a real option for solo loopd. Off-the-shelf models (text-embedding-3, Cohere, BGE) are good enough and orders of magnitude cheaper.
+Training a custom embedding model was never a real option for solo buffr. Off-the-shelf models (text-embedding-3, Cohere, BGE) are good enough and orders of magnitude cheaper.
 
 ---
 
@@ -319,7 +319,7 @@ Training a custom embedding model was never a real option for solo loopd. Off-th
 
 ### Sentence-transformers (local)
 
-- **Codebase uses:** not used; relevant if loopd needed offline embedding.
+- **Codebase uses:** not used; relevant if buffr needed offline embedding.
 - **Why it's here:** the open-source family that runs locally (no API call); `all-MiniLM-L6-v2` is the canonical small choice.
 - **Leading today:** `sentence-transformers` — `adoption-leading` for self-hosted embedding, 2026.
 - **Why it leads:** runs on CPU at ~100 docs/sec for the small variants; no API key needed; works in air-gapped settings.
@@ -332,16 +332,16 @@ Training a custom embedding model was never a real option for solo loopd. Off-th
 ### [B2A.1] Pick storage: sqlite-vec extension vs JSON TEXT + JS cosine
 
 - **Exercise ID:** `[B2A.1]`
-- **What to build:** A 1-page decision spec in `loopd/.aipe/specs/features/rag-personal-corpus.md` comparing two options for storing 1536-dim vectors in `loopd.db`: (a) the `sqlite-vec` extension (vector type, builtin distance ops, ANN index) vs (b) storing each vector as a JSON TEXT column and doing cosine search in JavaScript. Pick one. Document why.
+- **What to build:** A 1-page decision spec in `buffr/.aipe/specs/features/rag-personal-corpus.md` comparing two options for storing 1536-dim vectors in `buffr.db`: (a) the `sqlite-vec` extension (vector type, builtin distance ops, ANN index) vs (b) storing each vector as a JSON TEXT column and doing cosine search in JavaScript. Pick one. Document why.
 - **Why it earns its place:** Phase 2A's storage choice cascades into every other build item. Picking this wrong means rebuilding the embedding pipeline later. Picking it well means everything downstream is straightforward.
-- **Files to touch:** new `loopd/.aipe/specs/features/rag-personal-corpus.md` (decision section), eventually a new migration adding the `entry_embeddings` table.
+- **Files to touch:** new `buffr/.aipe/specs/features/rag-personal-corpus.md` (decision section), eventually a new migration adding the `entry_embeddings` table.
 - **Done when:** the decision spec exists, names the tradeoff, picks an option, and a tiny proof-of-concept inserts and reads back one vector successfully.
 - **Estimated effort:** `1–4hr`.
 
 ### [B2A.3] Pick the embedding model
 
 - **Exercise ID:** `[B2A.3]`
-- **What to build:** A short eval comparing `text-embedding-3-small` (1536-dim and 512-dim variants) vs Cohere `embed-english-v3.0` on a small loopd-relevant test set: 10 queries × 30 entries each, scored on hit@5. Document the result, pick the winner, document why.
+- **What to build:** A short eval comparing `text-embedding-3-small` (1536-dim and 512-dim variants) vs Cohere `embed-english-v3.0` on a small buffr-relevant test set: 10 queries × 30 entries each, scored on hit@5. Document the result, pick the winner, document why.
 - **Why it earns its place:** the model choice locks in the geometry. Switching later is a full re-embed of every entry. Picking well now saves that pain.
 - **Files to touch:** new `scripts/eval-embedding-models.mjs`; uses real `entries.text` from a dev DB.
 - **Done when:** the eval script outputs hit@5 per model; the chosen model is named in `rag-personal-corpus.md` with a one-sentence rationale.
@@ -351,14 +351,14 @@ Training a custom embedding model was never a real option for solo loopd. Off-th
 
 ## Summary
 
-Embeddings are dense, fixed-dimensional vectors that encode the meaning of a piece of text as a point in a high-dimensional space — and turn "semantically similar" into the math problem "geometrically close." In loopd this is not yet implemented; every retrieval is hand-picked SQL because the bounded-scope chains (caption, expand) need only recency, not semantic recall. The constraint that will make embeddings the right call is Phase 2A's unbounded-scope features (`[B2A.7]` interpret-this-week, `[B2A.8]` related-entries on threads) where keyword-only retrieval would miss the entries that matter. The cost being paid in trade is ~200–400 LOC, a new local table, an embedding-model cost per commit, and a stale-embedding maintenance loop.
+Embeddings are dense, fixed-dimensional vectors that encode the meaning of a piece of text as a point in a high-dimensional space — and turn "semantically similar" into the math problem "geometrically close." In buffr this is not yet implemented; every retrieval is hand-picked SQL because the bounded-scope chains (caption, expand) need only recency, not semantic recall. The constraint that will make embeddings the right call is Phase 2A's unbounded-scope features (`[B2A.7]` interpret-this-week, `[B2A.8]` related-entries on threads) where keyword-only retrieval would miss the entries that matter. The cost being paid in trade is ~200–400 LOC, a new local table, an embedding-model cost per commit, and a stale-embedding maintenance loop.
 
 Key points to remember:
 - A vector is a 1536-float (or similar) compression of meaning; same shape regardless of input length.
 - Cosine similarity = angle between vectors; that's how "similar" gets quantified.
 - The embedding model's training data IS the geometry — biases, missing concepts, language coverage all live there.
 - Embeddings shine for semantic recall; they're weak on negation, numerical reasoning, and cross-language.
-- For loopd, hand-picked SQL is fine for bounded scope; embeddings are required for unbounded scope.
+- For buffr, hand-picked SQL is fine for bounded scope; embeddings are required for unbounded scope.
 
 ---
 
@@ -379,7 +379,7 @@ Key points to remember:
                        similarity score ∈ [-1, 1]
   ```
 
-  [senior] Q: Why doesn't loopd use embeddings today, and when will it have to?
+  [senior] Q: Why doesn't buffr use embeddings today, and when will it have to?
   A: Three reasons it doesn't today. First, the corpus is bounded by recency — captions read last 5 entries, expand reads last 3 days, classify reads no context. Hand-picked SQL covers all of it. Second, embeddings are a real maintenance burden: stale-embedding tracking, re-embed on edit, a new storage layer. Third, the cost-benefit at solo scale is unclear. It *will* have to ship when Phase 2A lands `[B2A.7]` (interpret at week scope — can't hand-pick a week's worth of relevant entries) and `[B2A.8]` (related entries on threads — needs semantic similarity, not keyword overlap). Both features are in the spec; neither is built yet.
   Diagram:
   ```
@@ -392,7 +392,7 @@ Key points to remember:
   ```
 
   [arch] Q: What changes at 10× corpus size?
-  A: At ~3650 entries (10× loopd's current solo-user year), the math shifts in two ways. First, the storage is still small (~20 MB local for 1536-dim float vectors), so storage isn't the bottleneck. Second, the cosine-search cost in pure JavaScript becomes meaningful — ~3650 dot products per query at ~5ms total is fine; at 100k entries it's ~150ms which starts being user-visible. The architectural fix is moving from JS-side cosine to `sqlite-vec` with an HNSW index, where query time stays sub-10ms regardless of corpus size.
+  A: At ~3650 entries (10× buffr's current solo-user year), the math shifts in two ways. First, the storage is still small (~20 MB local for 1536-dim float vectors), so storage isn't the bottleneck. Second, the cosine-search cost in pure JavaScript becomes meaningful — ~3650 dot products per query at ~5ms total is fine; at 100k entries it's ~150ms which starts being user-visible. The architectural fix is moving from JS-side cosine to `sqlite-vec` with an HNSW index, where query time stays sub-10ms regardless of corpus size.
   Diagram:
   ```
   ┌─ UI layer ──────────────────────┐
@@ -410,7 +410,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"How do you handle the stale-embedding problem?" Most candidates don't acknowledge it exists. The honest answer: every time an entry's text changes, its embedding is stale and must be re-computed before the next retrieval. Otherwise queries will surface entries based on what they *used to say*. In loopd's plan, `[B2A.4]` adds a `embedding_stale_at` column and re-embeds on idle pass. Without that tracker, the entire retrieval pipeline silently drifts as users edit prose.
+"How do you handle the stale-embedding problem?" Most candidates don't acknowledge it exists. The honest answer: every time an entry's text changes, its embedding is stale and must be re-computed before the next retrieval. Otherwise queries will surface entries based on what they *used to say*. In buffr's plan, `[B2A.4]` adds a `embedding_stale_at` column and re-embeds on idle pass. Without that tracker, the entire retrieval pipeline silently drifts as users edit prose.
 
 ```
 Picked: stale_at tracker         Suggested: re-embed on every edit
@@ -435,7 +435,7 @@ Right for journaling app          Right for static reference corpus
 Close the file. Draw the 2D vector-space scatter showing journaling, fitness, and cooking clusters. Mark where "logged today's miles" lands and explain why.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) what an embedding vector is, (b) what cosine similarity computes, (c) why loopd doesn't use embeddings today, (d) the two Phase 2A features that will require them.
+In under 90 seconds, explain: (a) what an embedding vector is, (b) what cosine similarity computes, (c) why buffr doesn't use embeddings today, (d) the two Phase 2A features that will require them.
 
 ### Level 3 — Apply it to a new scenario
 A user wants to add a feature: "show me everything I wrote about feeling stuck." This phrase appears in zero entries verbatim, but ~12 entries express the concept differently ("hit a wall," "couldn't get started," etc.). Without looking at the file, explain why hand-picked SQL fails here and what shape the embedding-based solution takes.
@@ -443,7 +443,7 @@ A user wants to add a feature: "show me everything I wrote about feeling stuck."
 Open `[B2A.7]` in the curriculum and check whether your answer matches its design.
 
 ### Level 4 — Defend the decision you'd change
-Today loopd plans to embed at commit time and re-embed on idle. If you were starting Phase 2A today, would you embed asynchronously instead (fire-and-forget, like `scheduleClassify`)? Defend your answer naming one specific failure mode each choice creates.
+Today buffr plans to embed at commit time and re-embed on idle. If you were starting Phase 2A today, would you embed asynchronously instead (fire-and-forget, like `scheduleClassify`)? Defend your answer naming one specific failure mode each choice creates.
 
 ### Quick check — code reference test
 - What file would the embed call live in?

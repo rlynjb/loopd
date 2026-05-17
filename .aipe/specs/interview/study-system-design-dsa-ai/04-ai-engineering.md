@@ -2,7 +2,7 @@
 
 ## Opening — what you're looking at
 
-The AI surface in loopd lives under `src/services/ai/` (vlog summary, relatable caption) and `src/services/todos/` (classifier, six per-type expansions). It is provider-agnostic: the user picks Claude (Sonnet 4.6 + Haiku 4.5) or OpenAI (GPT-4o + GPT-4o-mini) in `app/settings/ai.tsx`, and `src/services/ai/config.ts` resolves the key from `expo-secure-store`. The Anthropic path uses `@anthropic-ai/sdk` (lazy-imported); the OpenAI path is a raw `fetch` against `api.openai.com`.
+The AI surface in buffr lives under `src/services/ai/` (vlog summary, relatable caption) and `src/services/todos/` (classifier, six per-type expansions). It is provider-agnostic: the user picks Claude (Sonnet 4.6 + Haiku 4.5) or OpenAI (GPT-4o + GPT-4o-mini) in `app/settings/ai.tsx`, and `src/services/ai/config.ts` resolves the key from `expo-secure-store`. The Anthropic path uses `@anthropic-ai/sdk` (lazy-imported); the OpenAI path is a raw `fetch` against `api.openai.com`.
 
 Two architectural decisions shape every AI feature in the codebase. The first is *heuristic before LLM* — Principle 10 in `docs/spec.md` §10. Any classification, scoring, or routing decision tries a deterministic function first, and only falls through to a model when the heuristic is uncertain. `heuristicClassify.ts` resolves ~80% of new todos to `'todo'` for free; the model never sees them. The second is *user override is permanent* — Principle 9. Once the user manually picks a type via the picker, `user_overridden_type=1` and the row is locked from future re-classification. AI output is editable; user override is the floor.
 

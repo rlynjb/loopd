@@ -1,6 +1,6 @@
 # Project context
 
-loopd — a solo-dev, native Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking modes" classifier + per-type expansion for todos, a `#tag` thread system for project attribution, a daily-schedule weekly grid on the dashboard, and a Supabase Postgres cloud-sync mirror with local SQLite as canonical.
+buffr — a solo-dev, native Android daily-vlogging app. Combines a journal (text + habits + clips) with an AI-assisted vlog editor, a "drops" pattern that extracts typed records (todos, nutrition, thread mentions) from inline prefix markers in prose, an LLM-assisted "thinking modes" classifier + per-type expansion for todos, a `#tag` thread system for project attribution, a daily-schedule weekly grid on the dashboard, and a Supabase Postgres cloud-sync mirror with local SQLite as canonical.
 
 Operational details in [`README.md`](../../README.md). Full architecture reference in [`docs/spec.md`](../../docs/spec.md). Companion design docs in [`docs/`](../../docs/) (cloud sync, daily schedule grid, caption variants, thinking modes, today-habits-threads, media pipeline, relatable caption).
 
@@ -8,7 +8,7 @@ Operational details in [`README.md`](../../README.md). Full architecture referen
 
 - **Runtime / framework:** React Native 0.83.2 + Expo SDK 55, TypeScript 5.9 strict.
 - **Routing:** `expo-router` 55 (file-based, `app/` directory).
-- **Local DB:** `expo-sqlite` 55 (WAL journal mode), file `loopd.db`.
+- **Local DB:** `expo-sqlite` 55 (WAL journal mode), file `buffr.db`.
 - **Cloud sync:** `@supabase/supabase-js` v2 + `react-native-url-polyfill`. Postgres mirror at Supabase, RLS scaffolded but disabled in Phase A (single hardcoded user_id).
 - **AI:** `@anthropic-ai/sdk` (Claude Sonnet 4.6 primary / Haiku 4.5 classifier) + raw `fetch` to OpenAI (GPT-4o / GPT-4o-mini). Provider-agnostic at the service layer.
 - **Media:** `@wokcito/ffmpeg-kit-react-native` 6.1.2 for transcode + export, `react-native-video` 6.19.1 for playback.
@@ -18,7 +18,7 @@ Operational details in [`README.md`](../../README.md). Full architecture referen
 
 ## Data model
 
-12 SQLite tables in `loopd.db`. 10 of those mirror to Supabase Postgres; the other 2 are local-only.
+12 SQLite tables in `buffr.db`. 10 of those mirror to Supabase Postgres; the other 2 are local-only.
 
 **Synced entity tables (mirrored to Supabase):**
 

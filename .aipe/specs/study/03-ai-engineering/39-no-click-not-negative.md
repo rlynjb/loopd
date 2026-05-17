@@ -13,7 +13,7 @@ You're building a related-content rail in your React app — 10 cards rendered, 
 
 The implicit question is "what does it mean when the user did nothing?" The "no-click is not a negative label" caveat is the answer for any system using implicit interaction as relevance signal — inaction has many causes, only one of which is "I judged it irrelevant." Treating absence as negative creates a structural 90/10 class imbalance, bakes in your current presentation policy, and confuses missing data with disagreement. The mitigation ladder is four rungs: precision-only (eval on tapped items), pair-comparison from clicks (A > B, A > C, nothing about B vs C), explicit feedback affordances ("is this helpful?"), and counterfactual propensity-scored evaluation.
 
-**What depends on getting this right:** whether eval numbers reflect quality or sampling bias, and which features can safely use interaction data. For loopd the planned `[B3.5]` retrieval eval uses hand-curated (query, expected_entry_id) pairs precisely to sidestep this trap — every label is intentional, no inference from absence. When `[B2A.8]` related-entries ships, the rail naturally produces click logs; the eval design must declare upfront that untapped entries are unknown, not negative. A future "AI-suggested todos to expand" feature would face the same choice.
+**What depends on getting this right:** whether eval numbers reflect quality or sampling bias, and which features can safely use interaction data. For buffr the planned `[B3.5]` retrieval eval uses hand-curated (query, expected_entry_id) pairs precisely to sidestep this trap — every label is intentional, no inference from absence. When `[B2A.8]` related-entries ships, the rail naturally produces click logs; the eval design must declare upfront that untapped entries are unknown, not negative. A future "AI-suggested todos to expand" feature would face the same choice.
 
 Without the caveat:
 - Log clicks on the related-entries rail; treat tapped as positive, untapped as negative; feed it as training data
@@ -103,7 +103,7 @@ Even if a user sees an entry and finds it relevant, they might not tap because:
 - They already remember the entry and don't need to re-read.
 - The current task doesn't require the related entry, even though it's relevant.
 
-In loopd specifically: the `[B2A.8]` related-entries rail surfaces entries the user MIGHT want to `#tag` to the current thread. A user might agree "yes that's related" but still not tap because they're in the middle of writing a different entry.
+In buffr specifically: the `[B2A.8]` related-entries rail surfaces entries the user MIGHT want to `#tag` to the current thread. A user might agree "yes that's related" but still not tap because they're in the middle of writing a different entry.
 
 The reasons users don't tap a relevant item:
 
@@ -184,9 +184,9 @@ Four mitigations, in increasing order of robustness:
 
 3. **Explicit feedback.** Add a "yes / no" affordance ("was this helpful?"). Users provide low-bias labels; the negative labels are now intended, not inferred.
 
-4. **Counterfactual evaluation.** Use propensity scoring to adjust for which items the user actually saw. Beyond loopd's scope at solo.
+4. **Counterfactual evaluation.** Use propensity scoring to adjust for which items the user actually saw. Beyond buffr's scope at solo.
 
-For loopd's `[B2A.8]`: option 1 (treat no-click as missing) is the right starting point. Option 3 (add "this is related?" yes/no on each item) is a cheap second step that yields high-quality data quickly.
+For buffr's `[B2A.8]`: option 1 (treat no-click as missing) is the right starting point. Option 3 (add "this is related?" yes/no on each item) is a cheap second step that yields high-quality data quickly.
 
 The four-rung mitigation ladder, with cost and signal quality:
 
@@ -195,7 +195,7 @@ The four-rung mitigation ladder, with cost and signal quality:
    ───    ───────────────────────────    ──────────────        ────────────────
    1      treat no-click as MISSING       no dev work; just     precision-only,
           (eval only on tapped items)     change the eval        no recall claims
-                                          interpretation         (loopd starts here
+                                          interpretation         (buffr starts here
                                                                   for [B3.5] + [B2A.8])
    2      pair-comparison from clicks     small infra change:    ranking signal
           (tapped item beats all          log per-impression     ("A > B" only;
@@ -210,7 +210,7 @@ The four-rung mitigation ladder, with cost and signal quality:
                                            shown + statistical    statistical machinery
                                            weighting             than solo scale earns
 
-   loopd's plan:
+   buffr's plan:
      [B3.5] retrieval eval:        rung 1 (hand-curated labels,
                                             never inference)
      [B2A.8] related-entries rail: rung 1 in v1 + rung 3 in v2
@@ -271,7 +271,7 @@ Mitigation ladder
 
   ┌─ Mitigation 4: counterfactual eval ────────────────┐
   │ Adjust for what the user saw vs what was shown.    │
-  │ Propensity scoring; beyond loopd's scope.          │
+  │ Propensity scoring; beyond buffr's scope.          │
   └─────────────────────────────────────────────────────┘
 ```
 
@@ -279,9 +279,9 @@ Mitigation ladder
 
 ## In this codebase
 
-**Status:** `learn-only` for loopd (`[C3.7]` is tagged `learn-only` but exercised through Phase 2A's `[B2A.9]` eval design and Phase 3's `[B3.5]` retrieval eval).
+**Status:** `learn-only` for buffr (`[C3.7]` is tagged `learn-only` but exercised through Phase 2A's `[B2A.9]` eval design and Phase 3's `[B3.5]` retrieval eval).
 
-The eval design for `[B3.5]` (loopd RAG retrieval) uses explicit (query, expected entry ID) pairs — not click logs. This is exactly the right shape: hand-curated labels avoid the no-click trap entirely.
+The eval design for `[B3.5]` (buffr RAG retrieval) uses explicit (query, expected entry ID) pairs — not click logs. This is exactly the right shape: hand-curated labels avoid the no-click trap entirely.
 
 **File:** *(no implementation today; relevant to the eval design more than the production code)*
 **Function / class:** *(not directly applicable)*
@@ -301,7 +301,7 @@ Implicit feedback is a sample of behavior under a particular presentation policy
 Some signals are clean negatives — a user actively dismisses or downvotes an item. Those are intentional negatives, not absent positives. The trap is specifically about treating absence as negative, not about treating intentional negatives as such.
 
 ### What to explore next
-- [B3.5] loopd RAG retrieval eval — uses explicit labels, not clicks
+- [B3.5] buffr RAG retrieval eval — uses explicit labels, not clicks
 - Joachims "Optimizing Search Engines using Clickthrough Data" — the classical reference
 - Anthropic's RLHF approach — explicit human-labelled preferences over implicit click data
 
@@ -374,7 +374,7 @@ Treating click data as labelled training data without any correction was never a
 
 ## Summary
 
-"No-click is not a negative label" is the caveat that implicit user inaction can't be interpreted as a quality signal — the user might not have seen the item, or saw it but had other reasons not to act. In loopd this is `learn-only`; the eval design for `[B3.5]` uses explicit labels to sidestep the trap entirely. The constraint that makes explicit labels the right call is solo-scale corpus + hand-curation feasibility. The cost being paid is volume — you cap at what one person can label.
+"No-click is not a negative label" is the caveat that implicit user inaction can't be interpreted as a quality signal — the user might not have seen the item, or saw it but had other reasons not to act. In buffr this is `learn-only`; the eval design for `[B3.5]` uses explicit labels to sidestep the trap entirely. The constraint that makes explicit labels the right call is solo-scale corpus + hand-curation feasibility. The cost being paid is volume — you cap at what one person can label.
 
 Key points to remember:
 - Inaction ≠ negative judgment.
@@ -403,7 +403,7 @@ Key points to remember:
   Right: B=positive, others=unknown
   ```
 
-  [senior] Q: How does loopd's `[B3.5]` eval avoid this trap?
+  [senior] Q: How does buffr's `[B3.5]` eval avoid this trap?
   A: By using explicit hand-curated (query, expected_entry_id) pairs as the eval source — not click data from production. ~20-30 pairs labelled by the developer based on actual recall expectations: "if I asked this question, this is the entry I expected to find." The signal is clean (every label is intentional), volume is small (capped at hand-labelling capacity), and the trap doesn't apply because there's no implicit-vs-explicit interpretation question. At scale, mixed signal — clicks + an explicit "is this related?" affordance — would become more practical.
   Diagram:
   ```
@@ -449,10 +449,10 @@ Right at small scale                   Wrong at any scale without corr.
 Close the file and redraw the four-step mitigation ladder. Annotate which step `[B3.5]` uses.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) why no-click ≠ negative, (b) the three reasons users skip items, (c) why hand-curated labels work for loopd at solo scale, (d) what changes at 10× users.
+In under 90 seconds, explain: (a) why no-click ≠ negative, (b) the three reasons users skip items, (c) why hand-curated labels work for buffr at solo scale, (d) what changes at 10× users.
 
 ### Level 3 — Apply it to a new scenario
-A future loopd feature surfaces "AI-suggested todos to expand." Users see 5 suggestions; users tap 1. Without looking, list the three biases at play and propose a clean eval design.
+A future buffr feature surfaces "AI-suggested todos to expand." Users see 5 suggestions; users tap 1. Without looking, list the three biases at play and propose a clean eval design.
 
 Open the diagram and check whether your design matches mitigation 3 (explicit feedback).
 

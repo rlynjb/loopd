@@ -1,7 +1,7 @@
 import type { Entry } from '../../types/entry';
 import type { ClipItem } from '../../types/project';
 
-const SYSTEM = `You are composing a daily vlog summary for a personal journal app called loopd. Given the user's journal entries, habits, todos, and video clip metadata for one day, produce a structured JSON response that will be used to auto-compose a short-form vertical vlog.
+const SYSTEM = `You are composing a daily vlog summary for a personal journal app called buffr. Given the user's journal entries, habits, todos, and video clip metadata for one day, produce a structured JSON response that will be used to auto-compose a short-form vertical vlog.
 
 Tone: casual and conversational, not formal or corporate. Use lowercase where natural. Keep idiomatic expressions minimal — be direct and simple. Stick strictly to what happened in the entries. Do not add filler phrases, forward-looking statements, or commentary beyond what the data says. Keep wording minimal — prefer the user's own words from their journal entries over paraphrasing.
 

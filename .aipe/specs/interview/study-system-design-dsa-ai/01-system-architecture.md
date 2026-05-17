@@ -39,7 +39,7 @@ Keep sentences short. Architectural prose earns its weight from specificity, not
 
 A concept written in this structure looks like:
 
-> **Shape.** loopd has three persistence layers: `liveTextRef` holds the latest typed character, React state holds what is rendered, SQLite holds what survives a process kill.
+> **Shape.** buffr has three persistence layers: `liveTextRef` holds the latest typed character, React state holds what is rendered, SQLite holds what survives a process kill.
 >
 > **Rule.** On every keystroke, `liveTextRef` and SQLite update before React state.
 >

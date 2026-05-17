@@ -15,7 +15,7 @@ Your Vercel usage dashboard shows the bill spiked three months in a row. The fir
 
 The implicit question is "where does the spend actually live, and which lever attacks it at the largest multiplier?" LLM cost optimization is the discipline of pulling levers in ROI order, not order-of-temptation. Five levers ranked: (1) heuristic-before-LLM skips the call entirely, (2) prompt caching saves 90% on stable prefixes, (3) semantic caching saves 100% on identical-input hits, (4) model routing buys ~5× cheaper inference on jobs that don't need premium quality, (5) prompt compression saves 10–30% but risks quality. Most teams pull lever 4 first because "use a cheaper model" feels like the senior-engineer move; the higher-ROI architectural levers stay untouched.
 
-**What depends on getting this right:** total spend per chain, where engineering time goes, and whether quality regressions get shipped along with the savings. For loopd only Lever 1 is implemented today (classify's heuristic gates 60–70% of calls — see `[B1.5]` / `[B1.8]`); `[B5.2]` adds prompt caching across eligible chains, `[B5.8]` adds semantic caching for interpret, `[B5.3]` formalises model routing with eval evidence (likely candidate: expand on Haiku). Lever 2 is silently skipped today because most SYSTEM_PROMPTs sit below Anthropic's cacheable-prefix threshold (~1024 tokens for Sonnet 4.6, ~2048 for Haiku 4.5) — pulling it without checking would be a no-op. The prerequisite for any honest lever-pulling is per-chain token logs from `[B1.2]`; optimising without measurement is guessing where the cost lives.
+**What depends on getting this right:** total spend per chain, where engineering time goes, and whether quality regressions get shipped along with the savings. For buffr only Lever 1 is implemented today (classify's heuristic gates 60–70% of calls — see `[B1.5]` / `[B1.8]`); `[B5.2]` adds prompt caching across eligible chains, `[B5.8]` adds semantic caching for interpret, `[B5.3]` formalises model routing with eval evidence (likely candidate: expand on Haiku). Lever 2 is silently skipped today because most SYSTEM_PROMPTs sit below Anthropic's cacheable-prefix threshold (~1024 tokens for Sonnet 4.6, ~2048 for Haiku 4.5) — pulling it without checking would be a no-op. The prerequisite for any honest lever-pulling is per-chain token logs from `[B1.2]`; optimising without measurement is guessing where the cost lives.
 
 Wrong order (temptation):
 - Start with Lever 5 (compress prompts) → 10–30% reduction with real quality risk, eval cycles burned re-testing every chain
@@ -79,13 +79,13 @@ The five sub-sections below trace each lever in detail.
 
 ### Lever 1: Skip the call entirely (heuristic-before-LLM)
 
-The cheapest call is the call you don't make. A regex-based heuristic that handles 60-70% of the easy cases means 60-70% of the spend disappears. loopd already does this for classify (see [05-heuristic-before-llm](./05-heuristic-before-llm.md)). It's the highest-ROI lever and almost always the right first move.
+The cheapest call is the call you don't make. A regex-based heuristic that handles 60-70% of the easy cases means 60-70% of the spend disappears. buffr already does this for classify (see [05-heuristic-before-llm](./05-heuristic-before-llm.md)). It's the highest-ROI lever and almost always the right first move.
 
-For loopd specifically: classify uses this; nothing else does. Most other chains (summarize, caption, expand, interpret) have no heuristic floor and pay full price every time.
+For buffr specifically: classify uses this; nothing else does. Most other chains (summarize, caption, expand, interpret) have no heuristic floor and pay full price every time.
 
 ### Lever 2: Prompt caching (provider-side)
 
-90% discount on input-side tokens for cached prefixes. See [40-llm-caching](./40-llm-caching.md) for the mechanics. Easy to add (~20 LOC). Constraint: prompt must exceed cacheable-prefix threshold and be stable across calls. loopd's chains have small system prompts (mostly below threshold today).
+90% discount on input-side tokens for cached prefixes. See [40-llm-caching](./40-llm-caching.md) for the mechanics. Easy to add (~20 LOC). Constraint: prompt must exceed cacheable-prefix threshold and be stable across calls. buffr's chains have small system prompts (mostly below threshold today).
 
 ### Lever 3: Semantic caching (application-side)
 
@@ -93,9 +93,9 @@ For loopd specifically: classify uses this; nothing else does. Most other chains
 
 ### Lever 4: Model routing (cheaper model for cheaper jobs)
 
-Pick a cheaper model for jobs where the quality difference doesn't matter. Haiku 4.5 is ~5× cheaper than Sonnet 4.6 with notably worse quality on creative or nuanced tasks but adequate quality on structured / classification tasks. loopd routes classify to Haiku; everything else to Sonnet.
+Pick a cheaper model for jobs where the quality difference doesn't matter. Haiku 4.5 is ~5× cheaper than Sonnet 4.6 with notably worse quality on creative or nuanced tasks but adequate quality on structured / classification tasks. buffr routes classify to Haiku; everything else to Sonnet.
 
-The bigger model-routing question: are we using Sonnet on jobs where Haiku would suffice? For loopd, probably yes on `expand` (the expand chain doesn't need Sonnet's reasoning depth for most types). Trying Haiku on expand with measured quality comparison is a real cost win if quality holds.
+The bigger model-routing question: are we using Sonnet on jobs where Haiku would suffice? For buffr, probably yes on `expand` (the expand chain doesn't need Sonnet's reasoning depth for most types). Trying Haiku on expand with measured quality comparison is a real cost win if quality holds.
 
 ### Lever 5: Prompt compression
 
@@ -226,7 +226,7 @@ Nothing structural; the order is genuinely better. The cost paid is *discipline*
 Time, quality, and engineering effort wasted on a sequence of low-ROI moves. Compressing a prompt before adding a heuristic gate is doing the harder thing for ~5× less impact.
 
 ### Sub-block 3 — the breakpoint
-The lever order is stable until pulling earlier levers exhausts their value. At that point, the marginal-ROI of lever N+1 exceeds lever N. For loopd, this happens roughly when (Levers 1+2+3) have saved >50% of LLM spend and the remaining 50% is dominated by full-priced model calls — at which point model routing becomes the next win.
+The lever order is stable until pulling earlier levers exhausts their value. At that point, the marginal-ROI of lever N+1 exceeds lever N. For buffr, this happens roughly when (Levers 1+2+3) have saved >50% of LLM spend and the remaining 50% is dominated by full-priced model calls — at which point model routing becomes the next win.
 
 ### What wasn't actually a tradeoff
 Not measuring before optimizing was never an option. Token-economics observability (Phase 1's `[B1.2]`) is the prerequisite for any informed cost-optimization decision.
@@ -237,7 +237,7 @@ Not measuring before optimizing was never an option. Token-economics observabili
 
 ### Per-chain model routing (cost-quality matrix)
 
-- **Codebase uses:** loopd routes classify to Haiku; the rest run on Sonnet by default.
+- **Codebase uses:** buffr routes classify to Haiku; the rest run on Sonnet by default.
 - **Why it's here:** the cheapest credible decision-knob in production LLM apps.
 - **Leading today:** explicit per-chain routing — `adoption-leading`, 2026.
 - **Why it leads:** explicit; debuggable; falls in line with provider-abstracted chain layer.
@@ -245,7 +245,7 @@ Not measuring before optimizing was never an option. Token-economics observabili
 
 ### Cost-aware libraries (LiteLLM, OpenRouter)
 
-- **Codebase uses:** not used; loopd's provider abstraction is custom.
+- **Codebase uses:** not used; buffr's provider abstraction is custom.
 - **Why it's here:** they pool routing logic, cost tracking, and fallback into one library.
 - **Leading today:** OpenRouter — `innovation-leading` for multi-provider routing, 2026.
 - **Why it leads:** unifies billing across providers; routes by configured rules; cost telemetry built in.
@@ -277,12 +277,12 @@ Not measuring before optimizing was never an option. Token-economics observabili
 
 ## Summary
 
-LLM cost optimization is the discipline of pulling cost levers in ROI order — skip-the-call > prompt cache > semantic cache > model routing > prompt compression. In loopd only Lever 1 is implemented (classify's heuristic). The constraint that makes ROI-order the right discipline is that architectural levers (skip, cache) deliver 60-90% reductions while configurational levers (model swap, prompt compression) typically deliver 10-30% — pulling levers in temptation-order leaves the biggest wins on the table. The cost being paid until the higher-ROI levers ship is roughly 50-70% of avoidable LLM spend.
+LLM cost optimization is the discipline of pulling cost levers in ROI order — skip-the-call > prompt cache > semantic cache > model routing > prompt compression. In buffr only Lever 1 is implemented (classify's heuristic). The constraint that makes ROI-order the right discipline is that architectural levers (skip, cache) deliver 60-90% reductions while configurational levers (model swap, prompt compression) typically deliver 10-30% — pulling levers in temptation-order leaves the biggest wins on the table. The cost being paid until the higher-ROI levers ship is roughly 50-70% of avoidable LLM spend.
 
 Key points to remember:
 - Five levers, ordered by ROI: skip > prompt-cache > semantic-cache > model > compress.
 - Measure first (see [23-token-economics](./23-token-economics.md)) — optimizing without measurement is guessing.
-- Lever 1 is loopd's biggest existing win (classify heuristic gates 60-70%).
+- Lever 1 is buffr's biggest existing win (classify heuristic gates 60-70%).
 - Levers 2-3 are next; both ship cleanly with small code changes.
 - Lever 5 (compression) is last — high effort, low ROI, real quality risk.
 
@@ -296,7 +296,7 @@ Key points to remember:
 ### Likely questions
 
   [mid] Q: What levers do you have to reduce LLM cost?
-  A: Five, in ROI order. First, skip the call entirely with a heuristic — loopd's classify does this and saves 60-70% of classify spend. Second, prompt caching for stable prefixes — 90% discount on cached input. Third, semantic caching for identical inputs — free on hits, applies to interpret. Fourth, model routing — cheaper model for cheaper jobs. Fifth, prompt compression — last lever pulled because effort-to-impact ratio is worst.
+  A: Five, in ROI order. First, skip the call entirely with a heuristic — buffr's classify does this and saves 60-70% of classify spend. Second, prompt caching for stable prefixes — 90% discount on cached input. Third, semantic caching for identical inputs — free on hits, applies to interpret. Fourth, model routing — cheaper model for cheaper jobs. Fifth, prompt compression — last lever pulled because effort-to-impact ratio is worst.
   Diagram:
   ```
   Lever                   Win        Effort     Order
@@ -330,7 +330,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"Why hasn't loopd pulled Lever 2 yet?" The honest answer: most of loopd's chain SYSTEM_PROMPTs are below Anthropic's cacheable-prefix threshold (1024 tokens for Sonnet, 2048 for Haiku) as of late 2025. Until prompts grow or the threshold drops, prompt caching is silently skipped by the provider. The right action is to document the threshold per chain and revisit when it changes.
+"Why hasn't buffr pulled Lever 2 yet?" The honest answer: most of buffr's chain SYSTEM_PROMPTs are below Anthropic's cacheable-prefix threshold (1024 tokens for Sonnet, 2048 for Haiku) as of late 2025. Until prompts grow or the threshold drops, prompt caching is silently skipped by the provider. The right action is to document the threshold per chain and revisit when it changes.
 
 ```
 Picked: skip Lever 2 for now            Suggested: implement Lever 2 anyway
@@ -355,18 +355,18 @@ Right at small prompts                   Right at large prompts
 Close the file and redraw the five levers in ROI order. Annotate the win, effort, and quality risk of each.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the five levers in ROI order, (b) why measurement comes before optimization, (c) why model routing is overrated as a first move, (d) what's blocking Lever 2 in loopd today.
+In under 90 seconds, explain: (a) the five levers in ROI order, (b) why measurement comes before optimization, (c) why model routing is overrated as a first move, (d) what's blocking Lever 2 in buffr today.
 
 ### Level 3 — Apply it to a new scenario
-loopd ships `[B5.2]` and `[B5.8]`. Per-chain spend is now: classify $0.10/mo, summarize $1.20/mo, caption $0.80/mo, expand $2.50/mo, interpret $0.40/mo. Without looking, predict which lever to pull next and why.
+buffr ships `[B5.2]` and `[B5.8]`. Per-chain spend is now: classify $0.10/mo, summarize $1.20/mo, caption $0.80/mo, expand $2.50/mo, interpret $0.40/mo. Without looking, predict which lever to pull next and why.
 
 Open the comparison table and check whether your prediction matches the "expand on Haiku" possibility.
 
 ### Level 4 — Defend the decision you'd change
-Today loopd routes classify to Haiku and everything else to Sonnet. If you were starting today, would you route summarize to Haiku by default? Defend your answer.
+Today buffr routes classify to Haiku and everything else to Sonnet. If you were starting today, would you route summarize to Haiku by default? Defend your answer.
 
 ### Quick check — code reference test
-- Which lever is loopd's biggest existing win?
+- Which lever is buffr's biggest existing win?
 - Where is the model routing decision made?
 
 Answer: Lever 1 (heuristic-before-LLM in classify). `getProvider()` and per-chain model selection in `src/services/ai/config.ts`.

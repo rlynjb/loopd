@@ -1,8 +1,8 @@
-# loopd — Implementation Plan: Today, Habits Expansion, and Threads
+# buffr — Implementation Plan: Today, Habits Expansion, and Threads
 
 Last updated: 2026-04-22
 
-Companion to [`loopd-today-habits-threads-spec.md`](./loopd-today-habits-threads-spec.md). This plan slices the spec's 22-step list (§12) into four shippable phases, records the auto-approved decisions on the spec's open questions (§14), and flags architectural concerns to resolve before build.
+Companion to [`buffr-today-habits-threads-spec.md`](./buffr-today-habits-threads-spec.md). This plan slices the spec's 22-step list (§12) into four shippable phases, records the auto-approved decisions on the spec's open questions (§14), and flags architectural concerns to resolve before build.
 
 The user instruction is "create the plan, auto-approve any decisions, don't commit and push." This document captures those decisions.
 
@@ -200,7 +200,7 @@ Three risks worth flagging now so the build doesn't have to discover them.
 
 **Risk: thread_mentions backfill on a heavy entries table.** A user with 1000+ entries will run a full re-scan when they create their first thread. Mitigation: backfill is non-blocking (background, with progress logs); user sees mentions populate over a few seconds. If this turns out to be slow, batch in chunks of 100 entries with `requestAnimationFrame` yields between chunks.
 
-**Risk: Slug-rejected-on-pull confuses users with multi-device Notion edits.** A user who edits a slug in Notion sees nothing change in loopd, with no in-app feedback. Mitigation: in Phase D, surface a settings-page banner ("N slug edits rejected from Notion") that links to the threads CRUD where the user can re-rename from the loopd side.
+**Risk: Slug-rejected-on-pull confuses users with multi-device Notion edits.** A user who edits a slug in Notion sees nothing change in buffr, with no in-app feedback. Mitigation: in Phase D, surface a settings-page banner ("N slug edits rejected from Notion") that links to the threads CRUD where the user can re-rename from the buffr side.
 
 ---
 
@@ -213,12 +213,12 @@ Manual end-to-end on a physical Android device after Phase D ships. The grid:
 | Daily habit done 5 days in a row | Streak = 5, all 5 cells filled in heatmap |
 | M/W/F habit done Mon and Wed, missed Fri | Streak breaks; Tue/Thu are neutral, not red |
 | 3x/week habit done Mon/Tue/Wed of same week | Streak = 1 (one completed week); current week not yet counted |
-| Type `#loop` in editor → autocomplete shows `loopd` | Recency-sorted, top match selected |
+| Type `#loop` in editor → autocomplete shows `buffr` | Recency-sorted, top match selected |
 | Type `#newthing` → tap "+ create #newthing" | Thread created, `#newthing` inserted at cursor, mention reconciles on next save |
-| Edit existing entry to remove `#loopd` from prose | `thread_mentions` row deleted on save |
-| Insert blank line above an entry's `#loopd` | Two-pass fallback matches by `(thread_id, tag_text)`, mention preserved |
-| Rename thread `loopd` → `loopd-app` in CRUD | Existing mentions stay; next normal scan reconciles |
-| Edit `Slug` on the Notion side | Pull rejects with warning log; loopd value unchanged |
+| Edit existing entry to remove `#buffr` from prose | `thread_mentions` row deleted on save |
+| Insert blank line above an entry's `#buffr` | Two-pass fallback matches by `(thread_id, tag_text)`, mention preserved |
+| Rename thread `buffr` → `buffr-app` in CRUD | Existing mentions stay; next normal scan reconciles |
+| Edit `Slug` on the Notion side | Pull rejects with warning log; buffr value unchanged |
 | Create new Threads page in Notion | On next pull, local thread created with derived slug |
 | Archive a thread | Disappears from Today and autocomplete; mentions remain in DB |
 | Open Today view with 5+ habits and 4+ threads | All visible; staleness ordering correct; recent captures section populated |

@@ -1,12 +1,12 @@
 # Interview prep: study system design, DSA & AI
 
-A book-style prep guide for defending **loopd** — a solo-built, Android-only daily-vlogging app combining a prose journal (with `[]` / `** food` / `#tag` markers driving derived state), an AI-assisted vlog editor (4-variant tonal captions), a Claude Sonnet + Haiku AI stack with Supabase Postgres cloud sync. Refreshed against the latest codebase as of 2026-05-05 (post-`a7d6044`: pin replacing reorder, swipe-to-delete, daily schedule grid, 4-variant captions, Notion sync layer fully removed).
+A book-style prep guide for defending **buffr** — a solo-built, Android-only daily-vlogging app combining a prose journal (with `[]` / `** food` / `#tag` markers driving derived state), an AI-assisted vlog editor (4-variant tonal captions), a Claude Sonnet + Haiku AI stack with Supabase Postgres cloud sync. Refreshed against the latest codebase as of 2026-05-05 (post-`a7d6044`: pin replacing reorder, swipe-to-delete, daily schedule grid, 4-variant captions, Notion sync layer fully removed).
 
 Read in order. Each chapter builds on the previous. Practise the hard questions out loud — they're the ones an interviewer will ask if they want to push past the prepared answers.
 
 ## Table of contents
 
-- [00 — Preface](00-preface.md) — the point loopd actually shows: a derived-state engine that hides behind a textbox; what to convey in the first 10 minutes.
+- [00 — Preface](00-preface.md) — the point buffr actually shows: a derived-state engine that hides behind a textbox; what to convey in the first 10 minutes.
 - [01 — System architecture](01-system-architecture.md) — the four-part Shape/Rule/Failure/Contrast meta-section, then full request flow from keystroke to cloud, with the four load-bearing concepts (prose-canonical, DB-first autosave, two-pass scanner, cloud-as-mirror).
 - [02 — Frontend engineering](02-frontend-engineering.md) — file-based routing, the dashboard's "props down, mutations up" pattern, the daily schedule grid, swipe-to-delete with explicit-height panels, why no global store.
 - [03 — Backend and API design](03-backend-api.md) — why no Express layer, `database.ts` as the in-process API surface, the dirty-row push protocol, server-time RPC for clock-skew avoidance, AI provider switching.
@@ -18,7 +18,7 @@ Read in order. Each chapter builds on the previous. Practise the hard questions 
 - [09 — Data structures and algorithms](09-dsa.md) — three real problems with brute force + optimal + ASCII traces (two-pass scanner, cell-state derivation, dashboard pin-first sort) and a complexity cheat sheet across every major op.
 - [10 — What I'd do differently](10-what-id-do-differently.md) — three changes immediately, three at scale, four to leave alone; the hard answer to "if you could fix one thing, what would it be?" (test suite).
 - [11 — Defending AI-assisted work](11-defending-ai-work.md) — six talking points for the AI question, including a concrete walk-through of an AI-introduced bug I caught at review time and how to address "are you actually a senior engineer."
-- [12 — Appendix: complexity cheat sheet](12-appendix-complexity.md) — every major operation in loopd with time + space + 10×-scale verdict; the lookup table to scan five minutes before the interview.
+- [12 — Appendix: complexity cheat sheet](12-appendix-complexity.md) — every major operation in buffr with time + space + 10×-scale verdict; the lookup table to scan five minutes before the interview.
 
 ## How to use this guide
 

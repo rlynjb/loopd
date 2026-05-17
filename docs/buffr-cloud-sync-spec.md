@@ -1,8 +1,8 @@
-# loopd — Feature Spec: Cloud Sync (Supabase)
+# buffr — Feature Spec: Cloud Sync (Supabase)
 
 Last updated: 2026-05-02 · revision 3
 
-Replaces Notion as the cloud backend for loopd with **Supabase Postgres**. Local SQLite remains canonical. Cloud sync is opt-in per user — eventually a paid tier, initially personal infrastructure for the sole developer.
+Replaces Notion as the cloud backend for buffr with **Supabase Postgres**. Local SQLite remains canonical. Cloud sync is opt-in per user — eventually a paid tier, initially personal infrastructure for the sole developer.
 
 This spec **deprecates** the Notion sync surface area in [`spec.md`](./spec.md) — specifically:
 - § 1 (last bullet of the core loop)
@@ -30,7 +30,7 @@ Replacing Notion with a real Postgres database removes all five.
 
 **The constraint that makes this design distinctive:**
 
-This is **not** "let's make Postgres our primary database." Local SQLite stays canonical. The cloud is a sync mirror — a backup-and-replication layer for users who opt in. The architectural reason: loopd is *prose-canonical* (Architectural Principle 2). The journal entry's text in `entries.text` is the source of truth for everything derived from it (todos in `todos_json`, `todo_meta`, `nutrition`, `thread_mentions`). That source must live with the user, work offline, save on every keystroke. Cloud-as-canonical-store breaks all three properties.
+This is **not** "let's make Postgres our primary database." Local SQLite stays canonical. The cloud is a sync mirror — a backup-and-replication layer for users who opt in. The architectural reason: buffr is *prose-canonical* (Architectural Principle 2). The journal entry's text in `entries.text` is the source of truth for everything derived from it (todos in `todos_json`, `todo_meta`, `nutrition`, `thread_mentions`). That source must live with the user, work offline, save on every keystroke. Cloud-as-canonical-store breaks all three properties.
 
 So: **local is home. Cloud is the safety net you opt into.**
 
@@ -452,9 +452,9 @@ pending: 0 changes
 [ sync now ]
 ───────
 
-dev menu (long press loopd version below)
+dev menu (long press buffr version below)
 ─────────────────────────────────────
-loopd 0.4.x (build N)
+buffr 0.4.x (build N)
 ```
 
 That's it. No connection wizard, no DB ID inputs, no per-DB sync buttons (no per-DB Notion concept anymore), no setup guide. The whole flow is: "is it connected? when did it last sync? how do I force one?"
@@ -577,7 +577,7 @@ Aggressive cut: ~39h. Same architecture, fewer moving parts at v1.
 - **The 5-second push debounce window** (§ 4.3) — could be longer (30s) if you want fewer cloud writes, or instant if latency matters. Default 5s feels right; revisit after dogfooding.
 - **What happens if Supabase is down?** Push silently fails, retries on next trigger. Pull silently fails, app reads from local cache (canonical). User experience: no degradation. The right behavior, but worth confirming the silence.
 - **Postgres CHECK enforcement strictness.** Local SQLite CHECKs are documented in [`spec.md § 5`](./spec.md#5-data-model) but are advisory in some places (e.g. the `thread_mentions` invariant about at least one of `entry_id` / `todo_id` is enforced at the app level, not the DB, because of the manual-touch deviation). Postgres should match: app-level invariant for the deviation case, no CHECK on the DB. Confirm.
-- **`vlogs.export_uri` is a local file path** (`exports/[date]/...mp4` or `DCIM/loopd/...`). It's user-specific to the device. Sync should preserve the column for cross-device "did I export this?" queries, but the URI itself is meaningless on a different device. Two options: (a) sync the column, accept that it's only valid on the originating device, document the trap; (b) split `vlogs` into "metadata that syncs" + "local file references." Default: (a). It's fine for the metadata to be portable while the file isn't.
+- **`vlogs.export_uri` is a local file path** (`exports/[date]/...mp4` or `DCIM/buffr/...`). It's user-specific to the device. Sync should preserve the column for cross-device "did I export this?" queries, but the URI itself is meaningless on a different device. Two options: (a) sync the column, accept that it's only valid on the originating device, document the trap; (b) split `vlogs` into "metadata that syncs" + "local file references." Default: (a). It's fine for the metadata to be portable while the file isn't.
 - **`projects.clips_json` may reference local file URIs too.** Same trade-off. Default: sync the JSONB; treat `clip_uri` as device-local. A future "cross-device clip mirroring" feature is out of scope.
 - **`ai_summaries.summary_json` size after the caption pass.** Each row now carries a structured summary AND `caption` / `alternate` / `detectedTheme`. Still a few KB at most, but worth measuring on a real-data export to confirm bandwidth on first-pull stays reasonable.
 - **Does `getRecentAISummaries` need a `WHERE deleted_at IS NULL` filter?** Almost certainly yes — § 6.4's audit list now includes `ai/caption.ts`. The risk if missed: a soft-deleted summary feeds the caption call's tonal-continuity context, producing weird outputs. Worth verifying explicitly in test 4.

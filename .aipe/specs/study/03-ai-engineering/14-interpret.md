@@ -169,7 +169,7 @@ There is no `interpretations` table. No `last_interpretation` column on `entries
 What persistence would have to add, and what the ephemeral posture skips:
 
 ```
-       With persistence (NOT loopd)              Ephemeral (loopd)
+       With persistence (NOT buffr)              Ephemeral (buffr)
    ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
    │ interpretations table              │    │ no table                          │
    │   primary key (entry_id, model)    │    │                                   │
@@ -315,7 +315,7 @@ This is what people mean by "AI features for reading, not for storing." Most AI 
 "Long-form mirror" prompts come from the post-ChatGPT consumer wave — apps like Stoic, Daylio, and Reflectly built variants of "talk to your journal" features. The non-clinical, non-coachy tone constraint comes from feedback loops where users hated being labeled or motivated; the prompt's explicit "you are not a therapist, not a coach" bullet is a reaction to that failure mode.
 
 ### The deeper principle
-**Some AI outputs are products, not data.** Loopd's other 4 chains produce data the app uses — clip orderings, type labels, expansion JSON. Interpret produces an artifact the *user* uses — a piece of writing they read once. The validation strategy, the persistence strategy, and the failure-mode strategy all change when the user is the consumer, not the app.
+**Some AI outputs are products, not data.** Buffr's other 4 chains produce data the app uses — clip orderings, type labels, expansion JSON. Interpret produces an artifact the *user* uses — a piece of writing they read once. The validation strategy, the persistence strategy, and the failure-mode strategy all change when the user is the consumer, not the app.
 
 ```
   Other 4 chains          Interpret
@@ -434,7 +434,7 @@ Markdown vs prose-formatted JSON (with `{ text: '...' }` as a single field) wasn
 
 - **Exercise ID:** `[B2A.7]`
 - **What to build:** A 7-day variant of `interpretEntry` — `interpretWeek(weekStartDate)` — that takes a week of entries, retrieves the top-k semantically-similar entries from the rest of the corpus (via the `entry_embeddings` table from `[B2A.2]`), and feeds both the literal week text and the retrieved neighbours into the interpret prompt. UI: a "this week" entry point alongside the existing per-entry modal.
-- **Why it earns its place:** this is *the* feature in loopd that crosses the bounded-corpus threshold and turns the codebase from "no RAG" into "RAG above threshold." It's the smallest possible buildable surface that justifies the entire Phase 2A pipeline. Without it, embeddings are infrastructure without a customer.
+- **Why it earns its place:** this is *the* feature in buffr that crosses the bounded-corpus threshold and turns the codebase from "no RAG" into "RAG above threshold." It's the smallest possible buildable surface that justifies the entire Phase 2A pipeline. Without it, embeddings are infrastructure without a customer.
 - **Files to touch:** new `src/services/ai/interpretWeek.ts`; depends on `entry_embeddings` from `[B2A.2]` and the chunking decision from `[B2A.5]`; UI entry in `app/journal/[date].tsx` or a new `app/interpret/week.tsx`.
 - **Done when:** the feature ships end-to-end on Android; `[B2A.9]`'s eval set (20-30 query/expected pairs) confirms top-k recall on week-scope queries; an SLO is documented (target: ≤ 3s p95 end-to-end including embedding query).
 - **Estimated effort:** `≥1 week`.

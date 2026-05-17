@@ -1,6 +1,6 @@
 # Chapter 3 — Backend and API design
 
-loopd has no traditional backend. There is no API gateway, no Node service, no Express, no Lambda. There are exactly two servers that the app talks to over the wire: **Anthropic / OpenAI** for AI calls, and **Supabase Postgres** for the cloud sync mirror. Everything else lives on-device. This chapter is about the contract layer between the device and those two servers, and the in-process "API" — `src/services/database.ts` — that every screen calls instead of `fetch`.
+buffr has no traditional backend. There is no API gateway, no Node service, no Express, no Lambda. There are exactly two servers that the app talks to over the wire: **Anthropic / OpenAI** for AI calls, and **Supabase Postgres** for the cloud sync mirror. Everything else lives on-device. This chapter is about the contract layer between the device and those two servers, and the in-process "API" — `src/services/database.ts` — that every screen calls instead of `fetch`.
 
 The reason there is no backend: the app's threat model and use case make one unnecessary. There is one user (Phase A is hardcoded `PHASE_A_USER_ID` in `src/services/sync/client.ts`), the data is private, the AI calls are pre-paid through the user's own keys (`expo-secure-store` holds them), and the sync target is Supabase's hosted Postgres which already provides auth + RLS + realtime + connection pooling. Building an Express layer in front of Supabase would add latency, an attack surface, and an operational burden that buys nothing. The interview question that exposes whether someone understands this is "why no backend?" — answered honestly, the answer is "because Supabase is the backend."
 
@@ -17,7 +17,7 @@ The reason there is no backend: the app's threat model and use case make one unn
   │       └── todos/, nutrition/, threads/, habits/          │
   │       │                                                  │
   │       ▼                                                  │
-  │   expo-sqlite (loopd.db, WAL mode)                       │
+  │   expo-sqlite (buffr.db, WAL mode)                       │
   └──────────────────────────────────────────────────────────┘
                        │              │
                        │              │ on schedulePush() fire,
@@ -91,7 +91,7 @@ What would force me to add one: three concrete cases. First, **server-side AI** 
 
 The pattern I'd resist is *adding a backend just because it feels architecturally proper*. Every backend I've seen added prematurely became a bottleneck — every new feature means a backend change too, which doubles the velocity cost. Supabase + on-device services is genuinely fewer moving parts than React + Express + Postgres, and for the workload I have, fewer parts is the right answer.
 
-### `[arch]` — "How does loopd's API model break at 100K concurrent users?"
+### `[arch]` — "How does buffr's API model break at 100K concurrent users?"
 
 It breaks in three places. First, **Supabase's rate limits become the bottleneck.** The free tier is 60 requests per second per project; the pro tier is higher but still capped. With 100K users and a 5-second debounced push, the steady-state push rate is ~20K per second average — three orders of magnitude above the cap. Pull is even worse because the boot pull paginates at 200 rows per request and could fire 5+ requests on cold start. Sharding by Supabase project (one per N users) is one path; moving the sync layer to a custom service that batches and rate-limits is the other.
 
@@ -109,6 +109,6 @@ Concretely, the push pipeline records the last error in `sync_meta.last_error` (
 
 The reason it's not worse than that: the canonical store is local SQLite, so a failed push doesn't lose user data. The user keeps writing; SQLite keeps recording; on the next successful network connection, `pushAll` walks the dirty rows and ships them. The "recovery" is automatic in the sense that it's the same code path as the happy case. From the user's perspective, the data is always safe — it's just that the cloud might be hours behind reality after a long offline stretch.
 
-What I'd add for production: (1) a user-visible sync status indicator on the dashboard — small dot, green for "up to date," yellow for "X minutes behind," red for "X hours behind, errors logged." Click to see details. (2) Exponential backoff on consecutive failures, capped at maybe 5 minutes between attempts so a server outage doesn't burn battery. (3) A push queue with a max age — if a row has been dirty for more than 7 days and every push has failed, surface a one-time alert ("loopd hasn't been able to sync for a week — open settings to check") rather than silently failing forever. (4) Telemetry that emits sync errors to an observability platform so I'd know about a regression that's only happening in the field.
+What I'd add for production: (1) a user-visible sync status indicator on the dashboard — small dot, green for "up to date," yellow for "X minutes behind," red for "X hours behind, errors logged." Click to see details. (2) Exponential backoff on consecutive failures, capped at maybe 5 minutes between attempts so a server outage doesn't burn battery. (3) A push queue with a max age — if a row has been dirty for more than 7 days and every push has failed, surface a one-time alert ("buffr hasn't been able to sync for a week — open settings to check") rather than silently failing forever. (4) Telemetry that emits sync errors to an observability platform so I'd know about a regression that's only happening in the field.
 
 What I deliberately wouldn't add: an aggressive "retry now" button. The whole point of the 5-second debounce + auto-retry-on-next-write model is that the user doesn't have to think about sync. A "retry now" button trains them to think about it, which is the failure mode of a system that doesn't recover automatically. The status indicator is informational, not actionable; the actual recovery is hands-off.

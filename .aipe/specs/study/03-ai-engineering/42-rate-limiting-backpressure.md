@@ -15,7 +15,7 @@ Make a fast burst of requests to the GitHub API and the response headers tell yo
 
 The implicit question is "what stands between the burst of work and the slow external service that can't absorb it?" Rate limiting and backpressure are the pair: the provider sets external limits (RPM, TPM — 429 when exceeded, sometimes with a `Retry-After` header), and your code's queue is the internal mechanism that respects them. The queue is the rate limiter you actually control; size it conservatively and you never trigger the provider's. Three flavours: concurrency cap (never more than N in-flight, cheapest), token bucket (earn tokens at rate R, spend per call), adaptive backoff (slow down on 429s, speed up otherwise).
 
-**What depends on getting this right:** burst tolerance during sync-pull / batch-expand / multi-entry operations, whether 429 storms reach users as visible failures, and whether per-chain caps aggregate correctly against the provider's global ceiling. For loopd the partial pattern lives in `src/services/ai/expand.ts:25` as `MAX_CONCURRENT = 3` — per-call-site backpressure that works for expand alone but doesn't coordinate with other chains. `[B5.1]` lifts the pattern into a centralized `src/services/ai/queue.ts` with per-chain caps (classify=6, summarize=1, caption=1, expand=3, interpret=1) plus an optional global per-provider budget. Every chain migrates from direct provider calls to `aiQueue.enqueue(chainName, callFn, options)`; queue depth is visible in the planned AI ops panel.
+**What depends on getting this right:** burst tolerance during sync-pull / batch-expand / multi-entry operations, whether 429 storms reach users as visible failures, and whether per-chain caps aggregate correctly against the provider's global ceiling. For buffr the partial pattern lives in `src/services/ai/expand.ts:25` as `MAX_CONCURRENT = 3` — per-call-site backpressure that works for expand alone but doesn't coordinate with other chains. `[B5.1]` lifts the pattern into a centralized `src/services/ai/queue.ts` with per-chain caps (classify=6, summarize=1, caption=1, expand=3, interpret=1) plus an optional global per-provider budget. Every chain migrates from direct provider calls to `aiQueue.enqueue(chainName, callFn, options)`; queue depth is visible in the planned AI ops panel.
 
 Without centralized backpressure:
 - Sync-pull brings 50 entries → 50 `scheduleClassify` async calls fire simultaneously
@@ -79,7 +79,7 @@ The two paths a burst can take, with and without backpressure:
    (where queue depth = "indexing in background").
 ```
 
-The six sub-sections below trace the provider's exposed limits, the backpressure pattern, loopd's existing per-chain MAX_CONCURRENT, the centralized-queue shape, the three flavours of backpressure, and where it goes wrong.
+The six sub-sections below trace the provider's exposed limits, the backpressure pattern, buffr's existing per-chain MAX_CONCURRENT, the centralized-queue shape, the three flavours of backpressure, and where it goes wrong.
 
 ### The provider's view
 
@@ -90,7 +90,7 @@ Most providers expose two limits:
 
 Exceed either and the provider returns 429 (Too Many Requests). Some providers (Anthropic) include a `retry-after` header; others (some OpenAI tiers) just say "wait."
 
-For loopd at solo scale, the provider's limits are far above current usage — but burst patterns (sync-pull, multi-entry expand, batch eval runs) can hit them.
+For buffr at solo scale, the provider's limits are far above current usage — but burst patterns (sync-pull, multi-entry expand, batch eval runs) can hit them.
 
 ### Your code's view — backpressure
 
@@ -98,9 +98,9 @@ Backpressure is a queue-with-concurrency-cap. You don't ask the provider "can I 
 
 If you're coming from frontend, this is the same shape as React's `Suspense` boundary plus a request-batching layer — you don't fire 100 requests on a single render; you let the layer flatten and rate-shape them.
 
-### loopd's existing pattern
+### buffr's existing pattern
 
-loopd already has `MAX_CONCURRENT = 3` in `expand.ts`. This is backpressure at a per-call-site level — when expand processes multiple todos, no more than 3 hit the provider simultaneously. The pattern is correct; it just isn't centralized. The plan in `[B5.1]` is to lift this into a shared queue that every chain uses.
+buffr already has `MAX_CONCURRENT = 3` in `expand.ts`. This is backpressure at a per-call-site level — when expand processes multiple todos, no more than 3 hit the provider simultaneously. The pattern is correct; it just isn't centralized. The plan in `[B5.1]` is to lift this into a shared queue that every chain uses.
 
 ### The shape of a centralized queue
 
@@ -131,11 +131,11 @@ Centralized AI call queue (target — [B5.1])
 
 ### Three kinds of backpressure
 
-1. **Concurrency cap** — never more than N in-flight. Cheap, deterministic. loopd's existing `MAX_CONCURRENT=3`.
+1. **Concurrency cap** — never more than N in-flight. Cheap, deterministic. buffr's existing `MAX_CONCURRENT=3`.
 2. **Token bucket** — earn tokens at rate R; spend one per call; block when bucket empty. Smooths bursts.
 3. **Adaptive backoff** — slow down when 429s appear; speed up when they don't. Self-tuning.
 
-For loopd, concurrency cap is sufficient. Token bucket would matter at higher scale; adaptive backoff matters most when you don't know the provider's limit in advance.
+For buffr, concurrency cap is sufficient. Token bucket would matter at higher scale; adaptive backoff matters most when you don't know the provider's limit in advance.
 
 The three flavours compared:
 
@@ -176,7 +176,7 @@ The three flavours compared:
                           on success:
                             backoff = max(0, backoff/2);
                           
-   loopd today: concurrency cap (MAX_CONCURRENT=3) only.
+   buffr today: concurrency cap (MAX_CONCURRENT=3) only.
    [B5.1] centralises it; token bucket + adaptive backoff are
    future additions if scale or unknown limits force them.
 ```
@@ -225,7 +225,7 @@ Sync-pull stress test (50 entries arriving at once)
 
 ## In this codebase
 
-**Status:** Case B — partial. loopd has `MAX_CONCURRENT=3` in `expand.ts` (per-call-site backpressure). No centralized queue, no per-provider budget, no token-bucket.
+**Status:** Case B — partial. buffr has `MAX_CONCURRENT=3` in `expand.ts` (per-call-site backpressure). No centralized queue, no per-provider budget, no token-bucket.
 
 The plan: `[B5.1]` lifts the pattern into a shared `src/services/ai/queue.ts` that every chain uses, with per-chain caps and a global per-provider budget.
 
@@ -249,7 +249,7 @@ A queue isn't free — it adds latency for queued calls. At very low volume (no 
 ### What to explore next
 - [43-retry-circuit-breaker](./43-retry-circuit-breaker.md) → the retry layer that pairs with backpressure
 - [11-failure-modes](./11-failure-modes.md) → how rate-limit errors fit into the broader failure taxonomy
-- loopd's existing `expand.ts` `MAX_CONCURRENT=3` — the partial-shape inspiration
+- buffr's existing `expand.ts` `MAX_CONCURRENT=3` — the partial-shape inspiration
 
 ---
 
@@ -280,10 +280,10 @@ One shared module to maintain instead of per-chain caps. ~100 LOC vs scattered p
 Cross-chain interference. Today expand caps at 3 concurrent; if classify and expand fire concurrently with a burst, total concurrent provider calls = 3 (expand) + N (classify), and N is uncapped. At burst-time this can exceed provider limits.
 
 ### Sub-block 3 — the breakpoint
-Per-chain backpressure is sufficient as long as (a) burst-time totals across chains stay below provider limits, AND (b) chains don't coordinate (no "expand 50 entries fanout" pattern). Both hold for loopd today. Centralized queue is the right shape but isn't urgent.
+Per-chain backpressure is sufficient as long as (a) burst-time totals across chains stay below provider limits, AND (b) chains don't coordinate (no "expand 50 entries fanout" pattern). Both hold for buffr today. Centralized queue is the right shape but isn't urgent.
 
 ### What wasn't actually a tradeoff
-"No backpressure" was never an option. loopd shipped `MAX_CONCURRENT=3` early in expand because the alternative was visible failures.
+"No backpressure" was never an option. buffr shipped `MAX_CONCURRENT=3` early in expand because the alternative was visible failures.
 
 ---
 
@@ -292,10 +292,10 @@ Per-chain backpressure is sufficient as long as (a) burst-time totals across cha
 ### Custom in-app queue
 
 - **Codebase uses:** target plan; partial existing pattern in `expand.ts`.
-- **Why it's here:** loopd's stack has no external job queue (no Redis, no managed broker); in-app is the right shape.
+- **Why it's here:** buffr's stack has no external job queue (no Redis, no managed broker); in-app is the right shape.
 - **Leading today:** in-app async queue with concurrency cap — `adoption-leading` for client-side rate management, 2026.
 - **Why it leads:** zero new infrastructure; debuggable in the same logs as the chain code.
-- **Runner-up:** managed queue (BullMQ + Redis) — `innovation-leading` at multi-user backend scale; overkill for solo loopd.
+- **Runner-up:** managed queue (BullMQ + Redis) — `innovation-leading` at multi-user backend scale; overkill for solo buffr.
 
 ### Anthropic / OpenAI rate-limit headers
 
@@ -321,7 +321,7 @@ Per-chain backpressure is sufficient as long as (a) burst-time totals across cha
 
 ## Summary
 
-Rate limiting and backpressure are the pair of patterns that bound how fast loopd talks to LLM providers. The provider sets external limits (RPM, TPM); loopd's queue is the internal mechanism that respects them. In loopd this is partially implemented — `expand.ts` has per-call-site backpressure via `MAX_CONCURRENT=3`, but there's no centralized queue. `[B5.1]` lifts the pattern into a shared module. The constraint that makes centralized queueing the right call is that bursts across chains (sync-pull, multi-entry expand, batch eval) can exceed provider limits even when each chain individually is under cap. The cost being paid until `[B5.1]` ships is fragile burst handling.
+Rate limiting and backpressure are the pair of patterns that bound how fast buffr talks to LLM providers. The provider sets external limits (RPM, TPM); buffr's queue is the internal mechanism that respects them. In buffr this is partially implemented — `expand.ts` has per-call-site backpressure via `MAX_CONCURRENT=3`, but there's no centralized queue. `[B5.1]` lifts the pattern into a shared module. The constraint that makes centralized queueing the right call is that bursts across chains (sync-pull, multi-entry expand, batch eval) can exceed provider limits even when each chain individually is under cap. The cost being paid until `[B5.1]` ships is fragile burst handling.
 
 Key points to remember:
 - Backpressure = your queue; rate limit = provider's ceiling.
@@ -340,7 +340,7 @@ Key points to remember:
 ### Likely questions
 
   [mid] Q: What's the difference between rate limiting and backpressure?
-  A: Rate limiting is the *external* ceiling — the provider's RPM and TPM limits. Backpressure is the *internal* mechanism — your code respecting that ceiling by queueing work instead of firing it all at once. The queue is the rate limiter you actually control; sizing it conservatively means you never trigger the provider's. loopd has per-call-site backpressure today (`MAX_CONCURRENT=3` in expand) and plans `[B5.1]` to centralize it.
+  A: Rate limiting is the *external* ceiling — the provider's RPM and TPM limits. Backpressure is the *internal* mechanism — your code respecting that ceiling by queueing work instead of firing it all at once. The queue is the rate limiter you actually control; sizing it conservatively means you never trigger the provider's. buffr has per-call-site backpressure today (`MAX_CONCURRENT=3` in expand) and plans `[B5.1]` to centralize it.
   Diagram:
   ```
   Your code → queue (backpressure) → provider (rate limit)
@@ -370,7 +370,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"Why concurrency cap instead of true rate-per-second limiting?" The honest answer: concurrency caps are dead-simple to implement (a counter and a wait), while true rate-per-second limiting requires a timer-based token-bucket implementation. For loopd's scale, concurrency caps deliver 95% of the value at 20% of the code. The right answer is "we're choosing simpler-and-good-enough; we'd add token-bucket when concurrency-only fails."
+"Why concurrency cap instead of true rate-per-second limiting?" The honest answer: concurrency caps are dead-simple to implement (a counter and a wait), while true rate-per-second limiting requires a timer-based token-bucket implementation. For buffr's scale, concurrency caps deliver 95% of the value at 20% of the code. The right answer is "we're choosing simpler-and-good-enough; we'd add token-bucket when concurrency-only fails."
 
 ```
 Picked: concurrency cap (target)       Suggested: token-bucket
@@ -395,10 +395,10 @@ Right for bursts                         Right for sustained high rate
 Close the file and redraw the sync-pull burst flow — without backpressure (failures) and with centralized queue (smooth drain).
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the difference between rate limiting and backpressure, (b) why per-chain caps don't aggregate correctly, (c) loopd's `MAX_CONCURRENT=3` as the partial existing pattern, (d) what `[B5.1]` adds.
+In under 90 seconds, explain: (a) the difference between rate limiting and backpressure, (b) why per-chain caps don't aggregate correctly, (c) buffr's `MAX_CONCURRENT=3` as the partial existing pattern, (d) what `[B5.1]` adds.
 
 ### Level 3 — Apply it to a new scenario
-A future loopd feature: batch-expand 30 todos for a "weekly review." Without looking, design the call pattern — sequential? Parallel? With what cap? Why?
+A future buffr feature: batch-expand 30 todos for a "weekly review." Without looking, design the call pattern — sequential? Parallel? With what cap? Why?
 
 Open the diagram and check whether your design uses centralized queue.
 

@@ -1,6 +1,6 @@
 # 02 — Data structures and algorithms
 
-Every algorithm in this section is grounded in a real loopd operation. Each file includes a brute force version, an optimal version, an execution trace, and a comparison.
+Every algorithm in this section is grounded in a real buffr operation. Each file includes a brute force version, an optimal version, an execution trace, and a comparison.
 
 ## Index
 

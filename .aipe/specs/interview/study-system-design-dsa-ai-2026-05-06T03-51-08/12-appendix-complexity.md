@@ -1,6 +1,6 @@
 # Appendix — Complexity cheat sheet
 
-This is the lookup table you scan five minutes before the interview. Every major data operation in loopd, with its current time and space complexity, the file it lives in, and whether it holds at 10× scale (interpreted as ~10K active todos / habits / mentions per user).
+This is the lookup table you scan five minutes before the interview. Every major data operation in buffr, with its current time and space complexity, the file it lives in, and whether it holds at 10× scale (interpreted as ~10K active todos / habits / mentions per user).
 
 If you can hold this table in your head, you can answer "what does X cost" instantly without recomputing — which is what an interviewer is implicitly testing when they ask "how does this scale?"
 

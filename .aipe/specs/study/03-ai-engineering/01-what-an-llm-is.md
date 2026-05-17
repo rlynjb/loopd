@@ -200,8 +200,8 @@ Auto-regressive language models trace back to n-gram models from the 80s, recurr
 - Tasks that need real-time tool use (search, code exec). The model can't do those itself; you wrap it in a loop that interprets tool calls (see [06-tool-calling](./06-tool-calling.md)).
 
 ### What to explore next
-- [02-single-purpose-chains](./02-single-purpose-chains.md) → loopd's only pattern.
-- [06-tool-calling](./06-tool-calling.md) → the loop loopd doesn't use.
+- [02-single-purpose-chains](./02-single-purpose-chains.md) → buffr's only pattern.
+- [06-tool-calling](./06-tool-calling.md) → the loop buffr doesn't use.
 - [07-rag](./07-rag.md) → "memory" via retrieval.
 
 ---
@@ -237,7 +237,7 @@ We traded "the model remembers" for "every relevant context travels in the promp
 
 Every relevant context must be assembled in app code and pasted into the prompt — there is no "the model remembers last week." The anti-repetition memory for captions is literally `getRecentAISummaries(date, 5)` at `summarize.ts:buildCaptionInput()` L131, a SQLite query plus a string concat. Forget to fetch it, and the model happily reuses the same opening line every day. That cost is paid five times — once for each chain in `src/services/ai/`.
 
-We also gave up cheap multi-turn reasoning. If a future feature genuinely needs the model to refine its own draft based on a user reply, we'd have to introduce a conversation buffer as app-side state — a new table, a new prompt-assembly path, a new replay mechanism for debugging. Today loopd has zero of those features, which is exactly why every chain is single-call.
+We also gave up cheap multi-turn reasoning. If a future feature genuinely needs the model to refine its own draft based on a user reply, we'd have to introduce a conversation buffer as app-side state — a new table, a new prompt-assembly path, a new replay mechanism for debugging. Today buffr has zero of those features, which is exactly why every chain is single-call.
 
 ### What the alternative would have cost
 
@@ -275,7 +275,7 @@ The "model as a function" framing is Phase 1 foundational — every Phase 1 buil
 
 **Status:** `learn-only` (Phase 1 — LLM application foundations). The proof artifact for landing this understanding is the rest of Phase 1: every chain in `src/services/ai/` made debuggable by treating the call as a pure function. If `[B1.1]` (Zod schemas across 5 chains), `[B1.3]` (temperature variance), and `[B1.6]` (provider-swap eval) all ship cleanly, you've internalised the framing.
 
-See [21-tokenization.md](./21-tokenization.md) for the token-level mechanics and [22-streaming.md](./22-streaming.md) for the one variant of the function signature loopd doesn't use.
+See [21-tokenization.md](./21-tokenization.md) for the token-level mechanics and [22-streaming.md](./22-streaming.md) for the one variant of the function signature buffr doesn't use.
 
 ---
 
@@ -295,11 +295,11 @@ Key points to remember:
 ## Interview defense
 
 ### What an interviewer is really asking
-On "what is an LLM" the question almost never tests definitions — it tests whether I treat the model as a function or as a coworker. The error mode they're hunting is the candidate who anthropomorphises: "it remembers", "it knows", "it decides". I want to land on the framing that loopd's whole architecture (validation gate, async classify, heuristic-first) only makes sense if you start from "tokens in, tokens out, no memory, no I/O".
+On "what is an LLM" the question almost never tests definitions — it tests whether I treat the model as a function or as a coworker. The error mode they're hunting is the candidate who anthropomorphises: "it remembers", "it knows", "it decides". I want to land on the framing that buffr's whole architecture (validation gate, async classify, heuristic-first) only makes sense if you start from "tokens in, tokens out, no memory, no I/O".
 
 ### Likely questions
 
-[mid] Q: If the LLM is stateless, how does loopd give it any "memory" at all — for example, anti-repetition across captions?
+[mid] Q: If the LLM is stateless, how does buffr give it any "memory" at all — for example, anti-repetition across captions?
       A: It's not memory; it's context I assemble in app code. `src/services/ai/summarize.ts:buildCaptionInput()` (L111) calls `getRecentAISummaries(date, 5)` at L131 and pastes those into the caption prompt input. The model sees the last 5 captions as input tokens; it doesn't remember them. If I forgot to fetch and paste, the model would happily re-use the same opening line every day. The "memory" is a SQLite query plus a string concat — assembled by `summarize.ts` before it hands the prompt input to `caption.ts:generateCaption()`. The chain emits `{ variants: { clean, smoother, reflective, punchy }, detectedTheme }`; summarize.ts:91–92 then persists those as `summary_json.variants` and `summary_json.variantsTheme` (the theme key is renamed on write).
 
 ```
@@ -335,7 +335,7 @@ cost per call     paid once for input tokens          cost grows with turn count
 ```
 
 [arch] Q: At what point does this "function" framing break down? When would you stop modeling LLM calls as pure transformations?
-       A: The framing breaks the moment a feature genuinely needs multi-turn state — say, an interactive editor where the user replies to the model's draft. Then I'd need a conversation buffer, and the abstraction would shift from "function call" to "conversation step". I'd still keep each underlying API call stateless; I'd just acknowledge the buffer as app-side state. Loopd has zero of those features today, which is exactly why every chain in `src/services/ai/` is a single call.
+       A: The framing breaks the moment a feature genuinely needs multi-turn state — say, an interactive editor where the user replies to the model's draft. Then I'd need a conversation buffer, and the abstraction would shift from "function call" to "conversation step". I'd still keep each underlying API call stateless; I'd just acknowledge the buffer as app-side state. Buffr has zero of those features today, which is exactly why every chain in `src/services/ai/` is a single call.
 
 ```
 At 10× current volume + 1 interactive chain:

@@ -2,7 +2,7 @@
 
 ## Opening — what you're looking at
 
-Reliability in loopd is structured around one principle: a typed character must be durable before the user looks away. Everything else is recoverable. The vlog export can fail and the user can re-export. The AI summary can fail and the user can re-tap. The cloud sync can fail and the next push retries. But a half-typed sentence in a journal entry has no source-of-truth other than the device's RAM, and there's no "retry" for a thought.
+Reliability in buffr is structured around one principle: a typed character must be durable before the user looks away. Everything else is recoverable. The vlog export can fail and the user can re-export. The AI summary can fail and the user can re-tap. The cloud sync can fail and the next push retries. But a half-typed sentence in a journal entry has no source-of-truth other than the device's RAM, and there's no "retry" for a thought.
 
 That principle drives three observable patterns. First, DB-first autosave (rule 3 in `.aipe/project/rules.md`) — every keystroke commits to SQLite before any state change that could be interrupted. Second, two-pass scanners run only at commit boundaries (focus blur, screen leave) so that mid-keystroke ambiguity never produces partial typed records. Third, fire-and-forget reconciliation — `reconcileTodoMetaForEntry` and the threads/nutrition scanners return Promises that the caller doesn't await, so a slow scanner never blocks the user's next interaction.
 

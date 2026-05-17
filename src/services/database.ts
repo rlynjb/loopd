@@ -9,9 +9,9 @@ let db: SQLite.SQLiteDatabase | null = null;
 
 export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (db) return db;
-  db = await SQLite.openDatabaseAsync('loopd.db');
+  db = await SQLite.openDatabaseAsync('buffr.db');
   await migrate(db);
-  repairBareClipUris(db).catch(e => console.warn('[loopd] Clip URI repair error:', e));
+  repairBareClipUris(db).catch(e => console.warn('[buffr] Clip URI repair error:', e));
   return db;
 }
 
@@ -22,7 +22,7 @@ async function repairBareClipUris(database: SQLite.SQLiteDatabase): Promise<void
   const rows = await database.getAllAsync<{ id: string; date: string; clips_json: string | null; clip_uri: string | null }>(
     "SELECT id, date, clips_json, clip_uri FROM entries WHERE clips_json IS NOT NULL AND clips_json != '[]'"
   );
-  const baseDir = `${Paths.document.uri}/loopd/clips`;
+  const baseDir = `${Paths.document.uri}/buffr/clips`;
   for (const row of rows) {
     if (!row.clips_json) continue;
     let clips: { uri: string; durationMs: number }[];
@@ -199,6 +199,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       classifier_model TEXT,
       user_overridden_type INTEGER NOT NULL DEFAULT 0,
       position INTEGER,
+      pinned INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       CHECK (type IN ('todo','idea','knowledge','study','reflect')),
@@ -300,10 +301,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_entries_notion ON entries(notion_page_id);
         CREATE INDEX IF NOT EXISTS idx_entries_updated ON entries(updated_at);
       `);
-      console.log('[loopd] Migrated entries: removed dead columns (type, mood, category)');
+      console.log('[buffr] Migrated entries: removed dead columns (type, mood, category)');
     }
   } catch (e) {
-    console.warn('[loopd] Dead column migration error:', e);
+    console.warn('[buffr] Dead column migration error:', e);
   }
 
   // Migration: drop dead columns (mood, categories_json) from vlogs
@@ -330,10 +331,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
         DROP TABLE vlogs;
         ALTER TABLE vlogs_new RENAME TO vlogs;
       `);
-      console.log('[loopd] Migrated vlogs: removed dead columns (mood, categories_json)');
+      console.log('[buffr] Migrated vlogs: removed dead columns (mood, categories_json)');
     }
   } catch (e) {
-    console.warn('[loopd] Vlogs migration error:', e);
+    console.warn('[buffr] Vlogs migration error:', e);
   }
 
   // Migration: drop emoji column from habits
@@ -355,10 +356,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
         ALTER TABLE habits_new RENAME TO habits;
         CREATE INDEX IF NOT EXISTS idx_habits_notion ON habits(notion_page_id);
       `);
-      console.log('[loopd] Migrated habits: removed emoji column');
+      console.log('[buffr] Migrated habits: removed emoji column');
     }
   } catch (e) {
-    console.warn('[loopd] Habits emoji migration error:', e);
+    console.warn('[buffr] Habits emoji migration error:', e);
   }
 
   // ── Cloud sync (Supabase) — M0 schema additions ──
@@ -446,10 +447,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_todo_meta_updated ON todo_meta(updated_at);
         CREATE INDEX IF NOT EXISTS idx_todo_meta_created ON todo_meta(created_at);
       `);
-      console.log('[loopd] Migrated todo_meta: narrowed type CHECK to {todo, idea, knowledge, study, reflect}');
+      console.log('[buffr] Migrated todo_meta: narrowed type CHECK to {todo, idea, knowledge, study, reflect}');
     }
   } catch (e) {
-    console.warn('[loopd] todo_meta type-CHECK migration error:', e);
+    console.warn('[buffr] todo_meta type-CHECK migration error:', e);
   }
 
   // sync_meta — per-table sync-state ledger. NOT itself synced.
@@ -1200,7 +1201,7 @@ export async function deleteEmptyEntries(): Promise<number> {
   const empty = await db.getAllAsync<{ id: string; date: string; text: string | null }>(
     "SELECT id, date, text FROM entries WHERE deleted_at IS NULL AND (text IS NULL OR text = '') AND (habits_json IS NULL OR habits_json = '[]') AND (todos_json IS NULL OR todos_json = '[]') AND (clips_json IS NULL OR clips_json = '[]')"
   );
-  console.log('[loopd] deleteEmptyEntries:', empty.length, empty.map(e => ({ id: e.id, date: e.date, text: e.text })));
+  console.log('[buffr] deleteEmptyEntries:', empty.length, empty.map(e => ({ id: e.id, date: e.date, text: e.text })));
   for (const e of empty) {
     await deleteEntry(e.id);
   }

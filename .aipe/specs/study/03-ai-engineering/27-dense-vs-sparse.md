@@ -15,7 +15,7 @@ Run two searches on GitHub's code search. First, `repo:vercel/next.js "useRouter
 
 The implicit question is which lane you put on the search bar. Not one or the other — both, with a system to reconcile their picks. Sparse retrieval (BM25, exact-token matching) is the exact-string lane; dense retrieval (embeddings, cosine similarity) is the semantic lane.
 
-**What depends on getting this right:** every retrieval feature that has to handle both proper-noun lookups and meaning-based queries. Loopd doesn't index either way today — there's no `embed.ts`, no FTS5 index on `entries.text`, no `entry_embeddings`. The day a "find my entries about Spice House" feature lands, dense-only retrieval will return entries about "Indian restaurant" and miss the literal-string matches; sparse-only will miss entries that say "that new place we ate at" without naming it. The planned shape is hybrid: an FTS5 virtual table over `entries.text` for sparse, an `entry_embeddings` table for dense, and a fusion step (see `28-hybrid-retrieval-rrf.md`) to merge ranked lists. Lose either half and a whole class of queries silently fails — proper nouns and rare technical terms (sparse's strength) or paraphrase and synonymy (dense's strength).
+**What depends on getting this right:** every retrieval feature that has to handle both proper-noun lookups and meaning-based queries. Buffr doesn't index either way today — there's no `embed.ts`, no FTS5 index on `entries.text`, no `entry_embeddings`. The day a "find my entries about Spice House" feature lands, dense-only retrieval will return entries about "Indian restaurant" and miss the literal-string matches; sparse-only will miss entries that say "that new place we ate at" without naming it. The planned shape is hybrid: an FTS5 virtual table over `entries.text` for sparse, an `entry_embeddings` table for dense, and a fusion step (see `28-hybrid-retrieval-rrf.md`) to merge ranked lists. Lose either half and a whole class of queries silently fails — proper nouns and rare technical terms (sparse's strength) or paraphrase and synonymy (dense's strength).
 
 Without both layers (dense-only future):
 - Query "Spice House" → ranked entries about generic Indian food
@@ -117,7 +117,7 @@ Now dense wins. The user's query shares no rare words with the relevant entries,
 
 The practical consequence: dense retrieval is great at *paraphrase* and bad at *out-of-vocabulary identifiers* (proper nouns, product names, code identifiers, error codes). Sparse retrieval is the opposite. Most real corpora have both kinds of queries.
 
-For loopd specifically: a daily-journal corpus has lots of proper nouns (place names, people, project names, `#tags`) that sparse handles well, and lots of natural-language description (mood, feelings, themes) that dense handles well.
+For buffr specifically: a daily-journal corpus has lots of proper nouns (place names, people, project names, `#tags`) that sparse handles well, and lots of natural-language description (mood, feelings, themes) that dense handles well.
 
 What each shape eats vs what it chokes on:
 
@@ -126,7 +126,7 @@ What each shape eats vs what it chokes on:
    ───────────────────────────────         ──────────     ───────────
    proper noun ("Spice House")              no             yes
    rare technical term ("vindaloo")         no             yes
-   product / project name ("loopd")          no             yes
+   product / project name ("buffr")          no             yes
    error code ("ENOTFOUND")                  no             yes
    #tag                                      no             yes
    paraphrase ("the place we ate")          yes            no
@@ -136,7 +136,7 @@ What each shape eats vs what it chokes on:
    cross-language                            (depends      no
                                              on model)
 
-   loopd's corpus = lots of proper nouns AND lots of
+   buffr's corpus = lots of proper nouns AND lots of
    natural-language description → needs BOTH lanes.
    hybrid retrieval (next file, 28-hybrid-retrieval-rrf) is
    the production answer.
@@ -196,7 +196,7 @@ Query handling
 
 **Status:** Case B — neither dense nor sparse retrieval is implemented today.
 
-The closest existing pattern is SQL `LIKE '%substring%'` filtering, which is the most degenerate form of sparse search (no weighting, no ranking, just match/no-match). loopd doesn't currently use it for full-text search either; retrieval is hand-picked by date or `#tag`. Phase 2A's `[B2A.10]` adds BM25 alongside cosine and measures whether the combination outperforms either alone.
+The closest existing pattern is SQL `LIKE '%substring%'` filtering, which is the most degenerate form of sparse search (no weighting, no ranking, just match/no-match). buffr doesn't currently use it for full-text search either; retrieval is hand-picked by date or `#tag`. Phase 2A's `[B2A.10]` adds BM25 alongside cosine and measures whether the combination outperforms either alone.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, sparse logic lives in `src/services/ai/bm25.ts` or via `sqlite-fts5`)*
@@ -224,7 +224,7 @@ For very small corpora (< 100 docs), the distinction matters less because exhaus
 
 ## Tradeoffs
 
-### Comparison table — dense vs sparse vs hybrid for loopd
+### Comparison table — dense vs sparse vs hybrid for buffr
 
 ```
 ┌─────────────────────────┬─────────────────┬─────────────────┬───────────────────┐
@@ -243,7 +243,7 @@ For very small corpora (< 100 docs), the distinction matters less because exhaus
 
 ### Sub-block 1 — what dense-only gives up
 
-Out-of-vocabulary identifier precision. Every proper noun in a loopd entry — restaurant names, friend names, project names, place names — is a query the user might issue verbatim, and dense ranks paraphrases higher than literal matches. For a personal journal with lots of named entities, this is a real precision loss.
+Out-of-vocabulary identifier precision. Every proper noun in a buffr entry — restaurant names, friend names, project names, place names — is a query the user might issue verbatim, and dense ranks paraphrases higher than literal matches. For a personal journal with lots of named entities, this is a real precision loss.
 
 ### Sub-block 2 — what sparse-only would have cost
 
@@ -265,7 +265,7 @@ Skipping retrieval entirely was never an option for Phase 2A. The corpus is too 
 - **Why it's here:** the standard sparse retrieval algorithm; `sqlite-fts5` ships in `expo-sqlite` and provides BM25 ranking out of the box via virtual tables.
 - **Leading today:** BM25 — `adoption-leading` for sparse retrieval, 2026 (well past 2026 in fact — it's been the standard since the early 2000s).
 - **Why it leads:** robust to document length variance, well-tuned defaults, drop-in via fts5 with no extra dependencies.
-- **Runner-up:** SPLADE — `innovation-leading` learned sparse retrieval (a neural model that produces sparse weights). Better quality, but requires hosting an inference model — more infra than loopd's local-first stance accommodates.
+- **Runner-up:** SPLADE — `innovation-leading` learned sparse retrieval (a neural model that produces sparse weights). Better quality, but requires hosting an inference model — more infra than buffr's local-first stance accommodates.
 
 ### Cosine similarity (vector dot product on normalised vectors)
 
@@ -282,7 +282,7 @@ Skipping retrieval entirely was never an option for Phase 2A. The corpus is too 
 ### [B2A.10] Add BM25 alongside cosine; combine with RRF; measure hit@k
 
 - **Exercise ID:** `[B2A.10]`
-- **What to build:** A BM25 sparse index built via `sqlite-fts5` virtual table over `entries.text`. A retrieval function that runs both BM25 and cosine, merges the rankings via Reciprocal Rank Fusion (see [28-hybrid-retrieval-rrf](./28-hybrid-retrieval-rrf.md)), and returns top-k. Eval the hybrid against cosine-only on `[B2A.9]`'s eval set. Document the lift (or lack thereof) in `loopd/.aipe/specs/features/rag-personal-corpus.md`.
+- **What to build:** A BM25 sparse index built via `sqlite-fts5` virtual table over `entries.text`. A retrieval function that runs both BM25 and cosine, merges the rankings via Reciprocal Rank Fusion (see [28-hybrid-retrieval-rrf](./28-hybrid-retrieval-rrf.md)), and returns top-k. Eval the hybrid against cosine-only on `[B2A.9]`'s eval set. Document the lift (or lack thereof) in `buffr/.aipe/specs/features/rag-personal-corpus.md`.
 - **Why it earns its place:** Phase 2A's biggest single retrieval-quality lever is hybrid retrieval. If the hybrid lift on real data is meaningful (~5%+ hit@5 over dense-only), it's worth the storage cost. If it isn't, dense-only ships and BM25 stays a learn-only concept.
 - **Files to touch:** new fts5 virtual table migration in `src/services/database.ts`; new `src/services/ai/bm25.ts` + `hybridRetrieve.ts`; eval results in `scripts/eval-results/hybrid-vs-dense-<date>.md`.
 - **Done when:** the fts5 table is populated; the hybrid retrieval function returns top-k; eval results compare hybrid vs dense-only on the 20-30 query/expected pairs with measured numbers.
@@ -292,13 +292,13 @@ Skipping retrieval entirely was never an option for Phase 2A. The corpus is too 
 
 ## Summary
 
-Dense (embedding-based) and sparse (BM25-based) retrieval are two different compressions of text that handle different query types — dense wins on paraphrase, sparse wins on proper nouns and rare identifiers. In loopd neither is implemented today; `[B2A.10]` plans hybrid retrieval (both, combined via RRF) for Phase 2A. The constraint that makes hybrid the right target is loopd's corpus mix: a personal journal contains both lots of named entities (restaurant names, project names, `#tag` slugs) that sparse handles well AND lots of mood/theme prose that dense handles well. The cost being paid is running two indexes instead of one — ~500 KB of additional storage for the BM25 inverted index and ~50 LOC of orchestration.
+Dense (embedding-based) and sparse (BM25-based) retrieval are two different compressions of text that handle different query types — dense wins on paraphrase, sparse wins on proper nouns and rare identifiers. In buffr neither is implemented today; `[B2A.10]` plans hybrid retrieval (both, combined via RRF) for Phase 2A. The constraint that makes hybrid the right target is buffr's corpus mix: a personal journal contains both lots of named entities (restaurant names, project names, `#tag` slugs) that sparse handles well AND lots of mood/theme prose that dense handles well. The cost being paid is running two indexes instead of one — ~500 KB of additional storage for the BM25 inverted index and ~50 LOC of orchestration.
 
 Key points to remember:
 - Dense = vector cosine = meaning. Good at paraphrase, bad at exact identifiers.
 - Sparse = BM25 = weighted word overlap. Good at proper nouns and rare terms, bad at synonyms.
 - Production retrieval is hybrid: run both, combine.
-- For loopd, the corpus mix justifies hybrid — both surface types matter.
+- For buffr, the corpus mix justifies hybrid — both surface types matter.
 - Eval-driven: ship hybrid only if `[B2A.9]` shows meaningful lift over dense-only.
 
 ---
@@ -376,10 +376,10 @@ Right at "we have eval signal"       Right at "we don't have eval signal"
 Close the file and draw the dense-vs-sparse vector representation side-by-side for a single entry. Show what's in each: dense is fat-and-fully-populated, sparse is long-and-mostly-zero.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) when dense wins (paraphrase), (b) when sparse wins (proper nouns), (c) why production systems run both, (d) the deciding eval for loopd.
+In under 90 seconds, explain: (a) when dense wins (paraphrase), (b) when sparse wins (proper nouns), (c) why production systems run both, (d) the deciding eval for buffr.
 
 ### Level 3 — Apply it to a new scenario
-A loopd user searches for "the meeting where Sarah pushed back on the architecture decision." Without looking, predict whether dense, sparse, or hybrid handles this best and why. Where does each one's weakness show up?
+A buffr user searches for "the meeting where Sarah pushed back on the architecture decision." Without looking, predict whether dense, sparse, or hybrid handles this best and why. Where does each one's weakness show up?
 
 Open the comparison table and check your answer against the proper-noun precision row.
 
@@ -399,4 +399,4 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care to anchor on real software (replaced two-librarians-reference-desk analogy with GitHub code search exact-string vs natural-language modes, Sourcegraph, Algolia synonyms API).
 
 ---
-Updated: 2026-05-14 — v1.32.0 pass: kept Why care + How it works Move 1 anchors on GitHub code search + Sourcegraph + Algolia (level-3 engineering surfaces, acceptable). Swapped Why care Move 5 from "one librarian for exact titles, one for themes" physical-world metaphor to "Hybrid retrieval — sparse for exact-string lookups, dense for paraphrase; same query, two pipelines, fused at the end." Added Move 1 mnemonic diagram (dense vs sparse side-by-side: representation + similarity + what each captures and misses + implementation) + 1 new Move 2 sub-section diagram (query-type table mapping what each wins/loses at, with loopd-corpus implication). Sub-sections 1, 2, 3, 4 already had ASCII diagrams from earlier passes. Total: 2 new diagrams.
+Updated: 2026-05-14 — v1.32.0 pass: kept Why care + How it works Move 1 anchors on GitHub code search + Sourcegraph + Algolia (level-3 engineering surfaces, acceptable). Swapped Why care Move 5 from "one librarian for exact titles, one for themes" physical-world metaphor to "Hybrid retrieval — sparse for exact-string lookups, dense for paraphrase; same query, two pipelines, fused at the end." Added Move 1 mnemonic diagram (dense vs sparse side-by-side: representation + similarity + what each captures and misses + implementation) + 1 new Move 2 sub-section diagram (query-type table mapping what each wins/loses at, with buffr-corpus implication). Sub-sections 1, 2, 3, 4 already had ASCII diagrams from earlier passes. Total: 2 new diagrams.

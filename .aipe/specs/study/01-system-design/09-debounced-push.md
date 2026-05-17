@@ -35,7 +35,7 @@ Debounce once, after the burst is over — same shape as `_.debounce` on a produ
 
 ## How it works
 
-Lodash's `_.debounce(fn, 5000)` is the canonical pattern. Every call to the debounced function resets a timer; the inner function fires only after the timer has been quiet for the configured window. React Query's `useDebouncedCallback` ships the same primitive for client-side handlers. loopd's `schedulePush()` is this pattern applied to cloud sync — every `database.ts` write resets a 5-second timer; `pushAll()` fires once after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
+Lodash's `_.debounce(fn, 5000)` is the canonical pattern. Every call to the debounced function resets a timer; the inner function fires only after the timer has been quiet for the configured window. React Query's `useDebouncedCallback` ships the same primitive for client-side handlers. buffr's `schedulePush()` is this pattern applied to cloud sync — every `database.ts` write resets a 5-second timer; `pushAll()` fires once after the burst is over. That's the whole strategy: turn a stream of small events into one batched fire at the end of the quiet window.
 
 The shape in one timeline:
 
@@ -275,7 +275,7 @@ The code-surface saving from "no debouncer" is small — ~25 LOC of `schedulePus
 
 ### The breakpoint
 
-Fine until the write pattern changes. If loopd starts shipping a feature that produces sustained writes for minutes (e.g., live transcription writing one row per token), the dirty set grows faster than the debounce can clear it, and the `if (pushing) schedulePush()` re-arm guard becomes a queue-grower rather than a tolerance mechanism. The fix is parallel per-table pushes (`Promise.all` over the registry) plus larger batch sizes (50 → 500), which is roughly a day of work — not done because journaling never gets there.
+Fine until the write pattern changes. If buffr starts shipping a feature that produces sustained writes for minutes (e.g., live transcription writing one row per token), the dirty set grows faster than the debounce can clear it, and the `if (pushing) schedulePush()` re-arm guard becomes a queue-grower rather than a tolerance mechanism. The fix is parallel per-table pushes (`Promise.all` over the registry) plus larger batch sizes (50 → 500), which is roughly a day of work — not done because journaling never gets there.
 
 ### What wasn't actually a tradeoff
 

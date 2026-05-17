@@ -1,8 +1,8 @@
 # 03 — AI engineering
 
-Every AI concept in scope for loopd via the curriculum, organized by sub-discipline AND by curriculum phase. Each file opens with a "Why care" zoom-out, walks the mechanics in "How it works," and closes with Interview defense + Validate.
+Every AI concept in scope for buffr via the curriculum, organized by sub-discipline AND by curriculum phase. Each file opens with a "Why care" zoom-out, walks the mechanics in "How it works," and closes with Interview defense + Validate.
 
-**Mode:** curriculum-loaded (loopd is anchored to Phase 1 / 2A / 3 / 5 of `aieng-curriculum.md`).
+**Mode:** curriculum-loaded (buffr is anchored to Phase 1 / 2A / 3 / 5 of `aieng-curriculum.md`).
 
 Files for already-implemented concepts have Case A `## In this codebase` (real code references). Files for not-yet-implemented concepts have Case B `## In this codebase` ("Not yet implemented — deferred to Phase X") and use `## Project exercises` as the primary buildable target.
 
@@ -10,15 +10,15 @@ Files for already-implemented concepts have Case A `## In this codebase` (real c
 
 Use this view to trace each phase's concepts in order.
 
-### Phase 1 — LLM application foundations (anchor: loopd + aipe)
+### Phase 1 — LLM application foundations (anchor: buffr + aipe)
 
 | # | Concept | Status | Curriculum ID | One-line |
 |---|---|---|---|---|
-| 21 | [Tokenization](./21-tokenization.md) | learn-only | `[C1.1]` | Why context windows are sized in tokens; loopd consumes counts, doesn't tokenize. |
+| 21 | [Tokenization](./21-tokenization.md) | learn-only | `[C1.1]` | Why context windows are sized in tokens; buffr consumes counts, doesn't tokenize. |
 | 03 | [Context window](./03-context-window.md) | Case A (learn-only) | `[C1.2]` | Hand-picked, capped slices per chain. |
 | 15 | [Sampling parameters](./15-sampling-parameters.md) | Case A | `[C1.3]` | Only `interpret` tunes temperature; defaults elsewhere. |
 | 16 | [Structured outputs](./16-structured-outputs.md) | Case A | `[C1.4]` | Every JSON chain validates after parse. |
-| 22 | [Streaming responses](./22-streaming.md) | learn-only | `[C1.5]` | loopd doesn't stream; the design decision is why. |
+| 22 | [Streaming responses](./22-streaming.md) | learn-only | `[C1.5]` | buffr doesn't stream; the design decision is why. |
 | 23 | [Token economics](./23-token-economics.md) | Case B | `[C1.6]` | The `ai_call_log` table and AI ops panel. |
 | 17 | [Anatomy of a production prompt](./17-anatomy-of-prompt.md) | Case A | `[C1.7]` | Four-section prompt shape across all 5 chains. |
 | 04 | [Provider abstraction](./04-provider-abstraction.md) | Case A | `[C1.8]` | Call-site branch, no shared `BaseChatModel`. |
@@ -30,7 +30,7 @@ Use this view to trace each phase's concepts in order.
 | 19 | [Prompt chaining](./19-prompt-chaining.md) | Case A | `[C1.10]` detail | summarize → caption two-stage chain. |
 | 01 | [What an LLM is](./01-what-an-llm-is.md) | foundational | — | The function-of-tokens framing. |
 
-### Phase 2A — RAG over personal corpus (anchor: loopd)
+### Phase 2A — RAG over personal corpus (anchor: buffr)
 
 All Case B except where noted — Phase 2A is the curriculum's next phase.
 
@@ -46,10 +46,10 @@ All Case B except where noted — Phase 2A is the curriculum's next phase.
 | 31 | [Query rewriting / HyDE](./31-query-rewriting-hyde.md) | Case B | `[C2.8]` | Conditional; eval-driven on `[B2A.8]` first. |
 | 32 | [Stale embeddings](./32-stale-embeddings.md) | Case B | `[C2.11]` | Mark-stale on write; re-embed on idle. |
 | 33 | [Incremental indexing](./33-incremental-indexing.md) | Case B | `[C2.12]` | Three lifecycle paths: insert / update / delete. |
-| 34 | [GraphRAG](./34-graphrag.md) | Case B | `[C2.13]` | `thread_mentions` is loopd's graph; combine with vectors. |
+| 34 | [GraphRAG](./34-graphrag.md) | Case B | `[C2.13]` | `thread_mentions` is buffr's graph; combine with vectors. |
 | 07 | [RAG](./07-rag.md) | Case A (no-RAG today) | `[C2.1]` overview | The "no RAG above bounded scope" decision. |
 
-### Phase 3 — Evals and observability (anchor: loopd + aipe + contrl-mo)
+### Phase 3 — Evals and observability (anchor: buffr + aipe + contrl-mo)
 
 | # | Concept | Status | Curriculum ID | One-line |
 |---|---|---|---|---|
@@ -59,7 +59,7 @@ All Case B except where noted — Phase 2A is the curriculum's next phase.
 | 39 | ["No-click is not a negative label"](./39-no-click-not-negative.md) | learn-only | `[C3.7]` | Implicit feedback is partial truth. |
 | 38 | [LLM observability](./38-llm-observability.md) | Case B | `[C3.10]` + `[C3.11]` | Trace tree per call; local SQLite at solo scale. |
 
-### Phase 5 — Production serving (anchor: loopd + contrl-mo)
+### Phase 5 — Production serving (anchor: buffr + contrl-mo)
 
 | # | Concept | Status | Curriculum ID | One-line |
 |---|---|---|---|---|
@@ -155,10 +155,10 @@ The classifier picks one of **5** modes (was 7; reduced 2026-05-10 in migration 
 
 ## Curriculum scope vs current implementation
 
-loopd's curriculum scope is **Phase 1 / 2A / 3 / 5**. Phase 2C (classical ML) is anchored to contrl-mo, not loopd — loopd has no trained-model surface and the `04-machine-learning/` section is intentionally absent. Phase 4 (agents) is recommended for contrl-mo (Path C); loopd's option (Path B) is deferred — `06-tool-calling.md` and `12-why-no-agents.md` carry the "why no agents in loopd" position.
+buffr's curriculum scope is **Phase 1 / 2A / 3 / 5**. Phase 2C (classical ML) is anchored to contrl-mo, not buffr — buffr has no trained-model surface and the `04-machine-learning/` section is intentionally absent. Phase 4 (agents) is recommended for contrl-mo (Path C); buffr's option (Path B) is deferred — `06-tool-calling.md` and `12-why-no-agents.md` carry the "why no agents in buffr" position.
 
 **Current state across the 43 concept files:**
-- **Case A (implemented)**: ~20 files — Phase 1's foundations and the chain-shape concepts loopd already ships.
+- **Case A (implemented)**: ~20 files — Phase 1's foundations and the chain-shape concepts buffr already ships.
 - **Case B (not yet implemented)**: ~22 files — Phase 2A's RAG pipeline, Phase 3's eval suites, Phase 5's production hardening. Each is a `[Bx.y]` build target with a measurable Done-when condition.
 - **learn-only**: a handful — concepts the curriculum tags as foundation-only (tokenization, streaming, no-click signal).
 
@@ -171,7 +171,7 @@ The `## Project exercises` block on every file names the curriculum's `[Bx.y]` B
 Updated: 2026-05-10 — added 14-interpret to index, added Interpret + reduced expand-types row to features table, added thinking-mode taxonomy section (template v1.12.0 maintenance + codebase changes).
 
 ---
-Updated: 2026-05-11 — v1.25.0 pass: re-grouped index by sub-discipline (LLM foundations / Prompt engineering / Context and prompts / Retrieval and RAG / Agents and tool use / Evals and observability / Production serving / How this codebase uses AI); added 6 new concept files (15-sampling-parameters, 16-structured-outputs, 17-anatomy-of-prompt, 18-forbidden-patterns-rotation, 19-prompt-chaining, 20-prompt-injection); added "Sub-disciplines not represented in this codebase" section naming the deliberate omissions. `04-machine-learning/` section not created — loopd has no trained-model surface.
+Updated: 2026-05-11 — v1.25.0 pass: re-grouped index by sub-discipline (LLM foundations / Prompt engineering / Context and prompts / Retrieval and RAG / Agents and tool use / Evals and observability / Production serving / How this codebase uses AI); added 6 new concept files (15-sampling-parameters, 16-structured-outputs, 17-anatomy-of-prompt, 18-forbidden-patterns-rotation, 19-prompt-chaining, 20-prompt-injection); added "Sub-disciplines not represented in this codebase" section naming the deliberate omissions. `04-machine-learning/` section not created — buffr has no trained-model surface.
 
 ---
-Updated: 2026-05-11 — v1.26.0 + v1.29.0 pass: switched Section 03 to curriculum-loaded mode (curriculum auto-installed from `~/.config/aipe/global/aieng-curriculum.md`). Added `## Project exercises` blocks to all 20 existing AI files mapping each to the curriculum's `[Bx.y]` Build items. Added 23 new files (21-43) covering Phase 1 remainder, Phase 2A in full, Phase 3, and Phase 5 — each Case B file names the primary buildable target. Replaced the v1.25.0 "Sub-disciplines not represented" section with "Curriculum scope vs current implementation." Added an index-by-curriculum-phase view alongside the existing sub-discipline grouping. Created `system-design-templates/` sub-directory (v1.29.0) with `01-search-ranking.md` and `02-tech-support-chatbot.md`. `04-machine-learning/` remains intentionally absent — loopd is LLM-only; Phase 2C is anchored to contrl-mo.
+Updated: 2026-05-11 — v1.26.0 + v1.29.0 pass: switched Section 03 to curriculum-loaded mode (curriculum auto-installed from `~/.config/aipe/global/aieng-curriculum.md`). Added `## Project exercises` blocks to all 20 existing AI files mapping each to the curriculum's `[Bx.y]` Build items. Added 23 new files (21-43) covering Phase 1 remainder, Phase 2A in full, Phase 3, and Phase 5 — each Case B file names the primary buildable target. Replaced the v1.25.0 "Sub-disciplines not represented" section with "Curriculum scope vs current implementation." Added an index-by-curriculum-phase view alongside the existing sub-discipline grouping. Created `system-design-templates/` sub-directory (v1.29.0) with `01-search-ranking.md` and `02-tech-support-chatbot.md`. `04-machine-learning/` remains intentionally absent — buffr is LLM-only; Phase 2C is anchored to contrl-mo.

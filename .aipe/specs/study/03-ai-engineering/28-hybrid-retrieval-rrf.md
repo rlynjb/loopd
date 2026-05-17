@@ -13,7 +13,7 @@ You've got two ranking functions that return ordered lists of the same items but
 
 The implicit question is how to combine two lists when their scoring scales aren't comparable. Not normalisation, not learned weights — ranks-only fusion, where a constant smooths how aggressively rank-1 dominates.
 
-**What depends on getting this right:** the fusion step between loopd's two planned retrieval lanes — `hybridRetrieve()` (target, not yet created) combining a dense lane (`cosine(queryVec, entry_embeddings.vec)`) and a sparse lane (FTS5/BM25 on `entries.text`). The day "find my entries about Spice House" ships, the dense lane will hand back one ranked list (entries that mean "Indian restaurant") and the sparse lane will hand back another (entries that contain the literal "Spice House"). Sum the scores and the BM25 magnitudes (0 to ∞) drown the cosine values (-1 to 1) every time; min-max normalise and the score distribution shape breaks the comparison. RRF — `Σ 1/(k+rank)` with k=60 — sidesteps both problems and lands a fused top-k that includes the literal matches and the paraphrase matches in proportion to their rank in each lane.
+**What depends on getting this right:** the fusion step between buffr's two planned retrieval lanes — `hybridRetrieve()` (target, not yet created) combining a dense lane (`cosine(queryVec, entry_embeddings.vec)`) and a sparse lane (FTS5/BM25 on `entries.text`). The day "find my entries about Spice House" ships, the dense lane will hand back one ranked list (entries that mean "Indian restaurant") and the sparse lane will hand back another (entries that contain the literal "Spice House"). Sum the scores and the BM25 magnitudes (0 to ∞) drown the cosine values (-1 to 1) every time; min-max normalise and the score distribution shape breaks the comparison. RRF — `Σ 1/(k+rank)` with k=60 — sidesteps both problems and lands a fused top-k that includes the literal matches and the paraphrase matches in proportion to their rank in each lane.
 
 Without RRF (or any fusion):
 - Pick one lane and discard the other — dense wins on synonyms, loses on proper nouns
@@ -175,7 +175,7 @@ What RRF can vs can't do:
                                           formula    descent
 
    RRF's deliberate trade: simpler + zero-tune + lower ceiling than
-   learned-to-rank. for solo loopd scale (one user, dozens of
+   learned-to-rank. for solo buffr scale (one user, dozens of
    queries/day), simpler wins.
 ```
 
@@ -253,7 +253,7 @@ RRF assumes the rankers are *complementary*. If both rankers have the same blind
 ### What to explore next
 - [29-reranking-cross-encoder](./29-reranking-cross-encoder.md) → the rerank layer that comes after RRF
 - [36-eval-methods](./36-eval-methods.md) → how to measure whether RRF actually improved hit@k
-- Learned-to-rank — the more sophisticated alternative; not in loopd's plan
+- Learned-to-rank — the more sophisticated alternative; not in buffr's plan
 
 ---
 
@@ -284,7 +284,7 @@ Per-query adaptiveness. RRF treats both rankers equally on every query. If spars
 Two parameters (one weight per ranker) that need eval-driven tuning, plus the fragility of mixing scores that live on different scales. Once you tune the weights for your current corpus, the moment your corpus or embedding model changes, the weights are stale. RRF's parameter-free nature is the feature.
 
 ### Sub-block 3 — the breakpoint
-RRF stops being the right call when you have enough eval data to train a learned-to-rank model (10k+ labelled query-doc pairs) and a clear quality ceiling you're hitting. For loopd's eval-set size (20-30 pairs), learned-to-rank is wildly over-budget; RRF is the right call indefinitely.
+RRF stops being the right call when you have enough eval data to train a learned-to-rank model (10k+ labelled query-doc pairs) and a clear quality ceiling you're hitting. For buffr's eval-set size (20-30 pairs), learned-to-rank is wildly over-budget; RRF is the right call indefinitely.
 
 ### What wasn't actually a tradeoff
 Weighted sum of *raw scores* (dense cosine + BM25 score) was never a real option because the scales are incomparable. Even minor calibration efforts (z-score normalisation) are fragile across query distributions.
@@ -307,7 +307,7 @@ Weighted sum of *raw scores* (dense cosine + BM25 score) was never a real option
 - **Why it's here:** the LangChain abstraction that ships RRF (and weighted alternatives) out of the box.
 - **Leading today:** LangChain ensemble — `adoption-leading` for LangChain codebases, 2026.
 - **Why it leads:** zero implementation cost if you're already in LangChain.
-- **Runner-up:** custom implementation — `adoption-leading` for codebases that prefer no framework dependencies; loopd is in this camp.
+- **Runner-up:** custom implementation — `adoption-leading` for codebases that prefer no framework dependencies; buffr is in this camp.
 
 ---
 
@@ -326,14 +326,14 @@ Weighted sum of *raw scores* (dense cosine + BM25 score) was never a real option
 
 ## Summary
 
-Reciprocal Rank Fusion is a near-parameter-free formula that merges multiple ranked lists into one by summing `1/(k+rank)` across rankers. In loopd this is the planned combination strategy for hybrid retrieval (`[B2A.10]`) — combining dense cosine and sparse BM25 into one ranking. The constraint that makes RRF the right call is that the two scoring scales are incomparable and any tuned weighted-sum would be fragile across query distributions. The cost being paid is per-query adaptiveness: RRF treats both rankers equally on every query, even when one is genuinely better for that query's shape.
+Reciprocal Rank Fusion is a near-parameter-free formula that merges multiple ranked lists into one by summing `1/(k+rank)` across rankers. In buffr this is the planned combination strategy for hybrid retrieval (`[B2A.10]`) — combining dense cosine and sparse BM25 into one ranking. The constraint that makes RRF the right call is that the two scoring scales are incomparable and any tuned weighted-sum would be fragile across query distributions. The cost being paid is per-query adaptiveness: RRF treats both rankers equally on every query, even when one is genuinely better for that query's shape.
 
 Key points to remember:
 - RRF ignores scores, uses ranks only.
 - Formula: `Σ 1/(60 + rank)` per ranker; merge by sorting the sum.
 - Robust to which dense or sparse algorithm you pick.
 - Rewards consensus — docs in both lists outrank docs in only one.
-- For loopd, ~20 LOC; the smallest "interview-defensible hybrid retrieval" build.
+- For buffr, ~20 LOC; the smallest "interview-defensible hybrid retrieval" build.
 
 ---
 
@@ -368,7 +368,7 @@ Key points to remember:
   ```
 
   [arch] Q: At scale, does RRF still win?
-  A: Up until you have enough training data to learn per-query ranker preferences (10k+ labelled query-doc pairs), RRF is hard to beat. Beyond that, learned-to-rank models can outperform by adapting weights per query — knowing that proper-noun queries should weight sparse higher and paraphrase queries should weight dense higher. For loopd's eval set (20-30 pairs), learned-to-rank is wildly over-budget; RRF is right indefinitely.
+  A: Up until you have enough training data to learn per-query ranker preferences (10k+ labelled query-doc pairs), RRF is hard to beat. Beyond that, learned-to-rank models can outperform by adapting weights per query — knowing that proper-noun queries should weight sparse higher and paraphrase queries should weight dense higher. For buffr's eval set (20-30 pairs), learned-to-rank is wildly over-budget; RRF is right indefinitely.
   Diagram:
   ```
   Today (20-30 pairs)        →  RRF (parameter-free, robust)
@@ -413,7 +413,7 @@ A user runs a query and the dense ranker returns 10 results; the sparse ranker r
 Open the diagram and check whether you handled the "only in dense" docs correctly (they still get RRF scores from the dense side only).
 
 ### Level 4 — Defend the decision you'd change
-Today RRF treats both rankers equally. If you were starting today, would you weight sparse higher by default (since proper-noun precision is a real loopd weakness)? Defend your answer naming one specific failure mode.
+Today RRF treats both rankers equally. If you were starting today, would you weight sparse higher by default (since proper-noun precision is a real buffr weakness)? Defend your answer naming one specific failure mode.
 
 ### Quick check — code reference test
 - What function would do the merge?

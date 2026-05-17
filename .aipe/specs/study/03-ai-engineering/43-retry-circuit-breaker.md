@@ -15,7 +15,7 @@ Netflix's Hystrix library wraps every external call with two layers of protectio
 
 The implicit question is "given that this external call will sometimes fail, which failure scale is this — a transient blip or a sustained outage?" Retry and circuit breaker are the answer pair. Retry with exponential backoff handles small transient failures (3 attempts, 250ms → 500ms → 1000ms with jitter, only on 5xx / 429 / network errors — never on 4xx). Circuit breaker handles sustained outages with a three-state machine (CLOSED → OPEN after N consecutive failures → HALF-OPEN after T seconds → CLOSED on probe success or back to OPEN on probe fail). Retry without a breaker causes retry storms during real outages — every call burns 3× the failed-call volume on the dying provider; breaker without retry leaves transient failures unrecovered.
 
-**What depends on getting this right:** whether transient network jitter surfaces as user-visible failures, whether a 30-minute provider outage triggers retry storms that compound the damage, and whether users see a clear "AI unavailable" banner vs silent broken chains. For loopd both are unimplemented today; the existing `interpret.ts` "one retry on validate-fail" is content-level retry (a different pattern). `[B5.1]` adds the `retryWithBackoff(fn, options)` wrapper inside `src/services/ai/queue.ts`; `[B5.4]` adds a custom circuit breaker in `src/services/ai/circuitBreaker.ts` with per-provider state (Anthropic, OpenAI) and defaults N=5 / T=120s, surfaced in the planned AI ops panel from `[B1.8]`. Both layers live inside the queue from `[B5.1]` — backpressure waits for a slot, breaker checks state, retry wraps the call.
+**What depends on getting this right:** whether transient network jitter surfaces as user-visible failures, whether a 30-minute provider outage triggers retry storms that compound the damage, and whether users see a clear "AI unavailable" banner vs silent broken chains. For buffr both are unimplemented today; the existing `interpret.ts` "one retry on validate-fail" is content-level retry (a different pattern). `[B5.1]` adds the `retryWithBackoff(fn, options)` wrapper inside `src/services/ai/queue.ts`; `[B5.4]` adds a custom circuit breaker in `src/services/ai/circuitBreaker.ts` with per-provider state (Anthropic, OpenAI) and defaults N=5 / T=120s, surfaced in the planned AI ops panel from `[B1.8]`. Both layers live inside the queue from `[B5.1]` — backpressure waits for a slot, breaker checks state, retry wraps the call.
 
 Without retry + circuit breaker:
 - Transient network blip drops one classify call → todo stuck at `type='todo'`, user assumes the classifier is broken
@@ -124,7 +124,7 @@ HALF-OPEN  ──probe succeeds──►       CLOSED
 HALF-OPEN  ──probe fails──►          OPEN
 ```
 
-For loopd: defaults of N=5 (5 consecutive failures) and T=120s (2-minute open period) give the provider time to recover without retry pressure.
+For buffr: defaults of N=5 (5 consecutive failures) and T=120s (2-minute open period) give the provider time to recover without retry pressure.
 
 ### Why they compose
 
@@ -174,7 +174,7 @@ The retry-classification rules and the breaker-tuning failure modes:
    │   breaker barely opens; during real outage, 50× failures     │
    │   hammer the dying provider before breaker engages           │
    │                                                              │
-   │ N=5 (loopd default):                                         │
+   │ N=5 (buffr default):                                         │
    │   tolerates transient bursts; engages on sustained failure   │
    │                                                              │
    │ no probe in half-open:                                       │
@@ -275,7 +275,7 @@ Failure scales and the patterns that handle them
 
 ## In this codebase
 
-**Status:** Case B — partial. loopd has try/catch at each chain call site (see [11-failure-modes](./11-failure-modes.md)), no retry, no circuit breaker. `interpret.ts` has a one-retry pattern (`one retry on validate-fail`); not the same shape (that's content-level retry, not transport-level retry).
+**Status:** Case B — partial. buffr has try/catch at each chain call site (see [11-failure-modes](./11-failure-modes.md)), no retry, no circuit breaker. `interpret.ts` has a one-retry pattern (`one retry on validate-fail`); not the same shape (that's content-level retry, not transport-level retry).
 
 `[B5.1]` adds retry; `[B5.4]` adds the circuit breaker.
 
@@ -294,7 +294,7 @@ Retry with exponential backoff is one of the oldest production patterns — pres
 Different failure scales need different recovery strategies. One-size-fits-all retry policies either underreact (no retry for transient failures) or overreact (retry storm during real outages). Patterns specialized for failure scale are universal in production-grade systems.
 
 ### Where this breaks down
-Both patterns assume the failure is *retryable* — a 5xx or network error. They don't help when the failure is content-shaped (the model returns invalid JSON). loopd's existing `expand.ts` "one retry on validate-fail" handles the content-shaped case separately; that's a different pattern.
+Both patterns assume the failure is *retryable* — a 5xx or network error. They don't help when the failure is content-shaped (the model returns invalid JSON). buffr's existing `expand.ts` "one retry on validate-fail" handles the content-shaped case separately; that's a different pattern.
 
 ### What to explore next
 - [42-rate-limiting-backpressure](./42-rate-limiting-backpressure.md) → the queue layer that hosts retry and breaker
@@ -331,7 +331,7 @@ A simple state machine to maintain (~150 LOC vs ~50 for retry alone). Breaker st
 Retry storms during real outages. If Anthropic has a 30-minute outage and every chain call retries 3× before giving up, that's *3× the failed-call volume* during the worst possible time — burdens the recovering provider, wastes time, and gives users worse experience (long waits before each call gives up).
 
 ### Sub-block 3 — the breakpoint
-Retry alone is sufficient if outages are rare AND short. Past either threshold, the circuit breaker pays for itself. For loopd at solo scale, outages are *rare* but *unpredictable*; the breaker is cheap insurance.
+Retry alone is sufficient if outages are rare AND short. Past either threshold, the circuit breaker pays for itself. For buffr at solo scale, outages are *rare* but *unpredictable*; the breaker is cheap insurance.
 
 ### What wasn't actually a tradeoff
 "No resilience" is acceptable in prototype phase. Past first user, it's not — every retry-able failure becomes a user-visible bug.
@@ -351,7 +351,7 @@ Retry alone is sufficient if outages are rare AND short. Past either threshold, 
 ### Custom circuit breaker
 
 - **Codebase uses:** target plan for `[B5.4]`.
-- **Why it's here:** loopd has no existing dependency suitable; ~100 LOC custom is the right size.
+- **Why it's here:** buffr has no existing dependency suitable; ~100 LOC custom is the right size.
 - **Leading today:** custom — `adoption-leading` for client-side, 2026.
 - **Why it leads:** zero dependencies; full control over state transitions.
 - **Runner-up:** `opossum` (npm) — `innovation-leading` Hystrix-style circuit breaker for Node. Mature, well-documented; adds a dependency.
@@ -372,7 +372,7 @@ Retry alone is sufficient if outages are rare AND short. Past either threshold, 
 ### [B5.4] Circuit breaker for provider outage
 
 - **Exercise ID:** `[B5.4]`
-- **What to build:** A circuit breaker that wraps the retry layer. Per-provider state (loopd has two: Anthropic, OpenAI). Defaults: N=5 consecutive failures → OPEN; T=120s open period → HALF-OPEN; one successful probe → CLOSED; failed probe → OPEN another T. State and counts are visible in `[B1.8]`'s AI ops panel.
+- **What to build:** A circuit breaker that wraps the retry layer. Per-provider state (buffr has two: Anthropic, OpenAI). Defaults: N=5 consecutive failures → OPEN; T=120s open period → HALF-OPEN; one successful probe → CLOSED; failed probe → OPEN another T. State and counts are visible in `[B1.8]`'s AI ops panel.
 - **Why it earns its place:** the "real outage" failure mode is rare but high-impact. Without a breaker, every call retries and dies during a real Anthropic outage — making the app feel broken.
 - **Files to touch:** new `src/services/ai/circuitBreaker.ts`; integrates with `aiQueue.enqueue()`; surfaced in AI ops panel.
 - **Done when:** the breaker opens after 5 consecutive failures; blocks for 2 minutes; probes after; ops panel shows state per provider; users see a clear "AI temporarily unavailable" banner when breaker is open.
@@ -382,7 +382,7 @@ Retry alone is sufficient if outages are rare AND short. Past either threshold, 
 
 ## Summary
 
-Retry and circuit breaker compose to handle the two scales of external-call failure — retry for transient hiccups, circuit breaker for sustained outages. In loopd both are unimplemented today; `[B5.1]` adds retry, `[B5.4]` adds the breaker. The constraint that makes the pair the right call is that they address opposite failure shapes: retry without breaker causes retry storms during real outages; breaker without retry leaves transient failures unrecovered. The cost being paid until they ship is user-visible failures (stuck classifications, occasional silent failures during transient network issues) and retry storms during any provider outage.
+Retry and circuit breaker compose to handle the two scales of external-call failure — retry for transient hiccups, circuit breaker for sustained outages. In buffr both are unimplemented today; `[B5.1]` adds retry, `[B5.4]` adds the breaker. The constraint that makes the pair the right call is that they address opposite failure shapes: retry without breaker causes retry storms during real outages; breaker without retry leaves transient failures unrecovered. The cost being paid until they ship is user-visible failures (stuck classifications, occasional silent failures during transient network issues) and retry storms during any provider outage.
 
 Key points to remember:
 - Retry handles transient; circuit breaker handles sustained.
@@ -464,7 +464,7 @@ Close the file and redraw the full call lifecycle: backpressure → breaker → 
 In under 90 seconds, explain: (a) what retry handles vs what circuit breaker handles, (b) why retry-only is dangerous in outages, (c) the three breaker states, (d) the role of jitter.
 
 ### Level 3 — Apply it to a new scenario
-Anthropic has a 5-second hiccup. loopd's classify chain is mid-burst (10 calls in flight). Without looking, walk through what each layer does, in order.
+Anthropic has a 5-second hiccup. buffr's classify chain is mid-burst (10 calls in flight). Without looking, walk through what each layer does, in order.
 
 Open the diagram and check whether your walkthrough matches: retry succeeds at attempt 2 or 3; breaker stays CLOSED; user sees no failures.
 

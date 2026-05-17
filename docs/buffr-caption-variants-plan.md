@@ -1,4 +1,4 @@
-# loopd — Caption Variants Implementation Plan
+# buffr — Caption Variants Implementation Plan
 
 Replaces the current 2-variant relatable-caption pass (PRIMARY + ALT) with a **4-variant pass** that emits four tonal styles for the vlog editor's "Regenerate with AI" button. Each variant is the same 3-line body, same day, different voice.
 
@@ -105,7 +105,7 @@ UNIVERSAL RULES (apply to all four variants):
 - No questions, no exclamations.
 - No motivational platitudes ("trust the process", "embrace the journey").
 - Use specific nouns from the raw log when natural — "technical concepts",
-  "the morning workout", "the loopd codebase". Don't invent details.
+  "the morning workout", "the buffr codebase". Don't invent details.
 - All four variants describe the SAME day. Don't shift the topic between
   voices. Only the surface changes.
 

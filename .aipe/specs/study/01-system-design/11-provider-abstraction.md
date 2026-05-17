@@ -260,7 +260,7 @@ Pseudocode (the shape every caller follows):
 Multi-provider AI abstraction was popularised by LangChain's `BaseChatModel` interface — one shape, many providers. The trade-off has been visible since 2023: unified interfaces either lie (papering over real differences like JSON mode, system prompts, tool calling) or constrain to the lowest common denominator (no caching, no streaming, no provider-native features).
 
 ### The deeper principle
-**Two cleanly-different code paths beat one half-true unified interface.** When the abstraction is a lie, every reader has to remember what's actually different — the abstraction stops helping. Loopd writes the branch out.
+**Two cleanly-different code paths beat one half-true unified interface.** When the abstraction is a lie, every reader has to remember what's actually different — the abstraction stops helping. Buffr writes the branch out.
 
 ### Where this breaks down
 - Adding a third provider duplicates the branch shape three more times. At ~5 providers, the unified interface starts to win.

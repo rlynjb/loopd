@@ -1,5 +1,5 @@
 // Generic push: query rows where updated_at > synced_at, batch-upsert to
-// cloud, stamp synced_at on success. See docs/loopd-cloud-sync-spec.md §4.2.
+// cloud, stamp synced_at on success. See docs/buffr-cloud-sync-spec.md §4.2.
 import { getSupabase, PHASE_A_USER_ID } from './client';
 import { recordPushSuccess, recordSyncError } from './syncMeta';
 import type { PushResult, SyncableTable } from './types';
@@ -37,7 +37,7 @@ export async function pushTable<TLocal, TCloud>(
     if (error) {
       failed += batch.length;
       lastErr = error.message;
-      console.warn(`[loopd sync] push ${table.tableName} batch failed:`, error.message);
+      console.warn(`[buffr sync] push ${table.tableName} batch failed:`, error.message);
       // Don't stamp synced_at on the failed batch — it'll retry next push.
       continue;
     }

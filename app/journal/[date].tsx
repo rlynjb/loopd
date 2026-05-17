@@ -274,7 +274,7 @@ export default function JournalScreen() {
         if (outcome.status === 'failed') {
           if (outcome.error instanceof TranscodeCancelledError) continue;
           if (outcome.error instanceof DiskFullError) Alert.alert('Out of storage', outcome.error.message);
-          else console.warn('[loopd] clip transcode failed:', outcome.error);
+          else console.warn('[buffr] clip transcode failed:', outcome.error);
           continue;
         }
         const current = await getEntryById(entry.id);
@@ -528,7 +528,7 @@ export default function JournalScreen() {
         if (outcome.status === 'failed') {
           if (outcome.error instanceof TranscodeCancelledError) continue;
           if (outcome.error instanceof DiskFullError) Alert.alert('Out of storage', outcome.error.message);
-          else console.warn('[loopd] clip transcode failed:', outcome.error);
+          else console.warn('[buffr] clip transcode failed:', outcome.error);
           continue;
         }
         const current = await getEntryById(entryId);

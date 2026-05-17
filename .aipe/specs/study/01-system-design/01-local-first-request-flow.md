@@ -63,7 +63,7 @@ Same shape as the `setState`/`fetch()` split, but with a synchronous SQLite writ
 
 ### The single funnel — every write goes through `database.ts`
 
-`src/services/database.ts` is the only file that opens `loopd.db`. Hooks (`useEntries`, `useHabits`, `useExport`, …) call services (`src/services/<domain>/<verb><Noun>.ts`), and the services call `database.ts`. If you're coming from frontend, this is the same shape as a Redux store where every action passes through one root reducer — the funnel exists so two invariants can be enforced in one place: `updated_at = now()` and `schedulePush()` get called on every synced write, no exceptions. Concrete consequence: if a new contributor adds a mutation in a per-domain service file and forgets `schedulePush()`, the write lands in SQLite but never propagates to Supabase. The funnel makes that mistake hard to make — the helper that opens `loopd.db` is the same helper that fires the debounce. Boundary: if any other file opens the DB handle directly (e.g. a future migration script bypassing the helper), the invariants stop being enforceable.
+`src/services/database.ts` is the only file that opens `buffr.db`. Hooks (`useEntries`, `useHabits`, `useExport`, …) call services (`src/services/<domain>/<verb><Noun>.ts`), and the services call `database.ts`. If you're coming from frontend, this is the same shape as a Redux store where every action passes through one root reducer — the funnel exists so two invariants can be enforced in one place: `updated_at = now()` and `schedulePush()` get called on every synced write, no exceptions. Concrete consequence: if a new contributor adds a mutation in a per-domain service file and forgets `schedulePush()`, the write lands in SQLite but never propagates to Supabase. The funnel makes that mistake hard to make — the helper that opens `buffr.db` is the same helper that fires the debounce. Boundary: if any other file opens the DB handle directly (e.g. a future migration script bypassing the helper), the invariants stop being enforceable.
 
 The funnel shape — many callers, one mouth:
 
@@ -78,19 +78,19 @@ The funnel shape — many callers, one mouth:
        ┌──────────────────────────────────────┐
        │  src/services/database.ts            │
        │   1. INSERT / UPDATE row              │  ◄── only opener
-       │   2. stamp updated_at = now()         │     of loopd.db
+       │   2. stamp updated_at = now()         │     of buffr.db
        │   3. call schedulePush()              │
        └──────────────────────────────────────┘
                     │
                     ▼
-                loopd.db (SQLite, WAL)
+                buffr.db (SQLite, WAL)
 ```
 
 A new mutation written in any per-domain file routes through this helper or it doesn't write at all — and any mutator that bypasses the helper trips both invariants at once.
 
 ### Synchronous local write — the cursor never lags
 
-Inside `database.ts`, the mutator runs SQLite via `expo-sqlite`. In WAL mode this is a synchronous in-process call — write commits in single-digit milliseconds and the next read sees the new row. If you're coming from frontend, this is the same shape as calling `setState` in React: the next render sees the new state without waiting on anything external. Concrete consequence: a user types `[]` at t=0 and the autosave fires at t=1ms; the line is in `entries.text` immediately, the next focus blur's scanner reads it, the `todo_meta` row exists by t=5ms. The user has never observed the network. Boundary: this assumes the local DB is healthy — if `loopd.db` is corrupted or locked by another process (which can't happen in single-process mobile, but matters in unit tests), the synchronous contract collapses.
+Inside `database.ts`, the mutator runs SQLite via `expo-sqlite`. In WAL mode this is a synchronous in-process call — write commits in single-digit milliseconds and the next read sees the new row. If you're coming from frontend, this is the same shape as calling `setState` in React: the next render sees the new state without waiting on anything external. Concrete consequence: a user types `[]` at t=0 and the autosave fires at t=1ms; the line is in `entries.text` immediately, the next focus blur's scanner reads it, the `todo_meta` row exists by t=5ms. The user has never observed the network. Boundary: this assumes the local DB is healthy — if `buffr.db` is corrupted or locked by another process (which can't happen in single-process mobile, but matters in unit tests), the synchronous contract collapses.
 
 Walking that path on a timing axis makes the "no network observed" claim concrete:
 
@@ -191,7 +191,7 @@ This is what people mean by "decouple availability from durability." The user's 
 │                │  SQL via expo-sqlite                   │
 │                ▼                                        │
 │        ┌────────────────┐                               │
-│        │  database.ts   │  ONLY file that opens loopd.db│
+│        │  database.ts   │  ONLY file that opens buffr.db│
 │        └───────┬────────┘                               │
 │                │   1. write (INSERT / UPDATE)           │
 │                │   2. set updated_at = now              │
@@ -200,7 +200,7 @@ This is what people mean by "decouple availability from durability." The user's 
                  ▼
 ┌─ Storage layer ─────────────────────────────────────────┐
 │        ┌────────────────┐                               │
-│        │  loopd.db      │  SQLite, WAL, single-process  │
+│        │  buffr.db      │  SQLite, WAL, single-process  │
 │        └───────┬────────┘                               │
 │                │  reads on next tick                    │
 │                ▼                                        │
@@ -224,7 +224,7 @@ This is what people mean by "decouple availability from durability." The user's 
 
 ## In this codebase
 
-**SQLite mouth:**     `src/services/database.ts` — the only file that opens `loopd.db`. Every mutator stamps `updated_at` and calls `schedulePush()`. The 1455-line file *is* the funnel — the hard guarantee that "DB is canonical" lives here.
+**SQLite mouth:**     `src/services/database.ts` — the only file that opens `buffr.db`. Every mutator stamps `updated_at` and calls `schedulePush()`. The 1455-line file *is* the funnel — the hard guarantee that "DB is canonical" lives here.
 **React wrappers:**   `src/hooks/{useEntries,useDatabase,useHabits,useDayTitle,useExport,useProject}.ts` — thin state hooks that own a query each and delegate mutations into `database.ts`.
 **Debouncer:**        `src/services/sync/schedulePush.ts` → `schedulePush()` L14–L21 (5s window via `PUSH_DEBOUNCE_MS = 5_000` at L9, internal `fire()` at L22)
 **Orchestrator:**     `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — walks the 10-table `REGISTRY` defined at L25
@@ -304,7 +304,7 @@ Fine until a second device starts writing the same `user_id` rows concurrently. 
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` in WAL mode, single-process via `loopd.db`. The only file that opens `loopd.db` is `src/services/database.ts`.
+- **Codebase uses:** `expo-sqlite` in WAL mode, single-process via `buffr.db`. The only file that opens `buffr.db` is `src/services/database.ts`.
 - **Why it's here:** the synchronous write layer that makes "keystroke → ~1ms write → UI re-render" possible. If it were async, the local-first shape collapses.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; battle-tested WAL mode; mirrors the SQLite C API directly with zero bridge cost for Expo projects.
@@ -322,7 +322,7 @@ Fine until a second device starts writing the same `user_id` rows concurrently. 
 
 ## Summary
 
-Local-first architecture commits every user write to an on-device store synchronously and lets a background process race to mirror it somewhere durable later, decoupling availability from durability. In this codebase the chain is UI hook to service to `database.ts` to SQLite, with the only file that opens `loopd.db` being `database.ts`, and `schedulePush()` carrying the row to Supabase 5 seconds after the last write. The constraint was an Android journaling app opened on the train, in the kitchen, in bed — the user expects every keystroke to land instantly regardless of network, and Phase A has a single solo writer. The cost is that other devices won't see edits until ~5s after typing stops, and the 5-second debounce means a write is still local-only if the device dies before the push fires. The day a second device starts writing, last-write-wins becomes the load-bearing failure mode that needs CRDTs.
+Local-first architecture commits every user write to an on-device store synchronously and lets a background process race to mirror it somewhere durable later, decoupling availability from durability. In this codebase the chain is UI hook to service to `database.ts` to SQLite, with the only file that opens `buffr.db` being `database.ts`, and `schedulePush()` carrying the row to Supabase 5 seconds after the last write. The constraint was an Android journaling app opened on the train, in the kitchen, in bed — the user expects every keystroke to land instantly regardless of network, and Phase A has a single solo writer. The cost is that other devices won't see edits until ~5s after typing stops, and the 5-second debounce means a write is still local-only if the device dies before the push fires. The day a second device starts writing, last-write-wins becomes the load-bearing failure mode that needs CRDTs.
 
 Key points to remember:
 - UI to hook to service to `database.ts` to SQLite is synchronous; cloud catches up via `schedulePush()` 5 seconds after the last write.
@@ -356,7 +356,7 @@ A: The tap fires a hook method (e.g. `useEntries.editEntry`), which calls a serv
   database.ts   (write + updated_at + schedulePush)
         │
         ▼  ~1ms (UI re-renders from SQLite next tick)
-  loopd.db
+  buffr.db
         │  5s after last write
         ▼
   pushAll() → Supabase Postgres

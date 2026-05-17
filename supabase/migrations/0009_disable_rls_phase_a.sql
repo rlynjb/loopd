@@ -11,7 +11,7 @@
 -- the eventual Phase B migration re-enables RLS *after* Supabase Auth is
 -- wired in so auth.uid() actually returns the logged-in UUID.
 --
--- This is the Phase-A-correct posture per docs/loopd-cloud-sync-spec.md §3.6.
+-- This is the Phase-A-correct posture per docs/buffr-cloud-sync-spec.md §3.6.
 -- The anon key + hardcoded user_id stay the entire access boundary until
 -- Phase B ships.
 

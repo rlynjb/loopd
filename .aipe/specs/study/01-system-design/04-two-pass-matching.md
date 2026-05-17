@@ -245,7 +245,7 @@ Pseudocode (scanTodosFromText):
 ## Elaborate
 
 ### Where this pattern comes from
-This is a simplified diff algorithm — Myers' diff and its descendants do exactly this kind of two-pass match (LCS first, fallback heuristics second) at character/line granularity. Loopd applies the idea to row identity: "what stayed the same? then what shifted?"
+This is a simplified diff algorithm — Myers' diff and its descendants do exactly this kind of two-pass match (LCS first, fallback heuristics second) at character/line granularity. Buffr applies the idea to row identity: "what stayed the same? then what shifted?"
 
 ### The deeper principle
 **Identity ≠ content.** A row's id is the user's investment over time (classifier output, AI expansion, pin state). Edits to content shouldn't destroy identity. Two-pass matching is the cheapest way to preserve identity without making the user declare it.
@@ -324,7 +324,7 @@ Fine until the app needs to round-trip prose between writers — collaborative e
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db` — `todo_meta.text` and `todo_meta.sourceLine` are the columns the matcher reads as the "before" snapshot for Pass 1 and Pass 2 respectively.
+- **Codebase uses:** `expo-sqlite` against `buffr.db` — `todo_meta.text` and `todo_meta.sourceLine` are the columns the matcher reads as the "before" snapshot for Pass 1 and Pass 2 respectively.
 - **Why it's here:** the matcher needs synchronous read access to the previous scan's output; SQLite's WAL gives readers a stable snapshot while writers commit, so the matcher sees a consistent "before" state.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; WAL mode is battle-tested; mirrors the SQLite C API directly with zero bridge cost.

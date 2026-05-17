@@ -15,17 +15,17 @@ Open the AWS console for any non-trivial web app and count the storage services 
 
 The question polyglot persistence answers is one any system with diverse data has to answer: do you stuff every byte into one store — leading to "the database is slow" problems that are really "we put a hundred-megabyte video into a row meant for kilobyte text" problems — or do you split persistence across stores chosen by the shape of the data? Not one store for everything. The answer is *polyglot persistence*: structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, with each layer having one job and a single direction of trust.
 
-**What depends on getting this right:** whether each piece of data lives where its access pattern wants it to live, and whether one layer's failure mode doesn't compromise another. In this codebase there are five storage layers, each with one job: `loopd.db` (SQLite) holds the 12 canonical tables — every read goes here. `/document/loopd/clips/<date>/<id>.mp4` and `/document/loopd/exports/<date>.mp4` hold the video bytes, with SQLite rows pointing at absolute paths via `clip_uri` or `clips_json`. `expo-secure-store` (Android Keystore-backed) holds the API keys, provider preference, Supabase config, and run-once flags — never the JS bundle, never plain disk. Supabase Postgres is the cloud mirror — written via `pushAll()`, never read directly by the app. Anthropic and OpenAI hold loopd's data only for the duration of one API request — no fine-tunes, no embedding stores, no server-side state the codebase depends on. Each layer's direction of trust is documented; nothing reads from anywhere except SQLite.
+**What depends on getting this right:** whether each piece of data lives where its access pattern wants it to live, and whether one layer's failure mode doesn't compromise another. In this codebase there are five storage layers, each with one job: `buffr.db` (SQLite) holds the 12 canonical tables — every read goes here. `/document/buffr/clips/<date>/<id>.mp4` and `/document/buffr/exports/<date>.mp4` hold the video bytes, with SQLite rows pointing at absolute paths via `clip_uri` or `clips_json`. `expo-secure-store` (Android Keystore-backed) holds the API keys, provider preference, Supabase config, and run-once flags — never the JS bundle, never plain disk. Supabase Postgres is the cloud mirror — written via `pushAll()`, never read directly by the app. Anthropic and OpenAI hold buffr's data only for the duration of one API request — no fine-tunes, no embedding stores, no server-side state the codebase depends on. Each layer's direction of trust is documented; nothing reads from anywhere except SQLite.
 
 Without polyglot persistence (everything in SQLite):
 - A 12-second clip is encoded as base64 and stored in `entries.clip_blob` (≈12MB row)
 - Every dashboard query that selects `entries.*` pulls 12MB into memory per row
 - The Anthropic API key is stored in `app_config.api_keys` — readable by any SELECT
-- A backup of `loopd.db` to an unencrypted cloud sync drags every secret out
+- A backup of `buffr.db` to an unencrypted cloud sync drags every secret out
 - The "database is slow" complaint is really "the database is doing five jobs and none of them well"
 
 With polyglot persistence (five layers, one job each):
-- Clip lives at `/document/loopd/clips/2026-05-10/abc123.mp4`; SQLite holds 200 bytes of path metadata
+- Clip lives at `/document/buffr/clips/2026-05-10/abc123.mp4`; SQLite holds 200 bytes of path metadata
 - Dashboard query reads kilobytes, not megabytes
 - API key lives in Keystore; uninstall protection differs from the SQLite file's; a stolen `.db` file leaks nothing AI-related
 - Each layer's failure mode is bounded: Supabase down doesn't break the app, Keystore corruption doesn't lose journal entries, clip-file move doesn't take the database with it
@@ -36,7 +36,7 @@ Five storage layers, each with one job — same shape as the AWS DynamoDB / S3 /
 
 ## How it works
 
-An AWS app's typical storage stack: DynamoDB for hot rows, S3 for blobs, Secrets Manager for credentials, RDS for relational queries, Lambda for stateless compute. Five services, five jobs, no overlap. loopd ships the same shape: SQLite for hot rows (every UI read), filesystem for video clips (too large for SQLite rows), SecureStore for API keys (Android Keystore-backed), Supabase Postgres for the cloud mirror (cross-device durability), LLM provider APIs for stateless compute the app doesn't store. Each layer has its own access pattern and its own role; the architecture's discipline is keeping them straight.
+An AWS app's typical storage stack: DynamoDB for hot rows, S3 for blobs, Secrets Manager for credentials, RDS for relational queries, Lambda for stateless compute. Five services, five jobs, no overlap. buffr ships the same shape: SQLite for hot rows (every UI read), filesystem for video clips (too large for SQLite rows), SecureStore for API keys (Android Keystore-backed), Supabase Postgres for the cloud mirror (cross-device durability), LLM provider APIs for stateless compute the app doesn't store. Each layer has its own access pattern and its own role; the architecture's discipline is keeping them straight.
 
 The five layers and the trust directions between them:
 
@@ -45,7 +45,7 @@ The five layers and the trust directions between them:
               │                             │
               ▼                             │
    ┌────────────────────────┐               │
-   │ SQLite (loopd.db)      │  ◄── 12 tables, canonical
+   │ SQLite (buffr.db)      │  ◄── 12 tables, canonical
    │ WAL mode               │     reads + writes
    └──────────┬─────────────┘
               │
@@ -68,12 +68,12 @@ Five layers, one job each, one read direction. The five sub-sections below trace
 
 ### SQLite — the canonical drawer
 
-`loopd.db` is the only store the app *reads from*. Every screen, every hook, every scanner, every reconciler asks SQLite for its data. WAL mode (`PRAGMA journal_mode=WAL`) makes single-process concurrent reads + writes safe; the codebase opens one DB handle from `database.ts` and routes every mutator through it. If you're coming from frontend, this is the same shape as a Redux store: one place that holds everything, every component reads via selectors, every action goes through reducers. Concrete consequence: 12 tables live here — 10 synced (entries, projects, vlogs, day_meta, ai_summaries, nutrition, habits, todo_meta, threads, thread_mentions) plus 2 local-only (`sync_meta` ledger and the deprecated `sync_deletions` outbox). The dashboard reads via `useEntries`, the editor reads via `useProject`, the habits screen reads via `useHabits`. Nothing reads from anywhere else. Boundary: this discipline holds because there's exactly one file (`database.ts`) that opens `loopd.db`; if a future contributor opens a second handle, the WAL guarantees still apply at the SQLite level but the application invariants (one place to enforce `updated_at` and `schedulePush`) start to leak.
+`buffr.db` is the only store the app *reads from*. Every screen, every hook, every scanner, every reconciler asks SQLite for its data. WAL mode (`PRAGMA journal_mode=WAL`) makes single-process concurrent reads + writes safe; the codebase opens one DB handle from `database.ts` and routes every mutator through it. If you're coming from frontend, this is the same shape as a Redux store: one place that holds everything, every component reads via selectors, every action goes through reducers. Concrete consequence: 12 tables live here — 10 synced (entries, projects, vlogs, day_meta, ai_summaries, nutrition, habits, todo_meta, threads, thread_mentions) plus 2 local-only (`sync_meta` ledger and the deprecated `sync_deletions` outbox). The dashboard reads via `useEntries`, the editor reads via `useProject`, the habits screen reads via `useHabits`. Nothing reads from anywhere else. Boundary: this discipline holds because there's exactly one file (`database.ts`) that opens `buffr.db`; if a future contributor opens a second handle, the WAL guarantees still apply at the SQLite level but the application invariants (one place to enforce `updated_at` and `schedulePush`) start to leak.
 
 The table inventory in one view:
 
 ```
-   loopd.db (SQLite, WAL mode, single-process)
+   buffr.db (SQLite, WAL mode, single-process)
    ──────────────────────────────────────────────────────────────
    ┌──────────────────┬─────────────────────────────────────────┐
    │ synced (10)      │ entries, projects, vlogs, day_meta,     │
@@ -93,14 +93,14 @@ The single-opener invariant is what makes `updated_at` + `schedulePush()` enforc
 
 ### Filesystem — the bulky-items drawer
 
-Video clips and exports are too large for SQLite. They live as files under `/document/loopd/clips/<date>/<id>.mp4` and `/document/loopd/exports/<date>.mp4`. The SQLite row holds the absolute path string in `clip_uri` (legacy single-clip column on `entries`) or in `clips_json` (the array-of-clips column). When a screen plays a clip, `react-native-video` opens the file directly; SQLite is not in the read path for the bytes. Think of it like a database row pointing at an S3 URL — the row carries the metadata, the blob lives somewhere else. Concrete consequence: a user records a 12-second clip. ffmpeg writes the .mp4 to `/document/loopd/clips/2026-05-10/abc123.mp4`. `database.ts` upserts the entries row with `clips_json = [{uri: '/document/loopd/clips/2026-05-10/abc123.mp4', start: 0, end: 12, ...}]`. The home feed renders the clip thumbnail by passing the URI to `react-native-video`'s `<Video source={{uri}}/>`. Boundary: this works as long as the absolute path stays valid — `repairBareClipUris` is a defensive sweep that re-resolves any bare-filename leftovers from the deleted Notion-sync code, but a moved-app-data directory would invalidate every clip URI at once.
+Video clips and exports are too large for SQLite. They live as files under `/document/buffr/clips/<date>/<id>.mp4` and `/document/buffr/exports/<date>.mp4`. The SQLite row holds the absolute path string in `clip_uri` (legacy single-clip column on `entries`) or in `clips_json` (the array-of-clips column). When a screen plays a clip, `react-native-video` opens the file directly; SQLite is not in the read path for the bytes. Think of it like a database row pointing at an S3 URL — the row carries the metadata, the blob lives somewhere else. Concrete consequence: a user records a 12-second clip. ffmpeg writes the .mp4 to `/document/buffr/clips/2026-05-10/abc123.mp4`. `database.ts` upserts the entries row with `clips_json = [{uri: '/document/buffr/clips/2026-05-10/abc123.mp4', start: 0, end: 12, ...}]`. The home feed renders the clip thumbnail by passing the URI to `react-native-video`'s `<Video source={{uri}}/>`. Boundary: this works as long as the absolute path stays valid — `repairBareClipUris` is a defensive sweep that re-resolves any bare-filename leftovers from the deleted Notion-sync code, but a moved-app-data directory would invalidate every clip URI at once.
 
 The row-with-path-pointer-to-bytes shape:
 
 ```
    Filesystem (clip bytes):
-     /document/loopd/clips/2026-05-10/abc123.mp4    ◄── raw video
-     /document/loopd/exports/2026-05-10.mp4         ◄── exported vlog
+     /document/buffr/clips/2026-05-10/abc123.mp4    ◄── raw video
+     /document/buffr/exports/2026-05-10.mp4         ◄── exported vlog
 
                           ▲
                           │  path stored here
@@ -109,7 +109,7 @@ The row-with-path-pointer-to-bytes shape:
    ┌──────────────────────────────────────────────────────────────┐
    │ entries.clips_json = [                                        │
    │   {                                                            │
-   │     uri: '/document/loopd/clips/2026-05-10/abc123.mp4',         │
+   │     uri: '/document/buffr/clips/2026-05-10/abc123.mp4',         │
    │     start: 0,                                                  │
    │     end: 12                                                    │
    │   }                                                            │
@@ -147,11 +147,11 @@ The key-value inventory:
    src/services/ai/config.ts + src/services/sync/client.ts
 ```
 
-A leaked `loopd.db` file gives an attacker journal text; it doesn't give them the Anthropic key, because the key isn't in the file.
+A leaked `buffr.db` file gives an attacker journal text; it doesn't give them the Anthropic key, because the key isn't in the file.
 
 ### Supabase Postgres — the mirror across the wall
 
-Supabase is the cloud copy. It never gets read by the app — reads always hit SQLite. Writes commit locally first, then `schedulePush()` mirrors them up via `pushAll()` 5 seconds later ([07-cloud-sync-mirror](./07-cloud-sync-mirror.md)). On a new device, `firstPull()` populates SQLite from Supabase one time; from that point on, sync runs in both directions on the normal cadence. Think of it like a Git remote — the local working tree is what you read; `git push` mirrors your commits; `git pull` fetches commits from other clones. Concrete consequence: user writes a journal entry. The row lands in `loopd.db` in 1ms (the dashboard re-renders from local). Five seconds later, Supabase receives the upsert. If the user then opens the same Supabase project from a different device, that device's first pull brings the entry down. The cloud is durable; the device is canonical. Boundary: the cloud is also the dependency-of-last-resort — if both local and cloud are wiped, the data is gone. The user is responsible for not wiping both at once.
+Supabase is the cloud copy. It never gets read by the app — reads always hit SQLite. Writes commit locally first, then `schedulePush()` mirrors them up via `pushAll()` 5 seconds later ([07-cloud-sync-mirror](./07-cloud-sync-mirror.md)). On a new device, `firstPull()` populates SQLite from Supabase one time; from that point on, sync runs in both directions on the normal cadence. Think of it like a Git remote — the local working tree is what you read; `git push` mirrors your commits; `git pull` fetches commits from other clones. Concrete consequence: user writes a journal entry. The row lands in `buffr.db` in 1ms (the dashboard re-renders from local). Five seconds later, Supabase receives the upsert. If the user then opens the same Supabase project from a different device, that device's first pull brings the entry down. The cloud is durable; the device is canonical. Boundary: the cloud is also the dependency-of-last-resort — if both local and cloud are wiped, the data is gone. The user is responsible for not wiping both at once.
 
 Read path vs write path — only writes touch Supabase:
 
@@ -181,7 +181,7 @@ The cloud is durable; the device is canonical; the steady-state read path never 
 
 ### External LLMs — the passthrough drawer
 
-Anthropic and OpenAI hold loopd's data only for the duration of one API request. There's no fine-tune, no embedding store, no session memory the server keeps. The codebase sends a prompt, gets a response, persists the response to SQLite, and forgets the call ever happened. If you're coming from frontend, this is the same shape as calling Stripe to charge a card — the call is stateless from your side; whatever state the vendor keeps is for their own purposes (rate limits, billing), not yours. Concrete consequence: `generateCaption(date)` builds a prompt from local journal text, POSTs to api.anthropic.com, gets a JSON response with four caption variants, persists to `ai_summaries.summary_json.variants`. The next page render reads from SQLite, not from Anthropic. Boundary: the stateless contract holds only if you don't enrol in any vendor feature that creates server-side state (Anthropic Files API, vector stores, fine-tunes). The codebase deliberately avoids those — every call is a one-shot.
+Anthropic and OpenAI hold buffr's data only for the duration of one API request. There's no fine-tune, no embedding store, no session memory the server keeps. The codebase sends a prompt, gets a response, persists the response to SQLite, and forgets the call ever happened. If you're coming from frontend, this is the same shape as calling Stripe to charge a card — the call is stateless from your side; whatever state the vendor keeps is for their own purposes (rate limits, billing), not yours. Concrete consequence: `generateCaption(date)` builds a prompt from local journal text, POSTs to api.anthropic.com, gets a JSON response with four caption variants, persists to `ai_summaries.summary_json.variants`. The next page render reads from SQLite, not from Anthropic. Boundary: the stateless contract holds only if you don't enrol in any vendor feature that creates server-side state (Anthropic Files API, vector stores, fine-tunes). The codebase deliberately avoids those — every call is a one-shot.
 
 The stateless API-call shape:
 
@@ -192,7 +192,7 @@ The stateless API-call shape:
                           │
                           ▼  HTTPS POST (prompt + API key)
    ┌─ api.anthropic.com / api.openai.com ────────────────┐
-   │ stateless on loopd's side:                          │
+   │ stateless on buffr's side:                          │
    │   no fine-tunes                                      │
    │   no vector stores                                   │
    │   no session memory across calls                     │
@@ -221,9 +221,9 @@ This is what people mean by "give every storage layer a job and a single directi
   ┌──────────────────────────────┬────────────────────────────────────────┐
   │ Where the data lives         │ What's there                           │
   ├──────────────────────────────┼────────────────────────────────────────┤
-  │ loopd.db (SQLite)            │ 12 tables; canonical state             │
-  │ /document/loopd/clips/       │ raw video clips, per-day folders       │
-  │ /document/loopd/exports/     │ exported vlog .mp4 files               │
+  │ buffr.db (SQLite)            │ 12 tables; canonical state             │
+  │ /document/buffr/clips/       │ raw video clips, per-day folders       │
+  │ /document/buffr/exports/     │ exported vlog .mp4 files               │
   │ SecureStore                  │ API keys, provider, bootstrap flags    │
   │ Supabase Postgres            │ mirror of 10 tables, NEVER read first  │
   │ Anthropic / OpenAI           │ stateless — never persists user data   │
@@ -234,8 +234,8 @@ This is what people mean by "give every storage layer a job and a single directi
 
 ## In this codebase
 
-**SQLite:**         `src/services/database.ts` (1455 lines) — opens `loopd.db`, runs schema migrations on first call, exposes typed CRUD for 12 tables.
-**Filesystem:**     `src/services/fileManager.ts` — clip + export path helpers (`/document/loopd/clips/<date>/`, `/exports/<date>.mp4`), including `repairBareClipUris` defensive resolver.
+**SQLite:**         `src/services/database.ts` (1455 lines) — opens `buffr.db`, runs schema migrations on first call, exposes typed CRUD for 12 tables.
+**Filesystem:**     `src/services/fileManager.ts` — clip + export path helpers (`/document/buffr/clips/<date>/`, `/exports/<date>.mp4`), including `repairBareClipUris` defensive resolver.
 **SecureStore:**    `src/services/ai/config.ts` (50 lines) — `getProvider`, `getAnthropicKey`, `getOpenAIKey`. Other SecureStore consumers: `src/services/sync/client.ts` (Supabase URL + anon key), `src/services/sync/bootstrap.ts` (`cloud_initial_push_done` flag).
 **Postgres:**       `src/services/sync/client.ts` — Supabase JS client init. Reads from SecureStore so URL and anon key are user-supplied.
 **Per-table glue:** `src/services/sync/tables/*` — one file per synced table, exporting the mapper functions between SQLite and Postgres row shapes.
@@ -323,7 +323,7 @@ Replacing SQLite with WatermelonDB or another higher-level local store wasn't on
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` with WAL mode (`loopd.db`, 12 tables).
+- **Codebase uses:** `expo-sqlite` with WAL mode (`buffr.db`, 12 tables).
 - **Why it's here:** canonical local store for all structured data; every read in the app goes here first.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; battle-tested; mirrors the SQLite C API directly.
@@ -341,7 +341,7 @@ Replacing SQLite with WatermelonDB or another higher-level local store wasn't on
 
 ## Summary
 
-A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data — structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, mirrors on a cloud database, ephemeral calls to stateless services. In this codebase that's five layers: `src/services/database.ts` (1455 lines) opens `loopd.db` as the canonical SQLite store of 12 tables; `src/services/fileManager.ts` puts clips under `/document/loopd/clips/<date>/` and exports under `/document/loopd/exports/`; `src/services/ai/config.ts` reads SecureStore for API keys and run-once flags; `src/services/sync/client.ts` mirrors 10 tables to Supabase Postgres; and the AI services in `src/services/ai/` and `src/services/todos/` make stateless HTTP calls to Anthropic and OpenAI. The constraint was that mixing storage types would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly and you don't want secrets in a queryable table. The cost is that clips are device-local: reinstall the app and the videos are gone (cloud holds the metadata in `clips_json`, not the bytes), which is accepted for a solo product but would need Supabase Storage with content-addressed URIs for a durable multi-device product.
+A storage layer breakdown is the deliberate split of persistence across several backends, each chosen for the shape of one kind of data — structured rows in a relational engine, blobs on a filesystem, secrets in an encrypted keystore, mirrors on a cloud database, ephemeral calls to stateless services. In this codebase that's five layers: `src/services/database.ts` (1455 lines) opens `buffr.db` as the canonical SQLite store of 12 tables; `src/services/fileManager.ts` puts clips under `/document/buffr/clips/<date>/` and exports under `/document/buffr/exports/`; `src/services/ai/config.ts` reads SecureStore for API keys and run-once flags; `src/services/sync/client.ts` mirrors 10 tables to Supabase Postgres; and the AI services in `src/services/ai/` and `src/services/todos/` make stateless HTTP calls to Anthropic and OpenAI. The constraint was that mixing storage types would make sync hopeless — you can't push raw video bytes through `supabase-js` cleanly and you don't want secrets in a queryable table. The cost is that clips are device-local: reinstall the app and the videos are gone (cloud holds the metadata in `clips_json`, not the bytes), which is accepted for a solo product but would need Supabase Storage with content-addressed URIs for a durable multi-device product.
 
 Key points to remember:
 - The chain is canonical SQLite → filesystem for blobs → SecureStore for secrets → Postgres mirror (never read first) → stateless LLM APIs; each layer does one job.
@@ -382,7 +382,7 @@ A: API keys live in SecureStore (Android Keystore-backed). They don't live in SQ
 
 [senior] Q: Why don't you push video clips to cloud? Most apps would back up user content.
 
-A: Cost and complexity. A loopd user generates ~30s of video per day; that's small for one user, but pushing it through `supabase-js` would mean either base64-encoding the bytes (wasteful) or moving to Supabase Storage (a separate API surface, separate auth, separate failure modes). The current design accepts that clips are device-local — a phone loss means video loss, but the metadata (clip trims, overlays, timestamps) is in `clips_json` on the synced `entries` row, so a new device can rebuild a journal without the visuals. For a Phase B that wants durability, Supabase Storage with a content-addressed `clip_uri` (sha256 → URL) is the migration path. I deliberately chose to defer that.
+A: Cost and complexity. A buffr user generates ~30s of video per day; that's small for one user, but pushing it through `supabase-js` would mean either base64-encoding the bytes (wasteful) or moving to Supabase Storage (a separate API surface, separate auth, separate failure modes). The current design accepts that clips are device-local — a phone loss means video loss, but the metadata (clip trims, overlays, timestamps) is in `clips_json` on the synced `entries` row, so a new device can rebuild a journal without the visuals. For a Phase B that wants durability, Supabase Storage with a content-addressed `clip_uri` (sha256 → URL) is the migration path. I deliberately chose to defer that.
 
 ```
                   Path taken (device-local clips)       Alternative (Supabase Storage,
@@ -442,7 +442,7 @@ At 10 users × multi-device:
 ### The question candidates always dodge
 Q: You said clips are device-local. What's the recovery story when a user drops their phone in a lake?
 
-A: There isn't one for clips. The metadata recovers — installing the app on a new device, logging in (when Phase B exists), and pulling from cloud restores all `entries`, `todos`, `threads`, `vlogs`, etc. The video files themselves are gone. The exported vlog `.mp4` files in `/document/loopd/exports/` are also gone. For Phase A this is acceptable because I'm the only user and my phone has cloud backups via Google. For a multi-user product the answer has to be Supabase Storage with content-addressed paths — clip URIs become hashes, hashes resolve to URLs, the cloud is the durable store. That's a Phase C feature; the architecture supports the migration (the `clip_uri` column is just a string, not a foreign key) but I haven't shipped the bytes-to-cloud path. The honest version is "loopd backs up your journal, not your videos."
+A: There isn't one for clips. The metadata recovers — installing the app on a new device, logging in (when Phase B exists), and pulling from cloud restores all `entries`, `todos`, `threads`, `vlogs`, etc. The video files themselves are gone. The exported vlog `.mp4` files in `/document/buffr/exports/` are also gone. For Phase A this is acceptable because I'm the only user and my phone has cloud backups via Google. For a multi-user product the answer has to be Supabase Storage with content-addressed paths — clip URIs become hashes, hashes resolve to URLs, the cloud is the durable store. That's a Phase C feature; the architecture supports the migration (the `clip_uri` column is just a string, not a foreign key) but I haven't shipped the bytes-to-cloud path. The honest version is "buffr backs up your journal, not your videos."
 
 ```
                   Path taken (metadata-only backup)     Suggested (full backup with clips)
@@ -456,7 +456,7 @@ implementation    fileManager.ts unchanged              +Supabase Storage client
                                                           sha256 content-addressing +
                                                           upload-on-save + download-on-pull
 schema impact     none — clip_uri stays a string        none — clip_uri becomes a hash URL
-honest framing    "loopd backs up your journal,        "loopd backs up everything"
+honest framing    "buffr backs up your journal,        "buffr backs up everything"
                   not your videos"
 phase-A user fit  fine — I have Google phone backup     ceremony for use case I don't have
 phase-B user fit  insufficient — non-me users expect    correct shape

@@ -48,11 +48,11 @@ Anchor on identity, allow a bounded slip on position.
 
 ```
   parsed (from current text):
-    [{ threadId: "th1", lineIndex: 5, tagText: "loopd" },
+    [{ threadId: "th1", lineIndex: 5, tagText: "buffr" },
      { threadId: "th2", lineIndex: 7, tagText: "Health" }]
 
   existing (already in thread_mentions):
-    [{ id: "m1", threadId: "th1", sourceLine: 5, tagText: "loopd"  },   ← exact match
+    [{ id: "m1", threadId: "th1", sourceLine: 5, tagText: "buffr"  },   ← exact match
      { id: "m2", threadId: "th2", sourceLine: 4, tagText: "health" }]   ← shifted +3
 ```
 
@@ -76,10 +76,10 @@ Pseudocode:
   // re-scan whole `existing` array per parsed entry
 ```
 
-Execution trace (`parsed = [{th1, line 5, "loopd"}, {th2, line 7, "Health"}]`, `existing = [m1{th1, line 5}, m2{th2, line 4, "health"}]`):
+Execution trace (`parsed = [{th1, line 5, "buffr"}, {th2, line 7, "Health"}]`, `existing = [m1{th1, line 5}, m2{th2, line 4, "health"}]`):
 
 ```
-  parsed[0] (th1, line 5, "loopd"):
+  parsed[0] (th1, line 5, "buffr"):
     scan existing:
       m1: threadId match, sourceLine == 5 ✓     match m1
     cost: 1 scan step before match
@@ -272,7 +272,7 @@ Case-insensitive `tagText` comparison in Pass 2 isn't a tradeoff — `#Health` a
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db` — `thread_mentions` rows live here, and the "existing per-entry mentions" array Pass 1/2 reads against is fetched via the `database.ts` connection.
+- **Codebase uses:** `expo-sqlite` against `buffr.db` — `thread_mentions` rows live here, and the "existing per-entry mentions" array Pass 1/2 reads against is fetched via the `database.ts` connection.
 - **Why it's here:** the matcher needs a synchronous read of the previous scan's mentions; WAL mode gives a consistent snapshot while the next commit is being prepared.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with Expo; WAL mode is battle-tested; zero bridge cost.
@@ -400,7 +400,7 @@ If you skipped any: you described it, you didn't understand it.
 ### Level 3 — Apply it to a new scenario
 Answer this without looking at the file:
 
-Existing `thread_mentions` rows: `m1 = {th=loopd, sourceLine=2, tagText='loopd'}`, `m2 = {th=health, sourceLine=8, tagText='Health'}`. The user inserts 5 new lines at the top of the entry — so `parsed` now has `{th=loopd, lineIndex=7, tagText='loopd'}` and `{th=health, lineIndex=13, tagText='Health'}`. Walk Pass 1 and Pass 2 — what gets matched, what gets inserted, what gets deleted, and how many rows does the `m2`-with-+5-shift case keep?
+Existing `thread_mentions` rows: `m1 = {th=buffr, sourceLine=2, tagText='buffr'}`, `m2 = {th=health, sourceLine=8, tagText='Health'}`. The user inserts 5 new lines at the top of the entry — so `parsed` now has `{th=buffr, lineIndex=7, tagText='buffr'}` and `{th=health, lineIndex=13, tagText='Health'}`. Walk Pass 1 and Pass 2 — what gets matched, what gets inserted, what gets deleted, and how many rows does the `m2`-with-+5-shift case keep?
 
 Write your answer. 3–5 sentences minimum. Then open `src/services/threads/scanThreads.ts` L169–L230 and check whether your answer matches what the code actually does.
 

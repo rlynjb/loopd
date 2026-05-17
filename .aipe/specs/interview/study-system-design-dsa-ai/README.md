@@ -1,6 +1,6 @@
 # Interview prep: study system design, DSA, AI
 
-A book-style prep guide for defending loopd — a solo-dev, native Android daily-vlogging app — in technical interviews focused on system design, data structures and algorithms, and AI engineering. Written from the perspective of a staff engineer asking the questions a real interviewer would ask, answered in first person, grounded in the actual files of this repository.
+A book-style prep guide for defending buffr — a solo-dev, native Android daily-vlogging app — in technical interviews focused on system design, data structures and algorithms, and AI engineering. Written from the perspective of a staff engineer asking the questions a real interviewer would ask, answered in first person, grounded in the actual files of this repository.
 
 ## Contents
 

@@ -1,6 +1,6 @@
-# loopd — Cloud Sync Implementation Plan
+# buffr — Cloud Sync Implementation Plan
 
-Working plan for executing [loopd-cloud-sync-spec.md](./loopd-cloud-sync-spec.md). The spec covers *what* and *why*; this doc covers *in what order, with what checkpoints, and what to verify before taking the next step.*
+Working plan for executing [buffr-cloud-sync-spec.md](./buffr-cloud-sync-spec.md). The spec covers *what* and *why*; this doc covers *in what order, with what checkpoints, and what to verify before taking the next step.*
 
 Phases are designed to be **independently shippable / revertible** — each ends in a state where the app still works, the sync layer is partially live, and Notion sync is still operational. **Notion only gets deleted after M7**, the very last step. Until then, both systems can coexist.
 
@@ -90,7 +90,7 @@ The smallest end-to-end slice: take one table, get its rows into Postgres. This 
 - Wipe the same table local-side (TRUNCATE), run `pullAll()`, verify it repopulates from cloud.
 - The manual-touch deviation: a `thread_mentions` row with NULL entry_id+todo_id round-trips through both directions.
 
-**Checkpoint:** Snapshot current local DB (`cp loopd.db loopd.db.bak`). Round-trip every table. Notion sync still owns the actual auto-sync at boot.
+**Checkpoint:** Snapshot current local DB (`cp buffr.db buffr.db.bak`). Round-trip every table. Notion sync still owns the actual auto-sync at boot.
 
 ---
 
@@ -181,7 +181,7 @@ Walk all 13 test scenarios in spec §8.1 explicitly. Critical ones:
 | 11 | Caption-shape evolution | Old AI summary row (no caption fields) shows only SUMMARY chip; new row shows all three |
 | 13 | Rate-limit absence | 50 edits in 5s; no 429s |
 
-**Additional check beyond spec:** Backup snapshot of local SQLite (`cp loopd.db loopd.db.M6.bak`) before any destructive testing. Until M7 ships, this is the rollback artifact.
+**Additional check beyond spec:** Backup snapshot of local SQLite (`cp buffr.db buffr.db.M6.bak`) before any destructive testing. Until M7 ships, this is the rollback artifact.
 
 **Checkpoint — biggest one in the plan:** Pause for a week of regular use. Both syncs still running. Watch for: missed cloud updates, stale UI showing deleted rows, Postgres growth pattern, any unexpected errors in `sync_meta.last_error`.
 
@@ -226,7 +226,7 @@ Only after M6 has been live for at least a week without issues.
 
 6. **Schema-version coordination.** Local SQLite has its own schema version in `database.ts`. Cloud has Supabase migrations. They evolve independently in this design (per spec §11). After M0, every new local migration that affects synced tables needs a paired Supabase migration — document this rule in CLAUDE.md so future-you doesn't drift.
 
-7. **Snapshot discipline.** Take a `cp loopd.db loopd.db.<milestone>.bak` before each destructive milestone (M3, M4 bootstrap, M7). The DB file isn't in git. The snapshot is the only revert path.
+7. **Snapshot discipline.** Take a `cp buffr.db buffr.db.<milestone>.bak` before each destructive milestone (M3, M4 bootstrap, M7). The DB file isn't in git. The snapshot is the only revert path.
 
 ---
 

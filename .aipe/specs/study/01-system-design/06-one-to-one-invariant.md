@@ -248,7 +248,7 @@ JSON-in-relational hybrids are common in modern apps. Postgres has rich JSON ope
 **When the schema can't enforce an invariant, code must — and the enforcement must run on every relevant write.** The reconciler is what makes the JSON-array-plus-meta-table design honest. Without it, the system would silently drift.
 
 ### Where this breaks down
-- Concurrent writes to the same entry where two reconcilers race. SQLite WAL serialises this for loopd; in a multi-writer Postgres setup you'd need explicit locking or compare-and-swap.
+- Concurrent writes to the same entry where two reconcilers race. SQLite WAL serialises this for buffr; in a multi-writer Postgres setup you'd need explicit locking or compare-and-swap.
 - Failures mid-reconcile that leave the gap permanently — but the next commit re-runs reconcile, so the gap heals.
 
 ### What to explore next

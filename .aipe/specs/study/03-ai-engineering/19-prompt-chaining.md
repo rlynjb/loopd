@@ -187,7 +187,7 @@ A single prompt asking for both structured fields AND four tonal variants would 
 One mega-prompt vs two focused prompts:
 
 ```
-       Mega-prompt (NOT loopd)                  Two focused prompts (loopd)
+       Mega-prompt (NOT buffr)                  Two focused prompts (buffr)
    ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
    │ system: 150+ lines                 │    │ summarize.ts: 23-line system     │
    │   - JSON shape rules                │    │   prompt: JSON shape + tone      │
@@ -451,7 +451,7 @@ Also fine until per-call latency becomes UX-critical. The current chain runs onc
 - **Why it's here:** each chain owns its system prompt; no shared prompt template; each can be tuned independently.
 - **Leading today:** per-chain system prompts colocated with the call site — `adoption-leading` for small chain counts, 2026.
 - **Why it leads:** the prompt is right next to the validator that consumes its output and the call shape that sends it; everything you need to understand one chain lives in one file.
-- **Runner-up:** prompt-template files in a shared directory (e.g. `prompts/`) — `adoption-leading` for >10 chain codebases; centralization helps once you have shared prompt components (e.g., a shared role-of-loopd preamble) to extract.
+- **Runner-up:** prompt-template files in a shared directory (e.g. `prompts/`) — `adoption-leading` for >10 chain codebases; centralization helps once you have shared prompt components (e.g., a shared role-of-buffr preamble) to extract.
 
 ---
 

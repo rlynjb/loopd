@@ -15,7 +15,7 @@ A modern web app runs two cache layers side by side. One: Cloudflare's edge cach
 
 The implicit question is "at which layer is the work being repeated, and what kind of cache catches it?" LLM caching is the answer split into two: prompt caching is provider-side (KV-cache reuse on a stable prefix — Anthropic `cache_control`, OpenAI automatic; 90% discount on cached input tokens, threshold ~1024 for Sonnet 4.6 / ~2048 for Haiku), and semantic caching is application-side (store input → output keyed on a hash; on identical input, skip the model entirely). They save different costs and apply to different chains — stable prompts across diverse inputs vs identical inputs across the same prompt.
 
-**What depends on getting this right:** which chains pay full price for repeat work and which don't, and which chains stay variable when variability is the feature. For loopd `[B5.2]` adds Anthropic `cache_control` to eligible chains' SYSTEM_PROMPTs (audit length first — caption's ~600-token prompt is *below* Sonnet 4.6's cacheable threshold today, so caching is silently skipped; interpret's prompt qualifies). `[B5.8]` adds a local `interpret_cache` table keyed on (entry_id, entry_text_hash, chain_version) — re-tapping interpret on an unchanged entry returns in <50ms with no provider call. Caption is the explicit anti-fit for semantic caching — variability is the feature, anti-repetition history depends on `recentCaptions`, the cache would freeze the user on yesterday's caption forever.
+**What depends on getting this right:** which chains pay full price for repeat work and which don't, and which chains stay variable when variability is the feature. For buffr `[B5.2]` adds Anthropic `cache_control` to eligible chains' SYSTEM_PROMPTs (audit length first — caption's ~600-token prompt is *below* Sonnet 4.6's cacheable threshold today, so caching is silently skipped; interpret's prompt qualifies). `[B5.8]` adds a local `interpret_cache` table keyed on (entry_id, entry_text_hash, chain_version) — re-tapping interpret on an unchanged entry returns in <50ms with no provider call. Caption is the explicit anti-fit for semantic caching — variability is the feature, anti-repetition history depends on `recentCaptions`, the cache would freeze the user on yesterday's caption forever.
 
 Without either cache:
 - User taps interpret on an unchanged entry → full $0.01–0.03 + 2–5 seconds; tap again ten seconds later → full $0.01–0.03 + 2–5 seconds again
@@ -88,7 +88,7 @@ Models compute attention over the input sequence token-by-token. The transformer
 
 Providers expose this as a *cacheable prefix*: mark part of your prompt as cacheable, and on the second call with the same prefix, you pay ~10% of the input-token cost for cached portions. Anthropic does this explicitly with `cache_control`; OpenAI does it automatically.
 
-For loopd: every chain has a static SYSTEM_PROMPT (~100-300 tokens). Wrapping it with `cache_control` means the system prompt is paid full price once, then 10% per call afterward. The 90% discount compounds across thousands of calls.
+For buffr: every chain has a static SYSTEM_PROMPT (~100-300 tokens). Wrapping it with `cache_control` means the system prompt is paid full price once, then 10% per call afterward. The 90% discount compounds across thousands of calls.
 
 If you're coming from frontend, this is similar to a CDN cache for static assets — the static system prompt is your asset; the cache pays for storage; you get a discount on reads.
 
@@ -133,7 +133,7 @@ The 90% discount compounds — once you're past the cache-creation premium, ever
 
 For chains whose output is deterministic given the input (or where re-running gives slightly different output but the user wants the same one), cache `(input → output)` in your own DB. On second call with the same input, skip the model entirely.
 
-For loopd: `interpret(entry)` returns markdown the user reads. If they tap "interpret" on an unchanged entry twice, today you call the model twice — costing $0.01-0.03 per call. A semantic cache stores the markdown keyed by `(entry.text, entry.updated_at, chain_version)`. On second call with the same key, return cached. Free, instant.
+For buffr: `interpret(entry)` returns markdown the user reads. If they tap "interpret" on an unchanged entry twice, today you call the model twice — costing $0.01-0.03 per call. A semantic cache stores the markdown keyed by `(entry.text, entry.updated_at, chain_version)`. On second call with the same key, return cached. Free, instant.
 
 The `interpret_cache` table shape, with hit/miss/invalidate flow:
 
@@ -205,11 +205,11 @@ The semantic cache saves *all* the cost on cache hits. The prompt cache saves 90
 ### Where prompt caching helps and hurts
 
 Helps when:
-- System prompts are stable across calls (loopd: yes, every chain).
+- System prompts are stable across calls (buffr: yes, every chain).
 - System prompts are long enough to matter — Anthropic's minimum cacheable prefix is ~1024 tokens for Sonnet 4.6, ~2048 for Haiku. Below the threshold, caching is silently skipped.
 - Volume is high enough to amortize the (small) cache-creation premium on the first call.
 
-The cacheable-prefix threshold per loopd chain:
+The cacheable-prefix threshold per buffr chain:
 
 ```
    chain         current SYSTEM_PROMPT length    cacheable (Sonnet 4.6)?
@@ -237,7 +237,7 @@ Hurts when:
 - Prompts are short (below the threshold).
 - Volume is too low to amortize.
 
-For loopd: caption has the longest SYSTEM_PROMPT (~600 tokens) which is *below* the cacheable threshold for Sonnet 4.6. Caching wouldn't help today; would help if the prompt grew, or if the threshold dropped.
+For buffr: caption has the longest SYSTEM_PROMPT (~600 tokens) which is *below* the cacheable threshold for Sonnet 4.6. Caching wouldn't help today; would help if the prompt grew, or if the threshold dropped.
 
 ### Where semantic caching helps and hurts
 
@@ -251,7 +251,7 @@ Hurts when:
 - Variability is desired (creative outputs, varied captions).
 - Cache invalidation is hard (input changed, but how to detect?).
 
-For loopd: interpret is the natural candidate — same entry, same interpret call, user expects same output. Caption is *not* a good candidate — re-running caption should give *different* variants each time to fight repetition.
+For buffr: interpret is the natural candidate — same entry, same interpret call, user expects same output. Caption is *not* a good candidate — re-running caption should give *different* variants each time to fight repetition.
 
 ### This is what people mean by "two caches, two wins"
 
@@ -262,7 +262,7 @@ Provider-side and application-side caches save different costs. Most production 
 ## LLM caching — diagram
 
 ```
-The two cache layers for loopd's interpret chain
+The two cache layers for buffr's interpret chain
 
   ┌─ Application layer ───────────────────────────────────┐
   │  interpretEntry(entry)                                │
@@ -367,7 +367,7 @@ Every interpret re-tap pays full price. At solo scale this is pennies per month.
 The semantic cache catches identical-input re-calls; prompt caching catches stable-system-prompt savings across different inputs. Without prompt caching, every chain's system-prompt input cost is full price even though the prompt is fixed. Layering both is strictly better than either alone where applicable.
 
 ### Sub-block 3 — the breakpoint
-Caching's value scales with call volume. At loopd solo (~30 calls/day), the absolute dollar savings are small but the discipline is correct. At 100k users, prompt caching alone would save ~90% on input-side spend across all chains — a non-trivial number.
+Caching's value scales with call volume. At buffr solo (~30 calls/day), the absolute dollar savings are small but the discipline is correct. At 100k users, prompt caching alone would save ~90% on input-side spend across all chains — a non-trivial number.
 
 ### What wasn't actually a tradeoff
 Variability is a feature for caption — semantic caching of caption variants is wrong because users want fresh variants on re-roll. Prompt caching is fine there (system prompt is static).
@@ -387,7 +387,7 @@ Variability is a feature for caption — semantic caching of caption variants is
 ### Custom semantic cache (local SQLite)
 
 - **Codebase uses:** target for `[B5.8]`.
-- **Why it's here:** loopd's local-first architecture; cache colocated with canonical data.
+- **Why it's here:** buffr's local-first architecture; cache colocated with canonical data.
 - **Leading today:** application-side semantic cache — `adoption-leading` for repeatable-input chains, 2026.
 - **Why it leads:** zero new infrastructure; integrates with existing soft-delete and sync patterns.
 - **Runner-up:** Redis or similar dedicated cache — `innovation-leading` at scale; overkill for solo.
@@ -399,8 +399,8 @@ Variability is a feature for caption — semantic caching of caption variants is
 ### [B5.2] Prompt caching across chains
 
 - **Exercise ID:** `[B5.2]`
-- **What to build:** Audit each chain's SYSTEM_PROMPT length. For prompts above the cacheable threshold (1024 tokens on Sonnet, 2048 on Haiku), wrap the system block with `cache_control: { type: 'ephemeral' }` in the Anthropic call. For shorter prompts (most of loopd's today), document the threshold and skip. Re-evaluate when prompts grow.
-- **Why it earns its place:** the highest-ROI cost lever in loopd's chain layer; small change, recurring savings.
+- **What to build:** Audit each chain's SYSTEM_PROMPT length. For prompts above the cacheable threshold (1024 tokens on Sonnet, 2048 on Haiku), wrap the system block with `cache_control: { type: 'ephemeral' }` in the Anthropic call. For shorter prompts (most of buffr's today), document the threshold and skip. Re-evaluate when prompts grow.
+- **Why it earns its place:** the highest-ROI cost lever in buffr's chain layer; small change, recurring savings.
 - **Files to touch:** `src/services/ai/summarize.ts`, `caption.ts`, `classify.ts`, `expand.ts`, `interpret.ts` — wrap system prompts where eligible.
 - **Done when:** the eligible chains pass `cache_control` in their API calls; cache-creation tokens vs cache-read tokens are visible in the `[B1.2]` token log.
 - **Estimated effort:** `1–4hr`.
@@ -418,7 +418,7 @@ Variability is a feature for caption — semantic caching of caption variants is
 
 ## Summary
 
-LLM caching has two layers — provider-side prompt caching (90% discount on cached prefix tokens) and application-side semantic caching (zero cost on identical-input hits). In loopd this is not yet implemented; `[B5.2]` adds prompt caching where prompts exceed the cacheable threshold, and `[B5.8]` adds semantic caching for the interpret chain. The constraint that makes the two-layer approach right is that they save different costs and apply to different chains — caption benefits from prompt caching but not semantic; interpret benefits from both. The cost being paid until they ship is a few cents per month per user — small absolutely, meaningful at scale.
+LLM caching has two layers — provider-side prompt caching (90% discount on cached prefix tokens) and application-side semantic caching (zero cost on identical-input hits). In buffr this is not yet implemented; `[B5.2]` adds prompt caching where prompts exceed the cacheable threshold, and `[B5.8]` adds semantic caching for the interpret chain. The constraint that makes the two-layer approach right is that they save different costs and apply to different chains — caption benefits from prompt caching but not semantic; interpret benefits from both. The cost being paid until they ship is a few cents per month per user — small absolutely, meaningful at scale.
 
 Key points to remember:
 - Prompt cache = provider-side; saves 90% on input-side prefix tokens.
@@ -445,7 +445,7 @@ Key points to remember:
   ```
 
   [senior] Q: When does semantic caching hurt?
-  A: Three cases. First, when variability is the feature — caption deliberately returns different variants on re-roll; caching would freeze the user on yesterday's caption forever. Second, when the cache key doesn't capture all the inputs — if caption depends on `recentCaptions` (last 5 from history) and you key only on the entry text, you cache a stale anti-repetition state. Third, when storage cost dominates — at very high volumes with low repeat-rate, caching is overhead without payoff. For loopd, interpret is the natural fit because it's stable-input, stable-output; caption is the natural anti-fit.
+  A: Three cases. First, when variability is the feature — caption deliberately returns different variants on re-roll; caching would freeze the user on yesterday's caption forever. Second, when the cache key doesn't capture all the inputs — if caption depends on `recentCaptions` (last 5 from history) and you key only on the entry text, you cache a stale anti-repetition state. Third, when storage cost dominates — at very high volumes with low repeat-rate, caching is overhead without payoff. For buffr, interpret is the natural fit because it's stable-input, stable-output; caption is the natural anti-fit.
   Diagram:
   ```
   Picked: cache interpret, not caption     Suggested: cache everything
@@ -490,10 +490,10 @@ Interpret yes, caption no                     Both no (LLMs aren't fully det.)
 Close the file and redraw the two-layer cache flow for interpret. Annotate where each cache lives and what it saves.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the two cache layers, (b) where each applies in loopd, (c) why caption is wrong for semantic caching, (d) the prompt-cache threshold.
+In under 90 seconds, explain: (a) the two cache layers, (b) where each applies in buffr, (c) why caption is wrong for semantic caching, (d) the prompt-cache threshold.
 
 ### Level 3 — Apply it to a new scenario
-A future loopd chain summarises last week's threads (one call per week, ~500 token input, ~2000 token system prompt). Without looking, decide whether prompt caching, semantic caching, both, or neither is right.
+A future buffr chain summarises last week's threads (one call per week, ~500 token input, ~2000 token system prompt). Without looking, decide whether prompt caching, semantic caching, both, or neither is right.
 
 Open the Tradeoffs table and check whether your decision matches the "stable input + frequent re-runs" combination.
 

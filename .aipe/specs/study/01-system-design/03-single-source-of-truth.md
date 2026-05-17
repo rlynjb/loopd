@@ -210,10 +210,10 @@ The principle's anchor is the call site that fires all of these on every prose c
 ## Elaborate
 
 ### Where this pattern comes from
-The "single source of truth" idea is older than databases — it's a normalisation principle. The interesting move loopd makes is choosing *prose* as the source rather than a structured form. That's borrowed from tools like Roam, Logseq, and Obsidian, where you write naturally and the structure is parsed out behind you.
+The "single source of truth" idea is older than databases — it's a normalisation principle. The interesting move buffr makes is choosing *prose* as the source rather than a structured form. That's borrowed from tools like Roam, Logseq, and Obsidian, where you write naturally and the structure is parsed out behind you.
 
 ### The deeper principle
-**Pick one surface as canonical, even if it costs you.** A second writable surface means you'll spend forever syncing them. Loopd would have been simpler in the short term with a "add todo" button writing directly to `todos_json`, but the long-term cost is that "delete the line, todo disappears" stops working — and the data drifts every time the two surfaces disagree.
+**Pick one surface as canonical, even if it costs you.** A second writable surface means you'll spend forever syncing them. Buffr would have been simpler in the short term with a "add todo" button writing directly to `todos_json`, but the long-term cost is that "delete the line, todo disappears" stops working — and the data drifts every time the two surfaces disagree.
 
 ### Where this breaks down
 - Operations that have no natural prose representation (the manual-touch deviation is exactly this — see [12](./12-manual-touch-deviation.md)).
@@ -284,7 +284,7 @@ Auto-deriving rows from text via an ORM-style schema mapper wasn't on the table.
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` in WAL mode against `loopd.db`, opened only from `src/services/database.ts`. The `entries.text` TEXT column is the canonical surface.
+- **Codebase uses:** `expo-sqlite` in WAL mode against `buffr.db`, opened only from `src/services/database.ts`. The `entries.text` TEXT column is the canonical surface.
 - **Why it's here:** the synchronous TEXT column that makes "keystroke → autosave → read-back at next render" possible — if prose lived anywhere asynchronous, the canonical-surface rule collapses on every typing burst.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; WAL mode gives readers a stable snapshot while writers commit; mirrors the SQLite C API with zero bridge cost.

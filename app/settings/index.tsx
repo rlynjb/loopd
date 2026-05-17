@@ -10,18 +10,18 @@ export default function SettingsMenu() {
     try {
       const SQLite = await import('expo-sqlite');
       const Sharing = await import('expo-sharing');
-      const db = await SQLite.openDatabaseAsync('loopd.db');
+      const db = await SQLite.openDatabaseAsync('buffr.db');
       const dbPath = (db as unknown as { databasePath: string }).databasePath;
       await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
       const canShare = await Sharing.isAvailableAsync();
       if (canShare) {
         await Sharing.shareAsync(`file://${dbPath}`, {
           mimeType: 'application/x-sqlite3',
-          dialogTitle: 'Export loopd database',
+          dialogTitle: 'Export buffr database',
         });
       }
     } catch (err) {
-      console.warn('[loopd] DB export failed:', err);
+      console.warn('[buffr] DB export failed:', err);
     }
   };
 
@@ -43,7 +43,7 @@ export default function SettingsMenu() {
               if (result.canceled || !result.assets?.[0]) return;
               const pickedUri = result.assets[0].uri;
 
-              const db = await SQLite.openDatabaseAsync('loopd.db');
+              const db = await SQLite.openDatabaseAsync('buffr.db');
               const dbPath = (db as unknown as { databasePath: string }).databasePath;
               await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
 

@@ -3,7 +3,7 @@
 **Industry name(s):** Vector database, vector store, ANN index, similarity search engine
 **Type:** Industry standard
 
-> Where the vectors live, how the index works, and why the right answer for loopd is "SQLite, not a new service."
+> Where the vectors live, how the index works, and why the right answer for buffr is "SQLite, not a new service."
 
 **See also:** → [24-embeddings-geometric](./24-embeddings-geometric.md) · → [33-incremental-indexing](./33-incremental-indexing.md) · → [32-stale-embeddings](./32-stale-embeddings.md)
 
@@ -15,7 +15,7 @@ Open Pinecone's console on any indexed namespace. Paste a query text into the sa
 
 The implicit question is "given a query point, what are the nearest neighbours in this space, and how fast can we find them?" A vector database is the name for the storage layer that holds those points plus the index that answers the question without scanning every row. Two real decisions live underneath: which storage engine holds the vectors, and which algorithm (exhaustive vs ANN) the index uses.
 
-**What depends on getting this right:** which databases the codebase has to operate, how retrieval latency scales, and whether vectors stay co-located with the rows they describe. For loopd the planned `entry_embeddings` table lives in `loopd.db` next to `entries`, synced to Supabase via the existing `schedulePush` machinery — picking `sqlite-vec` keeps one canonical store and makes "filter `deleted_at IS NULL` then ORDER BY cosine" a single SQL statement. Pick Pinecone instead and every retrieval becomes a cross-service round-trip, plus a third operational surface, plus a sync mapper between two incompatible vector formats — for 365 entries per user, the new service earns nothing.
+**What depends on getting this right:** which databases the codebase has to operate, how retrieval latency scales, and whether vectors stay co-located with the rows they describe. For buffr the planned `entry_embeddings` table lives in `buffr.db` next to `entries`, synced to Supabase via the existing `schedulePush` machinery — picking `sqlite-vec` keeps one canonical store and makes "filter `deleted_at IS NULL` then ORDER BY cosine" a single SQL statement. Pick Pinecone instead and every retrieval becomes a cross-service round-trip, plus a third operational surface, plus a sync mapper between two incompatible vector formats — for 365 entries per user, the new service earns nothing.
 
 Without the right call:
 - Pick Pinecone at 365 vectors → third service to operate, no SQL joins, ~50–200ms network round-trip per query, local-first stance broken
@@ -23,7 +23,7 @@ Without the right call:
 - Pick `sqlite-vec` at 100× scale with multi-tenant pressure → SQLite's concurrent-read limits start mattering before the algorithm does
 
 With the right call:
-- `entry_embeddings` lives in `loopd.db` alongside `entries`; one PK convention, one sync path, one canonical store
+- `entry_embeddings` lives in `buffr.db` alongside `entries`; one PK convention, one sync path, one canonical store
 - HNSW index inside SQLite answers nearest-neighbour in sub-10ms even at 100k vectors
 - Migration to `pgvector`-primary becomes a layer swap, not a re-architecture, the day multi-tenant scale arrives
 
@@ -55,7 +55,7 @@ The two jobs and the three places vectors can live:
 
    three places to put the table + index:
    ┌─ in your existing DB ──────────────────────────────┐
-   │   sqlite-vec extension (SQLite — what loopd plans) │
+   │   sqlite-vec extension (SQLite — what buffr plans) │
    │   pgvector extension (Postgres)                    │
    │   zero new services; SQL joins work                │
    └─────────────────────────────────────────────────────┘
@@ -69,11 +69,11 @@ The two jobs and the three places vectors can live:
    └─────────────────────────────────────────────────────┘
 ```
 
-The four sub-sections below trace the exhaustive-vs-ANN algorithmic split, the three places vectors physically live, the sync mirror for loopd's vectors, and the common production failure.
+The four sub-sections below trace the exhaustive-vs-ANN algorithmic split, the three places vectors physically live, the sync mirror for buffr's vectors, and the common production failure.
 
 ### Exhaustive search vs ANN — the algorithmic split
 
-For N vectors of dimension D, exhaustive nearest-neighbour search is O(N × D). At loopd's solo scale (~365 entries, 1536 dim), that's 561k operations per query — about 5ms in JavaScript on a modern phone. Fine.
+For N vectors of dimension D, exhaustive nearest-neighbour search is O(N × D). At buffr's solo scale (~365 entries, 1536 dim), that's 561k operations per query — about 5ms in JavaScript on a modern phone. Fine.
 
 At 100k vectors of the same dim it's 153M operations — about 1500ms. Not fine.
 
@@ -108,15 +108,15 @@ Three options, ordered by infra burden:
 2. **In a dedicated vector service** — Pinecone, Weaviate, Qdrant. Managed or self-hosted. Optimised for scale; adds a service to operate.
 3. **In memory** — FAISS, hnswlib, in-process. Fastest. Resets on restart. Right for ephemeral or read-only indexes.
 
-For loopd specifically: the SQLite layer is the canonical store; the cloud mirror is Supabase Postgres. Both have first-class vector support (`sqlite-vec` ships as an extension; pgvector is a Postgres extension). Adding a separate Pinecone service would be a new operational surface for marginal benefit.
+For buffr specifically: the SQLite layer is the canonical store; the cloud mirror is Supabase Postgres. Both have first-class vector support (`sqlite-vec` ships as an extension; pgvector is a Postgres extension). Adding a separate Pinecone service would be a new operational surface for marginal benefit.
 
-The three storage choices side by side, with loopd's actual constraints:
+The three storage choices side by side, with buffr's actual constraints:
 
 ```
-   option              what loopd would pay                    when it's right
+   option              what buffr would pay                    when it's right
    ─────────────────   ───────────────────────────────         ──────────────────
-   sqlite-vec          + zero new services                     loopd today
-   (in loopd.db)       + SQL joins with deleted_at / user_id    (~365 entries,
+   sqlite-vec          + zero new services                     buffr today
+   (in buffr.db)       + SQL joins with deleted_at / user_id    (~365 entries,
                        + sync via existing schedulePush         solo-dev, local-
                        - locked into SQLite's concurrency       first stance)
                          limits
@@ -124,7 +124,7 @@ The three storage choices side by side, with loopd's actual constraints:
    pgvector            + Supabase already has it as an          multi-tenant
    (in Supabase        extension                                 production at
    Postgres)           + free PostgREST queries                  scale
-                       - changes loopd's read path (cloud
+                       - changes buffr's read path (cloud
                          becomes load-bearing for retrieval,
                          breaking the local-first contract)
    
@@ -137,13 +137,13 @@ The three storage choices side by side, with loopd's actual constraints:
                        - ~$70/month minimum at small scale
 ```
 
-At loopd's scale, the marginal benefit of Pinecone is negative — pick what's already in the stack.
+At buffr's scale, the marginal benefit of Pinecone is negative — pick what's already in the stack.
 
 ### Sync mirror for vectors — same shape as everything else
 
-loopd's sync pattern is local SQLite is canonical, Supabase Postgres is mirror. Vectors fit the pattern: store in SQLite locally with the rest of the entry data, push to Supabase via the existing `schedulePush` machinery. The only twist is that vectors are large compared to other columns (1536 floats × 4 bytes = 6 KB per row) — but still small in absolute terms at solo scale.
+buffr's sync pattern is local SQLite is canonical, Supabase Postgres is mirror. Vectors fit the pattern: store in SQLite locally with the rest of the entry data, push to Supabase via the existing `schedulePush` machinery. The only twist is that vectors are large compared to other columns (1536 floats × 4 bytes = 6 KB per row) — but still small in absolute terms at solo scale.
 
-Where vectors fit in loopd's existing sync flow:
+Where vectors fit in buffr's existing sync flow:
 
 ```
    entries.text edited
@@ -218,14 +218,14 @@ The "keep everything in one place until you can't" rule is what makes filtered c
 
 ### This is what people mean by "vectors are just another column"
 
-The vector is data; the index is infrastructure. If your existing database can index vectors, use it. If it can't, you have two databases to operate. For loopd the answer is SQLite + the `sqlite-vec` extension. For multi-tenant production at scale the answer might be different. Here's the picture.
+The vector is data; the index is infrastructure. If your existing database can index vectors, use it. If it can't, you have two databases to operate. For buffr the answer is SQLite + the `sqlite-vec` extension. For multi-tenant production at scale the answer might be different. Here's the picture.
 
 ---
 
 ## Vector databases — diagram
 
 ```
-The storage decision tree for loopd
+The storage decision tree for buffr
 
   ┌─ How many vectors? ────────────────────────────────┐
   │                                                    │
@@ -235,10 +235,10 @@ The storage decision tree for loopd
   │  sqlite-vec     pgvector +      Dedicated vec DB   │
   │  (in SQLite)    HNSW index      (Pinecone, etc.)   │
   │                                                    │
-  │  loopd today ←  loopd at 10×  ←  loopd at 100×     │
+  │  buffr today ←  buffr at 10×  ←  buffr at 100×     │
   └────────────────────────────────────────────────────┘
 
-  Storage layout (loopd's plan, [B2A.2])
+  Storage layout (buffr's plan, [B2A.2])
 
   ┌─ Storage layer (SQLite + sqlite-vec) ──────────────┐
   │  entry_embeddings                                  │
@@ -268,7 +268,7 @@ The storage decision tree for loopd
 
 **Status:** Case B — no vector storage today.
 
-`[B2A.1]` picks the storage approach (`sqlite-vec` extension vs JSON TEXT + JS cosine); `[B2A.2]` defines the schema. The plan is to keep everything in SQLite — same canonical store as every other loopd table, same sync mirror pattern, same soft-delete contract.
+`[B2A.1]` picks the storage approach (`sqlite-vec` extension vs JSON TEXT + JS cosine); `[B2A.2]` defines the schema. The plan is to keep everything in SQLite — same canonical store as every other buffr table, same sync mirror pattern, same soft-delete contract.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, table lives via `src/services/database.ts` schema; sync mapper in `src/services/sync/tables/entryEmbeddings.ts`)*
@@ -296,14 +296,14 @@ Storing vectors in your transactional database breaks down when the index size, 
 
 ## Tradeoffs
 
-### Comparison table — storage options for loopd
+### Comparison table — storage options for buffr
 
 ```
 ┌────────────────────────┬──────────────────┬──────────────────┬───────────────────┐
 │ Cost dimension         │ sqlite-vec       │ JSON TEXT + JS   │ Pinecone (service)│
 ├────────────────────────┼──────────────────┼──────────────────┼───────────────────┤
 │ New service            │ No               │ No               │ Yes               │
-│ Storage location       │ loopd.db         │ loopd.db         │ Pinecone cloud    │
+│ Storage location       │ buffr.db         │ buffr.db         │ Pinecone cloud    │
 │ Local-first stance     │ Native           │ Native           │ Broken            │
 │ Sync to Supabase       │ Existing pattern │ Existing pattern │ Separate sync     │
 │ Query latency (365)    │ ~2–5ms           │ ~5–10ms          │ ~50–200ms (net)   │
@@ -323,10 +323,10 @@ Cross-platform polish — `sqlite-vec` is newer than `pgvector` and the Expo SDK
 Linear-time queries — fine at 365 entries, breaks first at ~100k. No ANN index. The cost is invisible at solo scale and immediately fatal at 10× scale. The shape is the right *interface* (SQL `SELECT ... ORDER BY cosine_in_js`) but the wrong implementation.
 
 ### Sub-block 3 — the breakpoint
-`sqlite-vec` stops being the right call at (a) corpus size where mobile SQLite query times exceed ~100ms, roughly 100k-1M vectors depending on device, OR (b) multi-tenant scale where loopd's local-first stance softens. The transition would be to `pgvector` in Supabase as the primary store with SQLite as a cache.
+`sqlite-vec` stops being the right call at (a) corpus size where mobile SQLite query times exceed ~100ms, roughly 100k-1M vectors depending on device, OR (b) multi-tenant scale where buffr's local-first stance softens. The transition would be to `pgvector` in Supabase as the primary store with SQLite as a cache.
 
 ### What wasn't actually a tradeoff
-A dedicated vector service (Pinecone, Qdrant) was never a realistic option for solo loopd. The operational complexity and the violation of the "local SQLite is canonical" principle are both severe; neither earns its place at this scale.
+A dedicated vector service (Pinecone, Qdrant) was never a realistic option for solo buffr. The operational complexity and the violation of the "local SQLite is canonical" principle are both severe; neither earns its place at this scale.
 
 ---
 
@@ -337,7 +337,7 @@ A dedicated vector service (Pinecone, Qdrant) was never a realistic option for s
 - **Codebase uses:** target plan for `[B2A.1]`.
 - **Why it's here:** SQLite extension that adds vector columns, `vec_distance_cosine()`, and an HNSW-like index. Designed to fit into existing SQLite-based apps with minimal disruption.
 - **Leading today:** `sqlite-vec` — `innovation-leading` for embedded vector search, 2026.
-- **Why it leads:** fits loopd's local-first architecture; no new service; written by the SQLite team's adjacent community.
+- **Why it leads:** fits buffr's local-first architecture; no new service; written by the SQLite team's adjacent community.
 - **Runner-up:** JSON TEXT + JavaScript cosine — `adoption-leading` fallback for codebases that can't bundle extensions; loses ANN but ships without extension drama.
 
 ### pgvector
@@ -355,9 +355,9 @@ A dedicated vector service (Pinecone, Qdrant) was never a realistic option for s
 ### [B2A.1] Pick storage: sqlite-vec vs JSON TEXT + JS cosine
 
 - **Exercise ID:** `[B2A.1]`
-- **What to build:** A decision spec in `loopd/.aipe/specs/features/rag-personal-corpus.md` comparing (a) the `sqlite-vec` extension in Expo SDK 55 + Supabase Postgres with `pgvector`, vs (b) JSON TEXT column with JS-side cosine. Includes a proof-of-concept: install `sqlite-vec` in dev, insert one vector, read it back, run a cosine query. If `sqlite-vec` works in Expo, pick it; else fall back to JSON TEXT.
+- **What to build:** A decision spec in `buffr/.aipe/specs/features/rag-personal-corpus.md` comparing (a) the `sqlite-vec` extension in Expo SDK 55 + Supabase Postgres with `pgvector`, vs (b) JSON TEXT column with JS-side cosine. Includes a proof-of-concept: install `sqlite-vec` in dev, insert one vector, read it back, run a cosine query. If `sqlite-vec` works in Expo, pick it; else fall back to JSON TEXT.
 - **Why it earns its place:** the storage choice is irreversible without migrating every vector. Getting it right at the start saves a future migration.
-- **Files to touch:** new `loopd/.aipe/specs/features/rag-personal-corpus.md`; eventually new migrations in `src/services/database.ts` and `supabase/migrations/`.
+- **Files to touch:** new `buffr/.aipe/specs/features/rag-personal-corpus.md`; eventually new migrations in `src/services/database.ts` and `supabase/migrations/`.
 - **Done when:** the decision is documented, the proof-of-concept ships, and the schema migration adding `entry_embeddings` is written.
 - **Estimated effort:** `1–4hr` (PoC), `1–2 days` if `sqlite-vec` doesn't work in Expo and the fallback needs work.
 
@@ -374,11 +374,11 @@ A dedicated vector service (Pinecone, Qdrant) was never a realistic option for s
 
 ## Summary
 
-A vector database is the storage + index layer for embeddings. In loopd this is not yet implemented; the plan keeps everything in the existing SQLite + Supabase stack (`sqlite-vec` local, `pgvector` cloud) rather than introducing a dedicated vector service. The constraint that makes this the right call is loopd's local-first stance plus its scale: at 365 entries per user, neither cross-table joins nor query latency demand a new service, and adding one would violate the "SQLite is canonical" principle. The cost being paid is dependence on the `sqlite-vec` extension being usable in Expo SDK 55 — the fallback is JSON TEXT + JS cosine, which is slower but works.
+A vector database is the storage + index layer for embeddings. In buffr this is not yet implemented; the plan keeps everything in the existing SQLite + Supabase stack (`sqlite-vec` local, `pgvector` cloud) rather than introducing a dedicated vector service. The constraint that makes this the right call is buffr's local-first stance plus its scale: at 365 entries per user, neither cross-table joins nor query latency demand a new service, and adding one would violate the "SQLite is canonical" principle. The cost being paid is dependence on the `sqlite-vec` extension being usable in Expo SDK 55 — the fallback is JSON TEXT + JS cosine, which is slower but works.
 
 Key points to remember:
 - Vector DBs differ in storage and query algorithm (ANN vs exhaustive).
-- For loopd's scale, the answer is "your existing database, with vector support."
+- For buffr's scale, the answer is "your existing database, with vector support."
 - HNSW is the dominant ANN algorithm; both `sqlite-vec` and `pgvector` ship it.
 - Dedicated vector services pay off at >1M vectors or multi-tenant scale.
 - Storage choice cascades into every Phase 2A build item.
@@ -393,7 +393,7 @@ Key points to remember:
 ### Likely questions
 
   [mid] Q: Why didn't you use Pinecone?
-  A: Three reasons. First, scale — loopd has ~365 vectors per user, well below the ~1M threshold where dedicated vector services start being necessary. Second, the local-first architectural principle — loopd's canonical store is SQLite on device with Supabase Postgres as a sync mirror; introducing a third service for vectors would break that pattern. Third, cross-table joins — every retrieval needs to filter `deleted_at IS NULL` and often join with the entry text; SQL is cheaper than two-service round-trips.
+  A: Three reasons. First, scale — buffr has ~365 vectors per user, well below the ~1M threshold where dedicated vector services start being necessary. Second, the local-first architectural principle — buffr's canonical store is SQLite on device with Supabase Postgres as a sync mirror; introducing a third service for vectors would break that pattern. Third, cross-table joins — every retrieval needs to filter `deleted_at IS NULL` and often join with the entry text; SQL is cheaper than two-service round-trips.
   Diagram:
   ```
   Picked: sqlite-vec + pgvector       Suggested: Pinecone
@@ -428,7 +428,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"Why two storage backends — SQLite locally and Supabase remotely?" The honest answer: it's not "two backends," it's "one canonical store with a sync mirror." Vectors fit the same pattern as every other table in loopd — local-first reads, cloud as durable backup. The complication is keeping vector schemas in sync across the two: `sqlite-vec`'s BLOB-encoded vectors and pgvector's `vector(1536)` column type are not byte-compatible, so the sync mappers need explicit serialisation logic.
+"Why two storage backends — SQLite locally and Supabase remotely?" The honest answer: it's not "two backends," it's "one canonical store with a sync mirror." Vectors fit the same pattern as every other table in buffr — local-first reads, cloud as durable backup. The complication is keeping vector schemas in sync across the two: `sqlite-vec`'s BLOB-encoded vectors and pgvector's `vector(1536)` column type are not byte-compatible, so the sync mappers need explicit serialisation logic.
 
 ```
 Picked: SQLite + Supabase mirror       Suggested: one store only
@@ -451,13 +451,13 @@ Right at local-first stance             Right at always-online apps
 ## Validate your understanding
 
 ### Level 1 — Reconstruct the diagram
-Close the file and redraw the decision tree: corpus size → storage choice. Annotate the loopd today / 10× / 100× points.
+Close the file and redraw the decision tree: corpus size → storage choice. Annotate the buffr today / 10× / 100× points.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) what a vector DB does, (b) the ANN vs exhaustive split, (c) why loopd uses SQLite + sqlite-vec, (d) when a dedicated service starts winning.
+In under 90 seconds, explain: (a) what a vector DB does, (b) the ANN vs exhaustive split, (c) why buffr uses SQLite + sqlite-vec, (d) when a dedicated service starts winning.
 
 ### Level 3 — Apply it to a new scenario
-loopd grows to 1000 users averaging 1000 entries each — 1M vectors total. The Supabase pgvector instance is the primary read path. Without looking, predict what changes architecturally and where the bottleneck lands first.
+buffr grows to 1000 users averaging 1000 entries each — 1M vectors total. The Supabase pgvector instance is the primary read path. Without looking, predict what changes architecturally and where the bottleneck lands first.
 
 Open the comparison table and check against the "Query latency (1M)" row.
 

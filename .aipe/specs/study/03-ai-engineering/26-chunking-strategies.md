@@ -13,7 +13,7 @@ You've got a 5000-character document and you want to embed it for retrieval. Opt
 
 The implicit question is what size piece you cut the document into before sending each through the same fixed-size embed function. Not "how do I embed the entry," but "how much of the entry per vector." A single vector per long entry averages every idea into a centroid that points at none of them; one vector per sentence shatters the antecedents; somewhere in between is the right cut.
 
-**What depends on getting this right:** every retrieval feature in the Phase 2A roadmap that touches long entries. Today loopd doesn't chunk — `interpret.ts` and `expand.ts` work at the whole-entry granularity (`buildContext` in `expand.ts` ships ~3 days of entry context as-is). When `[B2A.7]` interpret-this-week or any "find what I said about my knee" feature lands, the planned `embed.ts` will face the call: one vector per `entries.text` row (whole-entry, simplest), one per sentence (highest precision, 5–20× storage in `entry_embeddings`), or one per paragraph (middle). Pick wrong and the right entry gets buried at rank 17 behind cat-topic centroids, or — at the other extreme — "it was great" lands in a chunk with no antecedent. The decision affects `entry_embeddings` storage cost, search latency, and recall, and re-chunking later means re-embedding every entry.
+**What depends on getting this right:** every retrieval feature in the Phase 2A roadmap that touches long entries. Today buffr doesn't chunk — `interpret.ts` and `expand.ts` work at the whole-entry granularity (`buildContext` in `expand.ts` ships ~3 days of entry context as-is). When `[B2A.7]` interpret-this-week or any "find what I said about my knee" feature lands, the planned `embed.ts` will face the call: one vector per `entries.text` row (whole-entry, simplest), one per sentence (highest precision, 5–20× storage in `entry_embeddings`), or one per paragraph (middle). Pick wrong and the right entry gets buried at rank 17 behind cat-topic centroids, or — at the other extreme — "it was great" lands in a chunk with no antecedent. The decision affects `entry_embeddings` storage cost, search latency, and recall, and re-chunking later means re-embedding every entry.
 
 Without chunking (whole-entry vectors):
 - One vector per `entries.text` row. Simplest. Smallest table.
@@ -101,7 +101,7 @@ The right strategy depends on what the user is searching for — whole entries, 
 
 ### Why "embed the whole entry" sometimes works and sometimes doesn't
 
-For loopd's existing chains, the entry-level granularity is correct because the chain's job is "summarise/caption *this entry*." There's no sub-entry retrieval. Whole-document is correct when the retrieval unit matches the consumption unit.
+For buffr's existing chains, the entry-level granularity is correct because the chain's job is "summarise/caption *this entry*." There's no sub-entry retrieval. Whole-document is correct when the retrieval unit matches the consumption unit.
 
 The practical consequence: chunking only earns its place when (a) entries become long enough that a single vector loses fidelity, AND (b) the user wants to find *parts of entries*, not whole entries. For Phase 2A's `[B2A.7]` interpret-this-week, the consumption unit is "this week's entries" — the entry-level granularity works fine, because the user asks "what was this week about?" not "what was the second paragraph of Tuesday about?"
 
@@ -119,7 +119,7 @@ When whole-document wins vs when sub-entry chunking does:
    user queries "what did I say about X"     marginal          yes
    (cross-entry topic search)                
    
-   loopd today (existing chains):
+   buffr today (existing chains):
      short-to-medium entries, mostly single-topic per day,
      consumption unit = whole entry
    → whole-document is correct
@@ -208,7 +208,7 @@ The fix to all three is "evaluate, don't theorise" — pick a strategy, run the 
 
 ### This is what people mean by "chunking is an empirical decision"
 
-There is no universal best chunking strategy. There's only "the strategy that scored highest on *your* eval set for *your* expected query patterns." For loopd, that strategy is most likely whole-entry first, with sentence-window as a fallback only if the eval shows the whole-entry approach missing recall.
+There is no universal best chunking strategy. There's only "the strategy that scored highest on *your* eval set for *your* expected query patterns." For buffr, that strategy is most likely whole-entry first, with sentence-window as a fallback only if the eval shows the whole-entry approach missing recall.
 
 Here's the picture of how granularity translates into trade-offs.
 
@@ -267,7 +267,7 @@ Granularity vs precision/recall trade-off
 
 **Status:** Case B — no chunking in use today.
 
-The curriculum's `[B2A.5]` decision: **per-entry whole-text first; sentence-window only if eval shows recall miss.** For loopd's typical entry length (a few paragraphs) and expected query patterns ("find an entry about X" rather than "find a paragraph about X"), the whole-entry vector should be sufficient. The decision spec lives in `loopd/.aipe/specs/features/rag-personal-corpus.md` once written.
+The curriculum's `[B2A.5]` decision: **per-entry whole-text first; sentence-window only if eval shows recall miss.** For buffr's typical entry length (a few paragraphs) and expected query patterns ("find an entry about X" rather than "find a paragraph about X"), the whole-entry vector should be sufficient. The decision spec lives in `buffr/.aipe/specs/features/rag-personal-corpus.md` once written.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, lives in `src/services/ai/embed.ts:chunkEntry()`)*
@@ -295,7 +295,7 @@ Chunking strategy fails when your documents have *deeply nested* structure — l
 
 ## Tradeoffs
 
-### Comparison table — whole-entry vs sentence-window for loopd
+### Comparison table — whole-entry vs sentence-window for buffr
 
 ```
 ┌─────────────────────────┬─────────────────────────┬────────────────────────┐
@@ -316,14 +316,14 @@ Chunking strategy fails when your documents have *deeply nested* structure — l
 
 ### Sub-block 1 — what whole-entry gives up
 
-Sub-entry precision. If a user writes a 1500-word entry covering three topics, the entry's vector is the centroid of all three — and a query about any one of them ranks the entry lower than it would if that topic had its own vector. For loopd's typical short-to-medium entries this matters little; for long-form entries (rare today) it can drop a relevant entry out of top-5.
+Sub-entry precision. If a user writes a 1500-word entry covering three topics, the entry's vector is the centroid of all three — and a query about any one of them ranks the entry lower than it would if that topic had its own vector. For buffr's typical short-to-medium entries this matters little; for long-form entries (rare today) it can drop a relevant entry out of top-5.
 
 ### Sub-block 2 — what sentence-window would have cost
 
-5-20× more vectors, 5-20× more embed calls per entry, ~5-20× more storage, and the cross-chunk reference problem (chunks containing "it was great" with no antecedent). Implementation roughly doubles: chunk-boundary detection, per-chunk persistence, and rollup logic at query time to merge multi-hit-per-entry results into one ranked list. For loopd's solo scale the storage and cost are still negligible, but the implementation complexity is real.
+5-20× more vectors, 5-20× more embed calls per entry, ~5-20× more storage, and the cross-chunk reference problem (chunks containing "it was great" with no antecedent). Implementation roughly doubles: chunk-boundary detection, per-chunk persistence, and rollup logic at query time to merge multi-hit-per-entry results into one ranked list. For buffr's solo scale the storage and cost are still negligible, but the implementation complexity is real.
 
 ### Sub-block 3 — the breakpoint
-Whole-entry stops being the right call when (a) the eval shows hit@5 below target on real query patterns, (b) entries grow consistently past ~2000 words (loopd's average is <500), or (c) users start asking sub-entry questions ("what was the paragraph about my knee" rather than "the entry about my knee").
+Whole-entry stops being the right call when (a) the eval shows hit@5 below target on real query patterns, (b) entries grow consistently past ~2000 words (buffr's average is <500), or (c) users start asking sub-entry questions ("what was the paragraph about my knee" rather than "the entry about my knee").
 
 ### What wasn't actually a tradeoff
 Token-level embedding (1 vector per token) is not a real option. The point of embedding is *compression* of meaning; per-token vectors defeat it.
@@ -335,10 +335,10 @@ Token-level embedding (1 vector per token) is not a real option. The point of em
 ### Custom JS chunker (current plan)
 
 - **Codebase uses:** target plan — a small `chunkEntry()` function in `src/services/ai/embed.ts` that returns either `[entry.text]` (whole-entry) or a sentence-window split based on a config flag.
-- **Why it's here:** loopd's chunking decision is small and binary today; a custom 20-LOC function is the right size.
+- **Why it's here:** buffr's chunking decision is small and binary today; a custom 20-LOC function is the right size.
 - **Leading today:** custom chunkers — `adoption-leading` for small codebases, 2026.
 - **Why it leads:** zero dependencies, easy to reason about, fits into existing service-layer pattern. LangChain's text splitters are overkill for this scope.
-- **Runner-up:** LangChain `RecursiveCharacterTextSplitter` — `innovation-leading` for multi-format corpora; powerful but adds a dependency loopd doesn't otherwise need.
+- **Runner-up:** LangChain `RecursiveCharacterTextSplitter` — `innovation-leading` for multi-format corpora; powerful but adds a dependency buffr doesn't otherwise need.
 
 ### Semantic Chunker (LlamaIndex)
 
@@ -355,9 +355,9 @@ Token-level embedding (1 vector per token) is not a real option. The point of em
 ### [B2A.5] Chunking decision: per-entry whole-text first; sentence-window only if eval shows recall miss
 
 - **Exercise ID:** `[B2A.5]`
-- **What to build:** A small JS chunker function in `src/services/ai/embed.ts` that defaults to whole-entry. Run `[B2A.9]`'s eval set against the whole-entry approach first. If hit@5 falls below 0.7, swap to sentence-window with 3-sentence chunks, 1-sentence overlap. Document the decision and the eval numbers in `loopd/.aipe/specs/features/rag-personal-corpus.md`.
+- **What to build:** A small JS chunker function in `src/services/ai/embed.ts` that defaults to whole-entry. Run `[B2A.9]`'s eval set against the whole-entry approach first. If hit@5 falls below 0.7, swap to sentence-window with 3-sentence chunks, 1-sentence overlap. Document the decision and the eval numbers in `buffr/.aipe/specs/features/rag-personal-corpus.md`.
 - **Why it earns its place:** the chunking choice is the second-most-expensive-to-reverse decision in Phase 2A (after model choice). Eval-driven picking turns a guess into a measurement.
-- **Files to touch:** new `src/services/ai/embed.ts` with `chunkEntry()`; `loopd/.aipe/specs/features/rag-personal-corpus.md` (decision section).
+- **Files to touch:** new `src/services/ai/embed.ts` with `chunkEntry()`; `buffr/.aipe/specs/features/rag-personal-corpus.md` (decision section).
 - **Done when:** the chunker function exists; whole-entry results pass the eval threshold OR sentence-window has been tried and documented as the winner with eval numbers.
 - **Estimated effort:** `1–4hr` for whole-entry; `1–2 days` if sentence-window becomes necessary.
 
@@ -365,14 +365,14 @@ Token-level embedding (1 vector per token) is not a real option. The point of em
 
 ## Summary
 
-Chunking is the decision about how to slice documents before embedding them — and the strategy you pick sets the unit of retrieval for every query that ever runs. In loopd this is not yet implemented; the curriculum's plan (`[B2A.5]`) is whole-entry first, with sentence-window as a fallback only if the eval shows recall miss. The constraint that makes whole-entry the right starting call is loopd's entry length (typically short-to-medium) and expected query patterns ("find an entry about X" rather than "find a paragraph about X"). The cost being paid is sub-entry precision: a long entry covering three topics will rank lower for any single-topic query than it would with chunking.
+Chunking is the decision about how to slice documents before embedding them — and the strategy you pick sets the unit of retrieval for every query that ever runs. In buffr this is not yet implemented; the curriculum's plan (`[B2A.5]`) is whole-entry first, with sentence-window as a fallback only if the eval shows recall miss. The constraint that makes whole-entry the right starting call is buffr's entry length (typically short-to-medium) and expected query patterns ("find an entry about X" rather than "find a paragraph about X"). The cost being paid is sub-entry precision: a long entry covering three topics will rank lower for any single-topic query than it would with chunking.
 
 Key points to remember:
 - Whole-document chunking is correct when the retrieval unit matches the consumption unit.
 - Sentence-window has higher precision but 5-20× storage and a real cross-chunk reference problem.
 - Chunking is an empirical decision — eval first, theorise later.
 - Smaller chunks = more precision, more storage, more vectors to search.
-- For loopd, hit@5 on the `[B2A.9]` eval set is the deciding number.
+- For buffr, hit@5 on the `[B2A.9]` eval set is the deciding number.
 
 ---
 
@@ -383,8 +383,8 @@ Key points to remember:
 
 ### Likely questions
 
-  [mid] Q: How are loopd's entries chunked?
-  A: Whole-entry — one vector per `entries.text`, regardless of length. The reason is that loopd's expected retrieval patterns are entry-level ("find an entry about X"), not paragraph-level, and the typical entry is short enough that the topic-averaging penalty of whole-document chunking is minimal. If the `[B2A.9]` eval shows hit@5 dropping below 0.7, the fallback is sentence-window with 3-sentence chunks and 1-sentence overlap.
+  [mid] Q: How are buffr's entries chunked?
+  A: Whole-entry — one vector per `entries.text`, regardless of length. The reason is that buffr's expected retrieval patterns are entry-level ("find an entry about X"), not paragraph-level, and the typical entry is short enough that the topic-averaging penalty of whole-document chunking is minimal. If the `[B2A.9]` eval shows hit@5 dropping below 0.7, the fallback is sentence-window with 3-sentence chunks and 1-sentence overlap.
   Diagram:
   ```
   entry.text (~500 words, 1 topic)
@@ -394,7 +394,7 @@ Key points to remember:
   ```
 
   [senior] Q: Why didn't you sentence-window from the start?
-  A: Three reasons. First, the retrieval unit matches the consumption unit — users look up "the entry where I talked about X" not "the sentence." Second, sentence-window adds the cross-chunk reference problem ("it was great" with no antecedent), and loopd's prose style has lots of pronoun-heavy short sentences that would suffer. Third, sentence-window is 5-20× the storage and 5-20× the indexing cost. At solo scale these are pennies, but the engineering complexity (chunk-boundary logic, query-time rollup) is real and unjustified unless the eval shows a recall miss. The plan is eval-first: ship whole-entry, run `[B2A.9]`, if hit@5 < 0.7 then sentence-window.
+  A: Three reasons. First, the retrieval unit matches the consumption unit — users look up "the entry where I talked about X" not "the sentence." Second, sentence-window adds the cross-chunk reference problem ("it was great" with no antecedent), and buffr's prose style has lots of pronoun-heavy short sentences that would suffer. Third, sentence-window is 5-20× the storage and 5-20× the indexing cost. At solo scale these are pennies, but the engineering complexity (chunk-boundary logic, query-time rollup) is real and unjustified unless the eval shows a recall miss. The plan is eval-first: ship whole-entry, run `[B2A.9]`, if hit@5 < 0.7 then sentence-window.
   Diagram:
   ```
   Picked: whole-entry              Suggested: sentence-window
@@ -448,10 +448,10 @@ Right for editable corpora        Right for static corpora
 Close the file and draw the three chunking strategies side-by-side: whole-document, sentence-window, semantic chunking. Label vectors-per-entry, storage cost, and precision for each.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) why chunking exists, (b) the trade between precision and storage, (c) why loopd starts with whole-entry, (d) the cross-chunk reference problem.
+In under 90 seconds, explain: (a) why chunking exists, (b) the trade between precision and storage, (c) why buffr starts with whole-entry, (d) the cross-chunk reference problem.
 
 ### Level 3 — Apply it to a new scenario
-A loopd user starts writing 5000-word weekly retrospectives once a week. The 365-entry corpus now contains 52 mega-entries among ~300 normal ones. Without looking, predict what happens to retrieval quality and propose one mitigation.
+A buffr user starts writing 5000-word weekly retrospectives once a week. The 365-entry corpus now contains 52 mega-entries among ~300 normal ones. Without looking, predict what happens to retrieval quality and propose one mitigation.
 
 Open the Tradeoffs comparison and check whether your mitigation matches the long-form-entry breakpoint named there.
 

@@ -163,7 +163,7 @@ The model treats the system-prompt constraints as hard rules — they're written
 What the model produces, with and without the rotation block:
 
 ```
-       Without rotation block               With rotation block (loopd)
+       Without rotation block               With rotation block (buffr)
    ┌──────────────────────────────────┐    ┌──────────────────────────────────┐
    │ day 1: "Spent the morning on the   │    │ day 1: "Spent the morning on the   │
    │         sync layer."                │    │         sync layer."                │
@@ -274,7 +274,7 @@ This is what people mean by "anti-repetition is a UX concern as much as a prompt
 ```
               The data flow per call
 
-  ┌─ Storage layer (loopd.db) ────────────────────────────────┐
+  ┌─ Storage layer (buffr.db) ────────────────────────────────┐
   │  ai_summaries table — last 5 rows                          │
   │   each carrying summary_json (parsed AISummary)            │
   └─────────────────────┬─────────────────────────────────────┘
@@ -435,7 +435,7 @@ Removing the rotation entirely was never a real option. Captions without rotatio
 ### Feed the 4 caption variants back into the rotation history
 
 - **Exercise ID:** *cross-cutting (depends on caption + summarize)*
-- **What to build:** Today `getRecentAISummaries(date, 5)` reads legacy single captions only. After loopd shipped the 4-variant chain (clean/smoother/reflective/punchy), the rotation history stopped including those four — meaning the rotation feature is degrading silently as the legacy column gets stale. Update the rotation source to read from `variants` (and pick one variant deterministically, e.g., `clean`) so the rotation block carries actual recent phrasing.
+- **What to build:** Today `getRecentAISummaries(date, 5)` reads legacy single captions only. After buffr shipped the 4-variant chain (clean/smoother/reflective/punchy), the rotation history stopped including those four — meaning the rotation feature is degrading silently as the legacy column gets stale. Update the rotation source to read from `variants` (and pick one variant deterministically, e.g., `clean`) so the rotation block carries actual recent phrasing.
 - **Why it earns its place:** the file's Tradeoffs section names this gap explicitly: *"the gap today is that 4-variant captions aren't being fed back to the rotation history, only legacy single captions are."* Fixing it is the smallest possible exercise that turns a documented gap into closed work.
 - **Files to touch:** `src/services/ai/summarize.ts:buildCaptionInput()` (specifically `getRecentAISummaries` consumer at L131), check `src/services/ai/caption.ts` `buildUserPrompt` L113–L117.
 - **Done when:** the rotation block in caption prompts reads from `variants.clean` for any AISummary newer than the cutover date and falls back to legacy `caption` for older rows; a captured prompt on a fresh day shows variant-derived captions in the LAST_5_CAPTIONS block.

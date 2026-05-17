@@ -1,6 +1,6 @@
 # Appendix — Complexity Cheat Sheet
 
-A reference for every major data operation in loopd. For each: the source file, the current asymptotic complexity (time / space), and a note on whether it holds at 10× scale (10× journal entries, 10× todos, 10× threads).
+A reference for every major data operation in buffr. For each: the source file, the current asymptotic complexity (time / space), and a note on whether it holds at 10× scale (10× journal entries, 10× todos, 10× threads).
 
 ## Notation
 

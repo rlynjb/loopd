@@ -1,7 +1,7 @@
 import 'react-native-url-polyfill/auto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-// Phase A: hardcoded single-user UUID per docs/loopd-cloud-sync-spec.md §5.1.
+// Phase A: hardcoded single-user UUID per docs/buffr-cloud-sync-spec.md §5.1.
 // Phase B replaces this with auth.uid() once login lands.
 export const PHASE_A_USER_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -13,7 +13,7 @@ function getEnv(): { url: string; anonKey: string } | null {
   const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey || url.includes('YOUR_PROJECT_REF') || anonKey.includes('YOUR_ANON_KEY')) {
     if (!warned) {
-      console.warn('[loopd sync] Supabase env vars missing — cloud sync disabled. Copy .env.example → .env and fill in EXPO_PUBLIC_SUPABASE_URL + EXPO_PUBLIC_SUPABASE_ANON_KEY.');
+      console.warn('[buffr sync] Supabase env vars missing — cloud sync disabled. Copy .env.example → .env and fill in EXPO_PUBLIC_SUPABASE_URL + EXPO_PUBLIC_SUPABASE_ANON_KEY.');
       warned = true;
     }
     return null;

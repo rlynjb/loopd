@@ -13,7 +13,7 @@ You're picking between two npm packages — `bcrypt` and `argon2` for password h
 
 The implicit question is whose conditions decide quality — the leaderboard's, or yours. Not the highest score on the public benchmark, not the most-popular model on Twitter — the model that wins a tiny eval against the prose your corpus actually contains, because re-embedding the whole corpus later is the renovation cost.
 
-**What depends on getting this right:** the future `embed.ts` choice and the shape of the planned `entry_embeddings` table. Loopd's corpus is first-person journaling prose in English — a model trained on conversational data may beat one trained on web SEO content, regardless of MTEB rank. Dimension is a cost knob: 256-dim is 6× cheaper to store and search than 1536-dim with marginal quality loss on most tasks, but you only know which loses what on *your* prose. The day this lands, that decision picks the schema of `entry_embeddings(entry_id, vec[N])` — switching from 1536-dim to 768-dim later means re-embedding every entry and migrating every row. The interview signal `[C2A.4]` (model selection rationale) maps directly to "did you eval against your own prose, or did you pick by reputation?"
+**What depends on getting this right:** the future `embed.ts` choice and the shape of the planned `entry_embeddings` table. Buffr's corpus is first-person journaling prose in English — a model trained on conversational data may beat one trained on web SEO content, regardless of MTEB rank. Dimension is a cost knob: 256-dim is 6× cheaper to store and search than 1536-dim with marginal quality loss on most tasks, but you only know which loses what on *your* prose. The day this lands, that decision picks the schema of `entry_embeddings(entry_id, vec[N])` — switching from 1536-dim to 768-dim later means re-embedding every entry and migrating every row. The interview signal `[C2A.4]` (model selection rationale) maps directly to "did you eval against your own prose, or did you pick by reputation?"
 
 Without an eval on your own prose:
 - Pick `text-embedding-3-small` (1536-dim) because it's the default
@@ -102,7 +102,7 @@ The smallest dimension that passes your eval is the right choice — not the def
 
 Models trained mostly on English fail at Korean. Models trained pre-2024 don't represent 2025 events. Models trained on web corpora over-represent SEO content. The model you pick is what its creators trained it on — and your retrieval results inherit those biases.
 
-For loopd specifically: the corpus is first-person journaling in English. A model trained on web prose (most of them) handles it fine. A model trained on conversational data (some retrieval-tuned variants) might handle it better. There's no way to know without running an eval on your data.
+For buffr specifically: the corpus is first-person journaling in English. A model trained on web prose (most of them) handles it fine. A model trained on conversational data (some retrieval-tuned variants) might handle it better. There's no way to know without running an eval on your data.
 
 The training-data fit by corpus type:
 
@@ -110,7 +110,7 @@ The training-data fit by corpus type:
    your corpus shape                model training-data fit          recommendation
    ───────────────────────          ─────────────────────────        ──────────────────
    first-person English journaling  web prose models work fine;       text-embedding-3-*
-   (loopd)                          conversational-tuned variants     or run eval to pick
+   (buffr)                          conversational-tuned variants     or run eval to pick
                                     might do better                   between variants
 
    technical docs / code            code-specific models               openai code-embeddings
@@ -134,14 +134,14 @@ A model trained on what your users actually write wins by a margin no benchmark 
 
 Per-query cost is tiny: `text-embedding-3-small` is ~$0.02 per million tokens. A 100-token query costs $0.000002. Even at 10 retrievals per day for a year, that's pennies. The cost surface is *indexing*, not querying — embedding every entry on commit, every chunk if you chunk, every re-embed when the entry text changes.
 
-For loopd's ~365 entries × ~1 re-embed per year on text edits, the indexing cost is roughly the same as the query cost: a few cents per year. The choice between cheap (text-embedding-3-small) and premium (text-embedding-3-large at 5× the price) doesn't matter financially at solo scale.
+For buffr's ~365 entries × ~1 re-embed per year on text edits, the indexing cost is roughly the same as the query cost: a few cents per year. The choice between cheap (text-embedding-3-small) and premium (text-embedding-3-large at 5× the price) doesn't matter financially at solo scale.
 
 Cost at three scales — query cost is trivial; indexing cost depends on corpus turnover:
 
 ```
    scale                  model price             query cost/year   index cost/year
    ──────────────────     ────────────────────    ───────────────   ───────────────
-   solo (loopd today)     text-embed-3-small       <$0.01            <$0.01
+   solo (buffr today)     text-embed-3-small       <$0.01            <$0.01
    365 entries            $0.02 / M tokens
    ~10 queries/day                                                    quality
                                                                       matters > $
@@ -174,7 +174,7 @@ The minimum-viable eval pipeline in code form:
    const evalSet = [
      { query: "money worries",          expectedId: "e-12" },
      { query: "running and energy",     expectedId: "e-47" },
-     { query: "ideas about loopd",      expectedId: "e-3"  },
+     { query: "ideas about buffr",      expectedId: "e-3"  },
      // ... 17–27 more pairs from your real prose ...
    ];
 
@@ -276,7 +276,7 @@ For very small corpora (under ~100 docs), the choice barely matters — almost a
 
 ## Tradeoffs
 
-### Comparison table — embedding model picks for loopd's likely corpus
+### Comparison table — embedding model picks for buffr's likely corpus
 
 ```
 ┌────────────────────────────┬──────────┬──────────┬───────────┬───────────────────┐
@@ -295,17 +295,17 @@ For very small corpora (under ~100 docs), the choice barely matters — almost a
 
 ### Sub-block 1 — what `text-embedding-3-small` (likely pick) would give up
 
-3–5 percentage points of retrieval quality vs the larger models or Cohere. At solo loopd scale this is not measurable — the 20-30 eval pair set is too small to reliably distinguish 0.62 vs 0.65 hit@5. The cost savings (3-small is 6× cheaper than 3-large) become relevant only past ~100k entries; at loopd's 365 entries the absolute dollar difference is pennies per year.
+3–5 percentage points of retrieval quality vs the larger models or Cohere. At solo buffr scale this is not measurable — the 20-30 eval pair set is too small to reliably distinguish 0.62 vs 0.65 hit@5. The cost savings (3-small is 6× cheaper than 3-large) become relevant only past ~100k entries; at buffr's 365 entries the absolute dollar difference is pennies per year.
 
 ### Sub-block 2 — what BGE-small (local) would have cost
 
 Zero monetary cost, no network round-trip per embed, and the ability to embed without an internet connection — meaningful for a local-first journaling app. The cost is lower quality (MTEB ~0.55 vs ~0.62 for 3-small), CPU usage on the user's phone during indexing, and an extra dependency to bundle. The decision flips toward BGE when (a) offline embedding becomes a requirement, or (b) cost truly matters (multi-tenant scale).
 
 ### Sub-block 3 — the breakpoint
-The choice of `3-small` stops being right when (a) eval results on real data show meaningful quality difference vs 3-large or Cohere (currently unmeasurable at solo eval-set sizes), (b) loopd grows to multi-tenant and per-tenant embed cost becomes meaningful, or (c) the corpus expands to non-English journaling and a multilingual model becomes necessary.
+The choice of `3-small` stops being right when (a) eval results on real data show meaningful quality difference vs 3-large or Cohere (currently unmeasurable at solo eval-set sizes), (b) buffr grows to multi-tenant and per-tenant embed cost becomes meaningful, or (c) the corpus expands to non-English journaling and a multilingual model becomes necessary.
 
 ### What wasn't actually a tradeoff
-Training a custom embedding model on loopd's data was never a real option. The corpus is too small (~365 docs/user) and the engineering cost is enormous compared to the marginal quality gain.
+Training a custom embedding model on buffr's data was never a real option. The corpus is too small (~365 docs/user) and the engineering cost is enormous compared to the marginal quality gain.
 
 ---
 
@@ -314,7 +314,7 @@ Training a custom embedding model on loopd's data was never a real option. The c
 ### text-embedding-3-small (OpenAI)
 
 - **Codebase uses:** target default for `[B2A.3]`, pending eval.
-- **Why it's here:** the cheapest credible general-purpose embedding model; configurable dimensions; same vendor as one of loopd's existing chat-completion providers.
+- **Why it's here:** the cheapest credible general-purpose embedding model; configurable dimensions; same vendor as one of buffr's existing chat-completion providers.
 - **Leading today:** `text-embedding-3-small` — `adoption-leading` for application-side embeddings, 2026.
 - **Why it leads:** cheap, fast, good-enough quality for most retrieval tasks; configurable dim is rare among competitors.
 - **Runner-up:** Cohere `embed-english-v3.0` — `innovation-leading` for retrieval quality on English-only corpora; slightly better hit@k on some benchmarks; pricier and adds a second vendor.
@@ -334,7 +334,7 @@ Training a custom embedding model on loopd's data was never a real option. The c
 ### [B2A.3] Pick the embedding model with a real eval
 
 - **Exercise ID:** `[B2A.3]`
-- **What to build:** A small eval script that runs ~20-30 (query, expected_entry_id) pairs against 3-4 candidate models and outputs hit@1, hit@5, and MRR per model. Candidates: `text-embedding-3-small` (1536-dim and 512-dim), `text-embedding-3-large`, Cohere `embed-english-v3.0`. Pick the winner and document why in `loopd/.aipe/specs/features/rag-personal-corpus.md`.
+- **What to build:** A small eval script that runs ~20-30 (query, expected_entry_id) pairs against 3-4 candidate models and outputs hit@1, hit@5, and MRR per model. Candidates: `text-embedding-3-small` (1536-dim and 512-dim), `text-embedding-3-large`, Cohere `embed-english-v3.0`. Pick the winner and document why in `buffr/.aipe/specs/features/rag-personal-corpus.md`.
 - **Why it earns its place:** this is the decision the entire Phase 2A RAG pipeline locks in. Picking by reputation is the lazy version; picking by eval on real data is the receipt.
 - **Files to touch:** new `scripts/eval-embedding-models.mjs`; reads real `entries.text` from a dev DB; writes results to `scripts/eval-results/embedding-models-<date>.md`.
 - **Done when:** the script outputs a per-model scoreboard; the chosen model is named in the feature spec with a one-paragraph rationale that references the eval numbers (not just the MTEB leaderboard).
@@ -344,13 +344,13 @@ Training a custom embedding model on loopd's data was never a real option. The c
 
 ## Summary
 
-Embedding model choice is the per-project decision that locks in your vector space's quality, cost, dimensionality, and language coverage — and it's locked-in because re-picking later means re-embedding the entire corpus. In loopd this decision lives in `[B2A.3]` and has not been made; the likely default is `text-embedding-3-small` at 1536-dim because it's cheap, well-documented, and matches an existing provider. The constraint that makes this the right call is eval-set size: at 20-30 pairs, the eval can distinguish strong from weak models but not 3-small from 3-large in any statistically meaningful way, so picking the cheaper one and saving the quality-comparison work is rational. The cost being paid is 3–5 percentage points of retrieval quality versus larger or premium models — invisible at this corpus size, possibly meaningful at 10× scale.
+Embedding model choice is the per-project decision that locks in your vector space's quality, cost, dimensionality, and language coverage — and it's locked-in because re-picking later means re-embedding the entire corpus. In buffr this decision lives in `[B2A.3]` and has not been made; the likely default is `text-embedding-3-small` at 1536-dim because it's cheap, well-documented, and matches an existing provider. The constraint that makes this the right call is eval-set size: at 20-30 pairs, the eval can distinguish strong from weak models but not 3-small from 3-large in any statistically meaningful way, so picking the cheaper one and saving the quality-comparison work is rational. The cost being paid is 3–5 percentage points of retrieval quality versus larger or premium models — invisible at this corpus size, possibly meaningful at 10× scale.
 
 Key points to remember:
 - Default is a trap; eval on your data, not on MTEB alone.
 - Dimensions are a knob: 256/512/1024 variants exist; pick the smallest that passes your eval.
 - Embedding model choice is largely irreversible without a full re-embed.
-- For loopd at solo scale, the financial difference between candidate models is pennies per year.
+- For buffr at solo scale, the financial difference between candidate models is pennies per year.
 - The eval set is ~20-30 (query, expected) pairs; bigger is better but the curve bends fast.
 
 ---
@@ -401,7 +401,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"Why didn't you fine-tune your own embedding model?" The honest answer: a custom embedding model needs a labelled training set (10k+ pairs at minimum for finetuning, 100k+ for from-scratch) and engineering cost (training infrastructure, eval pipeline, deployment) that's enormous compared to the marginal quality gain over an off-the-shelf model. For solo loopd this is decisively the wrong investment; for a billion-dollar product with terabytes of in-domain data it might be right.
+"Why didn't you fine-tune your own embedding model?" The honest answer: a custom embedding model needs a labelled training set (10k+ pairs at minimum for finetuning, 100k+ for from-scratch) and engineering cost (training infrastructure, eval pipeline, deployment) that's enormous compared to the marginal quality gain over an off-the-shelf model. For solo buffr this is decisively the wrong investment; for a billion-dollar product with terabytes of in-domain data it might be right.
 
 ```
 Picked: off-the-shelf         Suggested: fine-tune our own
@@ -430,7 +430,7 @@ Close the file and redraw the decision pipeline: candidate set → eval set → 
 In under 90 seconds, explain: (a) the four dimensions of model choice (dim, training data, cost, quality), (b) why the public benchmark isn't sufficient, (c) what the minimum viable eval looks like, (d) why the choice is largely irreversible.
 
 ### Level 3 — Apply it to a new scenario
-A loopd user starts journaling in Korean half the time. Your current model is `text-embedding-3-small`. Without looking, name two questions you'd want answered before considering a model swap, and the smallest experiment to answer each.
+A buffr user starts journaling in Korean half the time. Your current model is `text-embedding-3-small`. Without looking, name two questions you'd want answered before considering a model swap, and the smallest experiment to answer each.
 
 Open this file and check your answer against "Where this breaks down" and the Tradeoffs comparison.
 

@@ -13,7 +13,7 @@ You've got a search box that takes whatever the user types and runs it against y
 
 The implicit question is "why doesn't the user's typed string look like the things we're searching against, and how do we close that gap before the lookup?" Query rewriting is the family of techniques that answers it — and HyDE (Hypothetical Document Embeddings) is one specific shape: ask an LLM to generate a hypothetical document-shaped answer, embed *that*, and search with its vector instead of the user's. The short query and the long document live in different parts of vector space; the rewrite moves the search point into the documents' neighbourhood.
 
-**What depends on getting this right:** recall on short queries against long-form corpora, the latency budget per retrieval call, and whether the rewrite blurs or sharpens the user's intent. For loopd the planned `src/services/ai/queryRewrite.ts` would feed `[B2A.8]` related-entries (latency-tolerant) before `[B2A.7]` interpret-this-week (already at 3–5 seconds, where +1s pushes past the perceptual threshold). The gating evidence comes from `[B2A.9]`'s eval — recall@5 below ~70% on short queries earns HyDE its slot; above that, the latency tax buys nothing.
+**What depends on getting this right:** recall on short queries against long-form corpora, the latency budget per retrieval call, and whether the rewrite blurs or sharpens the user's intent. For buffr the planned `src/services/ai/queryRewrite.ts` would feed `[B2A.8]` related-entries (latency-tolerant) before `[B2A.7]` interpret-this-week (already at 3–5 seconds, where +1s pushes past the perceptual threshold). The gating evidence comes from `[B2A.9]`'s eval — recall@5 below ~70% on short queries earns HyDE its slot; above that, the latency tax buys nothing.
 
 Without the rewrite:
 - User types "knee" → embed → vector lands in short-query cluster, far from any real entry
@@ -126,7 +126,7 @@ The hypothetical document doesn't need to be factually accurate. It needs to be 
 ### Where it shines and where it doesn't
 
 HyDE helps most when:
-- Queries are short and the corpus is long-form (loopd's exact shape).
+- Queries are short and the corpus is long-form (buffr's exact shape).
 - Queries are conceptual and the corpus is concrete-prose.
 - The embedding model has a meaningful query/doc length sensitivity.
 
@@ -141,14 +141,14 @@ When HyDE earns its place, in a decision matrix:
    condition                                    HyDE helps?   why
    ───────────────────────────────────────      ───────────   ─────────────────
    short query + long-form corpus               YES            asymmetry is real;
-   (loopd's exact shape)                                       rewrite bridges it
+   (buffr's exact shape)                                       rewrite bridges it
    short query + short-form corpus              MAYBE          asymmetry smaller;
    (chat-history search)                                       diminishing returns
    long natural-language question +             NO             query already looks
    long corpus                                                 like a document
    query is a proper noun /                     NO (HURTS)     LLM blurs the
    exact identifier ("Spice House,"                            specificity into
-   "loopd," "ENOTFOUND")                                       generic prose →
+   "buffr," "ENOTFOUND")                                       generic prose →
                                                                sparse lane wins
                                                                this case
    latency budget < 500ms                       NO              the rewrite call
@@ -158,7 +158,7 @@ When HyDE earns its place, in a decision matrix:
    (modal-triggered, batch)                                    quality lift earns
                                                                the latency
 
-   for loopd specifically:
+   for buffr specifically:
      [B2A.8] related-entries: latency-tolerant → HyDE candidate
      [B2A.7] interpret-this-week: already at 3-5s → +1s breaks UX
 ```
@@ -247,7 +247,7 @@ Strategy 2: Expansion
 
 **Status:** Case B — no query rewriting today.
 
-The curriculum's `[B2B.5]` lives in *aipe*, not loopd: *"Query rewriting: expand `/aipe:feature <intent>` into richer retrieval query."* loopd's Phase 2A doesn't have a dedicated query-rewriting build item, but the `[B2A.7]` interpret-this-week feature and `[B2A.8]` related-entries feature both *might* benefit from HyDE — to be measured if `[B2A.9]`'s eval shows recall problems.
+The curriculum's `[B2B.5]` lives in *aipe*, not buffr: *"Query rewriting: expand `/aipe:feature <intent>` into richer retrieval query."* buffr's Phase 2A doesn't have a dedicated query-rewriting build item, but the `[B2A.7]` interpret-this-week feature and `[B2A.8]` related-entries feature both *might* benefit from HyDE — to be measured if `[B2A.9]`'s eval shows recall problems.
 
 **File:** *(no implementation yet)*
 **Function / class:** *(if shipped, lives in `src/services/ai/queryRewrite.ts`)*
@@ -275,7 +275,7 @@ HyDE depends on the LLM's ability to generate a *plausibly-shaped* hypothetical 
 
 ## Tradeoffs
 
-### Comparison table — query rewriting strategies for loopd
+### Comparison table — query rewriting strategies for buffr
 
 ```
 ┌───────────────────────┬────────────────┬───────────────────┬────────────────────┐
@@ -294,7 +294,7 @@ HyDE depends on the LLM's ability to generate a *plausibly-shaped* hypothetical 
 
 ### Sub-block 1 — what no-rewrite gives up
 
-Recall on short queries. If the user types "knee" against a long-form corpus, the query vector lands in short-query space and gets fuzzy retrieval. The right answer might not even be in top-50, depending on how many short-text inputs (cached AI summaries, todo lines, etc.) cluster near "knee." For loopd this *could* matter on the related-entries feature where users may type compact tag-like queries.
+Recall on short queries. If the user types "knee" against a long-form corpus, the query vector lands in short-query space and gets fuzzy retrieval. The right answer might not even be in top-50, depending on how many short-text inputs (cached AI summaries, todo lines, etc.) cluster near "knee." For buffr this *could* matter on the related-entries feature where users may type compact tag-like queries.
 
 ### Sub-block 2 — what HyDE would cost
 
@@ -313,7 +313,7 @@ Pre-computing query rewrites and caching them was never a real option for journa
 ### LLM-as-rewriter (Sonnet/Haiku)
 
 - **Codebase uses:** target plan if rewrite ships.
-- **Why it's here:** loopd already uses Claude for all of its AI chains; reusing the same provider for rewrites means no new vendor.
+- **Why it's here:** buffr already uses Claude for all of its AI chains; reusing the same provider for rewrites means no new vendor.
 - **Leading today:** Sonnet/Haiku — `adoption-leading` for rewrite calls, 2026.
 - **Why it leads:** the chain already exists; the rewrite prompt is small; no new vendor onboarding.
 - **Runner-up:** a dedicated rewrite-tuned model (e.g., Anthropic's smaller models, OpenAI's GPT-4o-mini) — `innovation-leading` for cost optimisation; pays off once rewrite call volume grows.
@@ -352,7 +352,7 @@ Pre-computing query rewrites and caching them was never a real option for journa
 
 ## Summary
 
-Query rewriting transforms the user's raw query into a form better-shaped for the retrieval index — and HyDE specifically asks an LLM to generate a hypothetical document, embed *that*, and search with its vector instead of the query's. In loopd this is not implemented; the conditional plan is to ship HyDE on `[B2A.8]` related-entries only if `[B2A.9]`'s eval shows recall problems on short queries. The constraint that may make HyDE the wrong call is loopd's latency budget on `[B2A.7]` interpret-this-week, where an extra LLM round-trip pushes the feature past the 5-second perceptual threshold. The cost being paid for skipping HyDE is potential recall loss on short, underspecified queries.
+Query rewriting transforms the user's raw query into a form better-shaped for the retrieval index — and HyDE specifically asks an LLM to generate a hypothetical document, embed *that*, and search with its vector instead of the query's. In buffr this is not implemented; the conditional plan is to ship HyDE on `[B2A.8]` related-entries only if `[B2A.9]`'s eval shows recall problems on short queries. The constraint that may make HyDE the wrong call is buffr's latency budget on `[B2A.7]` interpret-this-week, where an extra LLM round-trip pushes the feature past the 5-second perceptual threshold. The cost being paid for skipping HyDE is potential recall loss on short, underspecified queries.
 
 Key points to remember:
 - Short queries and long documents live in different parts of vector space.
@@ -384,7 +384,7 @@ Key points to remember:
   ```
 
   [senior] Q: When would you NOT use HyDE?
-  A: Three cases. First, when queries are already long-form (questions phrased as full sentences) — they already live in document space; the rewrite adds nothing. Second, when the corpus is full of proper nouns or rare identifiers the user is searching by name — HyDE blurs those into the hypothetical's natural prose. Third, when the latency budget is tight — every HyDE call adds 500-2000ms. For loopd specifically, the `[B2A.7]` interpret-this-week feature already takes 3-5 seconds; adding HyDE pushes it past the 5-second perceptual threshold. We'd ship HyDE on the related-entries feature first (more latency tolerance), measure, and only then consider it for interpret.
+  A: Three cases. First, when queries are already long-form (questions phrased as full sentences) — they already live in document space; the rewrite adds nothing. Second, when the corpus is full of proper nouns or rare identifiers the user is searching by name — HyDE blurs those into the hypothetical's natural prose. Third, when the latency budget is tight — every HyDE call adds 500-2000ms. For buffr specifically, the `[B2A.7]` interpret-this-week feature already takes 3-5 seconds; adding HyDE pushes it past the 5-second perceptual threshold. We'd ship HyDE on the related-entries feature first (more latency tolerance), measure, and only then consider it for interpret.
   Diagram:
   ```
   Picked: HyDE on B2A.8 only          Suggested: HyDE everywhere
@@ -431,10 +431,10 @@ Right when recall is the problem    Right when filler tags are the problem
 Close the file and redraw the HyDE flow: short query → LLM hypothetical → embedded → search → real document match. Mark where the query lives in vector space before and after rewrite.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the asymmetry HyDE addresses, (b) the three rewrite flavours (none / expansion / HyDE), (c) when HyDE hurts (proper nouns, long queries, tight latency), (d) loopd's conditional plan.
+In under 90 seconds, explain: (a) the asymmetry HyDE addresses, (b) the three rewrite flavours (none / expansion / HyDE), (c) when HyDE hurts (proper nouns, long queries, tight latency), (d) buffr's conditional plan.
 
 ### Level 3 — Apply it to a new scenario
-A loopd user runs the related-entries feature with the query "Sarah." There are three entries that mention Sarah by name. Without looking, predict whether HyDE helps or hurts here, and why.
+A buffr user runs the related-entries feature with the query "Sarah." There are three entries that mention Sarah by name. Without looking, predict whether HyDE helps or hurts here, and why.
 
 Open "Where this breaks down" and check your answer against the proper-noun discussion.
 

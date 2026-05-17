@@ -1,6 +1,6 @@
 # Chapter 4 — AI engineering
 
-loopd has three distinct AI surfaces: the **structured day summary** (`summarize`), the **4-variant tonal caption** (`generateCaption`), and the **todo type classifier** (`classifyTodo`). Each is in its own file under `src/services/ai/` or `src/services/todos/`, each has its own prompt, each runs on its own model. There is no LangChain, no chain composition, no agent loop. There are three function calls.
+buffr has three distinct AI surfaces: the **structured day summary** (`summarize`), the **4-variant tonal caption** (`generateCaption`), and the **todo type classifier** (`classifyTodo`). Each is in its own file under `src/services/ai/` or `src/services/todos/`, each has its own prompt, each runs on its own model. There is no LangChain, no chain composition, no agent loop. There are three function calls.
 
 The architecture decision that matters: **single-purpose calls beat chained calls for reliability.** Every call has one job, one prompt, one strict output contract. If `generateCaption` returns malformed JSON, the editor falls back to the structured summary's caption field. If `summarize` fails, the editor opens with no AI assist and the user can compose by hand. If `classifyTodo` fails, the todo stays at `type='todo'` and `classifier_confidence=null`, and the next boot's catch-up retries. Each failure is local; none cascade. That's by design.
 
@@ -119,7 +119,7 @@ The fallback chain: if `summarize` fails, the editor opens with no AI assist (us
 
 ### `[senior]` — "How do you handle prompt drift across model versions?"
 
-This is the question I think about most when shipping AI features. The answer in loopd is *defensive parsing plus explicit model pinning*, not prompt engineering.
+This is the question I think about most when shipping AI features. The answer in buffr is *defensive parsing plus explicit model pinning*, not prompt engineering.
 
 Model pinning: `CLAUDE_MODEL = 'claude-sonnet-4-6'` is a constant in both `summarize.ts:9` and `caption.ts:21`. The OpenAI side uses `'gpt-4o'`. I don't auto-upgrade. When Anthropic ships a new model, I evaluate manually on a fixed set of test prompts before bumping the constant. The classifier uses `'claude-haiku-4-5'`. Three pinned constants, three independent upgrade decisions.
 

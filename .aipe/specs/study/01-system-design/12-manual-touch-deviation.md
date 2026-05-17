@@ -74,7 +74,7 @@ The invariant in code form:
 
    (same for nutrition, todo_meta)
 
-   prose source for #loopd in entries.text line 7
+   prose source for #buffr in entries.text line 7
                        │
                        ▼  scanThreads / parseTags scan
                        ▼
@@ -82,7 +82,7 @@ The invariant in code form:
    ┌──────────────┬─────────────┬──────────┬────────────┬─────────────┐
    │ thread_id    │ entry_id    │ todo_id  │ source_line│ tag_text     │
    ├──────────────┼─────────────┼──────────┼────────────┼─────────────┤
-   │ loopd_id     │ e-1         │ NULL     │ 7          │ "loopd"      │
+   │ buffr_id     │ e-1         │ NULL     │ 7          │ "buffr"      │
    └──────────────┴─────────────┴──────────┴────────────┴─────────────┘
                   └─────┬─────┘             └────┬─────┘
                   back-pointer to prose          line in entries.text
@@ -92,19 +92,19 @@ Every row's `entry_id` joins back to a real line in `entries.text` — that's wh
 
 ### The deviation — `toggleThreadTouchToday`
 
-There's exactly one gesture that doesn't fit: the user taps a thread chip on the dashboard's daily-schedule grid for "today" — a soft commitment to the thread without typing anything. `toggleThreadTouchToday` writes a `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`, `source_line = 0`, `tag_text = ''`. The 54-line file is the entire exception — there's nothing else in the codebase that produces a NULL-keyed `thread_mentions` row. Think of it like a TypeScript `as any` cast that lives in one named file with a comment explaining why — the type system survives because the escape is in one place, the reviewer can see it, and the cast itself is documented in `docs/spec.md` Principle 11 alongside the rule it deviates from. Concrete consequence: tap the dashboard chip for thread `loopd` at 3pm. `toggleThreadTouchToday(loopd_id)` inserts `(thread_id=loopd_id, entry_id=NULL, todo_id=NULL, entry_date='2026-05-10', source_line=0, tag_text='')`. The 14-day activity strip for `loopd` now shows today as active. Tap the chip again — the row gets `deleted_at` stamped, the activity strip's today cell goes inactive. Boundary: the deviation is allowed because the soft commitment has no natural prose representation — you can't synthesize a prose line without polluting the user's journal with content they didn't type.
+There's exactly one gesture that doesn't fit: the user taps a thread chip on the dashboard's daily-schedule grid for "today" — a soft commitment to the thread without typing anything. `toggleThreadTouchToday` writes a `thread_mentions` row with `thread_id` set, `entry_id = NULL`, `todo_id = NULL`, `source_line = 0`, `tag_text = ''`. The 54-line file is the entire exception — there's nothing else in the codebase that produces a NULL-keyed `thread_mentions` row. Think of it like a TypeScript `as any` cast that lives in one named file with a comment explaining why — the type system survives because the escape is in one place, the reviewer can see it, and the cast itself is documented in `docs/spec.md` Principle 11 alongside the rule it deviates from. Concrete consequence: tap the dashboard chip for thread `buffr` at 3pm. `toggleThreadTouchToday(buffr_id)` inserts `(thread_id=buffr_id, entry_id=NULL, todo_id=NULL, entry_date='2026-05-10', source_line=0, tag_text='')`. The 14-day activity strip for `buffr` now shows today as active. Tap the chip again — the row gets `deleted_at` stamped, the activity strip's today cell goes inactive. Boundary: the deviation is allowed because the soft commitment has no natural prose representation — you can't synthesize a prose line without polluting the user's journal with content they didn't type.
 
 Walking the tap gesture to row insert:
 
 ```
-   user taps dashboard chip for #loopd at 15:00
+   user taps dashboard chip for #buffr at 15:00
               │
               ▼
-   toggleThreadTouchToday(loopd_id)
+   toggleThreadTouchToday(buffr_id)
               │
               ▼
    INSERT INTO thread_mentions (
-     thread_id   = loopd_id,
+     thread_id   = buffr_id,
      entry_id    = NULL,        ◄── DEVIATION (no prose source)
      todo_id     = NULL,        ◄── DEVIATION (no prose source)
      source_line = 0,
@@ -113,12 +113,12 @@ Walking the tap gesture to row insert:
    )
               │
               ▼
-   14-day activity strip for #loopd now shows today active
+   14-day activity strip for #buffr now shows today active
               │
               ▼  tap again
               │
    UPDATE thread_mentions SET deleted_at = now()
-   WHERE thread_id = loopd_id AND entry_id IS NULL
+   WHERE thread_id = buffr_id AND entry_id IS NULL
      AND entry_date = '2026-05-10'
               │
               ▼
@@ -131,18 +131,18 @@ Walking the tap gesture to row insert:
 
 Downstream readers — `computeStaleness`, `getThreadCards`, the 14-day activity strip — all read `thread_mentions` *the same way regardless of source*. The staleness label uses any non-deleted mention regardless of `entry_id`/`todo_id`; the 14-day strip queries the NULL-keyed rows specifically for the "touch" cell shape but treats them as identical to prose-derived mentions for the activity count. If you've worked with React Context, this is the same shape as a context value that's typed identically whether it came from a provider or a default — the consumer doesn't care about the origin. Concrete consequence: if a thread has 3 prose mentions and 2 manual touches in the last 14 days, `computeStaleness` returns "5 mentions, last 0 days ago" — the math is uniform. The activity strip shows 5 active cells, regardless of which were prose and which were touches. Boundary: the uniformity breaks the moment a reader wants to distinguish "prose-derived" from "touch-only" — e.g. the journal export, which by design *excludes* touch rows because they have no prose to print.
 
-For thread #loopd over the last 14 days — what readers see vs what export filters:
+For thread #buffr over the last 14 days — what readers see vs what export filters:
 
 ```
    thread_mentions rows (after 14 days of usage):
    ┌────────────┬──────────┬───────────┬──────────┐
    │ entry_id   │ todo_id  │ tag_text  │ source   │
    ├────────────┼──────────┼───────────┼──────────┤
-   │ e-3        │ NULL     │ "loopd"   │ prose    │
-   │ e-7        │ NULL     │ "loopd"   │ prose    │
+   │ e-3        │ NULL     │ "buffr"   │ prose    │
+   │ e-7        │ NULL     │ "buffr"   │ prose    │
    │ NULL       │ NULL     │ ""        │ touch    │ ◄── deviation
    │ NULL       │ NULL     │ ""        │ touch    │ ◄── deviation
-   │ e-12       │ NULL     │ "loopd"   │ prose    │
+   │ e-12       │ NULL     │ "buffr"   │ prose    │
    └────────────┴──────────┴───────────┴──────────┘
               │
               ▼  computeStaleness / activity strip read ALL non-deleted rows
@@ -210,7 +210,7 @@ This is what people mean by "principled exception." Every architecture rule will
     entry_id      = e123      ← from prose     entry_id      = NULL  ← deviation
     todo_id       = NULL                       todo_id       = NULL
     source_line   = 7                          source_line   = 0
-    tag_text      = "loopd"                    tag_text      = ""
+    tag_text      = "buffr"                    tag_text      = ""
     entry_date    = 2026-05-07                 entry_date    = 2026-05-07
     deleted_at    = NULL                       deleted_at    = NULL
                                                           ▲
@@ -235,7 +235,7 @@ This is what people mean by "principled exception." Every architecture rule will
 Documented exceptions are common in codebases that hold otherwise-strict invariants. The pattern is to put the exception in code where it's most visible (a service file with a name that calls out the deviation) and to describe it in the spec under the principle it breaks.
 
 ### The deeper principle
-**A documented exception beats an undocumented one — and beats a poorly-fit invariant.** The 12-principle list says "mentions are derived from prose," but the dashboard's daily-schedule grid genuinely needs a mention-shaped row that isn't from prose. Rather than weaken the principle ("mentions are mostly from prose"), loopd kept the principle strict and called out the one deviation by name.
+**A documented exception beats an undocumented one — and beats a poorly-fit invariant.** The 12-principle list says "mentions are derived from prose," but the dashboard's daily-schedule grid genuinely needs a mention-shaped row that isn't from prose. Rather than weaken the principle ("mentions are mostly from prose"), buffr kept the principle strict and called out the one deviation by name.
 
 ### Where this breaks down
 - Anyone adding a new consumer of `thread_mentions` must remember to handle the manual-touch shape. A consumer that assumes `entry_id IS NOT NULL` would silently exclude these rows.
@@ -310,7 +310,7 @@ Tracking touch state in a separate table (`thread_touches`) wasn't a real altern
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db` — the `thread_mentions` table allows NULL on both `entry_id` and `todo_id` columns, and `toggleThreadTouchToday()` writes that NULL-keyed row directly.
+- **Codebase uses:** `expo-sqlite` against `buffr.db` — the `thread_mentions` table allows NULL on both `entry_id` and `todo_id` columns, and `toggleThreadTouchToday()` writes that NULL-keyed row directly.
 - **Why it's here:** the deviation lives at the schema level — `thread_mentions` is the uniform feed and SQLite is what enforces its shape. If the schema forbade NULL on `entry_id` or `todo_id`, the deviation couldn't exist at all.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; nullable columns are a 30-year-old SQL feature, not a library trick; the deviation is allowed by SQL semantics, not by any framework escape hatch.

@@ -18,7 +18,7 @@ That is the question this operation answers when text contains regions a parser 
 **What depends on getting this right:** the contract between `parseTags` and `reconcileMentions`. In this codebase `parseTags` emits `{ slug, tagText, lineIndex }` for each `#tag` in `entries.text`, and `reconcileMentions` keys `thread_mentions` rows on `(threadId, sourceLine)`. If `maskCode` deleted fence contents instead of overwriting them with spaces, every line after a fenced block would shift up — `#health` that was on line 8 of the original text would arrive at `reconcileMentions` claiming line 5. Pass 1 (exact `(threadId, sourceLine)` match against the existing row at line 8) would miss; Pass 2's ±3 window would maybe rescue it; or the existing row would be deleted and a new one inserted with churn on `schedulePush()`. The space-preserving mask is what keeps the line-index contract intact across the parse boundary.
 
 Without offset preservation (delete fences):
-- User has `#loopd` at line 0, a 4-line code fence from lines 2-5, `#health` at line 7
+- User has `#buffr` at line 0, a 4-line code fence from lines 2-5, `#health` at line 7
 - Strip the fence → text is now 4 lines, `#health` is now on line 3
 - `reconcileMentions` already has a row for `#health` keyed to `sourceLine=7`
 - Pass 1 looks for line 3 → miss; Pass 2 fuzzy-matches within ±3 of line 3 → also miss
@@ -29,7 +29,7 @@ With same-length space mask:
 - `#health` stays at line 7 in the masked string
 - Per-line regex iteration finds it; emits `lineIndex: 7`
 - `reconcileMentions` Pass 1 hits its existing row by exact line; zero churn
-- The per-line `seen` Set also prevents two `#loopd` on the same line from double-claiming
+- The per-line `seen` Set also prevents two `#buffr` on the same line from double-claiming
 
 Overwrite the masked content; preserve the geometry the next stage depends on.
 
@@ -47,7 +47,7 @@ A redaction office. Sensitive lines aren't snipped out of the document — that 
 
 ```
   text:
-    "Working on #loopd today.
+    "Working on #buffr today.
      Code spans: `git checkout #main` should NOT match.
      ```
      #fenced should NOT match either
@@ -81,7 +81,7 @@ Pseudocode (single regex, no code-fence masking; post-filter false positives):
 Execution trace (text with 3 `#tag` candidates: line 0 prose, line 1 inside backticks, line 5 prose):
 
 ```
-  regex match 1: "#loopd" at offset 11
+  regex match 1: "#buffr" at offset 11
     isInsideCode(text, 11)?  scan 0..11, fence-depth=0, backtick-depth=0 → false
     keep. lineIndex computed by slicing → 0
   regex match 2: "#main" at offset 38 (inside `git checkout #main`)
@@ -129,7 +129,7 @@ The insight: mask code regions to *same-length space runs* before regex, so line
 
 ```
   After maskCode:
-    line 0  "Working on #loopd today."
+    line 0  "Working on #buffr today."
     line 1  "Code spans:                          should NOT match."
     line 2  "                                                      "  ← fence opener
     line 3  "                                                      "  ← inside fence
@@ -137,7 +137,7 @@ The insight: mask code regions to *same-length space runs* before regex, so line
     line 5  "#health quick note"
 
   Iterate lines:
-    line 0: TAG_RE matches "#loopd" → out += { slug:"loopd", tagText:"loopd", lineIndex:0 }
+    line 0: TAG_RE matches "#buffr" → out += { slug:"buffr", tagText:"buffr", lineIndex:0 }
     line 1: only spaces — no match
     line 2-4: no match
     line 5: matches "#health" → out += { slug:"health", tagText:"Health"|"health", lineIndex:5 }
@@ -239,7 +239,7 @@ We traded a transient extra string allocation for offsets that stay honest, so t
 
 The lazy regex `[\s\S]*?` has worst-case quadratic backtracking on adversarial inputs (lots of unbalanced backticks). For user-typed journal prose this never fires; for a 5MB paste with malformed fences the parse could hang. The mitigation is the implicit cap on entry size — nobody pastes 5MB into a daily journal line.
 
-Per-line dedup uses a `Set<string>` keyed by `lineIdx + '::' + slug`. Memory is bounded by tag count per line, but it's a per-call allocation that contributors won't notice. The reason it exists is that without it, two identical `#loopd` tags on one line would create two `thread_mentions` rows competing for the same `(threadId, sourceLine)` key — silent identity collision in the reconciler.
+Per-line dedup uses a `Set<string>` keyed by `lineIdx + '::' + slug`. Memory is bounded by tag count per line, but it's a per-call allocation that contributors won't notice. The reason it exists is that without it, two identical `#buffr` tags on one line would create two `thread_mentions` rows competing for the same `(threadId, sourceLine)` key — silent identity collision in the reconciler.
 
 ### What the alternative would have cost
 
@@ -405,13 +405,13 @@ Answer this without looking at the file:
 
 A user writes this entry on line 0–6:
 ```
-Working on #loopd today.
+Working on #buffr today.
 Need to remember `git checkout #main` doesn't count.
 ```` (fence opens line 2)
 some code with #fenced inside, also some prose
 ```` (fence closes line 4)
 Pushed #release branch live.
-Same #loopd tag again — but on a different line.
+Same #buffr tag again — but on a different line.
 ```
 
 What does `parseTags` return — how many tags, with which `lineIndex` values, and which (if any) does the per-line `seen` Set deduplicate?

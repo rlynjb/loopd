@@ -175,7 +175,7 @@ Every "free first, paid second" pipeline in this codebase has the same shape —
 
 ### Where this breaks down
 - New patterns the heuristic doesn't know about. Until the regex tables are updated, the LLM picks up the slack — graceful degradation.
-- Multi-language users (loopd assumes English regex). Non-English text falls through to `null` and the LLM handles it.
+- Multi-language users (buffr assumes English regex). Non-English text falls through to `null` and the LLM handles it.
 
 ### What to explore next
 - [03-ai-engineering/05-heuristic-before-llm](../03-ai-engineering/05-heuristic-before-llm.md) → the cost-gate framing.

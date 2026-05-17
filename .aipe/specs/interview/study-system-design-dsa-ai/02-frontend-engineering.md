@@ -103,7 +103,7 @@ The dashboard's `rankTodos` flattens all entries into a single in-memory list. A
 
 The `/todos` page is the harder case. It's a flat list with three filter chips (status, type, thread) and renders one row per `todo_meta`. At 500K rows, even an indexed `SELECT … LIMIT 100` is fast, but `FlatList` rendering 100 rows with `TypeBadge`, `StageBadge`, and a `TagAutocomplete` on each is not free. The fix is `getItemLayout` with a fixed row height (it's already fixed in CSS), virtualization tuning (windowSize=5), and moving the per-row badge color lookups out of render — they currently hit `typeMeta.ts` per row, which is fine at 500 rows but should be hoisted to a memoized lookup at 50K.
 
-The journal screen scales differently. Each daily entry list is bounded by the day's prose, so the per-day cost stays constant. The cross-day cost is just navigation, and `expo-router` lazy-loads each route. The thing that would actually break first is SQLite startup time on cold boot — opening a 200 MB `loopd.db` and running 11 schema migrations adds visible latency. The fix is migration squashing (one big bootstrap migration replaces the 11) and `PRAGMA journal_mode = WAL`, which is already on but worth re-checking under load.
+The journal screen scales differently. Each daily entry list is bounded by the day's prose, so the per-day cost stays constant. The cross-day cost is just navigation, and `expo-router` lazy-loads each route. The thing that would actually break first is SQLite startup time on cold boot — opening a 200 MB `buffr.db` and running 11 schema migrations adds visible latency. The fix is migration squashing (one big bootstrap migration replaces the 11) and `PRAGMA journal_mode = WAL`, which is already on but worth re-checking under load.
 
 ---
 

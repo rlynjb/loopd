@@ -238,7 +238,7 @@ This is what people mean by "special case is a parameter, not a fork." Every tim
 ## Elaborate
 
 ### Where this pattern comes from
-"Reuse the incremental pump by resetting its cursor" is the classic pattern for any CDC (change-data-capture) system that needs an initial backfill. Postgres logical replication, Kafka Connect, Debezium — all express full backfill as "snapshot then stream" but the snapshot phase is the cursor-from-epoch case of the stream phase. The shape is identical in loopd because the cloud uses `updated_at` as a logical clock.
+"Reuse the incremental pump by resetting its cursor" is the classic pattern for any CDC (change-data-capture) system that needs an initial backfill. Postgres logical replication, Kafka Connect, Debezium — all express full backfill as "snapshot then stream" but the snapshot phase is the cursor-from-epoch case of the stream phase. The shape is identical in buffr because the cloud uses `updated_at` as a logical clock.
 
 ### The deeper principle
 **A separate "restore" code path is duplication.** If your incremental sync's cursor includes the epoch, "restore" is just "incremental from epoch." Skip the special case; reset the cursor instead.
@@ -463,7 +463,7 @@ If you skipped any: you described it, you didn't understand it.
 ### Level 3 — Apply it to a new scenario
 Answer this without looking at the file:
 
-A user reinstalls loopd on a new device. The bootstrap detector runs and sees `!localHasData && cloudHasData`. The cloud has 350 entries, 200 todo_meta rows, 150 thread_mentions, and 5 ai_summaries. The user is on a 4G connection. Walk: how many `sync_meta` writes happen in the reset phase, how many paginated HTTP round-trips total across all 10 tables, what the value of `last_pull_at` is for the `entries` table when the function returns successfully, and what happens if the network drops after 6 tables have completed.
+A user reinstalls buffr on a new device. The bootstrap detector runs and sees `!localHasData && cloudHasData`. The cloud has 350 entries, 200 todo_meta rows, 150 thread_mentions, and 5 ai_summaries. The user is on a 4G connection. Walk: how many `sync_meta` writes happen in the reset phase, how many paginated HTTP round-trips total across all 10 tables, what the value of `last_pull_at` is for the `entries` table when the function returns successfully, and what happens if the network drops after 6 tables have completed.
 
 Write your answer. 3–5 sentences minimum. Then open `src/services/sync/firstPull.ts` L20–L30 + `src/services/sync/pull.ts` L34–L117 and check whether your answer matches what the code actually does.
 

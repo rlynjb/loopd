@@ -10,7 +10,7 @@ export function useDatabase() {
       .then(() => setReady(true))
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
-        console.error('[loopd] Database init failed:', message);
+        console.error('[buffr] Database init failed:', message);
         setError(message);
       });
   }, []);

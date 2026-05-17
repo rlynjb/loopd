@@ -190,7 +190,7 @@ This is what people mean by "graceful degradation for non-critical paths." Every
 
 ```
   ┌──────────────────────────────┬──────────────────────────────────────────────┐
-  │ Failure                      │ How loopd recovers                            │
+  │ Failure                      │ How buffr recovers                            │
   ├──────────────────────────────┼──────────────────────────────────────────────┤
   │ No API key configured        │ all 5 services return early; UI shows banner │
   │ Network error                │ caller catches, returns null; row stays in   │

@@ -13,7 +13,7 @@ You've got three kinds of tests in your CI pipeline. Unit tests cover the typica
 
 The implicit question is "what category of failure does this evaluation actually detect?" Eval set types are the answer: golden sets measure typical-case quality, adversarial sets measure worst-case resistance, regression sets measure whether past wins are still holding. Picking only golden — the tutorial default — surfaces "average went up" while hiding "edge case broke" and "old bug reappeared." Three sets, three bugs, three different cadences.
 
-**What depends on getting this right:** which prompt changes are safe to ship, which categories of failure surface from users instead of from CI, and whether the eval system can be trusted as a ship gate. For loopd the planned `scripts/eval-harness/datasets/` directory (per `[B3.1]`) sub-divides into golden / adversarial / regression per chain — classify, caption, compose, interpret. Without the split, a prompt tweak to caption could improve typical inputs, regress a known borderline (mis-classified todo "thinking about whether to learn rust"), and silently re-break a user-reported issue from three months ago — all while the single average ticks up.
+**What depends on getting this right:** which prompt changes are safe to ship, which categories of failure surface from users instead of from CI, and whether the eval system can be trusted as a ship gate. For buffr the planned `scripts/eval-harness/datasets/` directory (per `[B3.1]`) sub-divides into golden / adversarial / regression per chain — classify, caption, compose, interpret. Without the split, a prompt tweak to caption could improve typical inputs, regress a known borderline (mis-classified todo "thinking about whether to learn rust"), and silently re-break a user-reported issue from three months ago — all while the single average ticks up.
 
 Without the three-set split:
 - One ~50-item golden set → ship a prompt change; numbers go up 2 points; ship it
@@ -38,7 +38,7 @@ Each eval set type is built differently, evaluated differently, and answers a di
 The three sets and what each detects, in one picture:
 
 ```
-   loopd's planned scripts/eval-harness/datasets/
+   buffr's planned scripts/eval-harness/datasets/
    ─────────────────────────────────────────────────────────
    ┌─ golden/ (per chain) ────────────────────────────────┐
    │   ~50 hand-picked typical-case inputs                  │
@@ -80,11 +80,11 @@ The five sub-sections below trace each set type, why all three are necessary, an
 
 A small (20-100), hand-curated set of representative inputs with labels of what the *correct* output looks like. Built by a domain expert picking inputs they consider typical of real usage. Outputs scored via exact match, fuzzy match, rubric, or LLM-judge.
 
-For loopd specifically: 50 representative todos labelled with the correct `type` (todo / idea / knowledge / study / reflect). Run classify, score against labels.
+For buffr specifically: 50 representative todos labelled with the correct `type` (todo / idea / knowledge / study / reflect). Run classify, score against labels.
 
 If you're coming from frontend, golden sets are like your component snapshot tests — a known-good baseline you regression-test against.
 
-A few rows from loopd's planned golden/classify set:
+A few rows from buffr's planned golden/classify set:
 
 ```
    { input: "call mom",                              expected: 'todo'     },
@@ -107,7 +107,7 @@ Each row carries one input and one expected output; running classify across all 
 
 Inputs designed to stress the system: ambiguous edge cases, inputs that look like one type but mean another, inputs that exploit known model biases (sycophancy, refusal, hallucination). Built by a domain expert thinking adversarially: "what would break this?"
 
-For loopd: a 20-input set of borderline todos like "thinking about whether to learn rust" (could be study or reflect or idea), or "build the thing I've been putting off" (todo, but the word "thinking" might confuse classify), or prompt-injection attempts hidden in entry prose.
+For buffr: a 20-input set of borderline todos like "thinking about whether to learn rust" (could be study or reflect or idea), or "build the thing I've been putting off" (todo, but the word "thinking" might confuse classify), or prompt-injection attempts hidden in entry prose.
 
 Adversarial sets are like fuzz tests in software — you generate or hand-craft inputs that probe edge cases, not typical cases.
 
@@ -144,7 +144,7 @@ Hand-crafted from analysing classify failures; refreshes quarterly as new failur
 
 A growing set of (input, previously-correct-output) pairs from real user reports and past bugs. Built by adding every issue you've fixed to the set. Outputs scored by checking the prior-correct output didn't change.
 
-For loopd: every time a user pushes back ("classify got this wrong" → fix → add the case to the regression set), the regression set grows. Future prompt changes get scored against the entire backlog.
+For buffr: every time a user pushes back ("classify got this wrong" → fix → add the case to the regression set), the regression set grows. Future prompt changes get scored against the entire backlog.
 
 Regression sets are like the bug-fix tests in your test suite — every prior bug becomes a guard.
 
@@ -290,7 +290,7 @@ Building three eval sets has cost. At very small scale (one developer shipping o
 
 ## Tradeoffs
 
-### Comparison table — eval set strategies for loopd
+### Comparison table — eval set strategies for buffr
 
 ```
 ┌─────────────────────────┬──────────────────┬──────────────────┬─────────────────────┐
@@ -308,7 +308,7 @@ Building three eval sets has cost. At very small scale (one developer shipping o
 
 ### Sub-block 1 — what three sets gives up
 
-~100-150 hand-labelled examples (vs ~50 for golden-only), plus continuous regression-set growth as bugs get fixed. For loopd at solo scale this is real effort — a few hours per chain to hand-curate adversarial cases; ongoing discipline to add user-reported issues. The setup investment pays off on the first regression caught.
+~100-150 hand-labelled examples (vs ~50 for golden-only), plus continuous regression-set growth as bugs get fixed. For buffr at solo scale this is real effort — a few hours per chain to hand-curate adversarial cases; ongoing discipline to add user-reported issues. The setup investment pays off on the first regression caught.
 
 ### Sub-block 2 — what golden-only would cost
 
@@ -318,7 +318,7 @@ Edge-case blindness. Every prompt change ships with confidence that "the eval lo
 Single golden set is acceptable while (a) the system has only one user (you), and (b) you can manually UAT enough to catch what eval misses. Past one user, regression set becomes load-bearing.
 
 ### What wasn't actually a tradeoff
-"No evals, manual UAT only" was acceptable in Phase 1 because loopd was one user. It stops being acceptable the moment a regression hits a real user, because the only signal is their complaint.
+"No evals, manual UAT only" was acceptable in Phase 1 because buffr was one user. It stops being acceptable the moment a regression hits a real user, because the only signal is their complaint.
 
 ---
 
@@ -327,7 +327,7 @@ Single golden set is acceptable while (a) the system has only one user (you), an
 ### Custom eval harness in TypeScript/Node
 
 - **Codebase uses:** target plan for `[B3.1]`.
-- **Why it's here:** loopd's chains are TypeScript; reusing the same runtime for evals means no context-switching during development.
+- **Why it's here:** buffr's chains are TypeScript; reusing the same runtime for evals means no context-switching during development.
 - **Leading today:** custom eval harness — `adoption-leading` for solo dev teams, 2026.
 - **Why it leads:** zero new dependencies; integrates with existing chain code directly.
 - **Runner-up:** OpenAI Evals — `innovation-leading` for shared eval format; useful when comparing across providers or sharing with the broader community.
@@ -337,7 +337,7 @@ Single golden set is acceptable while (a) the system has only one user (you), an
 - **Codebase uses:** not used today.
 - **Why it's here:** self-hosted LLM observability that doubles as an eval platform.
 - **Leading today:** Langfuse — `innovation-leading` for self-hosted observability + eval, 2026.
-- **Why it leads:** open source, OpenTelemetry-compatible; aligns with loopd's local-first stance better than SaaS alternatives.
+- **Why it leads:** open source, OpenTelemetry-compatible; aligns with buffr's local-first stance better than SaaS alternatives.
 - **Runner-up:** LangSmith — `adoption-leading` for managed eval; richer UI; vendor lock-in.
 
 ---
@@ -356,7 +356,7 @@ Single golden set is acceptable while (a) the system has only one user (you), an
 ### [B3.10] Wire LLM evals into CI
 
 - **Exercise ID:** `[B3.10]`
-- **What to build:** A GitHub Action (or local pre-push hook, since loopd has no CI yet) that runs the classify and caption eval suites on every push, and reports the deltas vs the previous run. Block merges if the regression set drops below 100%.
+- **What to build:** A GitHub Action (or local pre-push hook, since buffr has no CI yet) that runs the classify and caption eval suites on every push, and reports the deltas vs the previous run. Block merges if the regression set drops below 100%.
 - **Why it earns its place:** evals only catch regressions if they're actually run before merge. Without CI integration, evals decay into "ran once."
 - **Files to touch:** new `.github/workflows/eval.yml` (or a `scripts/pre-push.sh`); depends on `[B3.1]`.
 - **Done when:** every push triggers the eval; the result is visible in CI logs; a regression causes a non-zero exit.
@@ -366,7 +366,7 @@ Single golden set is acceptable while (a) the system has only one user (you), an
 
 ## Summary
 
-Three eval set types — golden, adversarial, regression — each catch a category of bug the others miss. In loopd this is not yet implemented; `[B3.1]` builds the harness and `[B3.2]` through `[B3.9]` populate per-chain and per-retrieval-surface eval suites with the three set types. The constraint that makes three-set discipline the right call is that "the average is fine but edge cases break" is the dominant failure mode of LLM systems past the prototype stage. The cost being paid is roughly 100-150 hand-labelled examples per chain to bootstrap, plus ongoing regression-set growth as bugs surface.
+Three eval set types — golden, adversarial, regression — each catch a category of bug the others miss. In buffr this is not yet implemented; `[B3.1]` builds the harness and `[B3.2]` through `[B3.9]` populate per-chain and per-retrieval-surface eval suites with the three set types. The constraint that makes three-set discipline the right call is that "the average is fine but edge cases break" is the dominant failure mode of LLM systems past the prototype stage. The cost being paid is roughly 100-150 hand-labelled examples per chain to bootstrap, plus ongoing regression-set growth as bugs surface.
 
 Key points to remember:
 - Golden = typical case; adversarial = edge case; regression = past bug.
@@ -440,7 +440,7 @@ Right at discipline level             Right at "MVP" level
 Close the file and draw the three eval sets side-by-side. Label what each one measures and what cadence each runs at.
 
 ### Level 2 — Explain it out loud
-In under 90 seconds, explain: (a) the three set types and what each catches, (b) eval-set leakage and how to avoid it, (c) why regression sets ship-gate, (d) loopd's `[B3.1]` plan.
+In under 90 seconds, explain: (a) the three set types and what each catches, (b) eval-set leakage and how to avoid it, (c) why regression sets ship-gate, (d) buffr's `[B3.1]` plan.
 
 ### Level 3 — Apply it to a new scenario
 A user reports that a specific todo got mis-classified. You fix the prompt and the classify result is now correct. Without looking, predict what should happen to your eval suites and walk through the new lifecycle.

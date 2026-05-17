@@ -1,4 +1,4 @@
-# loopd — Spec Patch: Daily Schedule Weekly Grid
+# buffr — Spec Patch: Daily Schedule Weekly Grid
 
 Last updated: 2026-05-04 · revision 1
 
@@ -313,7 +313,7 @@ This patch redesigns the **habits** half. **It does not specify what happens to 
 
 - **(a) Threads keep their 14-cell strip below the new habits grid.** Two visually distinct sections under one `DAILY SCHEDULE` header. Easy ship; mixed visual language.
 - **(b) Threads get the same weekly grid treatment as habits.** Same 7-column structure; "manual touch" cells render as done; off-days for threads = days the thread doesn't have a `target_cadence_days`. Requires extending the cadence engine to handle threads' cadence concept (different from habits').
-- **(c) Threads move out of the dashboard entirely.** The dashboard becomes habit-only; threads live exclusively on the More tab and their detail pages. Cleanest but loses the at-a-glance "did I touch loopd today" signal that the existing combined strip provides.
+- **(c) Threads move out of the dashboard entirely.** The dashboard becomes habit-only; threads live exclusively on the More tab and their detail pages. Cleanest but loses the at-a-glance "did I touch buffr today" signal that the existing combined strip provides.
 
 I'd recommend **(a)** for v1 of this patch — ship the habits redesign, leave threads alone, address the visual mismatch in a follow-up. (b) is the most consistent design but requires real cadence-engine work for threads, which expands the scope significantly. (c) is a separate product call about whether threads belong on the dashboard at all.
 

@@ -75,10 +75,10 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
 
     const parsed = JSON.parse(jsonMatch[0]);
     const { summary, errors } = validateSummary(parsed, clipIds, clipDurations);
-    if (errors.length > 0) console.warn('[loopd ai] Validation warnings:', errors);
+    if (errors.length > 0) console.warn('[buffr ai] Validation warnings:', errors);
 
     // Second LLM call: 4-variant tonal caption per
-    // docs/loopd-caption-variants-plan.md. Single call emits all four
+    // docs/buffr-caption-variants-plan.md. Single call emits all four
     // variants (clean / smoother / reflective / punchy). Independent of the
     // structured summary — kept in its own call so the caption prompt can
     // stay strict on its forbidden patterns. Failures here don't fail the
@@ -92,14 +92,14 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
         summary.variantsTheme = captionOut.detectedTheme;
       }
     } catch (err) {
-      console.warn('[loopd ai] Caption skipped:', err instanceof Error ? err.message : err);
+      console.warn('[buffr ai] Caption skipped:', err instanceof Error ? err.message : err);
     }
 
     await upsertAISummary(date, JSON.stringify(summary), model);
     return { summary };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn('[loopd ai] Summarize error:', msg);
+    console.warn('[buffr ai] Summarize error:', msg);
     return { summary: null, error: msg };
   }
 }

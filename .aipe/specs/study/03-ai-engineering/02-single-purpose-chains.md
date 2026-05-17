@@ -1,4 +1,4 @@
-# Single-purpose chains (loopd's only pattern)
+# Single-purpose chains (buffr's only pattern)
 
 **Industry name(s):** Prompt chaining, single-purpose chain, decomposition pattern
 **Type:** Industry standard
@@ -33,7 +33,7 @@ One chain, one contract, one persist — failures stay where they happen.
 
 ## How it works
 
-Splitting a giant `useEffect` with five side-effects into five focused `useEffect`s is the canonical shape — when one throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of one effect. Same instinct as separate `useMutation` hooks per side-effect, or AWS Lambda's one-handler-one-error-path discipline at infrastructure scale. The pattern is "many small things over one big thing" — each failure is named, each is rerunnable, each owns its blast radius. loopd ships five AI chains using the same shape: one chain per AI job, one contract, one persist step.
+Splitting a giant `useEffect` with five side-effects into five focused `useEffect`s is the canonical shape — when one throws, the others still run, the React tree stays stable, and the debugging surface for each is the size of one effect. Same instinct as separate `useMutation` hooks per side-effect, or AWS Lambda's one-handler-one-error-path discipline at infrastructure scale. The pattern is "many small things over one big thing" — each failure is named, each is rerunnable, each owns its blast radius. buffr ships five AI chains using the same shape: one chain per AI job, one contract, one persist step.
 
 The two arrangements side by side:
 
@@ -231,14 +231,14 @@ If a single mega-prompt did "summarize + caption + classify all my todos", a sin
 ## Elaborate
 
 ### Where this pattern comes from
-Single-purpose tools are an old Unix value (do one thing, do it well). LangChain and similar tooling popularised both single chains and multi-chain orchestrations; loopd deliberately stays at the single-chain end.
+Single-purpose tools are an old Unix value (do one thing, do it well). LangChain and similar tooling popularised both single chains and multi-chain orchestrations; buffr deliberately stays at the single-chain end.
 
 ### The deeper principle
 **Failures should be local.** A chain that does one thing fails in one way. A chain that does five things fails in 5! ways and the error message is rarely informative.
 
 ### Where this breaks down
 - Tasks where the cost of N calls exceeds the cost of one bigger call (rare; caching usually closes the gap).
-- Tasks where the model's reasoning improves with a single coherent context (sometimes true for complex synthesis; rarely true for the kinds of jobs loopd does).
+- Tasks where the model's reasoning improves with a single coherent context (sometimes true for complex synthesis; rarely true for the kinds of jobs buffr does).
 
 ### What to explore next
 - [13-ai-features-in-this-app](./13-ai-features-in-this-app.md) → per-feature prompt + input + output.
@@ -319,14 +319,14 @@ Splitting `expand.ts` into 4 separate files (one per ExpandableType) was never g
 
 ## Project exercises
 
-**Status:** `learn-only` (Phase 1 — `[C1.10]` chains vs agent loops is tagged `learn-only — defended in Phase 4 framing`). loopd already ships five single-purpose chains; the interview signal is the *defense* of that shape, not another chain.
+**Status:** `learn-only` (Phase 1 — `[C1.10]` chains vs agent loops is tagged `learn-only — defended in Phase 4 framing`). buffr already ships five single-purpose chains; the interview signal is the *defense* of that shape, not another chain.
 
 ### Defend the chain shape via Phase 4 framing
 
 - **Exercise ID:** *cross-cutting (supports `[B4.6]` "when *not* to" section in the deferred Phase 4 agent build)*
-- **What to build:** A 1-page write-up — either a new `loopd/docs/why-no-agents.md` or an extension to `docs/spec.md` §10 Principle 10 commentary — that names the five chain boundaries, the three failure modes single chains avoid that agent loops invite (untyped intermediate state, retry amplification, observability gap), and the threshold at which loopd would adopt an agent.
+- **What to build:** A 1-page write-up — either a new `buffr/docs/why-no-agents.md` or an extension to `docs/spec.md` §10 Principle 10 commentary — that names the five chain boundaries, the three failure modes single chains avoid that agent loops invite (untyped intermediate state, retry amplification, observability gap), and the threshold at which buffr would adopt an agent.
 - **Why it earns its place:** the interview question candidates dodge is "why not agents?" — a written argument grounded in five real chains is the strongest possible answer.
-- **Files to touch:** `loopd/docs/spec.md` §10, or new `loopd/docs/why-no-agents.md`. Cross-references [12-why-no-agents.md](./12-why-no-agents.md).
+- **Files to touch:** `buffr/docs/spec.md` §10, or new `buffr/docs/why-no-agents.md`. Cross-references [12-why-no-agents.md](./12-why-no-agents.md).
 - **Done when:** the doc names each of the five chains, the agent-loop alternative for each, and the cost a loop would add at single-user scale.
 - **Estimated effort:** `1–4hr`.
 

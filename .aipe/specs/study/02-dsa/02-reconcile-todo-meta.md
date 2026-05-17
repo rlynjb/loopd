@@ -259,7 +259,7 @@ Choosing Map+Set over two `.find()` calls wasn't a tradeoff on speed — at N=20
 
 ### expo-sqlite (WAL)
 
-- **Codebase uses:** `expo-sqlite` against `loopd.db`. The reconciler inserts new `todo_meta` rows and stamps `deleted_at` on orphans through the `database.ts` connection.
+- **Codebase uses:** `expo-sqlite` against `buffr.db`. The reconciler inserts new `todo_meta` rows and stamps `deleted_at` on orphans through the `database.ts` connection.
 - **Why it's here:** the inserts and soft-deletes must hit SQLite atomically per row so the next focus-blur scan sees consistent state.
 - **Leading today:** `expo-sqlite` — `adoption-leading`, 2026.
 - **Why it leads:** ships with the Expo SDK; WAL mode lets the next read see a consistent snapshot while the reconciler commits.

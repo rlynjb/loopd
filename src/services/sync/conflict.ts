@@ -1,5 +1,5 @@
 // Last-write-wins conflict resolution by `updated_at` per
-// docs/loopd-cloud-sync-spec.md §4.6. Pure function — easily testable.
+// docs/buffr-cloud-sync-spec.md §4.6. Pure function — easily testable.
 //
 // The honest cases this resolves cleanly:
 //   - Two devices edit same row → newer updated_at wins.

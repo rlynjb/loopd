@@ -1,5 +1,5 @@
 // CRUD for the local `sync_meta` table — per-table sync ledger.
-// See docs/loopd-cloud-sync-spec.md §3.5.
+// See docs/buffr-cloud-sync-spec.md §3.5.
 import { getDatabase } from '../database';
 
 export type SyncMetaRow = {

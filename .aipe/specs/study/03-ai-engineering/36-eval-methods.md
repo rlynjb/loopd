@@ -15,7 +15,7 @@ Open any repo with a Vitest or Jest suite and look at the test types being run. 
 
 The implicit question is "given what the chain returns, which scoring method actually captures whether the output is good?" Eval methods are the answer: exact match for discrete labels, fuzzy match for whitespace/casing drift, schema match for JSON contracts, rubric LLM-as-judge for free-form prose, pairwise comparison for relative quality. Picking by reputation ("we use F1 because everyone does") forces the wrong method onto outputs it can't measure; picking by output shape gives signal.
 
-**What depends on getting this right:** which numbers can be trusted as signal vs noise, and whether the eval pipeline reports anything meaningful per chain. For loopd the planned `scripts/eval-harness/metrics/` directory holds one function per method (`f1.ts`, `rubricJudge.ts`, `pairwise.ts`), and the chain-to-method mapping is fixed by output shape: classify → exact match + F1, summarize/expand → schema + per-field, caption (4 variants) → rubric + pairwise, interpret → rubric, retrieval → hit@k + MRR. Force classify into rubric and the eval adds 500–2000ms per item plus stochasticity for no gain; force caption into exact match and the score reports ~0% accuracy because two correct captions never match verbatim.
+**What depends on getting this right:** which numbers can be trusted as signal vs noise, and whether the eval pipeline reports anything meaningful per chain. For buffr the planned `scripts/eval-harness/metrics/` directory holds one function per method (`f1.ts`, `rubricJudge.ts`, `pairwise.ts`), and the chain-to-method mapping is fixed by output shape: classify → exact match + F1, summarize/expand → schema + per-field, caption (4 variants) → rubric + pairwise, interpret → rubric, retrieval → hit@k + MRR. Force classify into rubric and the eval adds 500–2000ms per item plus stochasticity for no gain; force caption into exact match and the score reports ~0% accuracy because two correct captions never match verbatim.
 
 **Method mismatch (numbers lie):**
 - Caption scored by exact match → near-0% accuracy; two correct outputs differ word-for-word; team panics
@@ -68,37 +68,37 @@ The cost / signal trade across the five methods:
      free-form      → rubric + (optional) pairwise
 ```
 
-The five sub-sections below trace each method in turn — what output shape it fits, how it scores, and which loopd chain uses it.
+The five sub-sections below trace each method in turn — what output shape it fits, how it scores, and which buffr chain uses it.
 
 ### 1. Exact match — discrete labels
 
 For outputs from a fixed vocabulary (classifier labels, enumerable choices), check if `prediction == label`. Score is per-item 0 or 1. Aggregate as accuracy or per-class F1.
 
-For loopd: the classifier chain. 5 labels (todo, idea, knowledge, study, reflect). For each labelled todo, check if `classify(todo).type === expected_type`.
+For buffr: the classifier chain. 5 labels (todo, idea, knowledge, study, reflect). For each labelled todo, check if `classify(todo).type === expected_type`.
 
 ### 2. Fuzzy match — slight variation
 
 For outputs that should match but might have whitespace, casing, or formatting differences. Levenshtein distance, ROUGE, or n-gram overlap. Pass if score above threshold.
 
-For loopd: not commonly applicable — most chains either return discrete labels or free-form prose where fuzzy match doesn't capture meaning.
+For buffr: not commonly applicable — most chains either return discrete labels or free-form prose where fuzzy match doesn't capture meaning.
 
 ### 3. Structured / schema match — JSON contracts
 
 For outputs that should be valid JSON conforming to a schema. Score: passes the validator (yes/no); for graded scoring, field-by-field accuracy on the parsed object.
 
-For loopd: summarize, expand. Each returns a structured JSON object with multiple fields. Score per-field: did `headline` match? did `mood` match? did `clipOrder` match? Aggregate by field and overall.
+For buffr: summarize, expand. Each returns a structured JSON object with multiple fields. Score per-field: did `headline` match? did `mood` match? did `clipOrder` match? Aggregate by field and overall.
 
 ### 4. Rubric / LLM-as-judge — free-form prose
 
 For outputs that are free-form (captions, interpretations). Define a rubric (3-5 criteria like "fits the mood", "no repetitive phrasing", "specific to the entry"); feed `(input, output, rubric)` to a judge LLM; the judge scores 1-5 per criterion.
 
-For loopd: captions, interpret. Score each output on the rubric; aggregate as per-criterion mean.
+For buffr: captions, interpret. Score each output on the rubric; aggregate as per-criterion mean.
 
 ### 5. Pairwise comparison — "which is better"
 
 For outputs where the absolute quality is harder to score than the relative quality. Show the judge two outputs (A and B) for the same input; ask which is better. Randomise positions to control for position bias.
 
-For loopd: caption variants (clean vs smoother vs reflective vs punchy). Score by win-rate in pairwise comparisons.
+For buffr: caption variants (clean vs smoother vs reflective vs punchy). Score by win-rate in pairwise comparisons.
 
 ### Where the methods fail
 
@@ -117,7 +117,7 @@ Pairwise                  Absolute-quality questions             "A is better th
                                                                   both are bad
 ```
 
-The practical consequence: every chain in loopd needs the right method picked once, then applied consistently. Mixing methods across runs makes results not-comparable.
+The practical consequence: every chain in buffr needs the right method picked once, then applied consistently. Mixing methods across runs makes results not-comparable.
 
 ### This is what people mean by "the metric is part of the eval"
 
@@ -128,7 +128,7 @@ You don't "have an eval"; you have a chain, an eval set, AND a scoring method. T
 ## Eval methods — diagram
 
 ```
-Method-to-chain mapping for loopd's 5 chains
+Method-to-chain mapping for buffr's 5 chains
 
   ┌─ Classify ────────────────────────────────────────┐
   │ Output: discrete label (5 values)                 │
@@ -162,10 +162,10 @@ Method-to-chain mapping for loopd's 5 chains
   │ Suite:  [B3.4] interpret suite                    │
   └────────────────────────────────────────────────────┘
 
-  ┌─ RAG retrieval (loopd + aipe) ────────────────────┐
+  ┌─ RAG retrieval (buffr + aipe) ────────────────────┐
   │ Output: ranked list of doc IDs                    │
   │ Method: hit@k, MRR                                │
-  │ Suite:  [B3.5] loopd RAG, [B3.6] aipe RAG         │
+  │ Suite:  [B3.5] buffr RAG, [B3.6] aipe RAG         │
   └────────────────────────────────────────────────────┘
 ```
 
@@ -284,12 +284,12 @@ Skipping eval entirely was acceptable at Phase 1 solo scale. Past one user, eval
 - **Done when:** 20 outputs scored; per-criterion means are stable on repeat runs.
 - **Estimated effort:** `1–4hr` after `[B3.3]` plumbing.
 
-### [B3.5] Suite 4 — loopd RAG retrieval: hit@k, MRR
+### [B3.5] Suite 4 — buffr RAG retrieval: hit@k, MRR
 
 - **Exercise ID:** `[B3.5]`
-- **What to build:** 20-30 (query, expected entry ID) pairs from real loopd usage. Score retrieval by hit@1, hit@5, and MRR.
+- **What to build:** 20-30 (query, expected entry ID) pairs from real buffr usage. Score retrieval by hit@1, hit@5, and MRR.
 - **Why it earns its place:** Phase 2A's whole gate — without this eval, the chunking decision, the rerank decision, and the hybrid decision are all guesses.
-- **Files to touch:** `scripts/eval-harness/datasets/rag-loopd/`.
+- **Files to touch:** `scripts/eval-harness/datasets/rag-buffr/`.
 - **Done when:** the eval runs against the Phase 2A retrieval pipeline; hit@k and MRR are reported.
 - **Estimated effort:** `1–4hr` for the dataset; eval plumbing reuses `[B3.1]` harness.
 
@@ -311,7 +311,7 @@ Skipping eval entirely was acceptable at Phase 1 solo scale. Past one user, eval
 
 ## Summary
 
-Five eval methods — exact match, fuzzy match, structured/schema match, rubric LLM-as-judge, pairwise comparison — each fit a different output shape. In loopd this is not yet implemented; the chain-to-method mapping is: classify → exact match + F1; summarize/expand → schema + per-field; caption → rubric + pairwise; interpret → rubric; retrieval → hit@k + MRR. The constraint that makes method-per-chain the right call is that picking one method for all chains forces misleading numbers on at least one. The cost being paid is a multi-method eval pipeline — each chain's metric is different infrastructure.
+Five eval methods — exact match, fuzzy match, structured/schema match, rubric LLM-as-judge, pairwise comparison — each fit a different output shape. In buffr this is not yet implemented; the chain-to-method mapping is: classify → exact match + F1; summarize/expand → schema + per-field; caption → rubric + pairwise; interpret → rubric; retrieval → hit@k + MRR. The constraint that makes method-per-chain the right call is that picking one method for all chains forces misleading numbers on at least one. The cost being paid is a multi-method eval pipeline — each chain's metric is different infrastructure.
 
 Key points to remember:
 - Exact match: discrete labels. Free, deterministic.
@@ -341,7 +341,7 @@ Key points to remember:
   ```
 
   [senior] Q: When does LLM-as-judge mislead?
-  A: Three known biases. First, position bias — when comparing A and B pairwise, judges favor whichever is shown first; mitigate by running with reversed order and averaging. Second, verbosity bias — judges favor longer outputs even when shorter is better; mitigate by including "concise" in the rubric. Third, self-preference bias — a judge tends to favor outputs from the same model family; mitigate by using a different model for judging than for generation. For loopd specifically, the caption chain runs on Sonnet and the judge will also be Sonnet — meaning self-preference bias is real and should be acknowledged in the eval report.
+  A: Three known biases. First, position bias — when comparing A and B pairwise, judges favor whichever is shown first; mitigate by running with reversed order and averaging. Second, verbosity bias — judges favor longer outputs even when shorter is better; mitigate by including "concise" in the rubric. Third, self-preference bias — a judge tends to favor outputs from the same model family; mitigate by using a different model for judging than for generation. For buffr specifically, the caption chain runs on Sonnet and the judge will also be Sonnet — meaning self-preference bias is real and should be acknowledged in the eval report.
   Diagram:
   ```
   Picked: rubric judge w/ mitigations    Suggested: rubric judge naive
@@ -361,7 +361,7 @@ Key points to remember:
   ```
 
 ### The question candidates always dodge
-"How do you know your judge is reliable?" The honest answer: run the judge against a small set of human-labelled outputs and measure judge-human agreement. If agreement is below ~80%, the judge is too noisy to trust for routine eval. For loopd's caption rubric specifically, a one-time judge-vs-human calibration on 20 outputs is the gate before using the judge for routine runs.
+"How do you know your judge is reliable?" The honest answer: run the judge against a small set of human-labelled outputs and measure judge-human agreement. If agreement is below ~80%, the judge is too noisy to trust for routine eval. For buffr's caption rubric specifically, a one-time judge-vs-human calibration on 20 outputs is the gate before using the judge for routine runs.
 
 ```
 Picked: judge-human calibration         Suggested: trust the judge blindly
@@ -383,7 +383,7 @@ Right at "we're shipping evals"           Right at "we're exploring"
 ## Validate your understanding
 
 ### Level 1 — Reconstruct the diagram
-Close the file and redraw the chain-to-method mapping for loopd's 5 chains plus retrieval. Justify each pick.
+Close the file and redraw the chain-to-method mapping for buffr's 5 chains plus retrieval. Justify each pick.
 
 ### Level 2 — Explain it out loud
 In under 90 seconds, explain: (a) the five methods, (b) why classify uses exact match and caption uses rubric, (c) the three LLM-judge biases, (d) why method must follow output shape.

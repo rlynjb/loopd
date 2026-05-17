@@ -3,7 +3,7 @@
 ## Full system map
 
 ```
-                              loopd — Android-only daily-vlogging app
+                              buffr — Android-only daily-vlogging app
 ─────────────────────────────────────────────────────────────────────────────────────────
 
    ┌────────────────────────── Device (single Android phone) ───────────────────────────┐
@@ -64,9 +64,9 @@
    │   └────┬─────────────────────────────────────┬──────────────────────────────────┘  │
    │        │ writes (SQL)                        │ media (filesystem)                  │
    │        ▼                                     ▼                                     │
-   │   ┌─ Local SQLite (loopd.db, WAL) ────┐  ┌─ Files (expo-file-system) ──────────┐   │
-   │   │ entries, projects, vlogs,         │  │ /document/loopd/clips/<date>/*.mp4  │   │
-   │   │ day_meta, ai_summaries,           │  │ /document/loopd/exports/<date>.mp4  │   │
+   │   ┌─ Local SQLite (buffr.db, WAL) ────┐  ┌─ Files (expo-file-system) ──────────┐   │
+   │   │ entries, projects, vlogs,         │  │ /document/buffr/clips/<date>/*.mp4  │   │
+   │   │ day_meta, ai_summaries,           │  │ /document/buffr/exports/<date>.mp4  │   │
    │   │ nutrition, habits, todo_meta,     │  └─────────────────────────────────────┘   │
    │   │ threads, thread_mentions          │                                            │
    │   │ + sync_meta, sync_deletions       │  ┌─ SecureStore (Android Keystore) ────┐   │
@@ -117,7 +117,7 @@
 
 - **app/** — file-routed expo-router screens. `_layout.tsx` is the boot path; dynamic segments use `[param]`. Talks to: hooks + services.
 - **src/hooks/** — thin React state wrappers around services. Each one owns a query (`useEntries.getAllEntries`) and exposes mutators that delegate to services. Talks to: services/.
-- **services/database.ts** — the only file that opens `loopd.db`. Owns the SQLite schema migration on first call, exposes typed CRUD functions, and calls `schedulePush()` on every write to a synced table. Talks to: SQLite, sync/schedulePush.
+- **services/database.ts** — the only file that opens `buffr.db`. Owns the SQLite schema migration on first call, exposes typed CRUD functions, and calls `schedulePush()` on every write to a synced table. Talks to: SQLite, sync/schedulePush.
 - **services/ai/** — provider-agnostic LLM service layer. Every call reads a SecureStore-stored key (Claude default, OpenAI alternate). Five single-purpose chains: structured summary, 4-variant caption, per-todo expansion, classifier, and the long-form `interpret` chain (added 2026-05-10). Interpret is the only one that emits markdown rather than JSON, and the only one whose output is not persisted (rendered in a modal, gone on close). Talks to: external LLM APIs.
 - **services/todos/** — drop-extraction pipeline. `scanTodos.scanTodosFromText` reads prose and produces a TodoItem[]; `reconcileMeta.reconcileTodoMetaForEntry` then patches the 1:1 todo_meta side. The classifier runs heuristic-first (free) and falls back to Haiku/4o-mini on ambiguous lines. As of 2026-05-10 the classifier picks one of 5 thinking modes (`todo`, `idea`, `knowledge`, `study`, `reflect`) — was 7 pre-reduction; `bug`/`question`/`decision`/`content` were dropped in migration 0008. `expand.expandTodo` runs Sonnet/4o for typed expansion (4 schemas: `idea`, `knowledge`, `study`, `reflect` — `'todo'` is the non-expandable default).
 - **services/threads/** — `#tag` extraction (`scanThreads.parseTags`), thread CRUD, and the `getThreadCards` aggregate that powers the Today view. `staleness.computeStaleness` is the pure cadence math. `touch.toggleThreadTouchToday` is the documented spec deviation — writes a `thread_mentions` row with NULL entry_id AND NULL todo_id.
@@ -125,8 +125,8 @@
 - **services/sync/** — cloud mirror layer. `schedulePush()` is a debounced 5s timer fired by every database write. `orchestrator.pushAll`/`pullAll` walk a 10-table registry. `push.ts` queries `WHERE updated_at > synced_at` and upserts. `pull.ts` queries `WHERE updated_at > last_pull_at` and resolves conflict via `chooseWinner` (last-write-wins by `updated_at`). `bootstrap.ts` decides between initial-push, first-pull, no-op on first cold start.
 - **services/ffmpeg.ts + textRenderer.tsx + exportPipeline.ts** — vlog export pipeline. `@wokcito/ffmpeg-kit-react-native` runs the transcode; `textRenderer` renders text overlays to a bitmap that ffmpeg overlays as a PNG. Talks to: filesystem, native ffmpeg.
 - **react-native-video** — playback half of the media pipeline (v6.19.1). Renders `.mp4` clips trimmed from the day's recording inside the editor + journal screens. Pairs with the ffmpeg/export side: ffmpeg writes clips, `react-native-video` plays them back. Talks to: filesystem (reads `clip_uri` paths).
-- **SQLite (loopd.db)** — the single source of truth. WAL journal mode. 12 tables: 10 synced + 2 local-only (`sync_meta` ledger, deprecated `sync_deletions`). Reads always filter `WHERE deleted_at IS NULL`.
-- **Filesystem** — clip URIs are device-local under `/document/loopd/clips/<date>/`. `clip_uri` columns hold absolute paths; `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
+- **SQLite (buffr.db)** — the single source of truth. WAL journal mode. 12 tables: 10 synced + 2 local-only (`sync_meta` ledger, deprecated `sync_deletions`). Reads always filter `WHERE deleted_at IS NULL`.
+- **Filesystem** — clip URIs are device-local under `/document/buffr/clips/<date>/`. `clip_uri` columns hold absolute paths; `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
 - **SecureStore** — Android Keystore-backed key/value. Stores LLM API keys, Supabase URL/anon key, the `cloud_initial_push_done` bootstrap flag, and per-feature backfill flags.
 - **Supabase Postgres** — the cloud mirror, never canonical. Reads always go to local SQLite; cloud catches up asynchronously. Migrations are append-only files in `supabase/migrations/`.
 - **scripts/db-migrate.mjs** — the migration runner. A Node script (uses `pg` + `dotenv`) that applies `supabase/migrations/0001..0005` against the Supabase Postgres mirror in order. Lives outside the device runtime — driven manually by the developer running `node scripts/db-migrate.mjs --all-pending`. Migration files in order: `0001` schema, `0002` RLS scaffolded but disabled in Phase A, `0003` server-time RPC, `0004` relax FKs, `0005` `todo_meta.pinned`. Talks to: Supabase Postgres.
@@ -150,7 +150,7 @@ The whole codebase enforces these five. Every pattern in `01-system-design/` tra
 
 - [`01-system-design/`](./01-system-design/) — every architectural pattern, one file per concept.
 - [`02-dsa/`](./02-dsa/) — every meaningful algorithm in the codebase, with execution traces and complexity.
-- [`03-ai-engineering/`](./03-ai-engineering/) — how loopd uses LLMs (and what it deliberately doesn't).
+- [`03-ai-engineering/`](./03-ai-engineering/) — how buffr uses LLMs (and what it deliberately doesn't).
 
 ---
 Updated: 2026-05-07 — fixed `app/todos.tsx` description (sort is now pinned-first then createdAt DESC, no longer "ranked"); added section index links.

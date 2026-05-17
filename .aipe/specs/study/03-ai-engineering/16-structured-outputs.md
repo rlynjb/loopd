@@ -435,7 +435,7 @@ Fine until the contract sprawls past ~10 fields per chain with nested objects. A
 
 ## Project exercises
 
-### [B1.1] Add Zod schemas for every AI input/output across loopd's 5 chains
+### [B1.1] Add Zod schemas for every AI input/output across buffr's 5 chains
 
 - **Exercise ID:** `[B1.1]`
 - **What to build:** Replace each hand-rolled validator (`validateSummary`, `parseAndValidate` in caption, `validateExpansion`, `parseClassifyJson`) with a Zod schema per chain. Schemas live in `src/services/ai/schemas/` and are imported by both the chain and the test fixtures. Surface `[C1.12]` output-mode-mismatch issues by making the contract structural rather than spread across prompt prose + TypeScript type + validator function.

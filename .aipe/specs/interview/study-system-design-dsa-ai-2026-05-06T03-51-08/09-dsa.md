@@ -1,8 +1,8 @@
 # Chapter 9 — Data structures and algorithms
 
-This chapter walks through the actual algorithms in loopd. Each problem is one I solved while building the app — not LeetCode, not theoretical. Each one has a brute-force version (often what shipped first), an optimal version (what's there now or what I'd change at scale), and an ASCII trace of execution.
+This chapter walks through the actual algorithms in buffr. Each problem is one I solved while building the app — not LeetCode, not theoretical. Each one has a brute-force version (often what shipped first), an optimal version (what's there now or what I'd change at scale), and an ASCII trace of execution.
 
-The DSA shape of loopd is dominated by **flat-array transformation**: take an array of records, filter, sort, deduplicate, group. There are no trees, no graphs, no DP. The interesting algorithmic territory is in the scanners (line-by-line text parsing with two-pass matching) and the cell-state derivation (cadence math against a date set). I'll cover one problem from each category.
+The DSA shape of buffr is dominated by **flat-array transformation**: take an array of records, filter, sort, deduplicate, group. There are no trees, no graphs, no DP. The interesting algorithmic territory is in the scanners (line-by-line text parsing with two-pass matching) and the cell-state derivation (cadence math against a date set). I'll cover one problem from each category.
 
 ## Problem 1 — Two-pass scanner: matching todo identities across edits
 

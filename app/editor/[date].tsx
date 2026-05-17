@@ -3,7 +3,7 @@ import { useSharedValue } from 'react-native-reanimated';
 import { View, Text, TextInput, Pressable, ScrollView, PanResponder, StyleSheet, Alert, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
-import { saveToDCIMLoopd } from '../../src/services/fileManager';
+import { saveToDCIMBuffr } from '../../src/services/fileManager';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
@@ -68,7 +68,7 @@ export default function EditorScreen() {
   // Which variant is currently rendered into the active text overlay.
   //
   // 4-variant tonal caption set (new — populated by the post-2026-05-05
-  // caption pass; see docs/loopd-caption-variants-plan.md):
+  // caption pass; see docs/buffr-caption-variants-plan.md):
   //   'clean'      — present-progressive, observational (default after regen)
   //   'smoother'   — conversational, hedged
   //   'reflective' — contemplative, slower
@@ -648,7 +648,7 @@ export default function EditorScreen() {
         await new Promise(r => setTimeout(r, 150));
         renderedTexts = await renderTextOverlays(textOverlays);
       } catch (err) {
-        console.warn('[loopd] Text rendering failed:', err);
+        console.warn('[buffr] Text rendering failed:', err);
       } finally {
         setRenderingText(false);
       }
@@ -659,8 +659,8 @@ export default function EditorScreen() {
 
     await save({ clips, textOverlays, filterOverlays, status: 'exported', exportUri });
 
-    try { await saveToDCIMLoopd(exportUri); } catch (e) {
-      console.warn('[loopd] Could not save to DCIM:', e);
+    try { await saveToDCIMBuffr(exportUri); } catch (e) {
+      console.warn('[buffr] Could not save to DCIM:', e);
     }
 
     cancelExport();
@@ -911,7 +911,7 @@ export default function EditorScreen() {
                     • New 4-variant pass → CLEAN / SMOOTH / REFLECT / PUNCHY / SUMMARY
                     • Legacy caption pass → PRIMARY / ALT / SUMMARY
                     • No caption ever ran → SUMMARY only
-                  See docs/loopd-caption-variants-plan.md §3.6. */}
+                  See docs/buffr-caption-variants-plan.md §3.6. */}
               {chipSet.length > 1 && (
                 <View style={styles.variantChipGroup}>
                   {chipSet.map(chip => (

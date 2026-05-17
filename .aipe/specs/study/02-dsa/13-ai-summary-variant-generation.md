@@ -129,7 +129,7 @@ The insight: structured-output prompting lets one LLM call emit all four variant
       summary.variants      = output.variants
       summary.variantsTheme = output.detectedTheme
   catch (err):
-    console.warn("[loopd ai] Caption skipped:", err)
+    console.warn("[buffr ai] Caption skipped:", err)
     // Don't fail the summarize chain — editor falls back to summary.summary
 ```
 

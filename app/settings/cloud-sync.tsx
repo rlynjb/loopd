@@ -1,5 +1,5 @@
 // Cloud sync page — push/pull, sync ledger, and a hidden long-press dev menu.
-// See docs/loopd-cloud-sync-spec.md §7.
+// See docs/buffr-cloud-sync-spec.md §7.
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
@@ -34,7 +34,7 @@ export default function CloudSyncScreen() {
 
   const refreshMeta = async () => {
     try { setMeta(await getAllSyncMeta()); } catch (err) {
-      console.warn('[loopd] sync meta load failed:', err);
+      console.warn('[buffr] sync meta load failed:', err);
     }
   };
 
@@ -71,7 +71,7 @@ export default function CloudSyncScreen() {
     setDevBusy(true);
     try {
       const result = await fn();
-      console.log(`[loopd sync] dev ${label}:`, result);
+      console.log(`[buffr sync] dev ${label}:`, result);
       Alert.alert(label, JSON.stringify(result, null, 2).slice(0, 600));
       await refreshMeta();
     } catch (err) {

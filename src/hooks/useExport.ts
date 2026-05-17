@@ -24,7 +24,7 @@ export function useExport() {
     } catch (e) {
       if (cancelledRef.current) return null;
       const msg = e instanceof Error ? e.message : String(e);
-      console.error('[loopd] Export failed:', msg);
+      console.error('[buffr] Export failed:', msg);
       setProgress({ stage: 'error', progress: 0, currentTimeMs: 0, totalDurationMs: 0, error: msg });
       return null;
     } finally {

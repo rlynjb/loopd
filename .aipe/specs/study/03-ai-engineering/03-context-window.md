@@ -1,9 +1,9 @@
-# Context window — how loopd packs it
+# Context window — how buffr packs it
 
 **Industry name(s):** Context window, attention budget, token budget
 **Type:** Industry standard
 
-> The model only sees what's in the window for *this call*. Loopd hand-picks small, capped slices per feature.
+> The model only sees what's in the window for *this call*. Buffr hand-picks small, capped slices per feature.
 
 **See also:** → [02-single-purpose-chains](./02-single-purpose-chains.md) · → [07-rag](./07-rag.md)
 
@@ -191,7 +191,7 @@ This is what people mean by "the prompt is the application." Once you accept tha
 **Bounded context is a feature.** An unbounded prompt grows with the user's data; cost grows with the user's data; latency grows with the user's data. Caps decouple cost from data size.
 
 ### Where this breaks down
-- Features that genuinely need richer context (semantic search across all entries). Today loopd doesn't have these; if added, see [07-rag](./07-rag.md).
+- Features that genuinely need richer context (semantic search across all entries). Today buffr doesn't have these; if added, see [07-rag](./07-rag.md).
 - Models with very large context windows (1M+) — caps matter less for fitting, more for cost.
 
 ### What to explore next
@@ -403,7 +403,7 @@ Open the file. Compare.
 ✗ Fail: re-read the diagram section, wait 10 minutes, try again. Do not move to Level 2 until you pass.
 
 ### Level 2 — Explain it out loud
-Explain how loopd packs the context window to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
+Explain how buffr packs the context window to an imaginary colleague who just asked "how does this work in your project?" No notes. Under 90 seconds.
 
 Checkpoints — did you:
 - Name the specific file or function?  → `src/services/todos/expand.ts:buildContext` is the canonical example

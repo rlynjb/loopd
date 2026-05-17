@@ -280,7 +280,7 @@ In return: type-safety lives in one place (the param list type defines every rou
 
 ### The breakpoint
 
-Fine until ~50 screens OR until nested navigation depth exceeds 2 levels. Past that, file-as-route's flat structure becomes a navigation drawer of nested folders that takes longer to visually scan than a typed registry. The fix is React Navigation's manual registry with a typed `RootStackParamList`. Today loopd has 15 screens and 1 level of nesting (e.g. `app/settings/index.tsx`); the registry would be pure overhead.
+Fine until ~50 screens OR until nested navigation depth exceeds 2 levels. Past that, file-as-route's flat structure becomes a navigation drawer of nested folders that takes longer to visually scan than a typed registry. The fix is React Navigation's manual registry with a typed `RootStackParamList`. Today buffr has 15 screens and 1 level of nesting (e.g. `app/settings/index.tsx`); the registry would be pure overhead.
 
 ### What wasn't actually a tradeoff
 
@@ -302,7 +302,7 @@ Hybrid "file-based + manual override for nested cases" wasn't a real option. exp
 
 ## Summary
 
-File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly — the filesystem is the router. In this codebase the `app/` directory tree is the route tree under expo-router 55: `app/_layout.tsx` (287 lines) is the boot path that initialises SQLite via `useDatabase`, runs the cloud bootstrap, and wraps providers; `[param]` directories like `app/journal/[date].tsx` define dynamic segments read via `useLocalSearchParams()`; and there is no `routes.ts`. The constraint was that a separate route registry drifts from the actual screens it documents, and convention-as-code keeps the URL and the file as the same fact. The cost is that abstracting behaviour across many routes is awkward — each file imports its own shared bits — but for loopd's ~15 screens that cost is negligible. A 200-route app or one with deeply nested back stacks would push toward React Navigation's explicit registry instead.
+File-based routing is the convention that a directory layout, with naming rules for dynamic segments and shared layouts, defines the application's URL space directly — the filesystem is the router. In this codebase the `app/` directory tree is the route tree under expo-router 55: `app/_layout.tsx` (287 lines) is the boot path that initialises SQLite via `useDatabase`, runs the cloud bootstrap, and wraps providers; `[param]` directories like `app/journal/[date].tsx` define dynamic segments read via `useLocalSearchParams()`; and there is no `routes.ts`. The constraint was that a separate route registry drifts from the actual screens it documents, and convention-as-code keeps the URL and the file as the same fact. The cost is that abstracting behaviour across many routes is awkward — each file imports its own shared bits — but for buffr's ~15 screens that cost is negligible. A 200-route app or one with deeply nested back stacks would push toward React Navigation's explicit registry instead.
 
 Key points to remember:
 - `app/_layout.tsx` is the boot path that every route runs through — SQLite open, bootstrap, providers all land here before any screen mounts.
@@ -344,7 +344,7 @@ A: expo-router maps the URL to `app/journal/[date].tsx`. The `_layout.tsx` at th
 
 [senior] Q: What's the cost of file-based routing on a small app like this?
 
-A: Surprisingly little, because the app is small. The cost shows up in two places: first, every screen has to import its own version of shared header/footer components — there's no central route definition where you'd hang shared layout, except via `_layout.tsx` files. Second, refactoring URLs requires renaming files, which messes with version control history. For loopd's ~15 screens, both costs are negligible. If the app had 200 routes I'd reconsider; at this scale, file-as-route is the cheaper option.
+A: Surprisingly little, because the app is small. The cost shows up in two places: first, every screen has to import its own version of shared header/footer components — there's no central route definition where you'd hang shared layout, except via `_layout.tsx` files. Second, refactoring URLs requires renaming files, which messes with version control history. For buffr's ~15 screens, both costs are negligible. If the app had 200 routes I'd reconsider; at this scale, file-as-route is the cheaper option.
 
 ```
                   Path taken (file-as-route)            Alternative (React Navigation
@@ -366,7 +366,7 @@ this codebase     yes — flat enough, registry would    no — would add ceremo
 
 [arch] Q: How does this compare to React Navigation's manual route configuration, and when would you switch?
 
-A: React Navigation uses an explicit route registry — you declare every screen and its params in a typed config. The win is type-safety on params and centralized navigation logic; the cost is a registry that drifts from the actual screens. expo-router takes the inverse: file structure is the registry, type-safety on params is via `useLocalSearchParams<T>()` generics. I'd switch to React Navigation if I needed deeply nested navigators with complex stack/tab interactions — file-based routing handles flat plus simple nested fine, but multi-level nested back stacks get awkward. loopd's navigation is flat enough that file-based wins.
+A: React Navigation uses an explicit route registry — you declare every screen and its params in a typed config. The win is type-safety on params and centralized navigation logic; the cost is a registry that drifts from the actual screens. expo-router takes the inverse: file structure is the registry, type-safety on params is via `useLocalSearchParams<T>()` generics. I'd switch to React Navigation if I needed deeply nested navigators with complex stack/tab interactions — file-based routing handles flat plus simple nested fine, but multi-level nested back stacks get awkward. buffr's navigation is flat enough that file-based wins.
 
 ```
 At 50+ screens OR nested navigation depth > 2 levels:

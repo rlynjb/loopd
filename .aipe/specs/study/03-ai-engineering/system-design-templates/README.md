@@ -6,12 +6,12 @@ These templates use the **9 labelled-bullet shape**, not the per-concept structu
 
 ## Templates
 
-| # | Template | Applies to loopd | One-line |
+| # | Template | Applies to buffr | One-line |
 |---|---|---|---|
-| 01 | [Search ranking](./01-search-ranking.md) | `partially` | Hybrid retrieval + optional rerank over a corpus. loopd's Phase 2A delivers this at small scale. |
-| 02 | [Tech support chatbot](./02-tech-support-chatbot.md) | `no` | RAG-grounded support assistant with escalation gate. Thought-experiment for loopd; loopd isn't a support product. |
+| 01 | [Search ranking](./01-search-ranking.md) | `partially` | Hybrid retrieval + optional rerank over a corpus. buffr's Phase 2A delivers this at small scale. |
+| 02 | [Tech support chatbot](./02-tech-support-chatbot.md) | `no` | RAG-grounded support assistant with escalation gate. Thought-experiment for buffr; buffr isn't a support product. |
 
-## Applies-to-loopd table
+## Applies-to-buffr table
 
 Quick scan for which templates the codebase can defend as built or partially-built:
 

@@ -13,7 +13,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('[loopd] Uncaught error:', error, info.componentStack);
+    console.error('[buffr] Uncaught error:', error, info.componentStack);
   }
 
   render() {

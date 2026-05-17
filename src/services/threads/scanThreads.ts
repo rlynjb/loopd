@@ -15,7 +15,7 @@ const TAG_RE = /(^|[^\w-])#([a-zA-Z][a-zA-Z0-9-]*)/g;
 
 export type ParsedTag = {
   slug: string;        // lowercased, ready for thread.slug match
-  tagText: string;     // literal as typed (case preserved): "Loopd"
+  tagText: string;     // literal as typed (case preserved): "Buffr"
   lineIndex: number;
 };
 
@@ -33,7 +33,7 @@ function maskCode(text: string): string {
 }
 
 // Extract tag mentions from arbitrary text. De-duped per-line per-slug
-// (multiple #loopd on the same line collapse to one mention).
+// (multiple #buffr on the same line collapse to one mention).
 export function parseTags(text: string): ParsedTag[] {
   if (!text) return [];
   const masked = maskCode(text);

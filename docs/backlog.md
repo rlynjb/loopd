@@ -1,4 +1,4 @@
-# loopd — Backlog
+# buffr — Backlog
 
 Things that aren't urgent but are worth tracking. Each entry has the rough cost + the trigger that would make it become priority.
 
@@ -53,7 +53,7 @@ Soft-deleted rows (`deleted_at IS NOT NULL`) accumulate forever. The plan was a 
 
 ## Cloud sync — Phase B (multi-user, paid tier)
 
-**Status:** out of scope for current single-developer use; sketched in [`docs/loopd-cloud-sync-spec.md`](./loopd-cloud-sync-spec.md) §14.
+**Status:** out of scope for current single-developer use; sketched in [`docs/buffr-cloud-sync-spec.md`](./buffr-cloud-sync-spec.md) §14.
 
 What it adds:
 - **Auth** — Supabase Auth with email magic link or OAuth (Apple/Google).
@@ -62,7 +62,7 @@ What it adds:
 - **Payment** — TBD; likely $3–5/mo. Supabase free tier covers ~100 paid users.
 - **Free-tier UX** — "Cloud Sync (paid). Your data lives only on this device. Tap to subscribe." Single guard at the top of `pushAll()` and `pullAll()` does it.
 
-**Trigger:** when you decide to open loopd to other users.
+**Trigger:** when you decide to open buffr to other users.
 
 **Cost:** ~80% UX work (auth screens, payment, onboarding), ~20% data-layer work. Multiple weeks.
 
@@ -86,11 +86,11 @@ The existing `rewriteTodoLine` helper handles done/text changes; would need an a
 
 **Status:** known gap, no plan yet.
 
-`entries.clips_json` round-trips through cloud sync, but the actual MP4 files in `Documents/loopd/clips/<date>/*.mp4` do NOT. If local FS is wiped, the videos are unrecoverable from the cloud.
+`entries.clips_json` round-trips through cloud sync, but the actual MP4 files in `Documents/buffr/clips/<date>/*.mp4` do NOT. If local FS is wiped, the videos are unrecoverable from the cloud.
 
 **Options:**
 - Push clips to Supabase Storage on every import. Costs egress + storage; users care about MB-scale per clip.
-- Rely on phone's native photo backup (Google Photos / iCloud); accept clips-not-in-loopd-cloud as a known trade-off.
+- Rely on phone's native photo backup (Google Photos / iCloud); accept clips-not-in-buffr-cloud as a known trade-off.
 - Optional toggle: "Also back up video files" — opt-in for users who want it.
 
 **Trigger:** if device-loss recovery actually happens (or anticipating Phase B users wanting full backup).
