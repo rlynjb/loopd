@@ -166,6 +166,7 @@ This is what people mean by "batch under, but small enough to retry cheaply." Ev
 **Orchestrator:**    `src/services/sync/orchestrator.ts` → `pushAll()` L38–L60 — walks the 10-table `REGISTRY` (defined L25)
 **Per-table glue:**  `src/services/sync/tables/*` — each table exports `localQueryDirty`, `localToCloud`, `localMarkSynced` (the three callbacks `pushTable` consumes)
 **Cursor column:**   the SQLite `synced_at` column on every synced table is the durable retry queue — `localQueryDirty` runs `SELECT * WHERE updated_at > synced_at`
+**Schema namespace:** `supabase.from(table).upsert(…, { onConflict: 'user_id,id' })` resolves to `buffr.<table>` because `src/services/sync/client.ts:47` sets `db: { schema: 'buffr' }` (migration 0010 moved the tables out of `public`); the upsert + onConflict semantics are unchanged.
 
 ---
 
@@ -431,3 +432,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (moving-truck-with-pallets scenario → naming the batched-upsert-with-idempotent-retry pattern → bolded "what depends on getting this right" pivot with `synced_at` cursor-as-retry-queue stakes → before/after bullets comparing per-row vs batched push of 137 dirty rows → one-line summary "round-trips are the cost; the cursor column IS the retry queue").
+
+---
+Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (`supabase.from(table).upsert(…)` now resolves to `buffr.<table>` via the client's default schema config; upsert + `onConflict` semantics unchanged).

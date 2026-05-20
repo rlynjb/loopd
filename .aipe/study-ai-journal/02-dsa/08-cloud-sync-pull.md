@@ -181,6 +181,7 @@ This is what people mean by "incremental sync via a monotonic cursor." RSS reade
 **Orchestrator:**  `src/services/sync/orchestrator.ts` → `pullAll()` L61–L82
 **Conflict:**      `src/services/sync/conflict.ts` → `chooseWinner()` L20–L31
 **RPC contract:**  `supabase/migrations/0003_server_time_rpc.sql` defines `get_server_time()` server-side
+**Schema namespace:** Both `supabase.from(table).gt('updated_at', cursor)…` and `supabase.rpc('get_server_time')` resolve to `buffr.<table>` and `buffr.get_server_time()` because `src/services/sync/client.ts:47` sets `db: { schema: 'buffr' }` (migration 0010 moved the table and the RPC out of `public`); the cursor + page-by-200 algorithm is unchanged by the move.
 
 ---
 
@@ -453,3 +454,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-friends-with-drop-box + newspaper-delivery analogies with Notion's two-device sync, GitHub's `since` cursor API, RSS `If-Modified-Since`, and React Query's `useInfiniteQuery` with server-provided `nextCursor`). Why care WC1 was missed by the original triage; included in this pass.
+
+---
+Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (both `supabase.from(table).gt(…)` and `supabase.rpc('get_server_time')` now resolve under `buffr.*`; cursor + page-by-200 algorithm is unchanged).

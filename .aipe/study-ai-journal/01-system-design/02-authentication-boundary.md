@@ -181,9 +181,10 @@ This is what defense in depth looks like in a real system — two independent me
 
 ## In this codebase
 
-**Hardcoded id:**       `src/services/sync/client.ts` — holds `PHASE_A_USER_ID` (UUID). Every push and pull mapper stamps it; replacing it with `auth.uid()` is the Phase B switch.
-**Schema gate:**        `supabase/migrations/0001_initial_schema.sql` — declares composite `(user_id, id)` PKs on every synced table. The schema-level isolation that holds today and after RLS ships.
-**Runtime gate (off):** `supabase/migrations/0002_rls_policies.sql` — the staged-but-disabled RLS scaffold. File exists, policies are not installed in Phase A.
+**Hardcoded id:**         `src/services/sync/client.ts` — holds `PHASE_A_USER_ID` (UUID). Every push and pull mapper stamps it; replacing it with `auth.uid()` is the Phase B switch.
+**Schema gate:**          `supabase/migrations/0001_initial_schema.sql` — declares composite `(user_id, id)` PKs on every synced table. The schema-level isolation that holds today and after RLS ships.
+**Runtime gate (off):**   `supabase/migrations/0002_rls_policies.sql` — the staged-but-disabled RLS scaffold. File exists, policies are not installed in Phase A.
+**Postgres namespace:**   `supabase/migrations/0010_namespace_to_buffr_schema.sql` — moved all 10 synced tables and the `get_server_time()` RPC from `public` into a dedicated `buffr` schema; the JS client sets `db: { schema: 'buffr' }` so every `.from()` call resolves there. The composite-PK gate and the staged RLS policies followed the tables to the new schema automatically (Postgres tracks them by OID), so the auth posture didn't change — only the namespace did.
 
 ---
 
@@ -473,3 +474,6 @@ Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of 
 
 ---
 Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from whole-product references (GitHub branch protection, Stripe webhooks) to the level-1 primitive (two `WHERE` clauses on the same query); same swap on the Why care Move 5 summary. Added Move 1 mnemonic diagram (two-WHERE-clauses pipeline) + 4 Move 2 sub-section diagrams: composite-PK table shape, RLS client-vs-database query rewrite, Phase A/B side-by-side, and a failure-mode comparison table. Total: 5 new diagrams.
+
+---
+Updated: 2026-05-19 — added `Postgres namespace` row to `## In this codebase` documenting migration 0010 (cloud tables moved to `buffr` schema); noted that the composite-PK gate and the staged RLS policies followed the tables to the new schema automatically, so the auth posture is unchanged.

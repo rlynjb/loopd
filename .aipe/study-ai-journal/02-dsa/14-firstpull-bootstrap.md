@@ -233,6 +233,8 @@ This is what people mean by "special case is a parameter, not a fork." Every tim
 - `pullTable()` in `src/services/sync/pull.ts` L34–L117 (cursor + page-by-200, see [08-cloud-sync-pull](./08-cloud-sync-pull.md))
 - The `cursor = last_pull_at ?? '1970-01-01...'` line in `pullTable` is what makes "NULL = pull from epoch" work without a code branch.
 
+**Schema namespace:** every `supabase.from(table).gt(…)` call inside the reused `pullTable` machinery resolves against `buffr.<table>` because `src/services/sync/client.ts:47` sets `db: { schema: 'buffr' }` (migration 0010 moved cloud tables out of `public`). firstPullAll itself only touches local SQLite (`sync_meta`); the schema change is transparent to it.
+
 ---
 
 ## Elaborate
@@ -508,3 +510,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (subway-turnstile-no-first-rider-gate scenario → naming the "special-case-is-a-parameter-not-a-fork" principle for initial replication → bolded "what depends on getting this right" pivot with `firstPullAll` install-time-code-path testing-surface stakes → before/after bullets comparing dedicated bulk-loader vs cursor-reset reuse for 10k/100k row attach → one-line summary "special case is a parameter; the common path subsumes the rare one").
+
+---
+Updated: 2026-05-19 — added `Schema namespace` note to `## In this codebase` clarifying that firstPullAll itself only touches local `sync_meta`, while the reused `pullTable` machinery now resolves cloud queries against the `buffr` schema (migration 0010).

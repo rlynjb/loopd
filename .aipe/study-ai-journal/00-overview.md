@@ -81,6 +81,8 @@
    ┌─ Cloud (Supabase Postgres) ─────────────────────────────────────────────────┐
    │                                                                             │
    │  Mirror of 10 synced tables, composite (user_id, id) PKs.                   │
+   │  All tables + RPC live in the `buffr` schema (migration 0010) so this       │
+   │  project can host two other apps' tables in their own schemas later.        │
    │  RLS scaffolded but disabled in Phase A (single hardcoded user_id).         │
    │                                                                             │
    │  RPC: get_server_time() — used by pull to avoid clock-skew bugs.            │
@@ -128,7 +130,7 @@
 - **SQLite (buffr.db)** — the single source of truth. WAL journal mode. 12 tables: 10 synced + 2 local-only (`sync_meta` ledger, deprecated `sync_deletions`). Reads always filter `WHERE deleted_at IS NULL`.
 - **Filesystem** — clip URIs are device-local under `/document/buffr/clips/<date>/`. `clip_uri` columns hold absolute paths; `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
 - **SecureStore** — Android Keystore-backed key/value. Stores LLM API keys, Supabase URL/anon key, the `cloud_initial_push_done` bootstrap flag, and per-feature backfill flags.
-- **Supabase Postgres** — the cloud mirror, never canonical. Reads always go to local SQLite; cloud catches up asynchronously. Migrations are append-only files in `supabase/migrations/`.
+- **Supabase Postgres** — the cloud mirror, never canonical. Reads always go to local SQLite; cloud catches up asynchronously. Migrations are append-only files in `supabase/migrations/`. As of `0010_namespace_to_buffr_schema.sql`, the 10 mirrored tables and the `get_server_time()` RPC live in a dedicated `buffr` schema; the JS client at `src/services/sync/client.ts` sets `db: { schema: 'buffr' }` so every `.from()` / `.rpc()` default-resolves there. Reason: the same Supabase project will eventually host two other apps' tables in their own schemas, so prefixing in `public` would collide.
 - **scripts/db-migrate.mjs** — the migration runner. A Node script (uses `pg` + `dotenv`) that applies `supabase/migrations/0001..0005` against the Supabase Postgres mirror in order. Lives outside the device runtime — driven manually by the developer running `node scripts/db-migrate.mjs --all-pending`. Migration files in order: `0001` schema, `0002` RLS scaffolded but disabled in Phase A, `0003` server-time RPC, `0004` relax FKs, `0005` `todo_meta.pinned`. Talks to: Supabase Postgres.
 - **External LLMs** — Anthropic + OpenAI. Provider switch lives in `src/services/ai/config.ts` and is read on every call. 5 callsites × 2 providers = 10 explicit branches; OpenAI's JSON chains pass `response_format: json_object` while interpret's OpenAI branch omits it (it wants markdown, not JSON).
 
@@ -161,3 +163,6 @@ Updated: 2026-05-10 — added migration runner + react-native-video to legend; a
 
 ---
 Updated: 2026-05-10 — fixed stale nutrition path reference (`nutrition/scan.ts` → `nutrition/scanNutrition.ts`); aligns with the DSA file 12 path.
+
+---
+Updated: 2026-05-19 — labelled the cloud-side block in the system map and the Supabase Postgres legend bullet with the `buffr` schema (per migration 0010); noted the client's `db.schema = 'buffr'` setting so the reader knows where `.from(table)` calls resolve.

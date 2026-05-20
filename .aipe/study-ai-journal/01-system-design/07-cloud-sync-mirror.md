@@ -214,6 +214,7 @@ This is what people mean by "the cloud is a sync mirror, not the canonical sourc
 **Conflict:**        `src/services/sync/conflict.ts` → `chooseWinner()` L20–L31
 **Ledger:**          `src/services/sync/syncMeta.ts` — per-table `last_pull_at`, `last_push_at`, `pending_pushes`, `last_error`
 **Per-table glue:**  `src/services/sync/tables/*` — each exports `localQueryDirty`, `localToCloud`, `localFromCloud`, `localMarkSynced`
+**Schema namespace:** `supabase/migrations/0010_namespace_to_buffr_schema.sql` moved every mirrored table and `get_server_time()` into a dedicated `buffr` schema. The JS client at `src/services/sync/client.ts:47` sets `db: { schema: 'buffr' }`, so the `supabase.from(table).upsert(…)` and `.gt('updated_at', cursor)` pseudocode below default-resolves against `buffr.<table>` without any change to the call shape — the schema choice lives in one config line, not in every call site.
 
 ```
 Push pseudocode (push.ts):
@@ -527,3 +528,6 @@ Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of 
 
 ---
 Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-product references (Linear / Notion / Apple Photos iCloud) to a level-1 primitive (`localStorage.getItem`/`setItem` + a background `fetch` for durability). Kept How it works Move 1 anchor on git (level-4 industry primitive). Added Move 1 mnemonic diagram (local-canonical + cloud-mirror shape) + 4 Move 2 sub-section diagrams: push-pull trigger split, push dirty-filter loop, pull arbitration flow, server-time-RPC side-by-side. Total: 5 new diagrams.
+
+---
+Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (cloud tables + `get_server_time()` moved to the `buffr` schema). Noted that the pseudocode in How it works still resolves correctly because the client sets `db.schema = 'buffr'` once instead of qualifying every call site.
