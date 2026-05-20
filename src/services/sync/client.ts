@@ -5,7 +5,10 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 // Phase B replaces this with auth.uid() once login lands.
 export const PHASE_A_USER_ID = '00000000-0000-0000-0000-000000000001';
 
-let client: SupabaseClient | null = null;
+// Schema generic is `'buffr'` because the client below sets db.schema = 'buffr'
+// (see migration 0010). Without this annotation TS infers the default 'public'
+// from `SupabaseClient` and refuses the assignment from createClient.
+let client: SupabaseClient<any, any, 'buffr'> | null = null;
 let warned = false;
 
 function getEnv(): { url: string; anonKey: string } | null {
@@ -27,7 +30,7 @@ export function isCloudConfigured(): boolean {
 
 // Returns null when env isn't configured. Callers must handle that case
 // (orchestrator no-ops, dev menu shows a "not configured" message).
-export function getSupabase(): SupabaseClient | null {
+export function getSupabase(): SupabaseClient<any, any, 'buffr'> | null {
   if (client) return client;
   const env = getEnv();
   if (!env) return null;
@@ -38,6 +41,10 @@ export function getSupabase(): SupabaseClient | null {
       autoRefreshToken: false,
       detectSessionInUrl: false,
     },
+    // Default-resolve every .from() and .rpc() against the buffr schema so
+    // this client can share a Supabase project with other apps' schemas
+    // without table-name collisions. See supabase/migrations/0010.
+    db: { schema: 'buffr' },
     // Realtime is unused at v1 (pull-on-foreground is sufficient per spec §11).
     realtime: { params: { eventsPerSecond: 1 } },
   });
