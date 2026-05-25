@@ -5,7 +5,7 @@
 
 > Decide whether a line is *definitely a todo* (return `'todo'`) or *uncertain* (return `null`, defer to LLM). Never mis-classify a question or idea as a todo.
 
-**See also:** → [02-reconcile-todo-meta](./02-reconcile-todo-meta.md) · → [03-ai-engineering/05-heuristic-before-llm](../03-ai-engineering/05-heuristic-before-llm.md)
+**See also:** → [02-reconcile-todo-meta](./02-reconcile-todo-meta.md) · → [`../study-ai-engineering/`](../../study-ai-engineering/) for the heuristic-before-LLM cost-gate framing (dir cleared 2026-05-24 — repopulates on next `/aipe:study-ai-engineering` run)
 
 ---
 
@@ -178,7 +178,7 @@ Every "free first, paid second" pipeline in this codebase has the same shape —
 - Multi-language users (buffr assumes English regex). Non-English text falls through to `null` and the LLM handles it.
 
 ### What to explore next
-- [03-ai-engineering/05-heuristic-before-llm](../03-ai-engineering/05-heuristic-before-llm.md) → the cost-gate framing.
+- [`../study-ai-engineering/`](../../study-ai-engineering/) → the cost-gate framing (dir cleared 2026-05-24; repopulates on next `/aipe:study-ai-engineering` run).
 - [02-reconcile-todo-meta](./02-reconcile-todo-meta.md) → the call site.
 
 ---

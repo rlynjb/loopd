@@ -5,7 +5,7 @@
 
 > Every AI service file imports `getProvider`, branches twice (once on the request, once on the model id), then converges on the same downstream parse step.
 
-**See also:** → [03-ai-engineering/04-provider-abstraction](../03-ai-engineering/04-provider-abstraction.md) · → [03-ai-engineering/02-single-purpose-chains](../03-ai-engineering/02-single-purpose-chains.md)
+**See also:** → [`../study-ai-engineering/`](../../study-ai-engineering/) (the AI-engineering framing of provider abstraction and single-purpose chains; dir cleared 2026-05-24 — repopulates when `/aipe:study-ai-engineering` runs)
 
 ---
 
@@ -267,7 +267,7 @@ Multi-provider AI abstraction was popularised by LangChain's `BaseChatModel` int
 - New cross-cutting features (token counting, retries, streaming) have to land in both branches. There's no shared layer to hold them.
 
 ### What to explore next
-- [03-ai-engineering/04-provider-abstraction](../03-ai-engineering/04-provider-abstraction.md) → the AI-engineering framing of the same pattern.
+- [`../study-ai-engineering/`](../../study-ai-engineering/) → the AI-engineering framing of the same pattern (dir cleared 2026-05-24; repopulates on next `/aipe:study-ai-engineering` run).
 - LangChain `BaseChatModel` → for the unified-interface alternative.
 
 ---

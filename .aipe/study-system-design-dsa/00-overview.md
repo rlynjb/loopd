@@ -152,7 +152,8 @@ The whole codebase enforces these five. Every pattern in `01-system-design/` tra
 
 - [`01-system-design/`](./01-system-design/) — every architectural pattern, one file per concept.
 - [`02-dsa/`](./02-dsa/) — every meaningful algorithm in the codebase, with execution traces and complexity.
-- [`03-ai-engineering/`](./03-ai-engineering/) — how buffr uses LLMs (and what it deliberately doesn't).
+- [`../study-ai-engineering/`](../study-ai-engineering/) — how buffr uses LLMs. Cleared 2026-05-24 so the new `/aipe:study-ai-engineering` command can regenerate it under the v1.38.0 9-sub-section structure (`01-llm-foundations/`, `02-context-and-prompts/`, …, `09-machine-learning/`).
+- [`../study-prompt-engineering/`](../study-prompt-engineering/) — the portfolio-wide prompt-engineering guide.
 
 ---
 Updated: 2026-05-07 — fixed `app/todos.tsx` description (sort is now pinned-first then createdAt DESC, no longer "ranked"); added section index links.
@@ -166,3 +167,9 @@ Updated: 2026-05-10 — fixed stale nutrition path reference (`nutrition/scan.ts
 
 ---
 Updated: 2026-05-19 — labelled the cloud-side block in the system map and the Supabase Postgres legend bullet with the `buffr` schema (per migration 0010); noted the client's `db.schema = 'buffr'` setting so the reader knows where `.from(table)` calls resolve.
+
+---
+Updated: 2026-05-24 — directory split per v1.38.0 plugin: `.aipe/study-ai-journal/` → `.aipe/study-system-design-dsa/` (renamed; system design + DSA only) and `.aipe/study-ai-journal/03-ai-engineering/` → `.aipe/study-ai-engineering/` (extracted as sibling top-level dir). Updated cross-section "See also" links across both guides to the new paths.
+
+---
+Updated: 2026-05-24 — cleared `.aipe/study-ai-engineering/` (47 files). The new `/aipe:study-ai-engineering` command (v1.38.0) regenerates the AI guide under a per-scope structure (9 sub-section subdirectories instead of the flat layout the migrated content had). Cross-section "See also" links from sd/dsa files now point at the directory rather than specific files so they re-resolve once the new command runs.

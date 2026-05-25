@@ -5,7 +5,7 @@
 
 > Single LLM call emits four tonal variants (`clean | smoother | reflective | punchy`) of the same day, plus a `detectedTheme` key. Persisted as `variants` + `variantsTheme` on `ai_summaries.summary_json`.
 
-**See also:** → [10-heuristic-first-classifier](./10-heuristic-first-classifier.md) · → [03-ai-engineering/](../03-ai-engineering/)
+**See also:** → [10-heuristic-first-classifier](./10-heuristic-first-classifier.md) · → [03-ai-engineering/](../../study-ai-engineering/)
 
 ---
 
