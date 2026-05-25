@@ -1,6 +1,6 @@
 # Prompt engineering — study guide
 
-Topic-focused companion to `/aipe:study`. Covers prompt engineering as a working discipline, anchored to two codebases in this portfolio: **buffr** (formerly loopd — daily-journaling app with 5 production AI chains) and **aipe** (`/Users/rein/Public/aipe/` — the meta-tooling project that owns prompt templates and skill specs).
+Topic-focused companion to `/aipe:study`. Per-repo scope — describes how **this codebase (buffr — daily-journaling app with 5 production AI chains under `src/services/ai/`)** uses each pattern. Other meta-tooling codebases (aipe and similar) appear only as illustrative pattern references where they sharpen a take; the file you're reading is about buffr.
 
 Voice: working AI engineer who has shipped production LLM systems. Hedging is banned. First-person where it earns its place. Concrete bugs, specific dates, specific phrasings — not "best practices" prose.
 
@@ -44,3 +44,6 @@ Voice: working AI engineer who has shipped production LLM systems. Hedging is ba
 | 13 | Forbidden patterns | Every caption variant starts with "As you reflect on…" because nobody banned it. |
 
 → **Start with [00-overview.md](./00-overview.md)** if you want the discipline summarised on one page. → **Skip to the file matching the bug you're chasing** if you came here from a production failure.
+
+---
+Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (per-repo scope: this codebase is the primary anchor; aipe/others are illustrative).

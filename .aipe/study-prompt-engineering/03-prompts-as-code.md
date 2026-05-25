@@ -188,11 +188,7 @@ The full picture is below.
 
 Prompts are in git as part of the source. The model version constants (`CLAUDE_MODEL`, `OPENAI_MODEL`) are defined at the top of each chain file but not logged with calls.
 
-**Aipe's prompt assets:**
-
-**Files:** `/Users/rein/Public/aipe/specs/*.md` (the skill specs — `study.md`, `refactor.md`, etc.) and `/Users/rein/Public/aipe/prompts/*.md` (one-off templates like `pr-review-protocol-v2.md`, `frontend-story-checklist.md`)
-
-Aipe is the cleanest example in the portfolio of prompts-as-code at scale. Every spec is a markdown file in git; every iteration goes through a PR. The frontmatter on `pr-review-protocol-v2.md` (note the `-v2` in the filename) carries the version explicitly in the name — the v1 still exists in git history for reference. This is the structural shape buffr would converge toward if its prompt count grew.
+For an illustrative example of the structural shape buffr would converge toward if its prompt count grew, the aipe meta-tooling project (`/Users/rein/Public/aipe/specs/*.md`) keeps every spec as a separate markdown file in git, with versioning sometimes encoded in the filename (`pr-review-protocol-v2.md` — the v1 lives in git history). buffr is nowhere near needing that file split; the illustrative reference is only useful to recognise the shape if you ever have to.
 
 ---
 
@@ -417,3 +413,6 @@ Without opening files:
 - Which file owns the model version constants for buffr's caption chain?
 - Where would per-call AI call logs land if they existed?
 - What does aipe's `pr-review-protocol-v2.md` filename tell you about its versioning convention?
+
+---
+Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (aipe dedicated sub-section in `In this codebase` demoted to one illustrative paragraph).

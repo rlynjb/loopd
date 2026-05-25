@@ -2,10 +2,11 @@
 
 Prompt engineering is the discipline of designing, versioning, evaluating, and defending the text inputs you send to a large language model so the outputs survive production. Most of it is operational hygiene, not clever phrasing: counting tokens, keeping prompts in version control with the model version they were validated against, building an eval set, treating user input as data not instructions. The clever phrasing matters too — few-shot examples constrain harder than instructions, chain-of-thought helps multi-step problems and wastes tokens on simple ones — but a codebase that nails the operational discipline and ignores the techniques outperforms the reverse every time.
 
-## The portfolio anchors
+## This codebase
 
-- **buffr** (formerly loopd) — daily-journaling app at `/Users/rein/Public/buffr/`. Five production AI chains: `summarize` (structured daily summary), `caption` (4 tonal variants per day), `expand` (per-todo typed structured expansion), `classify` (thinking-mode classifier with heuristic-first short-circuit), `interpret` (long-form markdown reflection). Two providers (Anthropic primary, OpenAI alternate). All chains live under `src/services/ai/`.
-- **aipe** — meta-tooling at `/Users/rein/Public/aipe/`. Owns the curriculum (`prompts/aieng-curriculum.md`), the skill specs (`specs/study.md`, `specs/refactor.md`, etc.), the slash commands (`commands/`), and the skill wrappers (`skills/`). Every spec is itself a production prompt — when a user invokes `/aipe:study`, that spec is the prompt the agent runs against.
+**buffr** (formerly loopd) — daily-journaling app at `/Users/rein/Public/buffr/`. Five production AI chains: `summarize` (structured daily summary), `caption` (4 tonal variants per day), `expand` (per-todo typed structured expansion), `classify` (thinking-mode classifier with heuristic-first short-circuit), `interpret` (long-form markdown reflection). Two providers (Anthropic primary, OpenAI alternate). All chains live under `src/services/ai/`. Every concept file describes how buffr implements (or doesn't yet implement) the pattern; concepts buffr doesn't implement are explicitly Case B with the build target named.
+
+Per-repo scope: this guide is about buffr. Other meta-tooling codebases in the same author's portfolio (notably `aipe`, the slash-command-and-spec project that produces this guide itself) appear only as illustrative pattern references where they sharpen a take. The guide does not co-anchor.
 
 ## Operational discipline first (01–05)
 
@@ -37,3 +38,6 @@ Vendor-specific syntax quirks (those live inside individual files' Tech referenc
 ## How to read this
 
 If you came from a production failure, skip directly to the file matching the bug. If you're new to the discipline, read 01–05 in order, then jump around the techniques as the codebase calls for them. If you're auditing a system that uses LLMs, the Validate block at the end of each file tells you what good looks like — a reader who can pass Level 4 on each of 01–05 has the operational discipline; the techniques follow from that base.
+
+---
+Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (per-repo scope: buffr is the anchor; aipe demoted from co-anchor to illustrative reference).

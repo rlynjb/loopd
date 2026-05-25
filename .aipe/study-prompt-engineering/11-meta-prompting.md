@@ -3,7 +3,7 @@
 **Industry name(s):** Meta-prompting, prompt-generation, prompt-of-prompts, LLM-authored prompts
 **Type:** Industry standard · Language-agnostic
 
-> Use an LLM to draft prompts for another LLM call. Useful for initial drafting; dangerous if the output enters the codebase unedited. aipe is the canonical example — its specs ARE prompts that generate other prompts.
+> Use an LLM to draft prompts for another LLM call. Useful for initial drafting; dangerous if the output enters the codebase unedited. Buffr does not use meta-prompting — the 5 chain prompts were hand-written and stay that way; this file describes the discipline that would apply if a future complex chain ever made the draft-and-edit workflow earn its keep here.
 
 **See also:** → [03-prompts-as-code](./03-prompts-as-code.md) · → [05-eval-driven-iteration](./05-eval-driven-iteration.md) · → [01-anatomy](./01-anatomy.md)
 
@@ -21,7 +21,7 @@ That should-I-let-an-LLM-write-this question is what meta-prompting answers. Not
 
 ### Move 3 — Why answering that question matters
 
-**What breaks without the discipline:** LLM-authored prompts ship without human review, look right, fail in production with subtle issues nobody catches because nobody read them carefully. The cost is invisible until it's the prompt's behaviour that's wrong. In buffr today, no chain uses meta-prompting; the 5 chain prompts were written by hand. Aipe is the inverse — its `specs/*.md` files ARE meta-prompts (a spec like `study.md` is a 1000-line prompt the agent runs to generate a study guide); every aipe spec is a meta-prompt that an LLM author would be tempted to draft for you, and the discipline that the aipe specs are hand-curated is exactly the discipline meta-prompting requires.
+**What breaks without the discipline:** LLM-authored prompts ship without human review, look right, fail in production with subtle issues nobody catches because nobody read them carefully. The cost is invisible until it's the prompt's behaviour that's wrong. In buffr today, no chain uses meta-prompting; the 5 chain prompts in `src/services/ai/` were written by hand and that's the correct choice for prompts of this size that change only when their consumer model changes. The risk surface meta-prompting introduces — a draft that looks plausible but cites fields buffr doesn't have, labels buffr doesn't use, edge cases for some other app — is the risk this file is protecting buffr against if someone ever reaches for the workflow.
 
 ### Move 4 — Concrete before/after
 
@@ -110,35 +110,26 @@ If you're coming from frontend, this is the same shape as using Copilot to draft
 
 If you're coming from frontend, this is the same as code review for an autocomplete-suggested function — the suggestion may compile and look right; you still verify the logic. Boundary: meta-prompting with a model that's STRONGER than the prompt's target model often produces drafts the target model can't reliably follow (Claude Opus drafts a prompt with subtle instruction-following requirements; Sonnet running the prompt misses them). Match the drafter model's capabilities to the consumer model's capabilities.
 
-**Layer 4 — aipe as the production example.** Aipe's `specs/*.md` files are meta-prompts at scale — `specs/study.md` is a ~3000-line prompt that, when invoked via the `/aipe:study` slash command, generates an 80-file study guide. The discipline is that every aipe spec is HAND-CURATED by the human author; aipe itself doesn't generate aipe specs. The pattern earns its keep here because the specs are run thousands of times across different codebases — every minute saved in a spec is amortised across thousands of invocations. For one-off prompts in a single chain, the amortisation is weaker; meta-prompting earns less per draft.
-
-```
-   aipe's meta-prompting structure
-   ───────────────────────────────
-   specs/study.md           (the meta-prompt — describes how to generate a study guide)
-   commands/study.md        (the slash-command wrapper)
-   skills/study/SKILL.md    (the skill descriptor)
-   ─────
-   running /aipe:study invokes the meta-prompt against a target codebase
-   the output is .aipe/study-<purpose>/00-overview.md + per-concept files
-```
+**Layer 4 — amortisation decides whether the workflow earns its keep.** The reason a prompt becomes a meta-prompting candidate isn't "it's complex" — it's "it's complex AND it runs many times." A one-off prompt for a single chain saves you the ~30 minutes of scaffolding once; a prompt that gets re-invoked across thousands of contexts amortises every accuracy improvement across every invocation. An illustrative example outside buffr: the aipe meta-tooling project at `/Users/rein/Public/aipe/specs/` ships ~3000-line spec files (e.g. `specs/study.md`) that get invoked many times across different codebases; each spec is hand-curated rather than meta-prompted because at that amortisation level the accuracy cost of letting hallucinations slip through review outweighs every draft-time saving. The pattern recognition for buffr: none of buffr's 5 chain prompts hits that amortisation threshold. They're small, they run on a single codebase, they change rarely. Meta-prompting would cost more than it saved.
 
 ### Move 2.5 — Current state vs future state
 
-Buffr today doesn't use meta-prompting for its 5 chains. The chain prompts were authored by hand, evolved through iteration, and live in their respective `.ts` files. The portfolio's META-prompting (the aipe specs) is where the pattern lives — buffr is on the consumer side of aipe's meta-prompts (when you run `/aipe:study` in buffr, aipe's `specs/study.md` is the meta-prompt; the output is buffr's study guide).
+Buffr today doesn't use meta-prompting for its 5 chains. The chain prompts were authored by hand, evolved through iteration, and live in their respective `.ts` files. That stays true unless a future chain crosses two thresholds at once: structurally complex draft (system role + 5+ few-shot + label list + edge cases) AND enough runtime amortisation to justify the review burden.
 
 ```
           Now (buffr)                          Later (hypothetical)
 ┌──────────────────────────────┐  ┌──────────────────────────────────┐
 │ 5 chain prompts hand-written │  │ same 5 chains, hand-written      │
-│ no meta-prompting in buffr   │  │ NEW: a hypothetical chain that    │
-│                              │  │ generates "tomorrow's journal     │
-│                              │  │ prompts" given user's history     │
-│                              │  │ → this chain's prompt is itself   │
-│                              │  │   meta-prompted via aipe          │
+│ no meta-prompting in buffr   │  │ NEW: a complex chain (e.g.       │
+│                              │  │ "themes across entries" or       │
+│                              │  │ "tomorrow's prompts") whose      │
+│                              │  │ initial draft justifies a        │
+│                              │  │ meta-prompted scaffold + heavy   │
+│                              │  │ human review pass                │
 └──────────────────────────────┘  └──────────────────────────────────┘
-   correct for current chains        meta-prompting appropriate for
-                                     complex new chains, not for tweaks
+   correct for current chains        meta-prompting appropriate only
+                                     when complexity + amortisation
+                                     both clear the threshold
 ```
 
 ### Move 3 — The principle
@@ -185,15 +176,13 @@ The full picture is below.
 
 ## In this codebase
 
-**Buffr's chain prompts: all hand-written, no meta-prompting.**
+**Not yet implemented — Case B.**
 
-**Files:** `src/services/ai/{summarize,caption,expand,classify,interpret}.ts` — the prompts in each chain were authored by hand.
+**Files:** `src/services/ai/summarize.ts`, `caption.ts`, `expand.ts`, `classify.ts`, `interpret.ts` — all 5 chain prompts were authored by hand and live as template literals in their respective chain files (roughly L40–L150 in each). No prompt in buffr is meta-prompted today; no draft-attribution convention exists in git history; no helper exists for invoking a drafter model against buffr's schema.
 
-**Aipe's meta-prompts: the canonical example.**
+This is the correct shape for the current scope. Each chain prompt is small enough (under 200 lines), changes rarely enough (only on consumer-model upgrades or eval-driven iteration), and lives close enough to the code that consumes it that the meta-prompting workflow would add more review-burden cost than draft-time saving. The buildable target for meta-prompting in buffr is Project exercise `B3.19` below — applied to a future chain (not the existing 5) only if that chain crosses both the complexity and amortisation thresholds.
 
-**Files:** `/Users/rein/Public/aipe/specs/*.md` — every spec is a meta-prompt. `specs/study.md` is the largest (~3000 lines); `specs/refactor.md`, `specs/audit.md`, etc. are smaller. Each spec, when invoked via `/aipe:<skill>`, generates substantial output (study guides, audit reports, refactor specs).
-
-**File:** `/Users/rein/Public/aipe/commands/study.md` — the slash-command wrapper that invokes `specs/study.md`. The invocation chain is `command → spec → agent runs spec → generates output`. The spec IS the meta-prompt.
+For an illustrative example of meta-prompting *at scale* (a setting where the workflow visibly earns its keep), the aipe meta-tooling project at `/Users/rein/Public/aipe/specs/*.md` is a clean reference — every spec is a hand-curated meta-prompt that, when invoked, generates substantial output (study guides, audit reports, refactor specs). The point of citing it here is the amortisation math: aipe's specs run thousands of times across many codebases, which is why even there the specs are hand-curated rather than meta-prompted themselves. None of buffr's chains are anywhere near that amortisation level.
 
 ---
 
@@ -248,7 +237,7 @@ Writing complex prompts by hand from scratch costs 30-60 minutes per prompt. For
 
 ### The breakpoint
 
-Meta-prompting earns its keep when the initial draft is structurally complex (system role + label list + 5+ few-shot examples + edge cases). Below that, edit by hand. Aipe's specs are the extreme case where meta-prompting could be transformative (3000-line spec drafts) — but aipe's specs are hand-curated because the runtime amortisation makes accuracy worth more than draft speed.
+Meta-prompting earns its keep when the initial draft is structurally complex (system role + label list + 5+ few-shot examples + edge cases) AND the prompt runs often enough to amortise the review-burden cost. Below that, edit by hand. Buffr's 5 chain prompts sit below both thresholds today; if a future chain crosses them, meta-prompting becomes a real candidate for the initial scaffold.
 
 ---
 
@@ -281,7 +270,7 @@ Meta-prompting earns its keep when the initial draft is structurally complex (sy
 
 ### Part 1 — concept recap
 
-Meta-prompting uses an LLM to draft prompts for other LLM calls — useful for initial drafts of structurally-complex prompts where the draft saves significant scaffolding time, dangerous if the draft enters the codebase without human review. The workflow is: human writes goal + real context, LLM drafts, human reviews and edits, edited draft enters via PR. Buffr's 5 chain prompts are hand-written; aipe's `specs/*.md` files are meta-prompts at scale (specs that generate other prompts), and the aipe specs themselves are hand-curated because runtime amortisation makes accuracy more valuable than draft speed. The cost being paid for the current shape is correct — the chains are stable, hand-written, evaluated; meta-prompting earns its keep only on new complex chains.
+Meta-prompting uses an LLM to draft prompts for other LLM calls — useful for initial drafts of structurally-complex prompts where the draft saves significant scaffolding time, dangerous if the draft enters the codebase without human review. The workflow is: human writes goal + real context, LLM drafts, human reviews and edits, edited draft enters via PR. Buffr's 5 chain prompts are hand-written and that's the right call: they sit below both the complexity threshold (under 200 lines each) and the amortisation threshold (one codebase, rare changes) at which meta-prompting earns its keep. The pattern stays in this guide so the discipline is in hand if a future complex chain ever crosses both thresholds at once.
 
 ### Part 2 — key points to remember
 
@@ -305,16 +294,16 @@ When an interviewer asks "do you use LLMs to write your prompts," they're testin
 
 **A:** When the initial draft is structurally complex enough that the LLM saves you ~30 minutes of scaffolding, and you have the domain expertise to review the draft for hallucinations. Concretely: new chain prompts with system + label list + 5+ few-shot + edge cases — meta-prompting saves time. Small tweaks to existing chains — write by hand, the overhead of drafting + reviewing exceeds the gain.
 
-**Q [senior]:** Why don't aipe's spec files use meta-prompting themselves?
+**Q [senior]:** When is hand-curating a prompt the right call instead of meta-prompting it, even when the prompt is large and structurally complex?
 
-**A:** Because aipe's specs are amortised across thousands of invocations. A spec like `study.md` (~3000 lines) runs every time someone invokes `/aipe:study`; an inaccuracy in the spec produces inaccurate study guides for every user of every project. The accuracy cost of meta-prompting (LLM hallucinations sneaking through review) is multiplied by usage count. Hand-curating the specs trades draft-time for accuracy-over-many-invocations — correct trade for an artefact run repeatedly. The same logic applies to other widely-used prompts (open-source prompt templates, framework system messages) — accuracy matters more than draft speed.
+**A:** When the prompt's runtime amortisation is high enough that the accuracy cost of letting hallucinations slip through review outweighs every draft-time saving. The math is simple: a prompt that runs once costs you ~30 minutes if you write it by hand; a prompt that runs 3000 times costs you ~30 minutes × 3000 if a hallucinated rule produces a subtly wrong output every time. Hand-curating widely-used prompts trades draft-time for accuracy-over-many-invocations — correct trade for an artefact run repeatedly. For buffr, none of the 5 chain prompts hit that amortisation level (one app, one consumer, low change rate), so the question is moot today; the answer matters the moment a future chain or shared prompt template starts to.
 
 ```
    amortisation                       hand-curate?
    ─────────────                      ────────────
    prompt runs 1× (one-off script)    no — meta-prompting is fine
-   prompt runs 30× (a chain)          maybe — meta-prompt + careful review
-   prompt runs 3000× (aipe spec)      yes — hand-curate
+   prompt runs ~30× (a chain)         maybe — meta-prompt + careful review
+   prompt runs 1000×+ (shared spec)   yes — hand-curate
 ```
 
 **Q [arch]:** What changes about meta-prompting at scale (100× the number of chains)?
@@ -333,7 +322,7 @@ When an interviewer asks "do you use LLMs to write your prompts," they're testin
 - Draft is raw material; never the final artefact.
 - Review burden is load-bearing; skipping it ships hallucinations.
 - Worth it on complex new prompts; wastes time on small tweaks.
-- Aipe's specs are meta-prompts at scale, hand-curated because amortisation makes accuracy worth more than draft speed.
+- Amortisation decides hand-curate vs meta-prompt: low-runtime prompts can be meta-prompted; high-runtime prompts get hand-curated because accuracy compounds.
 
 ---
 
@@ -366,5 +355,8 @@ Defend or oppose: "buffr should retroactively run all 5 chain prompts through a 
 
 Without opening files:
 - Are any of buffr's 5 chain prompts meta-prompted today?
-- Where do aipe's meta-prompts live (path convention)?
+- What are the two thresholds a future buffr chain would need to cross before meta-prompting earned its keep?
 - What's the load-bearing cost of meta-prompting?
+
+---
+Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (`In this codebase` rewritten as Case B for buffr; Layer 4 aipe block, Move 2.5, breakpoint paragraph, Summary Part 1, senior interview Q, and one-line anchors all reframed so aipe appears only as illustrative reference and amortisation/complexity thresholds become the load-bearing point).

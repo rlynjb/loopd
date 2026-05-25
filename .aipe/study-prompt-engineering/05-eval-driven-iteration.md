@@ -219,7 +219,7 @@ The full picture is below.
 **Function / class:** `validateAISummary(json: unknown): AISummary`
 **Line range:** L1–L137 — runtime schema validator for summarize chain. Catches structural failures but not semantic regressions ("is the summary actually good").
 
-**Aipe's eval surface:** `/Users/rein/Public/aipe/specs/study.md` and the other skill specs serve a similar role to evals — they're hand-curated specifications of what the agent should produce. There's no automated runner against them, but the specs themselves are the closest thing to a golden set the portfolio has.
+As an external illustrative example of what "eval-shaped specification" can look like outside formal eval sets, the aipe meta-tooling project (`/Users/rein/Public/aipe/specs/`) hand-curates spec documents that describe exactly what the agent should produce; no runner, but the specs themselves act as the discipline. buffr itself doesn't have anything like this — the closest thing is `validateAISummary` (which checks shape, not quality).
 
 ---
 
@@ -456,3 +456,6 @@ Without opening files:
 - Which chain is the highest-priority candidate for an eval set?
 - Where would the eval files live (path convention)?
 - What's the difference between the golden set and the regression suite?
+
+---
+Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (aipe paragraph reworded as external illustrative example rather than in-portfolio co-anchor).
