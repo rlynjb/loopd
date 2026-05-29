@@ -402,7 +402,7 @@ When an interviewer asks "how do you structure a multi-step LLM workflow," they'
 
 ### The question candidates always dodge
 
-**Q:** Your `classify` chain has a heuristic-first short-circuit (`heuristicClassify`) that catches ~80% of cases before the LLM runs. Why isn't that a hack? Isn't the whole point of LLM chains to use the LLM?
+**Q:** Your `classify` chain has a heuristic-first short-circuit (`heuristicClassify`) that catches ~70% of cases before the LLM runs. Why isn't that a hack? Isn't the whole point of LLM chains to use the LLM?
 
 **A:** It would be a hack if the heuristic and the LLM disagreed on the 80% the heuristic catches — that would mean the heuristic is overfitting and shipping wrong answers. The pattern only works because the heuristic and the LLM agree on the easy cases (verified empirically) and disagree only on the genuinely ambiguous ones. The 80% short-circuit is exactly the right move: zero LLM cost for the cases that don't need LLM judgment, full LLM cost for the cases that do. The candidates who reject this pattern as "not LLM" miss the point: LLM should be the tool of last resort for the cases that need it, not the tool of first resort for everything. Heuristic-first is the production engineer's answer to "stop spending on LLM calls that don't need LLM judgment."
 
@@ -462,3 +462,6 @@ Without opening files:
 - How many AI chains does buffr have?
 - Where do they live (directory)?
 - Which one has a heuristic-first short-circuit, and where does the heuristic live?
+
+---
+Updated: 2026-05-29 — aligned the heuristic short-circuit rate (`heuristicClassify`) from "~80%" to "~70%" in the interview-defense Q, consistent with the 08-few-shot alignment and the other two guides (unmeasured back-of-envelope estimate).

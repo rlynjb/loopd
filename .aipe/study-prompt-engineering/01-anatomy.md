@@ -26,13 +26,13 @@ That blast-radius question is what prompt anatomy answers. Not "what's the right
 ### Move 4 — Concrete before/after
 
 Without the anatomy (one 200-line string):
-- New label `'reduce'` added to the list
+- New label `'plan'` added to the list
 - Buried 80 lines later: "Always prefer one of {todo, idea, knowledge, study, reflect}" — a forbidden-pattern reminder
 - Model gets two contradictory signals (new label allowed; only the old five allowed) and picks the more recent one (recency bias toward the new label)
-- 60% of classifications become `'reduce'` for a week before anyone notices
+- 60% of classifications become `'plan'` for a week before anyone notices
 
 With the anatomy (four named sections):
-- New label `'reduce'` added in **system** ("you classify into one of: todo, idea, knowledge, study, reflect, reduce")
+- New label `'plan'` added in **system** ("you classify into one of: todo, idea, knowledge, study, reflect, plan")
 - Forbidden-pattern reminder lives in **system** too — the writer updates both in the same edit because they're co-located
 - Examples in **few-shot** are checked: the new label needs at least one example
 - Per-call user text lands in **user message**, untouched
@@ -313,7 +313,7 @@ When an interviewer asks "how do you structure a production prompt," they're pro
 
 **Q [mid]:** How do you decide whether a line of a prompt goes in the system prompt vs the user message?
 
-**A:** The test is whether the line changes per call. System is constant — role, output format, rules, forbidden patterns. User is per-call — context fields like today's date, retrieved data, the actual request. If a line names a specific user's data, it goes in user. If it names what the model should always do, it goes in system. The wire-level API enforces nothing; this discipline lives in the codebase. In buffr's classify chain, "you classify thinking modes into one of {todo, idea, knowledge, study, reflect, reduce}" is system; "Classify this todo: {currentTodo.text}" is user. Swap them and the model's instruction-following weakens.
+**A:** The test is whether the line changes per call. System is constant — role, output format, rules, forbidden patterns. User is per-call — context fields like today's date, retrieved data, the actual request. If a line names a specific user's data, it goes in user. If it names what the model should always do, it goes in system. The wire-level API enforces nothing; this discipline lives in the codebase. In buffr's classify chain, "you classify thinking modes into one of {todo, idea, knowledge, study, reflect}" is system; "Classify this todo: {currentTodo.text}" is user. Swap them and the model's instruction-following weakens.
 
 ```
    line                          → section
@@ -431,3 +431,6 @@ Without opening any files, answer:
 - How many lines is the prompt template approximately?
 
 Then open the file and verify.
+
+---
+Updated: 2026-05-29 — codebase-drift fix: removed the phantom `reduce` thinking-mode type. The Move 4 before/after example now uses a clearly-hypothetical new label (`plan`) instead of `reduce` (which collided with the migration name `0008_todo_meta_type_reduce` — that migration *reduces* the set, it doesn't add a type); the interview-defense answer now states the real 5-type set `{todo, idea, knowledge, study, reflect}`.

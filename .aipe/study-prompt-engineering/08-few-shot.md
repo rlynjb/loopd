@@ -322,7 +322,7 @@ When an interviewer asks "how do you stop a classifier from drifting," they're t
 
 **Q [senior]:** Buffr's `classify` chain has no few-shot examples. Why hasn't it drifted enough to force the fix?
 
-**A:** Because the heuristic short-circuit (`heuristicClassify`) catches the 80% of cases that are unambiguous before the LLM runs. The LLM only sees the 20% of ambiguous cases — where drift on label variants is more visible, but the volume is low. Single-user, ~30 ambiguous calls per day, the drift hasn't been visible enough to force the fix. At Phase B (multi-user) the drift becomes visible at scale — at 1000 users × ~30 ambiguous calls = 30,000 LLM classifier calls per day, 30% drift = 9000 mislabelled todos per day. The breakpoint is multi-user.
+**A:** Because the heuristic short-circuit (`heuristicClassify`) catches the ~70% of cases that are unambiguous before the LLM runs. The LLM only sees the ~30% of ambiguous cases — where drift on label variants is more visible, but the volume is low. Single-user, ~30 ambiguous calls per day, the drift hasn't been visible enough to force the fix. At Phase B (multi-user) the drift becomes visible at scale — at 1000 users × ~30 ambiguous calls = 30,000 LLM classifier calls per day, 30% drift = 9000 mislabelled todos per day. The breakpoint is multi-user.
 
 **Q [arch]:** What happens to few-shot effectiveness at 10× the prompt complexity?
 
@@ -367,7 +367,7 @@ Design the few-shot block: how many examples? Which moods do you cover? Where in
 
 ### Level 4 — Defend the decision you'd change
 
-Defend or oppose: "buffr's `classify` chain is fine without few-shot examples because the heuristic short-circuit catches 80% of cases."
+Defend or oppose: "buffr's `classify` chain is fine without few-shot examples because the heuristic short-circuit catches ~70% of cases."
 
 ### Quick check — code reference test
 
@@ -375,3 +375,6 @@ Without opening files:
 - Which buffr chain would benefit most from explicit few-shot examples?
 - Which buffr chain should NOT use few-shot examples?
 - Where in the prompt anatomy do few-shot examples live?
+
+---
+Updated: 2026-05-29 — aligned the heuristic short-circuit rate (`heuristicClassify`) from "80%" to "~70%" in the two interview-defense references, for consistency with the study-system-design-dsa and study-ai-engineering guides (the figure is an unmeasured back-of-envelope estimate). Left the unrelated "~80% of behaviour set" few-shot-coverage figure unchanged.

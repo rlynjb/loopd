@@ -301,13 +301,13 @@ Eval-driven iteration is overhead until a chain is in production and any downstr
 
 ## Project exercises
 
-### B3.9 — Build a 35-case golden set for the classifier
+### B3.9 — Build a 30-case golden set for the classifier
 
 - **Exercise ID:** `[B3.9]`
-- **What to build:** at `tests/ai/classify-eval.jsonl`, write 35 hand-curated cases covering: 5 canonical examples of each thinking-mode label (todo, idea, knowledge, study, reflect, reduce = 30), plus 5 boundary cases that exercise the verb-vs-context ambiguity ("understand X" where X is technical → study; where X is personal → todo). For each case: `{input, expected, why}`.
+- **What to build:** at `tests/ai/classify-eval.jsonl`, write 30 hand-curated cases covering: 5 canonical examples of each thinking-mode label (todo, idea, knowledge, study, reflect = 25), plus 5 boundary cases that exercise the verb-vs-context ambiguity ("understand X" where X is technical → study; where X is personal → todo). For each case: `{input, expected, why}`.
 - **Why it earns its place:** the foundation. Without the golden set, no further eval-driven work is possible. The half-day spent here is the half-day that turns classifier iteration from guessing into measuring.
 - **Files to touch:** new `tests/ai/classify-eval.jsonl`.
-- **Done when:** the file has 35 entries, hand-reviewed for representativeness; each entry has a `why` line explaining what aspect of the chain it tests.
+- **Done when:** the file has 30 entries, hand-reviewed for representativeness; each entry has a `why` line explaining what aspect of the chain it tests.
 - **Estimated effort:** 1–4hr.
 
 ### B3.10 — Build the runner
@@ -459,3 +459,6 @@ Without opening files:
 
 ---
 Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (aipe paragraph reworded as external illustrative example rather than in-portfolio co-anchor).
+
+---
+Updated: 2026-05-29 — codebase-drift fix: B3.9 golden-set exercise removed the phantom `reduce` label (a misread of migration `0008_todo_meta_type_reduce`); the real label set is 5 (`todo, idea, knowledge, study, reflect`), so the set is sized 5×5 + 5 boundary = 30 cases, not 35.
