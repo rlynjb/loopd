@@ -49,14 +49,14 @@ Track input and output distributions; alert on shifts; drift detection beats use
    ──────────────────────────────────────────
 
    Last 3 months (baseline):
-     task: 35%    errand: 25%    decision: 15%
-     learning: 10%  creative: 8%  social: 4%  admin: 3%
+     todo: 55%   idea: 18%   knowledge: 12%
+     study: 9%   reflect: 6%
 
    This month (current):
-     task: 30%    errand: 32%    decision: 14%      ← errand up 7pp
-     learning: 9%   creative: 8%  social: 4%  admin: 3%
+     todo: 50%   idea: 17%   knowledge: 11%
+     study: 16%  reflect: 6%      ← study up 7pp
 
-   Shift: errand +7pp → alert (above 5pp threshold)
+   Shift: study +7pp → alert (above 5pp threshold)
    Investigation triggered.
 ```
 
@@ -64,7 +64,7 @@ Track input and output distributions; alert on shifts; drift detection beats use
 
 **Layer 1 — what to track.** Prediction distribution (per-class output counts), latency, error rate, override rate (curriculum `B3.13` for the form classifier; same shape applies to buffr's todo classifier). Stored aggregates over rolling windows (24h, 7d, 30d).
 
-**Layer 2 — how to detect.** Compare current window to baseline. Threshold-based alert ("errand rate up >5pp from baseline"). For continuous distributions: KS test or Population Stability Index (PSI). Buffr's classifier is enum-output → simple per-class delta is fine.
+**Layer 2 — how to detect.** Compare current window to baseline. Threshold-based alert ("study rate up >5pp from baseline"). For continuous distributions: KS test or Population Stability Index (PSI). Buffr's classifier is enum-output → simple per-class delta is fine.
 
 ```
    buffr's planned drift checks
@@ -193,3 +193,6 @@ The breakpoint: detect drift once you have the trace data (`B3.11`) AND meaningf
 - What's a cheap drift signal for buffr's classifier?
 - What's the data dependency for drift detection?
 - What does the alert trigger?
+
+---
+Updated: 2026-05-29 — corrected the classifier type set in the drift-distribution example: the per-class distribution used 7 invented task-management types (task/errand/decision/learning/creative/social/admin); rebuilt it with the 5 real thinking-mode types (`todo, idea, knowledge, study, reflect`, todo-dominant) summing to 100%, with `study` as the drifting class. Set per migrations 0006-0008.

@@ -39,7 +39,7 @@ Per-feature inventory of every LLM-powered surface in buffr, with cross-referenc
 
 ### Feature: Todo classifier (`classify` chain)
 
-**What it does for the user:** when the user types a todo (`[]` prefix in prose), buffr classifies it into one of 7 thinking-mode types (`task`, `errand`, `decision`, `learning`, `creative`, `social`, `admin`) so the per-type expansion has the right output shape. The classification appears as a colored chip and routes the todo into the correct typed expansion schema.
+**What it does for the user:** when the user types a todo (`[]` prefix in prose), buffr classifies it into one of 5 thinking-mode types — `todo` (actionable, the non-expandable default), `idea` (an unproven possibility), `knowledge` (an absorbed insight), `study` (a learning intention), `reflect` (past-facing introspection) — so the per-type expansion has the right output shape. The classification appears as a colored chip and routes the four non-`todo` types into their typed expansion schema. (The set was reduced from an earlier engineering-flavored list in migrations 0006/0007/0008: `study` and `reflect` were added, then `bug`/`question`/`decision`/`content` were dropped.)
 
 **Files:** `src/services/todos/heuristicClassify.ts` (regex first pass), `src/services/todos/classify.ts` (LLM fallback), `src/services/ai/config.ts` (model = Haiku 4.5 for cheap classifier).
 
@@ -109,3 +109,6 @@ These features are described in the per-concept files as "Not yet implemented" w
 - **No production observability.** No `ai_call_log` table, no traces, no spans, no cost dashboard. The Phase 5 spec defines `app/more/ai-ops.tsx` as the surfacing screen.
 - **No retry/circuit-breaker on provider calls.** Errors surface as throws and fall through to the UI as a silent fallback. The Phase 5 spec defines the queue + retry + circuit-breaker layer.
 - **No prompt-injection guards on user-generated text.** The chains interpolate `entries.text` directly into prompts. Buffr's input source is the user's own private journal (single-user app), so the threat model is narrow — but the Phase 5 spec defines the sanitization layer as an exercise.
+
+---
+Updated: 2026-05-29 — corrected the classifier type set. The original generation invented a 7-type task-management set (`task, errand, decision, learning, creative, social, admin`); buffr's actual set is 5 thinking-mode types (`todo, idea, knowledge, study, reflect`) per `src/types/todoMeta.ts` + migrations 0006/0007/0008. Reframed the classifier-feature description accordingly.

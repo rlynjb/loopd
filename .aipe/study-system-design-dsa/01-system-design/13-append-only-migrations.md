@@ -26,8 +26,8 @@ Without append-only (edit-in-place is allowed):
 - Two environments now have schemas that differ by a NULL/NOT NULL constraint that no one can see in the file tree
 
 With append-only (corrections ship as new files):
-- Same typo discovery; developer writes `0006_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL`
-- Fresh clones run `0001` (nullable) → `0006` (not nullable); existing projects run only `0006`
+- Same typo discovery; developer writes `0011_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL` (0011 is the next free number — the chain is at 0010 today)
+- Fresh clones run `0001` (nullable) → `0011` (not nullable); existing projects run only `0011`
 - Both converge on the same final schema
 - The ledger entries match the file tree on every environment; "works on my machine" doesn't happen
 
@@ -49,11 +49,13 @@ The append-only ledger shape in one picture:
    0003_server_time.sql              ├────────────────────────┤
    0004_relax_fks.sql                │ 0001_initial.sql       │ ◄── ledger of
    0005_todo_meta_pinned.sql         │ 0002_rls.sql           │     applied files
-   0006_fix_typo.sql      ◄── never  │ 0003_server_time.sql   │
-                              edit   │ ...                    │
-                              0001;  └────────────────────────┘
-                              ship
-                              0006              │
+   ...                               │ 0003_server_time.sql   │
+   0010_namespace_buffr.sql          │ ...                    │
+   0011_fix_typo.sql      ◄── never  └────────────────────────┘
+                              edit
+                              0001;             │
+                              ship              │
+                              0011              │
                               forward           │
         │                                       │
         ▼                                       ▼
@@ -65,7 +67,7 @@ The migration history IS the schema. The four sub-sections below trace the numbe
 
 ### The numbered file convention — `NNNN_description.sql`
 
-Every schema change lives in `supabase/migrations/NNNN_<description>.sql`, where `NNNN` is a zero-padded sequence number. The codebase currently has `0001_initial_schema.sql` through `0005_todo_meta_pinned.sql`. The numbers are the canonical order; the filenames are documentation; the SQL inside is what actually runs. If you're coming from frontend, this is the same shape as a typed event-sourcing log or a Redux action history — events appended in order, the current state derived by replaying from the start. Concrete consequence: a fresh Supabase project runs `0001` through `0005` in order; an existing project that's already at `0004` runs only `0005`. The "current schema" is whatever the sum of all migrations produces — there's no separate `schema.sql` file claiming to be the truth. Boundary: this works because no two migrations carry the same number (the developer convention enforces uniqueness; the runner would error on collision).
+Every schema change lives in `supabase/migrations/NNNN_<description>.sql`, where `NNNN` is a zero-padded sequence number. The codebase currently has `0001_initial_schema.sql` through `0010_namespace_to_buffr_schema.sql`. The numbers are the canonical order; the filenames are documentation; the SQL inside is what actually runs. If you're coming from frontend, this is the same shape as a typed event-sourcing log or a Redux action history — events appended in order, the current state derived by replaying from the start. Concrete consequence: a fresh Supabase project runs `0001` through `0010` in order; an existing project that's already at `0009` runs only `0010`. The "current schema" is whatever the sum of all migrations produces — there's no separate `schema.sql` file claiming to be the truth. Boundary: this works because no two migrations carry the same number (the developer convention enforces uniqueness; the runner would error on collision).
 
 The numbered-file convention in the file tree:
 
@@ -125,7 +127,7 @@ Same ledger pattern as Prisma, Knex, Flyway — the runner is small precisely be
 
 ### Append-only means never edit `0001` — the discipline
 
-The rule: once a migration is committed and applied anywhere, it is permanent. If you discover a typo in `0001` two days later, you do NOT edit `0001`. You ship `0006_fix_the_typo.sql` that does the correction with `ALTER TABLE` or `ALTER COLUMN`. The reason: if `0001` is already in some environment's `_migrations` ledger, editing it doesn't re-run it — the ledger says "applied," so the runner skips it. The two environments are now diverging by exactly the size of the typo. If you're coming from frontend, this is the same shape as Git's rule against rewriting public history (`git push --force` to a shared branch): once others have a copy of the commit, you can only add on top. Concrete consequence: developer notices `0001` declared `entries.text TEXT` but it should have been `TEXT NOT NULL`. They write `0006_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL`. The fresh-project path now runs `0001` (text nullable) → `0006` (text not nullable). The already-running-project path runs only `0006`. Both converge on the same final schema. Boundary: this assumes the correction is expressible as an ALTER — schema changes that would require data backfill (e.g., the typo created data that's now misaligned) need their own DML migration in the same ledger.
+The rule: once a migration is committed and applied anywhere, it is permanent. If you discover a typo in `0001` two days later, you do NOT edit `0001`. You ship `0011_fix_the_typo.sql` that does the correction with `ALTER TABLE` or `ALTER COLUMN` (0011 is the next free number — the chain is at 0010 today). The reason: if `0001` is already in some environment's `_migrations` ledger, editing it doesn't re-run it — the ledger says "applied," so the runner skips it. The two environments are now diverging by exactly the size of the typo. If you're coming from frontend, this is the same shape as Git's rule against rewriting public history (`git push --force` to a shared branch): once others have a copy of the commit, you can only add on top. Concrete consequence: developer notices `0001` declared `entries.text TEXT` but it should have been `TEXT NOT NULL`. They write `0011_entries_text_not_null.sql` with `ALTER TABLE entries ALTER COLUMN text SET NOT NULL`. The fresh-project path now runs `0001` (text nullable) → `0011` (text not nullable). The already-running-project path runs only `0011`. Both converge on the same final schema. Boundary: this assumes the correction is expressible as an ALTER — schema changes that would require data backfill (e.g., the typo created data that's now misaligned) need their own DML migration in the same ledger.
 
 The two paths after discovering a typo:
 
@@ -156,7 +158,7 @@ Editing `0001` is the same mistake as `git push --force` to a shared branch — 
 
 ### Why the discipline matters — every environment converges on the same path
 
-The point of append-only isn't aesthetic. It's that *every environment runs the same sequence of files in the same order*. Production, staging, your local Supabase, a new contributor's Supabase clone — they all replay `0001` through `0005`. If the runner runs the same files in the same order on every environment, the schemas converge. The moment someone edits `0001`, environments that already applied the old `0001` carry one schema, and environments that haven't yet applied any migration apply the new `0001` and carry a different schema. Think of it like the determinism contract a build tool relies on (`make` rebuilds only what's changed; the build graph is the truth). Concrete consequence: a new contributor clones the repo, points at a fresh Supabase project, runs the migration runner. They get exactly the same schema production has. There's no "remember to also manually do X" step — the ledger is the only handoff. Boundary: a developer who edits `0001` on their machine and pushes the change breaks this contract. Code review catches it; the runner doesn't.
+The point of append-only isn't aesthetic. It's that *every environment runs the same sequence of files in the same order*. Production, staging, your local Supabase, a new contributor's Supabase clone — they all replay `0001` through `0010`. If the runner runs the same files in the same order on every environment, the schemas converge. The moment someone edits `0001`, environments that already applied the old `0001` carry one schema, and environments that haven't yet applied any migration apply the new `0001` and carry a different schema. Think of it like the determinism contract a build tool relies on (`make` rebuilds only what's changed; the build graph is the truth). Concrete consequence: a new contributor clones the repo, points at a fresh Supabase project, runs the migration runner. They get exactly the same schema production has. There's no "remember to also manually do X" step — the ledger is the only handoff. Boundary: a developer who edits `0001` on their machine and pushes the change breaks this contract. Code review catches it; the runner doesn't.
 
 Three environments, the same ledger sequence, the same end-state schema:
 
@@ -198,6 +200,10 @@ This is what people mean by "schemas as event-sourced logs." The pattern is ever
 │    0007_todo_meta_type_reflect.sql    ── widen type CHECK +'reflect'    │
 │    0008_todo_meta_type_reduce.sql     ── DROP {bug,question,decision,   │
 │                                          content}; remap rows to 'todo' │
+│    0009_disable_rls_phase_a.sql       ── re-DISABLE RLS (drifted on,    │
+│                                          froze sync); Phase A posture    │
+│    0010_namespace_to_buffr_schema.sql ── move tables + RPC into the     │
+│                                          dedicated `buffr` schema        │
 └──────────────────────────────────┬──────────────────────────────────────┘
                                    │
                                    ▼
@@ -274,7 +280,7 @@ We traded a clean-looking schema for replay determinism: every fresh environment
 
 ### What we gave up
 
-The schema is no longer a snapshot you can read in one file. Understanding "what columns does `todo_meta` have today?" means walking 0001 → 0005 (pinned column) → 0006 (type widen) → 0007 (type widen) → 0008 (type reduce). Eight files today; the cost grows linearly with feature work. Anyone joining the project has to either replay against a fresh DB or read the files in order — there's no consolidated `schema.sql` to grep.
+The schema is no longer a snapshot you can read in one file. Understanding "what columns does `todo_meta` have today?" means walking 0001 → 0005 (pinned column) → 0006 (type widen) → 0007 (type widen) → 0008 (type reduce) → 0009 (RLS re-disabled) → 0010 (`buffr` schema namespace). Ten files today; the cost grows linearly with feature work. Anyone joining the project has to either replay against a fresh DB or read the files in order — there's no consolidated `schema.sql` to grep.
 
 The 0006/0007/0008 sequence shows the discipline cost plainly. Three migrations narrowed the thinking-mode taxonomy from 7 modes to 5: 0006 added `study`, 0007 added `reflect`, 0008 dropped four. Each shipped on a separate day. None of them edits the prior files even though the net effect could have been one file with the final state. Three files, three audit entries, three replays per fresh DB. The cost is the file count; the win is that any dev who ran 0006 alone and stopped has a defined intermediate state.
 
@@ -515,3 +521,6 @@ Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of 
 
 ---
 Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-4 — git, Postgres WAL, event sourcing). Added Move 1 mnemonic diagram (migrations directory + ledger + git-like history shape) + 4 Move 2 sub-section diagrams: numbered-file replay rules, runner ledger-diff flow, wrong-vs-right path on a typo, three-env same-schema convergence. Total: 5 new diagrams.
+
+---
+Updated: 2026-05-29 — codebase-drift pass: resolved the internal contradiction where Move 2 / convergence still said "0001 through 0005" while the diagram listed 0006-0008. Ranges → 0001..0010; added 0009 (RLS re-disable) + 0010 (buffr schema namespace) to the source-tree diagram and the walk; "Eight files" → "Ten files." Bumped the hypothetical typo-fix example off 0006 (now a real migration) to 0011 in Why care, the ledger diagram, and the never-edit section.

@@ -3,7 +3,7 @@
 **Industry name(s):** Authentication middleware, security boundary
 **Type:** Industry standard · Language-agnostic
 
-> Phase A has no end-user authentication — every cloud row is tagged with a single hardcoded `user_id`. RLS is *scaffolded* (migration 0002) but disabled.
+> Phase A has no end-user authentication — every cloud row is tagged with a single hardcoded `user_id`. RLS policies are *defined* (migration 0002) but enforcement is off: 0002 disabled RLS by design, and migration 0009 re-disabled it after it drifted on and silently froze cloud sync (`auth.uid()` is NULL under the anon key, so every policy denied every push and pull).
 
 **See also:** → [07-cloud-sync-mirror](./07-cloud-sync-mirror.md) · → [13-append-only-migrations](./13-append-only-migrations.md)
 
@@ -15,7 +15,7 @@ You're writing a query against a `users`-scoped table — `SELECT * FROM entries
 
 The question those two clauses answer is the same one any multi-user data store has to answer: where does the trusted zone end, and what mechanism enforces the seam at every crossing? Not "do we have auth" — that's a yes-or-no with no architecture in it. The interesting answer is *defense in depth*: two independent gates with different failure modes, layered so one gate's bug doesn't compromise the other.
 
-**What depends on getting this right:** whether one user's journal becomes readable by anyone holding a copy of the anon key, and whether the cost of activating real auth later is "a one-line config swap" or "rewrite the schema." In this codebase the schema gate is composite `PRIMARY KEY (user_id, id)` on every synced Supabase table — even with bad code, a query for the wrong user's `id` returns no rows because the row's full key includes a `user_id` the caller doesn't know. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but disabled in Phase A; Phase A uses a hardcoded `PHASE_A_USER_ID` UUID in `src/services/sync/client.ts`. The schema was built to accept the runtime gate later without a migration — because the composite PK was correct from day one, Phase B activation is `auth.uid()` replacing the hardcoded UUID plus enabling migration 0002, not a schema rewrite.
+**What depends on getting this right:** whether one user's journal becomes readable by anyone holding a copy of the anon key, and whether the cost of activating real auth later is "a one-line config swap" or "rewrite the schema." In this codebase the schema gate is composite `PRIMARY KEY (user_id, id)` on every synced Supabase table — even with bad code, a query for the wrong user's `id` returns no rows because the row's full key includes a `user_id` the caller doesn't know. The runtime gate is RLS, defined in `supabase/migrations/0002_rls_policies.sql` but disabled in Phase A; Phase A uses a hardcoded `PHASE_A_USER_ID` UUID in `src/services/sync/client.ts`. The schema was built to accept the runtime gate later without a schema change — because the composite PK was correct from day one, Phase B activation is `auth.uid()` replacing the hardcoded UUID plus a new migration that flips RLS to `ENABLE` (0002's policies are already in tree), not a schema rewrite.
 
 Without two gates (only RLS, schema didn't anticipate multi-tenant):
 - A future PR disables RLS by accident
@@ -97,8 +97,8 @@ The client doesn't know the filter is there. The policy is on the table, not in 
 
 ### Phase A / Phase B — current state vs planned
 
-- **Phase A (current):** schema gate active, runtime gate dormant. `auth/client.ts` carries a single hardcoded `PHASE_A_USER_ID` UUID; every Supabase call inserts that value into the `user_id` column on writes and reads. RLS policies exist in `0002_rls_policies.sql` but are not installed (migration not applied). The cloud database treats the hardcoded id as the sole user.
-- **Phase B (planned):** schema gate unchanged, runtime gate activated. Ship Supabase auth (`signInWithPassword` or similar), drop the hardcoded id, apply `0002_rls_policies.sql` so RLS is on. Every client request now carries a JWT; `auth.uid()` returns the authenticated user's id; the schema gate still appears identical from the outside.
+- **Phase A (current):** schema gate active, runtime gate dormant. `auth/client.ts` carries a single hardcoded `PHASE_A_USER_ID` UUID; every Supabase call inserts that value into the `user_id` column on writes and reads. RLS policies are *defined and applied* by `0002_rls_policies.sql`, but that migration's final block disables RLS on every table (Phase A by design). RLS later drifted *on* — the Supabase dashboard flags disabled-RLS tables and offers a one-click enable — and silently froze cloud sync, because `auth.uid()` is NULL under the anon key so the policies denied every push and pull; migration `0009_disable_rls_phase_a.sql` re-disabled RLS to restore Phase A. The cloud database treats the hardcoded id as the sole user.
+- **Phase B (planned):** schema gate unchanged, runtime gate activated. Ship Supabase auth (`signInWithPassword` or similar), drop the hardcoded id, and ship a new migration that flips RLS to `ENABLE` on every table (0002's policies are already in tree). Every client request now carries a JWT; `auth.uid()` returns the authenticated user's id; the schema gate still appears identical from the outside.
 
 Side by side, the structural columns don't change — only the source of `user_id` and the activation state of RLS:
 
@@ -110,7 +110,7 @@ Side by side, the structural columns don't change — only the source of `user_i
    │           ▼                  │    │           ▼                  │
    │ schema gate (composite PK) ✓ │    │ schema gate (composite PK) ✓ │   unchanged
    │           ▼                  │    │           ▼                  │
-   │ RLS staged, NOT installed    │    │ RLS installed, ENFORCED ✓     │ ◀ activated
+   │ RLS defined, DISABLED        │    │ RLS ENABLED, ENFORCED ✓       │ ◀ activated
    │           ▼                  │    │           ▼                  │      (new!)
    │ row returns                  │    │ row returns                  │
    └──────────────────────────────┘    └──────────────────────────────┘
@@ -183,7 +183,8 @@ This is what defense in depth looks like in a real system — two independent me
 
 **Hardcoded id:**         `src/services/sync/client.ts` — holds `PHASE_A_USER_ID` (UUID). Every push and pull mapper stamps it; replacing it with `auth.uid()` is the Phase B switch.
 **Schema gate:**          `supabase/migrations/0001_initial_schema.sql` — declares composite `(user_id, id)` PKs on every synced table. The schema-level isolation that holds today and after RLS ships.
-**Runtime gate (off):**   `supabase/migrations/0002_rls_policies.sql` — the staged-but-disabled RLS scaffold. File exists, policies are not installed in Phase A.
+**Runtime gate (off):**   `supabase/migrations/0002_rls_policies.sql` — creates the per-table policies and disables RLS (Phase A by design; the `ENABLE` is the last block, deferred to Phase B).
+**RLS re-disable:**       `supabase/migrations/0009_disable_rls_phase_a.sql` — after RLS drifted on (Supabase dashboard one-click enable) and silently froze cloud sync (`auth.uid()` NULL under the anon key denied every push/pull), 0009 re-disabled RLS to restore Phase A. Policies stay defined; enforcement is off until a Phase B migration flips `ENABLE`.
 **Postgres namespace:**   `supabase/migrations/0010_namespace_to_buffr_schema.sql` — moved all 10 synced tables and the `get_server_time()` RPC from `public` into a dedicated `buffr` schema; the JS client sets `db: { schema: 'buffr' }` so every `.from()` call resolves there. The composite-PK gate and the staged RLS policies followed the tables to the new schema automatically (Postgres tracks them by OID), so the auth posture didn't change — only the namespace did.
 
 ---
@@ -199,6 +200,7 @@ RLS comes from Postgres' security model where the row itself decides who can rea
 ### Where this breaks down
 - A leaked anon key in Phase A is functionally a leaked password — there's no second factor.
 - Composite PKs alone don't protect against anyone who *knows* another user's id; RLS is what closes that hole.
+- Enabling RLS *before* real auth exists fails closed and silent: `auth.uid()` is NULL under the anon key, so every policy denies every query and cloud sync freezes with no error. This happened once; migration `0009` rolled it back. RLS and auth have to ship together — half of the pair is worse than neither.
 
 ### What to explore next
 - Supabase RLS policy documentation → for when migration 0002 is enabled.
@@ -218,8 +220,8 @@ We traded a real authentication surface for time-to-data-layer — the schema ga
 │                  │ RLS staged-but-off)            │ RLS enabled day-1)             │
 ├──────────────────┼────────────────────────────────┼────────────────────────────────┤
 │ Complexity       │ 1 line in client.ts +          │ login screen + session refresh │
-│                  │ migration 0002 file present    │ + token storage + RLS policies │
-│                  │ but not installed              │ enabled + bootstrap auth path  │
+│                  │ migration 0002 applied (RLS    │ + token storage + RLS policies │
+│                  │ disabled); 0009 re-disabled    │ enabled + bootstrap auth path  │
 │ Time-to-ship     │ days (auth deferred entirely)  │ 1–2 weeks (auth UI + supabase  │
 │  data layer      │                                │ flows + RLS testing per table) │
 │ Failure blast    │ leaked anon key = read all     │ leaked anon key = read nothing │
@@ -242,7 +244,7 @@ The Supabase anon key is functionally a password. Anyone holding it can read eve
 
 The device-loss case is uncovered. The app has no PIN, no biometric gate on launch, no encryption on `buffr.db` beyond what Android offers at the OS level. If a borrowed phone is unlocked, the journal is readable. That's the explicit cost of skipping the auth UI in Phase A; the threat model says "the target user is me, my phone has fingerprint lock" and stops there.
 
-Migration 0002 sitting in the repo with `policies not installed` is a footgun. A future contributor (or future-me) running migrations against a Phase B branch could enable RLS without also shipping the auth UI, and every read would return zero rows because `auth.uid()` is NULL. The mitigation is the migration filename + a comment, but the failure mode is real.
+Defined-but-disabled RLS is a footgun — and it already fired. RLS drifted on once (the Supabase dashboard nags about disabled-RLS tables and offers a one-click enable), and because `auth.uid()` is NULL under the anon key, every policy denied every push and pull. Cloud sync silently froze — local SQLite stayed canonical, so the app *felt* completely normal while the cloud quietly diverged. Migration `0009_disable_rls_phase_a.sql` rolled it back and codifies the Phase A posture in the migration chain (so a `db-migrate --all-pending` can't leave RLS on). The lesson: RLS without real auth doesn't half-work — it fails closed and silent.
 
 ### What the alternative would have cost
 
@@ -278,7 +280,7 @@ Fine until the first non-me user installs the APK. At that point the hardcoded U
 
 ## Summary
 
-A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces it on every crossing — defense in depth means the schema, the middleware, and the application code each independently refuse unauthorized access. In this codebase the schema gate is composite `(user_id, id)` primary keys declared in `supabase/migrations/0001_initial_schema.sql`, and the runtime gate is RLS staged in `supabase/migrations/0002_rls_policies.sql` but disabled; every Supabase write and read instead stamps a hardcoded `PHASE_A_USER_ID` UUID from `src/services/sync/client.ts`. The constraint was a solo product with a single user in Phase A — shipping the data layer and sync engine before the auth UI was the priority. The cost is that the Supabase anon key is functionally a password — anyone holding it can read everything, mitigated only by keys living in SecureStore and the app having no public surface. The day a real second user logs in, Phase B activates the runtime gate by replacing the hardcoded UUID with `auth.uid()` and enabling migration 0002.
+A trust boundary is the explicit seam between unauthenticated and authenticated code paths, paired with a mechanism that enforces it on every crossing — defense in depth means the schema, the middleware, and the application code each independently refuse unauthorized access. In this codebase the schema gate is composite `(user_id, id)` primary keys declared in `supabase/migrations/0001_initial_schema.sql`, and the runtime gate is RLS staged in `supabase/migrations/0002_rls_policies.sql` but disabled; every Supabase write and read instead stamps a hardcoded `PHASE_A_USER_ID` UUID from `src/services/sync/client.ts`. The constraint was a solo product with a single user in Phase A — shipping the data layer and sync engine before the auth UI was the priority. The cost is that the Supabase anon key is functionally a password — anyone holding it can read everything, mitigated only by keys living in SecureStore and the app having no public surface. The day a real second user logs in, Phase B activates the runtime gate by replacing the hardcoded UUID with `auth.uid()` and shipping a new migration that flips RLS to `ENABLE` (0002's policies are already applied; only the toggle is left).
 
 Key points to remember:
 - Two gates exist: composite `(user_id, id)` PKs (schema, always active) and RLS in migration 0002 (runtime, disabled in Phase A).
@@ -319,14 +321,14 @@ A: The schema gate is the composite `(user_id, id)` primary key on every synced 
 
 [senior] Q: Why ship without RLS at all? You wrote the policies — why not turn them on?
 
-A: Because turning on RLS means I also need real Supabase auth — there's no `auth.uid()` to evaluate without a logged-in user. Phase A is single-user-by-design; I hardcoded a UUID in `client.ts` so I could ship the data layer and the sync engine without solving auth UI first. The RLS migration is in tree precisely so Phase B can enable it without rewriting the sync layer. The cost I accepted is that the Supabase anon key is functionally a password — anyone holding it can read everything. Mitigation: the keys live in Android Keystore via `expo-secure-store`, and the app has no public API surface.
+A: Because turning on RLS means I also need real Supabase auth — there's no `auth.uid()` to evaluate without a logged-in user. I know this firsthand: RLS got enabled once (the Supabase dashboard nags about disabled-RLS tables and offers a one-click enable), and because `auth.uid()` is NULL under the anon key, every policy denied every push and pull — cloud sync silently froze while local SQLite kept working, so nothing *looked* broken. Migration `0009_disable_rls_phase_a.sql` rolled it back. That's the empirical proof that RLS without auth doesn't half-work; it fails closed and silent. Phase A is single-user-by-design; I hardcoded a UUID in `client.ts` so I could ship the data layer and the sync engine without solving auth UI first. The policies stay in tree (0002) so a Phase B migration can flip `ENABLE` once real auth lands, without rewriting the sync layer. The cost I accepted is that the Supabase anon key is functionally a password — anyone holding it can read everything. Mitigation: the keys live in Android Keystore via `expo-secure-store`, and the app has no public API surface.
 
 ```
                   Path taken (hardcoded UUID, RLS off)  Alternative (Supabase auth day 1)
                   ──────────────────────────────────    ──────────────────────────────────
 auth UI           none — deferred to Phase B            login + signup + session refresh
-RLS state         migration 0002 present, not          policies installed, enforced on
-                  installed                            every query
+RLS state         0002 applied → RLS disabled;          RLS enabled, enforced on
+                  0009 re-disabled after drift          every query
 anon-key risk     reads everything in cloud             reads nothing (token required)
 time-to-data      days                                  1–2 weeks
                   layer
@@ -338,7 +340,7 @@ when worth        single solo writer                   multi-user from day 1
 
 [arch] Q: Walk me through the migration from Phase A to Phase B at scale. What stays, what changes?
 
-A: The schema doesn't change — composite PKs were always correct. The migration is: ship Supabase auth UI, replace `PHASE_A_USER_ID` reads with the authenticated user's UUID, run a one-time backfill that rewrites every existing row's `user_id` to that authenticated UUID, then enable migration `0002` to turn on RLS. The sync layer and every CRUD path stay identical. The risk is the backfill — if a user already has data on multiple devices each tagged with the same hardcoded UUID, deduplication is required first.
+A: The schema doesn't change — composite PKs were always correct. The migration is: ship Supabase auth UI, replace `PHASE_A_USER_ID` reads with the authenticated user's UUID, run a one-time backfill that rewrites every existing row's `user_id` to that authenticated UUID, then ship a new migration that flips RLS to `ENABLE` (0002's policies are already applied; 0009 currently holds RLS off). The sync layer and every CRUD path stay identical. The risk is the backfill — if a user already has data on multiple devices each tagged with the same hardcoded UUID, deduplication is required first. And the ordering matters: enable RLS *after* the backfill and a verified `auth.uid()`, or you reproduce the 0009 silent-freeze.
 
 ```
 At Phase B (1 → N users, real auth):
@@ -414,7 +416,7 @@ If you skipped any: you described it, you didn't understand it.
 ### Level 3 — Apply it to a new scenario
 Answer this without looking at the file:
 
-Phase B ships tomorrow. The migration is: ship Supabase auth UI, drop the hardcoded `PHASE_A_USER_ID`, enable migration `0002`. A user has 200 entries already in cloud, all tagged with the Phase A UUID. After they log in for the first time and get a *real* `auth.uid()`, what does the dashboard query show? What's the one-time backfill that has to run, and where would you write it?
+Phase B ships tomorrow. The migration is: ship Supabase auth UI, drop the hardcoded `PHASE_A_USER_ID`, ship a new migration that flips RLS to `ENABLE` (0002's policies are applied; 0009 holds RLS off today). A user has 200 entries already in cloud, all tagged with the Phase A UUID. After they log in for the first time and get a *real* `auth.uid()`, what does the dashboard query show? What's the one-time backfill that has to run, and where would you write it?
 
 Write your answer. 3–5 sentences minimum. Then open `src/services/sync/client.ts` and `supabase/migrations/0001_initial_schema.sql` to verify the schema shape.
 
@@ -477,3 +479,6 @@ Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anc
 
 ---
 Updated: 2026-05-19 — added `Postgres namespace` row to `## In this codebase` documenting migration 0010 (cloud tables moved to `buffr` schema); noted that the composite-PK gate and the staged RLS policies followed the tables to the new schema automatically, so the auth posture is unchanged.
+
+---
+Updated: 2026-05-29 — codebase-drift + accuracy pass: corrected the factually-wrong "migration 0002 not installed / not applied" claims (0002 IS applied — it creates the policies and disables RLS by design). Added the real RLS incident the file was missing: RLS drifted on (Supabase dashboard one-click enable), `auth.uid()` was NULL under the anon key so every policy denied every push/pull, cloud sync silently froze, and migration 0009 rolled it back. Added 0009 to `In this codebase`, a `Where this breaks down` bullet, the footgun sub-block (hypothetical → actual incident), and the [senior] interview answer. Reframed Phase B from "enable migration 0002" to "ship a new ENABLE migration" (0002 disables RLS; the toggle is a separate migration) across Why care, Summary, and both [arch]/Level-3 scenarios. Fixed the Phase A/B diagram cell and two comparison-table cells.

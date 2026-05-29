@@ -29,7 +29,7 @@ Operational details in [`README.md`](../../README.md). Full architecture referen
 - `ai_summaries` — cached AI composition per date. `summary_json` carries the structured AISummary + the new 4-variant tonal captions (`variants` keyed by clean / smoother / reflective / punchy + `variantsTheme`). PK `(user_id, date)`.
 - `nutrition` — one row per `** food N kcal` line in prose.
 - `habits` — user's repeatable disciplines + cadence (`cadence_type`, `cadence_days`, `cadence_count`) + `time_of_day` bucket.
-- `todo_meta` — 1:1 with each TodoItem in `entries.todos_json`. Holds `type`, `expanded_md`, `classifier_confidence`, `user_overridden_type`, `pinned`. CHECK constraints on `type` (7 values) + `stage` (3 values, deprecated).
+- `todo_meta` — 1:1 with each TodoItem in `entries.todos_json`. Holds `type`, `expanded_md`, `classifier_confidence`, `user_overridden_type`, `pinned`. CHECK constraints on `type` (5 values: `todo`, `idea`, `knowledge`, `study`, `reflect` — widened then reduced in migrations 0006/0007/0008; `bug`/`question`/`decision`/`content` were dropped) + `stage` (3 values, deprecated).
 - `threads` — `#tag` project metadata. `slug` UNIQUE per user (case-insensitive).
 - `thread_mentions` — junction. App-level invariant: at least one of `entry_id` / `todo_id` is set, **except** for the manual-touch deviation (both NULL when written by `toggleThreadTouchToday`).
 
@@ -51,7 +51,7 @@ Operational details in [`README.md`](../../README.md). Full architecture referen
 - `src/types/` — `entry.ts`, `ai.ts`, `todoMeta.ts`, `thread.ts`, `nutrition.ts`, `project.ts`, `common.ts`. `notion.ts` is orphan (no importers; safe to delete).
 - `src/constants/` — theme tokens, app constants.
 - `src/utils/` — generators (`generateId`), time helpers.
-- `supabase/migrations/` — Postgres DDL. 0001 schema, 0002 RLS (disabled), 0003 server-time RPC, 0004 relax FKs, 0005 todo_meta.pinned. Applied via `node scripts/db-migrate.mjs --all-pending`.
+- `supabase/migrations/` — Postgres DDL. 0001 schema, 0002 RLS policies + disable (Phase A), 0003 server-time RPC, 0004 relax FKs, 0005 todo_meta.pinned, 0006/0007 widen todo_meta.type (+study, +reflect), 0008 reduce type set (drop bug/question/decision/content), 0009 re-disable RLS after it drifted on and froze sync, 0010 namespace cloud tables + `get_server_time()` to the `buffr` schema. Applied via `node scripts/db-migrate.mjs --all-pending`.
 - `scripts/` — `db-migrate.mjs` (Supabase migration runner using `pg` + `dotenv`).
 - `docs/` — design specs + plans + the canonical reference at `spec.md`. Interview-prep chapters are at `.aipe/specs/interview/`.
 - `android/` — committed prebuilt native project. Build via `gradlew :app:assembleRelease` then `adb install -r`.

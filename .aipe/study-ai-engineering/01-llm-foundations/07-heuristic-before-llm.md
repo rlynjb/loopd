@@ -13,7 +13,7 @@
 
 ### Move 1 — The grounded scenario
 
-You're typing in buffr: `[] book flight to LAX`. The classifier needs to label this `errand`. Easy case — there's a verb-of-action and a destination, hundreds of similar todos resolve to `errand`. But the system as built sends every todo, no matter how obvious, through a Haiku 4.5 LLM call. That's a 200ms latency hit and ~$0.0001 per call for input the cheapest regex could route in 100 microseconds. Across thousands of todos, you've paid hundreds of API calls for "this contains the word 'book' or 'buy' or 'pick up'" — a job rules can do free.
+You're typing in buffr: `[] book flight to LAX`. The classifier needs to label this `todo` — it's a plain action item, not a thought to sit with. Easy case — it opens with an imperative verb (`book`), and lines that open that way are nearly always `todo`. But if the system sent every line through a Haiku 4.5 LLM call regardless, that's a 200ms latency hit and ~$0.0001 per call for input the cheapest regex could route in 100 microseconds. Across thousands of lines, you've paid hundreds of API calls for "this opens with an imperative verb like 'book', 'call', or 'fix'" — a job rules can do free.
 
 ### Move 2 — Name the question the pattern answers
 
@@ -53,7 +53,7 @@ Most inputs are predictable; rules handle them; only the ambiguous remainder pay
      ▼
    ┌─────────────────────┐
    │ Heuristic check     │  fast, free, deterministic
-   │ (regex, rules)      │  e.g. "book|buy|pick up" → errand
+   │ (regex, rules)      │  e.g. imperative "book|call|fix" → 'todo'
    └─────────┬───────────┘
              │
         ┌────┴────┐
@@ -71,28 +71,29 @@ Most inputs are predictable; rules handle them; only the ambiguous remainder pay
 
 ### Move 2 — The layered walkthrough
 
-**Layer 1 — what the heuristic looks like.** Regex patterns matched against the input string. Each pattern maps to an output category. First match wins. For buffr's classifier in `heuristicClassify.ts`:
+**Layer 1 — what the heuristic looks like.** Regex patterns matched against the input string. The key point: the heuristic only ever emits `'todo'` or `null` — it detects *definitely-an-action* lines and abstains on everything else. It never picks `idea`/`knowledge`/`study`/`reflect`; those are the LLM's job on the abstain path. For buffr's classifier in `heuristicClassify.ts`:
 
 ```
-   ┌─ buffr's classifier heuristics (approximate) ────────────┐
-   │   /\b(book|buy|order|pick up|drop off|return|get)\b/i    │
-   │     →  errand                                             │
-   │   /\b(decide|figure out|choose|pick between)\b/i         │
-   │     →  decision                                           │
-   │   /\b(learn|read|watch|study|research)\b/i               │
-   │     →  learning                                           │
-   │   /\b(design|sketch|draft|write up|build)\b/i            │
-   │     →  creative                                           │
-   │   ...                                                     │
-   └───────────────────────────────────────────────────────────┘
+   ┌─ buffr's classifier heuristic (heuristicClassify.ts, approximate) ──┐
+   │   imperative verb at line start                                     │
+   │     /^(call|book|buy|fix|send|email|pick up|finish)\b/i  →  'todo'  │
+   │   deadline pattern                                                  │
+   │     /\b(by|before|due)\s+(eod|tomorrow|fri|\d)/i         →  'todo'  │
+   │   speculative / modal / question starts                            │
+   │     /^(maybe|should we|what if|i wonder|reflect on)/i    →  null    │
+   │     (defer to LLM — likely idea / study / reflect, not 'todo')      │
+   │   no signal                                              →  null    │
+   └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Layer 2 — when the heuristic doesn't fire.** Some inputs are genuinely ambiguous: `[] thing about the project` has no verb signal. Some are creative phrasings the regex doesn't recognise: `[] noodle on the auth design`. For those, the LLM call runs as a fallback. The regex pass is fast (sub-millisecond); the model call is the slow path. Most inputs hit the fast path; the slow path is what the LLM is for.
+It's a binary gate (`'todo'` vs abstain), not a multi-class router. Returning `'todo'` wrongly costs the user trust (a checkbox they have to clear); returning `null` only costs an LLM call — so the gate is biased toward abstention.
+
+**Layer 2 — when the heuristic doesn't fire.** Some inputs are genuinely ambiguous: `[] thing about the project` has no imperative signal. Some are thinking-mode phrasings the regex deliberately abstains on: `[] noodle on the auth design` (likely `reflect` or `idea`), `[] the Raft paper` (likely `study`). For those, the LLM call runs as a fallback and picks among `idea`/`knowledge`/`study`/`reflect`. The regex pass is fast (sub-millisecond); the model call is the slow path. Most inputs hit the fast path; the slow path is what the LLM is for.
 
 ```
    buffr's classifier dispatch
    ───────────────────────────
-   heuristicClassify(text) →  type | null
+   heuristicClassify(text) →  'todo' | null
          │
     ┌────┴────┐
     │  null?  │
@@ -102,9 +103,9 @@ Most inputs are predictable; rules handle them; only the ambiguous remainder pay
     │          │
     ▼ no       ▼ yes
    return     classifyWithLLM(text)
-   type          │
+   'todo'        │
                  ▼
-              type (Haiku 4.5)
+              idea | knowledge | study | reflect | todo  (Haiku 4.5)
 ```
 
 **Layer 3 — drift is the failure mode.** A regex written today catches today's phrasings. Six months from now, users have invented new ways to write todos that the regex doesn't catch — those now go to the LLM (cost goes up; latency on those inputs goes up). Worse: a regex might fire on a phrasing whose meaning has shifted, returning the wrong label. The mitigation: log every heuristic-routed case; periodically (weekly, monthly) sample some of them through the LLM and compare. If divergence exceeds a threshold, update the regex set.
@@ -142,10 +143,10 @@ The full picture is below.
 │         ▼                                                              │
 │   ┌──────────────────────────────────┐                                 │
 │   │ heuristicClassify.ts (regex set)│   ~70% of inputs resolve here    │
-│   │   case "book|buy|...":  errand   │   sub-millisecond, deterministic │
-│   │   case "decide|choose": decision │                                  │
-│   │   ...                            │                                  │
-│   │   default:               null    │                                  │
+│   │   imperative "book|call|fix" →   │   sub-millisecond, deterministic │
+│   │     'todo'                       │                                  │
+│   │   deadline "by EOD" →  'todo'    │                                  │
+│   │   default:             null      │                                  │
 │   └──────────┬───────────────────────┘                                 │
 │              │                                                         │
 │         ┌────┴────┐                                                    │
@@ -324,3 +325,6 @@ Without opening files:
 - What file owns the regex set?
 - What fraction of todos hit the heuristic path today?
 - What's the symptom of heuristic drift?
+
+---
+Updated: 2026-05-29 — corrected the classifier type set AND the mischaracterized heuristic. The heuristic was shown as a multi-class router (book→errand, decide→decision, etc.) with invented task-management types; it actually emits only `'todo'` (imperative/deadline signals) or `null` (abstain → LLM picks `idea`/`knowledge`/`study`/`reflect`). Reframed Move 1, the Layer 1 heuristic table, the dispatch diagram, and the In-this-codebase pipeline diagram.

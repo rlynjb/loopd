@@ -13,7 +13,7 @@
 
 ### Move 1 — The grounded scenario
 
-User types `[] book flight`. Buffr classifies it as `errand`. User opens the todo detail, taps the type chip, manually changes it to `task` ("it's a long booking project, not a quick errand"). Closes the screen. Next day, user edits the prose. The classifier runs again on the (slightly changed) todo text. It re-classifies as `errand`. User's manual correction is gone. From the user's perspective, the AI is fighting them.
+User types `[] revisit the caption-variants decision`. Buffr classifies it as `study`. User opens the todo detail, taps the type chip, manually changes it to `reflect` ("I'm not learning something new — I'm reconsidering a call I already made"). Closes the screen. Next day, user edits the prose. The classifier runs again on the (slightly changed) text. It re-classifies as `study`. User's manual correction is gone. From the user's perspective, the AI is fighting them.
 
 ### Move 2 — Name the question the pattern answers
 
@@ -26,8 +26,8 @@ That who-set-this question is what user-override locks answer. Not "how do I pre
 ### Move 4 — Concrete before/after
 
 Without override lock:
-- User overrides `type` from `errand` to `task`
-- Next classify run rewrites to `errand`
+- User overrides `type` from `study` to `reflect`
+- Next classify run rewrites to `study`
 - User has to manually re-fix; eventually gives up
 - AI gets a "broken" reputation in the user's head
 
@@ -51,7 +51,7 @@ Any field with both AI and user write access needs an override flag; the LLM che
    Field with override tracking:
    ┌──────────────────────────────────────────────┐
    │ {                                            │
-   │   type: 'task',                              │
+   │   type: 'reflect',                           │
    │   type_source: 'user',     ← who set this    │
    │   user_overridden_type: true                 │
    │ }                                            │
@@ -125,7 +125,7 @@ The full picture is below.
 │                                                                        │
 │   id                       integer    primary key                      │
 │   todo_id                  text                                        │
-│   type                     text       ('task' | 'errand' | ...)        │
+│   type                     text       ('todo'|'idea'|'knowledge'|…)    │
 │   user_overridden_type     boolean    DEFAULT false                    │
 │   expanded_md              text       nullable                         │
 │   classifier_confidence    real       nullable                         │
@@ -310,3 +310,6 @@ Without opening files:
 - What field carries buffr's only override lock today?
 - Where does the classify dispatch check the lock?
 - What's the symptom of a missing lock?
+
+---
+Updated: 2026-05-29 — corrected the classifier type set in the override example: `book flight: errand→task` (invented task-management types) → `revisit the caption-variants decision: study→reflect` (real thinking-mode types). Updated the field-shape diagram (`type: 'task'` → `'reflect'`) and the schema annotation. Set is `todo, idea, knowledge, study, reflect`.

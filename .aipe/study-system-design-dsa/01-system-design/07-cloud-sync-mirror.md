@@ -254,6 +254,7 @@ This is the classic timestamp-cursor sync engine, descended from CouchDB and Dyn
 ### Where this breaks down
 - Bidirectional realtime where both sides write the same row in the same second. LWW will pick one and silently drop the other; CRDTs or operational transforms become necessary.
 - Tables with massive churn where the dirty set per push is huge. Batches of 50 stop being enough; sharding becomes mandatory.
+- **Silent-failure observability gap (live today).** The orchestrator logs only on the success path — `orchestrator.ts:49` (`if (r.succeeded > 0 || r.failed > 0)`) and `:72` (`if (r.applied > 0 || r.fetched > 0)`). An error-only result that doesn't *throw* — a PostgREST error returned as data, not an exception — produces zero counts, fails the log guard, and surfaces nothing. Because reads stay local-canonical, the app feels completely normal while the cloud quietly stops converging. This bit twice: (1) RLS drifted on, `auth.uid()` was NULL under the anon key, every push/pull was denied and returned no rows — silent until caught and rolled back in migration 0009; (2) after migration 0010 moved the tables into the `buffr` schema, the schema wasn't yet in Supabase's exposed-schemas list, so every call returned `PGRST106` — silent for ~an hour until someone curled the endpoint. The fix is to log when `r.error` is set, not only when counts are non-zero (tracked in `.aipe/specs/refactors/cleanup-orchestrator-silent-sync-error-logging.md`). The lesson: success-only logging makes a frozen mirror invisible in a local-first app — the absence of a sync log has to be as loud as a sync error.
 
 ### What to explore next
 - [Conflict resolution: last-write-wins](./08-conflict-last-write-wins.md) → the per-row decision in pull.
@@ -531,3 +532,6 @@ Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-
 
 ---
 Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (cloud tables + `get_server_time()` moved to the `buffr` schema). Noted that the pseudocode in How it works still resolves correctly because the client sets `db.schema = 'buffr'` once instead of qualifying every call site.
+
+---
+Updated: 2026-05-29 — added a `Where this breaks down` bullet on the silent-failure observability gap: the orchestrator's success-only log guards (`orchestrator.ts:49`/`:72`) hide error-only sync results, which made two production freezes invisible (RLS drift → 0009; PGRST106 schema-not-exposed after 0010). Documented the fix direction (log on `r.error`) and the local-first lesson (a frozen mirror is invisible because reads stay local).

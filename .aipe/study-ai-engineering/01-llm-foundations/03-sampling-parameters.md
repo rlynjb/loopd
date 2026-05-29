@@ -13,7 +13,7 @@
 
 ### Move 1 — The grounded scenario
 
-You're building buffr's classifier. You want it to deterministically route todos into one of 7 thinking-mode types. Same todo text → same type, every time. You ship `temperature: 0.7` because that's the default in the Anthropic SDK example you copied. Three days later a user reports: "I typed `[] book flight` yesterday, it was classified as `errand`; I typed the exact same thing today, classified as `task`." Same input, different output. The classifier looks broken, but the model is doing exactly what `temperature: 0.7` told it to: sample from the distribution with natural variation.
+You're building buffr's classifier. You want it to deterministically route todos into one of 5 thinking-mode types (`todo`, `idea`, `knowledge`, `study`, `reflect`). Same todo text → same type, every time. You ship `temperature: 0.7` because that's the default in the Anthropic SDK example you copied. Three days later a user reports: "I typed `[] look into vector search` yesterday, it was classified as `study`; I typed the exact same thing today, classified as `idea`." Same input, different output. The classifier looks broken, but the model is doing exactly what `temperature: 0.7` told it to: sample from the distribution with natural variation.
 
 ### Move 2 — Name the question the pattern answers
 
@@ -278,7 +278,7 @@ When an interviewer asks "what temperature do you use," they're checking whether
 
 **Q [mid]:** Why is temperature=0 the right choice for buffr's classifier?
 
-**A:** Because the user expects "same todo, same label." Anything above 0 produces drift on identical inputs — `[] book flight` classified as `errand` today, `task` tomorrow — which surfaces as a "the AI is broken" user complaint. The classifier is the one chain where reproducibility is the spec; temperature 0 is the implementation that delivers it.
+**A:** Because the user expects "same todo, same label." Anything above 0 produces drift on identical inputs — `[] look into vector search` classified as `study` today, `idea` tomorrow — which surfaces as a "the AI is broken" user complaint. The classifier is the one chain where reproducibility is the spec; temperature 0 is the implementation that delivers it.
 
 **Q [senior]:** Buffr's caption chain uses 4 different temperatures for 4 variants. Why not just use temperature=1 for all four?
 
@@ -337,3 +337,6 @@ Without opening files:
 - What temperature does buffr's `classify` chain use?
 - What temperatures do the 4 caption variants use?
 - What's the symptom if you ship a classifier at temperature=0.7?
+
+---
+Updated: 2026-05-29 — corrected the classifier type set in the reproducibility examples: `book flight → errand/task` (invented task-management types) → `look into vector search → study/idea` (real thinking-mode types per migrations 0006-0008). Set is `todo, idea, knowledge, study, reflect`.

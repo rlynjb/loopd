@@ -69,7 +69,7 @@ Execution trace (4 incoming todos: "call mom", "is this still broken?", "noticed
 
 ```
   "call mom"             → LLM call (~300ms, ~$0.0004)  → 'todo'
-  "is this still broken?"→ LLM call (~300ms, ~$0.0004)  → 'question' (mapped → null)
+  "is this still broken?"→ LLM call (~300ms, ~$0.0004)  → 'todo' (non-expandable default)
   "noticed flicker"      → LLM call (~300ms, ~$0.0004)  → 'idea'
   "fix bug by EOD"       → LLM call (~300ms, ~$0.0004)  → 'todo'
 
@@ -434,3 +434,6 @@ Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it wor
 
 ---
 Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (doctor-receptionist-at-front-desk scenario → naming the cascading-classifier / cheap-first-expensive-second pattern → bolded "what depends on getting this right" pivot with latency/$ /trust + false-positive-vs-negative asymmetry stakes → before/after bullets comparing always-Haiku vs heuristic-first across three example lines → one-line summary "cheap-first, expensive-second, abstain on uncertain").
+
+---
+Updated: 2026-05-29 — codebase-drift pass: brute-force execution-trace output `'question' (mapped → null)` → `'todo' (non-expandable default)`. `'question'` was dropped from `todo_meta.type` in migration 0008; the current set is `todo, idea, knowledge, study, reflect`, where `todo` is the non-expandable default.

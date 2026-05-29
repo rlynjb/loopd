@@ -87,7 +87,7 @@ Three sets: golden (baseline), adversarial (robustness), regression (don't re-in
 
 **Layer 2 — adversarial set.** Inputs crafted to expose failure modes. For buffr's classifier: ambiguous todos like `[] thing` (no verb). For summarize: entries with embedded JSON or markdown that might confuse output mode. For prompt injection (concept `06-production-serving/03`): "Ignore previous instructions" embedded in user prose.
 
-**Layer 3 — regression set.** Every production bug becomes a test case. User reports "classifier mis-classified `[] book flight to LAX` as task instead of errand on May 10" → add to regression set with expected = errand. Next prompt change runs through the regression set; if any regress, don't ship.
+**Layer 3 — regression set.** Every production bug becomes a test case. User reports "classifier mis-classified `[] revisit the auth design` as `study` instead of `reflect` on May 10" → add to regression set with expected = `reflect`. Next prompt change runs through the regression set; if any regress, don't ship.
 
 ```
    Regression set growth
@@ -174,7 +174,7 @@ The breakpoint: build eval sets the moment a chain ships to production OR is bei
 ### B3.2 — Classifier golden set
 
 - **Exercise ID:** `B3.2`
-- **What to build:** 50 labeled todos covering all 7 thinking-mode types; run heuristic-only and heuristic+LLM through; report per-type precision/recall/F1.
+- **What to build:** 50 labeled todos covering all 5 thinking-mode types (`todo`, `idea`, `knowledge`, `study`, `reflect`); run heuristic-only and heuristic+LLM through; report per-type precision/recall/F1.
 - **Done when:** scores are documented and reproducible.
 - **Estimated effort:** 4 hours (curation + runner).
 
@@ -208,3 +208,6 @@ The breakpoint: build eval sets the moment a chain ships to production OR is bei
 - What's a golden set used for?
 - Where does the regression set come from?
 - What's the gate to ship a prompt change?
+
+---
+Updated: 2026-05-29 — corrected the classifier type set: regression-case example `book flight as task instead of errand` → `revisit the auth design as study instead of reflect`; "all 7 thinking-mode types" → "all 5 thinking-mode types (`todo, idea, knowledge, study, reflect`)" per migrations 0006-0008.

@@ -275,7 +275,7 @@ We traded a schema-level guarantee for application-layer flexibility: SQLite wou
 │                  │ todo_meta queried separately │ embedded expanded_md (often  │
 │                  │ when needed                  │ 100s of lines per todo)      │
 │ Cross-entry      │ SQL on todo_meta: pinned=1,  │ JSON gymnastics — every      │
-│ queries          │ type='bug' — first-class     │ aggregate query walks all    │
+│ queries          │ type='study' — first-class   │ aggregate query walks all    │
 │                  │                              │ entries' JSON                │
 │ Cloud-sync       │ per-table batches; clean     │ entries push carries full    │
 │ shape            │                              │ todo_meta payload every time │
@@ -300,7 +300,7 @@ A new entry-level invariant means a new reconciler. Today we have one (todos↔m
 
 The "obvious" alternative — FK with `ON DELETE CASCADE` — isn't actually available. SQLite has no syntax to FK from a side table to an element of a JSON column. So the alternative being weighed is *embedding* `todo_meta` as another JSON column on `entries`, eliminating the side table.
 
-That path would have made every `SELECT * FROM entries` carry the full `expanded_md` payload for every todo on that entry. `expanded_md` can be 100+ lines of markdown per ambiguous todo; on a day with 8 todos the entry row would inflate from ~2 KB to 50+ KB. The dashboard's `getEntriesForDate` and the journal's autosave round-trip would both pay that cost on every read. Cross-entry queries like "show me all `pinned=1` todos" or "show me all `type='bug'` todos across the week" would become JSON traversals instead of indexed SQL — a 50× slowdown at the 100-entry scale.
+That path would have made every `SELECT * FROM entries` carry the full `expanded_md` payload for every todo on that entry. `expanded_md` can be 100+ lines of markdown per ambiguous todo; on a day with 8 todos the entry row would inflate from ~2 KB to 50+ KB. The dashboard's `getEntriesForDate` and the journal's autosave round-trip would both pay that cost on every read. Cross-entry queries like "show me all `pinned=1` todos" or "show me all `type='study'` todos across the week" would become JSON traversals instead of indexed SQL — a 50× slowdown at the 100-entry scale.
 
 Cloud sync would also suffer. The mirror pushes per-table rows; embedded meta would mean every entries-row push carries the entire meta payload, every time, even when only the prose changed. With per-table batches the meta delta is small; with embedded meta the smallest delta is "the whole row."
 
@@ -370,7 +370,7 @@ A: The prose commit fires `scanTodosFromText`, which produces a new `TodoItem` i
 
 [senior] Q: Why not store `todo_meta` as another JSON column on `entries` and avoid the reconciler entirely?
 
-A: Three reasons. First, `todo_meta.expanded_md` can be hundreds of lines of markdown — embedding it in the entry's JSON would bloat every read of the entry by a multiple. Second, the cloud sync layer pushes per-table; per-row JSON inflation makes batches awkward. Third, the meta table queries support filters like "all todos with `pinned = 1` across all entries" or "all todos of `type = 'bug'`" — those are SQL queries on a normal table; they'd be JSON gymnastics on an embedded column. The reconciler is the cost of separating identity (in JSON) from metadata (in a table); I think it's the right tradeoff.
+A: Three reasons. First, `todo_meta.expanded_md` can be hundreds of lines of markdown — embedding it in the entry's JSON would bloat every read of the entry by a multiple. Second, the cloud sync layer pushes per-table; per-row JSON inflation makes batches awkward. Third, the meta table queries support filters like "all todos with `pinned = 1` across all entries" or "all todos of `type = 'study'`" — those are SQL queries on a normal table; they'd be JSON gymnastics on an embedded column. The reconciler is the cost of separating identity (in JSON) from metadata (in a table); I think it's the right tradeoff.
 
 ```
                   Path taken (side table + reconciler)   Alternative (embedded JSON meta)
@@ -521,3 +521,6 @@ Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of 
 
 ---
 Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from Kubernetes (level-4 industry tool) down to level-1 primitive (React `<List items={todos}>` with `key={todo.id}` and per-row component state). Same swap on How it works Move 1 (lead with React keyed-list reconciler; Kubernetes demoted to "same shape at infrastructure scale"). Added Move 1 mnemonic diagram (two-sided JSON/SQL shape) + 4 Move 2 sub-section diagrams: ids-on-both-sides table view, scanner-vs-existing diff trace, in-place-edit preserves-metadata trace, would-be-FK syntax + why no engine accepts it. Total: 5 new diagrams.
+
+---
+Updated: 2026-05-29 — codebase-drift pass: swapped the three `type='bug'` cross-entry-query examples to `type='study'`. `'bug'` was dropped from the `todo_meta.type` CHECK in migration 0008; the current type set is `todo, idea, knowledge, study, reflect`.

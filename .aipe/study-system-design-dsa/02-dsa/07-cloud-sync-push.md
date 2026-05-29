@@ -181,6 +181,7 @@ Batched upsert is the standard pattern for any sync engine — Salesforce Bulk A
 ### Where this breaks down
 - Tables with row sizes that vary wildly. A batch of 50 with one giant row may exceed payload limits while a batch of 50 with tiny rows wastes capacity.
 - Cases where intra-batch ordering matters. Upserts with `onConflict` are commutative within a batch, but if you depend on order (e.g., FK dependencies), you need to batch carefully.
+- Errors that arrive as data instead of exceptions. The orchestrator that drives `pushTable` logs only when counts are non-zero (`orchestrator.ts:49` — `if (r.succeeded > 0 || r.failed > 0)`). A PostgREST error returned in the response body (RLS denial, `PGRST106` for an unexposed schema) produces zero counts, no throw, and no log — the dirty set never drains and the freeze is silent because reads stay local. Both production freezes that hit this (RLS drift → migration 0009; the `buffr` schema not exposed after migration 0010) trace back to success-only logging; see `01-system-design/07-cloud-sync-mirror.md` "Where this breaks down."
 
 ### What to explore next
 - [08-cloud-sync-pull](./08-cloud-sync-pull.md) → the read counterpart.
@@ -435,3 +436,6 @@ Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form 
 
 ---
 Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (`supabase.from(table).upsert(…)` now resolves to `buffr.<table>` via the client's default schema config; upsert + `onConflict` semantics unchanged).
+
+---
+Updated: 2026-05-29 — added a `Where this breaks down` bullet on errors-as-data: the orchestrator's success-only log guard (`orchestrator.ts:49`) hides PostgREST errors returned in the response body (RLS denial, `PGRST106`), so the dirty set silently never drains. Cross-referenced the two production freezes (0009 RLS drift; 0010 schema-not-exposed) and the mirror file's fuller writeup.

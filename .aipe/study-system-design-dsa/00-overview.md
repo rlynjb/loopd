@@ -93,7 +93,7 @@
             │                              ┌─ scripts/db-migrate.mjs (Node) ──────┐
             │                              │                                      │
             │                              │  Migration runner. Walks             │
-            │                              │  supabase/migrations/0001..0005      │
+            │                              │  supabase/migrations/0001..0010      │
             │                              │  in order against the Postgres       │
             │                              │  mirror. Driven manually by the      │
             │                              │  developer:                          │
@@ -131,7 +131,7 @@
 - **Filesystem** — clip URIs are device-local under `/document/buffr/clips/<date>/`. `clip_uri` columns hold absolute paths; `repairBareClipUris` defensively re-resolves any bare-filename leftovers from the deleted Notion sync code.
 - **SecureStore** — Android Keystore-backed key/value. Stores LLM API keys, Supabase URL/anon key, the `cloud_initial_push_done` bootstrap flag, and per-feature backfill flags.
 - **Supabase Postgres** — the cloud mirror, never canonical. Reads always go to local SQLite; cloud catches up asynchronously. Migrations are append-only files in `supabase/migrations/`. As of `0010_namespace_to_buffr_schema.sql`, the 10 mirrored tables and the `get_server_time()` RPC live in a dedicated `buffr` schema; the JS client at `src/services/sync/client.ts` sets `db: { schema: 'buffr' }` so every `.from()` / `.rpc()` default-resolves there. Reason: the same Supabase project will eventually host two other apps' tables in their own schemas, so prefixing in `public` would collide.
-- **scripts/db-migrate.mjs** — the migration runner. A Node script (uses `pg` + `dotenv`) that applies `supabase/migrations/0001..0005` against the Supabase Postgres mirror in order. Lives outside the device runtime — driven manually by the developer running `node scripts/db-migrate.mjs --all-pending`. Migration files in order: `0001` schema, `0002` RLS scaffolded but disabled in Phase A, `0003` server-time RPC, `0004` relax FKs, `0005` `todo_meta.pinned`. Talks to: Supabase Postgres.
+- **scripts/db-migrate.mjs** — the migration runner. A Node script (uses `pg` + `dotenv`) that applies `supabase/migrations/0001..0010` against the Supabase Postgres mirror in order. Lives outside the device runtime — driven manually by the developer running `node scripts/db-migrate.mjs --all-pending`. Migration files in order: `0001` schema, `0002` RLS policies created + RLS disabled (Phase A by design), `0003` server-time RPC, `0004` relax FKs, `0005` `todo_meta.pinned`, `0006`/`0007` widen `todo_meta.type` CHECK (+`study`, +`reflect`), `0008` reduce the type set (drop `bug`/`question`/`decision`/`content`), `0009` re-disable RLS after it drifted on and silently froze sync, `0010` namespace cloud tables + `get_server_time()` into the `buffr` schema. Talks to: Supabase Postgres.
 - **External LLMs** — Anthropic + OpenAI. Provider switch lives in `src/services/ai/config.ts` and is read on every call. 5 callsites × 2 providers = 10 explicit branches; OpenAI's JSON chains pass `response_format: json_object` while interpret's OpenAI branch omits it (it wants markdown, not JSON).
 
 ---
@@ -173,3 +173,6 @@ Updated: 2026-05-24 — directory split per v1.38.0 plugin: `.aipe/study-ai-jour
 
 ---
 Updated: 2026-05-24 — cleared `.aipe/study-ai-engineering/` (47 files). The new `/aipe:study-ai-engineering` command (v1.38.0) regenerates the AI guide under a per-scope structure (9 sub-section subdirectories instead of the flat layout the migrated content had). Cross-section "See also" links from sd/dsa files now point at the directory rather than specific files so they re-resolve once the new command runs.
+
+---
+Updated: 2026-05-29 — codebase-drift pass: bumped migration range `0001..0005` → `0001..0010` in the system map and the db-migrate legend; enumerated 0006-0010 (type-set widen/reduce, RLS re-disable, `buffr` schema namespace) and corrected the 0002 RLS phrasing to "policies created + RLS disabled by design."
