@@ -1,10 +1,21 @@
-// Free, fast, deterministic. Returns 'todo' only when confident — anything
-// ambiguous returns null and falls through to the LLM classifier in Phase B.
+import type { TodoType } from '../../types/todoMeta';
+
+// Free, fast, deterministic. Returns the user's intended type only when
+// confident — anything ambiguous returns null and falls through to the LLM
+// classifier.
+//
+// Conservative widening (Phase C of the Gemma plan): the heuristic now
+// returns the four non-todo types (idea / knowledge / study / reflect) when
+// the user self-labels with an unambiguous marker:
+//   "idea:" / "TIL" / "study:" / "reflect:" / "reflect on"
+// Every other ambiguous shape stays null and the LLM decides.
 //
 // Per spec §5.2 the heuristic intentionally over-fires on null. False
-// negatives (an obvious todo getting LLM-classified anyway) cost one cheap
-// model call. False positives (an idea mis-classified as todo) cost a
-// manual user override. Spec accepts that tradeoff for accuracy.
+// negatives (a confident type getting LLM-classified anyway) cost one cheap
+// model call. False positives (e.g. "Idea Park is fun" reading as 'idea')
+// cost a manual user override. Spec accepts that tradeoff for accuracy —
+// and the explicit-marker shapes used here are deliberate enough that the
+// false-positive rate should be near zero on real journal input.
 
 // Common imperative verbs — line that starts with one of these is almost
 // always a todo. Built from the illustrative list in spec §5.2; can be
@@ -41,6 +52,8 @@ const QUESTION_STARTS = [
 ];
 
 // Conditional / observational starts — almost never plain todos.
+// "idea[:\s]" used to live here as a null-return. It's been promoted to
+// IDEA_STARTS below since the colon form is an explicit self-label.
 const SPECULATIVE_STARTS = [
   /^maybe\b/i,
   /^what\s+if\b/i,
@@ -50,7 +63,6 @@ const SPECULATIVE_STARTS = [
   /^figured\s+out\b/i,
   /^turns\s+out\b/i,
   /^the\s+thing\s+is\b/i,
-  /^idea[:\s]/i,
 ];
 
 // Deadline patterns — when present, very likely a todo.
@@ -61,16 +73,54 @@ const DEADLINE_PATTERNS = [
   /\beod\b/i, /\beom\b/i, /\basap\b/i,
 ];
 
+// Explicit self-label markers. Each one fires its declared type before any
+// of the null-return checks or todo checks run. Intentionally narrow — only
+// the colon form (or, for "reflect", "reflect on …") so generic uses of the
+// word as a noun don't misfire ("Idea Park is fun" stays null).
+const IDEA_STARTS = [
+  /^idea\s*:/i,
+];
+
+const KNOWLEDGE_STARTS = [
+  // "TIL" is the internet "today I learned" convention. Rare as a noun;
+  // confidently knowledge in journal context. Covers "TIL: X" and "TIL X".
+  /^til\b/i,
+];
+
+const STUDY_STARTS = [
+  /^study\s*:/i,
+];
+
+const REFLECT_STARTS = [
+  /^reflect\s*:/i,
+  /^reflect\s+on\b/i,
+];
+
 function firstWord(text: string): string {
   const match = text.trim().match(/^([\w'-]+)/);
   return match ? match[1].toLowerCase() : '';
 }
 
-// Returns 'todo' when we're confident, null otherwise. Never returns a
-// non-todo type — assignment of {idea, bug, question, …} is the LLM's job.
-export function heuristicClassify(rawText: string): 'todo' | null {
+// Returns the user-self-labeled type when confident, null otherwise.
+// Non-todo returns are only fired by the explicit self-label markers above.
+export function heuristicClassify(rawText: string): TodoType | null {
   const text = rawText.trim();
   if (!text) return null;
+
+  // Explicit self-labels win first — intentional markers trump punctuation
+  // ambiguity. "Idea: should we X?" reads as 'idea' despite the trailing ?.
+  for (const re of IDEA_STARTS) {
+    if (re.test(text)) return 'idea';
+  }
+  for (const re of KNOWLEDGE_STARTS) {
+    if (re.test(text)) return 'knowledge';
+  }
+  for (const re of STUDY_STARTS) {
+    if (re.test(text)) return 'study';
+  }
+  for (const re of REFLECT_STARTS) {
+    if (re.test(text)) return 'reflect';
+  }
 
   // Trailing question mark → question or speculation, never plain todo.
   if (text.endsWith('?')) return null;
