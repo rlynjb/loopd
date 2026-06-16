@@ -7,6 +7,7 @@ import {
   callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
   GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { cachedCall, type CacheKeyInput } from './cache';
 import {
   CAPTION_VARIANT_KEYS,
   type CaptionInput,
@@ -29,6 +30,9 @@ import {
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
 const MAX_TOKENS = 768;
+
+// Bump on meaningful prompt or output-format changes.
+const PROMPT_VERSION = 'caption-v1';
 
 const SYSTEM_PROMPT = `You generate four variant captions for a daily vlog from the user's raw log. Each variant is the same 3-line body about the same day, written in a different tonal voice. The user picks which voice to publish.
 
@@ -275,7 +279,17 @@ export async function generateCaption(
   const user = buildUserPrompt(input);
 
   try {
-    const { text } = await runCaptionLLM(provider, strictLocal, system, user);
+    const cacheInput: CacheKeyInput = {
+      chain: 'caption',
+      provider,
+      promptVersion: PROMPT_VERSION,
+      system,
+      user,
+    };
+    const { text } = await cachedCall(cacheInput, async () => {
+      const r = await runCaptionLLM(provider, strictLocal, system, user);
+      return { text: r.text, modelServed: r.model };
+    });
     const output = parseAndValidate(text);
     if (!output) return { output: null, error: 'Could not parse caption JSON' };
     return { output };

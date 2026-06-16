@@ -139,11 +139,18 @@ export async function isModelDownloaded(): Promise<boolean> {
 }
 
 // Routing decision: should this chain attempt on-device Gemma first?
-// Phase 5a leaves this at false — the implementation above is in place
-// but unreachable until Phase 5d flips this to consult isModelDownloaded
-// + device class + user opt-out state.
+// Returns true when ALL of these hold:
+//   - the GGUF model file exists at getModelPath()
+//   - the device class is not 'disabled' (>= 2 GB RAM)
+// Phase 5a's callGemmaLocal becomes reachable once the user downloads
+// the model via Settings -> Gemma on-device (Phase 5b) on a capable
+// device. A future "disable on-device" opt-out can short-circuit before
+// the file check; not added yet.
 export async function shouldUseGemmaLocal(): Promise<boolean> {
-  return false;
+  const { detectDeviceClass } = await import('../deviceClass');
+  const cls = await detectDeviceClass();
+  if (cls === 'disabled') return false;
+  return isModelDownloaded();
 }
 
 // Releases the cached llama context. Called when the user clears the

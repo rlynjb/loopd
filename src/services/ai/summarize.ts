@@ -7,6 +7,7 @@ import {
   callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
   GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { cachedCall, type CacheKeyInput } from './cache';
 import { buildPrompt } from './prompt';
 import { validateSummary } from './validate';
 import { generateCaption } from './caption';
@@ -17,6 +18,11 @@ import type { Entry } from '../../types/entry';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
 const MAX_TOKENS = 1024;
+
+// Bump on meaningful prompt or output-format changes to invalidate the
+// cached rows naturally. The cache key composite includes this so a
+// reader can sweep all summarize rows by dropping previous versions.
+const PROMPT_VERSION = 'summarize-v1';
 
 async function callClaude(apiKey: string, system: string, user: string): Promise<string> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
@@ -137,7 +143,17 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
   const { system, user } = buildPrompt(entries, allClips, allHabits, date);
 
   try {
-    const { text, model } = await runSummarizeLLM(provider, strictLocal, system, user);
+    const cacheInput: CacheKeyInput = {
+      chain: 'summarize',
+      provider,
+      promptVersion: PROMPT_VERSION,
+      system,
+      user,
+    };
+    const { text, modelServed: model } = await cachedCall(cacheInput, async () => {
+      const r = await runSummarizeLLM(provider, strictLocal, system, user);
+      return { text: r.text, modelServed: r.model };
+    });
 
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return { summary: null, error: 'No JSON in response' };

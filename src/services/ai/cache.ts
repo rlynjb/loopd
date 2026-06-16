@@ -112,6 +112,43 @@ export async function getCacheStats(): Promise<{
   return { rows: total, perChain };
 }
 
+// Convenience wrapper: lookup → call → write. Cache write failures are
+// swallowed and logged — they never fail the user-facing call. This is
+// the integration point most chain helpers use; classify's cascade has
+// its own integration because it predicts the provider before calling
+// (the cascade can fall back).
+export async function cachedCall(
+  input: CacheKeyInput,
+  call: () => Promise<{ text: string; modelServed: string }>,
+): Promise<{ text: string; modelServed: string }> {
+  const cached = await getCached(input);
+  if (cached) {
+    return { text: cached.result, modelServed: cached.modelServed };
+  }
+  const result = await call();
+  try {
+    await setCached(input, result.modelServed, result.text);
+  } catch (err) {
+    console.warn('[buffr ai cache] setCached failed:', err);
+  }
+  return result;
+}
+
+// Best-effort cache write. Used by classify (and any chain that runs the
+// LLM directly rather than through cachedCall) to avoid duplicating the
+// try/catch boilerplate.
+export async function writeCachedSafe(
+  input: CacheKeyInput,
+  modelServed: string,
+  result: string,
+): Promise<void> {
+  try {
+    await setCached(input, modelServed, result);
+  } catch (err) {
+    console.warn('[buffr ai cache] setCached failed:', err);
+  }
+}
+
 // Optional cap: keep only the most-recent N rows. Exposed for a future
 // maintenance pass; not currently wired. Useful if the cache grows
 // unboundedly on a long-lived install.

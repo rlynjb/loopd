@@ -7,6 +7,7 @@ import {
   callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
   GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { cachedCall, type CacheKeyInput } from './cache';
 import type { Interpretation } from '../../types/ai';
 
 // Long-form interpretation chain. Output is markdown — multi-section essay
@@ -20,6 +21,9 @@ const OPENAI_MODEL = 'gpt-4o';
 // 600–1000 tokens of prose. Cap leaves headroom for longer entries.
 const MAX_TOKENS = 1800;
 const TEMPERATURE = 0.7;
+
+// Bump on meaningful prompt or output-format changes.
+const PROMPT_VERSION = 'interpret-v1';
 
 export const MIN_TEXT_LENGTH = 20;
 export const MAX_INPUT_CHARS = 2000;
@@ -191,7 +195,17 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
   const truncated = truncateTail(text, MAX_INPUT_CHARS);
 
   try {
-    const { text: raw, model: modelId } = await runInterpretLLM(provider, strictLocal, truncated);
+    const cacheInput: CacheKeyInput = {
+      chain: 'interpret',
+      provider,
+      promptVersion: PROMPT_VERSION,
+      system: SYSTEM_PROMPT,
+      user: truncated,
+    };
+    const { text: raw, modelServed: modelId } = await cachedCall(cacheInput, async () => {
+      const r = await runInterpretLLM(provider, strictLocal, truncated);
+      return { text: r.text, modelServed: r.model };
+    });
     const md = cleanMarkdown(raw);
     if (!md) return { ok: false, reason: 'malformed' };
 
