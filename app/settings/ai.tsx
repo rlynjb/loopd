@@ -11,6 +11,23 @@ import {
   getProvider, setProvider, type AIProvider,
 } from '../../src/services/ai/config';
 import { testConnection } from '../../src/services/ai/summarize';
+import { getDeviceInfo, type DeviceClass } from '../../src/services/ai/deviceClass';
+import {
+  downloadGemmaModel, deleteGemmaModel, getModelDiskSize,
+  MODEL_FILENAME,
+  type DownloadProgress,
+} from '../../src/services/ai/download';
+
+type DeviceInfo = {
+  deviceClass: DeviceClass;
+  totalMemoryGB: number;
+  modelName: string | null;
+  brand: string | null;
+  overrideActive: boolean;
+};
+
+const GB = 1024 * 1024 * 1024;
+const MB = 1024 * 1024;
 
 export default function AISettingsScreen() {
   const router = useRouter();
@@ -21,6 +38,11 @@ export default function AISettingsScreen() {
   const [strictLocal, setStrictLocalState] = useState(false);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<'none' | 'ok' | 'error'>('none');
+
+  // Gemma on-device state.
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
+  const [modelDiskBytes, setModelDiskBytes] = useState(0);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -39,6 +61,11 @@ export default function AISettingsScreen() {
         (p === 'openai' && ok) ||
         (p === 'gemma' && gk)
       ) setStatus('ok');
+
+      const info = await getDeviceInfo();
+      setDeviceInfo(info);
+      const sz = await getModelDiskSize();
+      setModelDiskBytes(sz);
     })();
   }, []);
 
@@ -95,6 +122,43 @@ export default function AISettingsScreen() {
     setStatus('none');
   };
 
+  const handleDownloadModel = async () => {
+    if (!deviceInfo) return;
+    if (deviceInfo.deviceClass === 'disabled') {
+      Alert.alert('Unsupported device', 'On-device AI requires at least 2 GB of RAM. Use cloud Gemma instead.');
+      return;
+    }
+    const variant = deviceInfo.deviceClass === 'full' ? 'gemma-3-4b' : 'gemma-3-1b';
+    setDownloadProgress({ totalBytesWritten: 0, totalBytesExpectedToWrite: 0, fraction: 0 });
+    const result = await downloadGemmaModel(variant, p => setDownloadProgress(p));
+    setDownloadProgress(null);
+    if (result.success) {
+      const sz = await getModelDiskSize();
+      setModelDiskBytes(sz);
+      Alert.alert('Download complete', 'Gemma is ready to run on-device.');
+    } else {
+      Alert.alert('Download failed', result.error ?? 'Unknown error');
+    }
+  };
+
+  const handleDeleteModel = async () => {
+    Alert.alert(
+      'Remove model?',
+      'This frees disk space but disables on-device Gemma until you re-download.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            await deleteGemmaModel();
+            setModelDiskBytes(0);
+          },
+        },
+      ],
+    );
+  };
+
   const currentKey =
     provider === 'claude' ? claudeKey :
     provider === 'openai' ? openaiKey :
@@ -112,6 +176,8 @@ export default function AISettingsScreen() {
     provider === 'openai' ? 'OPENAI' :
     'TOGETHER';
   const hasSavedKey = currentKey.length > 0;
+  const modelDownloaded = modelDiskBytes > 0;
+  const modelSizeGB = modelDiskBytes / GB;
 
   return (
     <View style={styles.container}>
@@ -209,6 +275,63 @@ export default function AISettingsScreen() {
             <Text style={styles.disconnectText}>Disconnect</Text>
           </Pressable>
         )}
+
+        {/* Gemma on-device */}
+        <Text style={[styles.label, { marginTop: 18 }]}>GEMMA ON-DEVICE</Text>
+        {deviceInfo ? (
+          <View style={styles.gemmaCard}>
+            <Text style={styles.gemmaLine}>
+              Device class: <Text style={styles.gemmaValue}>{deviceInfo.deviceClass}</Text>
+            </Text>
+            <Text style={styles.gemmaLine}>
+              RAM: <Text style={styles.gemmaValue}>{deviceInfo.totalMemoryGB.toFixed(1)} GB</Text>
+            </Text>
+            {deviceInfo.deviceClass === 'disabled' ? (
+              <Text style={styles.hint}>
+                On-device AI requires {'>='} 2 GB RAM. This device should use cloud Gemma.
+              </Text>
+            ) : modelDownloaded ? (
+              <>
+                <Text style={styles.gemmaLine}>
+                  Model: <Text style={styles.gemmaValue}>{MODEL_FILENAME}</Text>
+                </Text>
+                <Text style={styles.gemmaLine}>
+                  Size on disk: <Text style={styles.gemmaValue}>{modelSizeGB.toFixed(2)} GB</Text>
+                </Text>
+                <Pressable onPress={handleDeleteModel} style={styles.removeBtn}>
+                  <Text style={styles.removeBtnText}>Remove model</Text>
+                </Pressable>
+              </>
+            ) : downloadProgress !== null ? (
+              <>
+                <Text style={styles.gemmaLine}>
+                  Downloading… <Text style={styles.gemmaValue}>{(downloadProgress.fraction * 100).toFixed(0)}%</Text>
+                </Text>
+                <Text style={styles.gemmaLine}>
+                  <Text style={styles.gemmaValue}>
+                    {(downloadProgress.totalBytesWritten / MB).toFixed(0)} MB
+                  </Text>
+                  {downloadProgress.totalBytesExpectedToWrite > 0 && (
+                    <>
+                      {' / '}
+                      <Text style={styles.gemmaValue}>
+                        {(downloadProgress.totalBytesExpectedToWrite / MB).toFixed(0)} MB
+                      </Text>
+                    </>
+                  )}
+                </Text>
+              </>
+            ) : (
+              <Pressable onPress={handleDownloadModel} style={styles.downloadBtn}>
+                <Text style={styles.downloadBtnText}>
+                  Download {deviceInfo.deviceClass === 'full' ? 'Gemma 3 4B (~2.5 GB)' : 'Gemma 3 1B (~700 MB)'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        ) : (
+          <Text style={styles.hint}>Detecting device…</Text>
+        )}
       </ScrollView>
     </View>
   );
@@ -260,4 +383,34 @@ const styles = StyleSheet.create({
   statusText: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted },
   disconnectBtn: { paddingVertical: 12, alignItems: 'center', backgroundColor: 'rgba(251,113,133,0.08)', borderWidth: 1, borderColor: 'rgba(251,113,133,0.2)', borderRadius: 8 },
   disconnectText: { fontFamily: fonts.mono, fontSize: 12, color: colors.coral },
+  gemmaCard: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: 8,
+    padding: 14,
+    gap: 6,
+  },
+  gemmaLine: { fontFamily: fonts.mono, fontSize: 11, color: colors.textMuted },
+  gemmaValue: { color: colors.text },
+  downloadBtn: {
+    marginTop: 6,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: 'rgba(232,213,176,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,213,176,0.2)',
+    borderRadius: 8,
+  },
+  downloadBtnText: { fontFamily: fonts.mono, fontSize: 12, color: colors.accent },
+  removeBtn: {
+    marginTop: 6,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: 'rgba(251,113,133,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,113,133,0.2)',
+    borderRadius: 8,
+  },
+  removeBtnText: { fontFamily: fonts.mono, fontSize: 11, color: colors.coral },
 });
