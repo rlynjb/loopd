@@ -67,19 +67,19 @@ async function runSummarizeLLM(
   // Strict-local: on-device Gemma only. Cloud paths (incl. cloud Gemma)
   // are off-limits regardless of which provider the user picked.
   if (strictLocal) {
-    if (!(await shouldUseGemmaLocal())) {
+    if (!(await shouldUseGemmaLocal('summarize'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal(system, user, MAX_TOKENS);
+    const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   // User picked Gemma: try on-device, then cloud Gemma, then graceful
   // fallback to Claude if neither served.
   if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal()) {
+    if (await shouldUseGemmaLocal('summarize')) {
       try {
-        const text = await callGemmaLocal(system, user, MAX_TOKENS);
+        const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
         return { text, model: GEMMA_LOCAL_MODEL };
       } catch (err) {
         console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);

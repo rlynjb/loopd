@@ -132,17 +132,17 @@ async function runInterpretLLM(
 
   // Strict-local: only on-device Gemma.
   if (strictLocal) {
-    if (!(await shouldUseGemmaLocal())) {
+    if (!(await shouldUseGemmaLocal('interpret'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal(SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+    const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal()) {
+    if (await shouldUseGemmaLocal('interpret')) {
       try {
-        const text = await callGemmaLocal(SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+        const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
         return { text, model: GEMMA_LOCAL_MODEL };
       } catch (err) {
         console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);

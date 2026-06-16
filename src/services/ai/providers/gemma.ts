@@ -11,9 +11,16 @@
 // Android GPU. The context is initialized lazily on first call and
 // cached for the session (initLlama loads the full ~2.5 GB model into
 // memory; we never want to do that twice).
+//
+// Phase 7 adds a latency probe: each callGemmaLocal records the wall-
+// clock time against the per-chain budget. Three consecutive over-
+// budget runs auto-skip that chain from the on-device path until the
+// user re-downloads the model (which clears the skip flags). This keeps
+// a slow device from chronically dragging out user-facing operations.
 
 import { initLlama } from 'llama.rn';
 import { Paths } from 'expo-file-system';
+import * as SecureStore from 'expo-secure-store';
 
 const TOGETHER_ENDPOINT = 'https://api.together.xyz/v1/chat/completions';
 
@@ -32,6 +39,25 @@ export const MODEL_FILENAME = 'gemma-3-4b-it-Q4_K_M.gguf';
 export function getModelPath(): string {
   return `${Paths.document.uri}/buffr/models/${MODEL_FILENAME}`;
 }
+
+// Per-chain latency budgets (ms) for on-device Gemma. Sourced from the
+// plan v3 "Per-chain latency budgets" table. Sustained over-budget runs
+// auto-skip that chain. Tune up if Gemma local turns out faster than
+// expected (probe resets cleanly via resetGemmaLocalSkip()).
+const BUDGETS_MS: Record<string, number> = {
+  classify: 1500,
+  caption: 3000,
+  summarize: 10000,
+  interpret: 15000,
+};
+
+const STRIKES_TO_SKIP = 3;
+const KEY_GEMMA_SKIP_PREFIX = 'gemma_local_skip_';
+const KEY_GEMMA_STREAK_PREFIX = 'gemma_local_streak_';
+
+// Chains the probe knows about. Used by resetGemmaLocalSkip() when
+// clearing all probe state on model re-download.
+const KNOWN_CHAINS = ['classify', 'caption', 'summarize', 'interpret'] as const;
 
 // Cloud Gemma via Together. Same input/output shape as callOpenAI in the
 // chain files so it can be wired in symmetrically. Throws on non-2xx so
@@ -104,13 +130,19 @@ async function getLlamaContext(): Promise<LlamaContext> {
 // (model file missing, native module not built into the binary) so the
 // chain code falls through to the next provider — unless strict-local
 // mode is on, in which case the chain surfaces its existing failure.
+//
+// The first arg (chain) is the chain name — 'classify' / 'caption' /
+// 'summarize' / 'interpret'. Used by the latency probe to track over-
+// budget runs per chain and auto-disable when sustained.
 export async function callGemmaLocal(
+  chain: string,
   system: string,
   user: string,
   maxTokens: number,
   temperature?: number,
 ): Promise<string> {
   const ctx = await getLlamaContext();
+  const start = Date.now();
   const result = await ctx.completion({
     messages: [
       { role: 'system', content: system },
@@ -123,7 +155,43 @@ export async function callGemmaLocal(
     // runaway generation if it doesn't.
     stop: ['<end_of_turn>', '</s>', '<|end_of_text|>'],
   });
+  const elapsed = Date.now() - start;
+  await updateGemmaLocalProbe(chain, elapsed);
   return result.text ?? '';
+}
+
+// Latency probe — best-effort, never propagates errors. A single
+// over-budget run isn't enough to skip; we wait for STRIKES_TO_SKIP
+// consecutive over-budget runs to filter out one-off slow calls
+// (cold start, thermal throttle clearing, etc).
+async function updateGemmaLocalProbe(chain: string, elapsedMs: number): Promise<void> {
+  const budget = BUDGETS_MS[chain];
+  if (!budget) return;
+
+  const streakKey = `${KEY_GEMMA_STREAK_PREFIX}${chain}`;
+  try {
+    if (elapsedMs <= budget) {
+      // Under budget — reset streak.
+      await SecureStore.deleteItemAsync(streakKey);
+      return;
+    }
+    const currentStreak = parseInt(
+      (await SecureStore.getItemAsync(streakKey)) ?? '0',
+      10,
+    );
+    const newStreak = currentStreak + 1;
+    if (newStreak >= STRIKES_TO_SKIP) {
+      await SecureStore.setItemAsync(`${KEY_GEMMA_SKIP_PREFIX}${chain}`, '1');
+      await SecureStore.deleteItemAsync(streakKey);
+      console.warn(
+        `[buffr ai] gemma local for ${chain} skipped after ${STRIKES_TO_SKIP} slow runs (last: ${elapsedMs}ms > ${budget}ms budget)`,
+      );
+    } else {
+      await SecureStore.setItemAsync(streakKey, String(newStreak));
+    }
+  } catch {
+    // probe is best-effort; never fail the call
+  }
 }
 
 // True when the GGUF file exists at the expected path. Phase 5b's
@@ -142,15 +210,39 @@ export async function isModelDownloaded(): Promise<boolean> {
 // Returns true when ALL of these hold:
 //   - the GGUF model file exists at getModelPath()
 //   - the device class is not 'disabled' (>= 2 GB RAM)
-// Phase 5a's callGemmaLocal becomes reachable once the user downloads
-// the model via Settings -> Gemma on-device (Phase 5b) on a capable
-// device. A future "disable on-device" opt-out can short-circuit before
-// the file check; not added yet.
-export async function shouldUseGemmaLocal(): Promise<boolean> {
+//   - the per-chain auto-skip flag is not set (Phase 7 latency probe)
+// The optional `chain` arg gates the per-chain skip check. Callers that
+// don't pass it (e.g. warmLlamaContext, predictClassifyProvider when
+// deciding cache key) get the device-and-model gates only.
+export async function shouldUseGemmaLocal(chain?: string): Promise<boolean> {
   const { detectDeviceClass } = await import('../deviceClass');
   const cls = await detectDeviceClass();
   if (cls === 'disabled') return false;
-  return isModelDownloaded();
+  if (!(await isModelDownloaded())) return false;
+  if (chain) {
+    try {
+      const skipped = await SecureStore.getItemAsync(`${KEY_GEMMA_SKIP_PREFIX}${chain}`);
+      if (skipped === '1') return false;
+    } catch {
+      // SecureStore failure shouldn't disable on-device routing.
+    }
+  }
+  return true;
+}
+
+// Clears the auto-skip + streak state for one chain (or all chains if
+// no arg). Called by the download flow on successful (re-)download:
+// the user expects fresh perf after re-installing the model.
+export async function resetGemmaLocalSkip(chain?: string): Promise<void> {
+  const chains = chain ? [chain] : Array.from(KNOWN_CHAINS);
+  for (const c of chains) {
+    try {
+      await SecureStore.deleteItemAsync(`${KEY_GEMMA_SKIP_PREFIX}${c}`);
+      await SecureStore.deleteItemAsync(`${KEY_GEMMA_STREAK_PREFIX}${c}`);
+    } catch {
+      // ignore; best-effort cleanup
+    }
+  }
 }
 
 // Eagerly loads the llama context if conditions are met. Called once at

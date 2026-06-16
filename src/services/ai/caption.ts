@@ -221,17 +221,17 @@ async function runCaptionLLM(
   user: string,
 ): Promise<{ text: string; model: string }> {
   if (strictLocal) {
-    if (!(await shouldUseGemmaLocal())) {
+    if (!(await shouldUseGemmaLocal('caption'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal(system, user, MAX_TOKENS);
+    const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal()) {
+    if (await shouldUseGemmaLocal('caption')) {
       try {
-        const text = await callGemmaLocal(system, user, MAX_TOKENS);
+        const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
         return { text, model: GEMMA_LOCAL_MODEL };
       } catch (err) {
         console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);

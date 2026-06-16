@@ -10,7 +10,7 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   getModelPath, MODEL_FILENAME,
-  unloadLlamaContext,
+  unloadLlamaContext, resetGemmaLocalSkip,
 } from './providers/gemma';
 
 // Bartowski community quantizations on HuggingFace — the standard pick
@@ -79,6 +79,9 @@ export async function downloadGemmaModel(
     if (!result) {
       return { success: false, error: 'Download did not complete' };
     }
+    // Fresh download — clear any per-chain auto-skip flags from the
+    // previous install so we re-probe the new model's perf.
+    await resetGemmaLocalSkip();
     return { success: true };
   } catch (err) {
     return {
@@ -98,6 +101,8 @@ export async function deleteGemmaModel(): Promise<{ success: boolean }> {
     if (info.exists) {
       await FileSystem.deleteAsync(destPath, { idempotent: true });
     }
+    // Clear probe state so a future re-download starts fresh.
+    await resetGemmaLocalSkip();
     return { success: true };
   } catch (err) {
     console.warn('[buffr ai] deleteGemmaModel failed:', err);

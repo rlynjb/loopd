@@ -106,7 +106,7 @@ function parseClassifyJson(raw: string): { type?: string; confidence?: string } 
 // hits naturally.
 async function predictClassifyProvider(strictLocal: boolean): Promise<AIProvider> {
   if (strictLocal) return 'gemma';
-  if (await shouldUseGemmaLocal()) return 'gemma';
+  if (await shouldUseGemmaLocal('classify')) return 'gemma';
   if (await getGemmaCloudKey()) return 'gemma';
   if (await getOpenAIKey()) return 'openai';
   return 'claude';
@@ -150,11 +150,11 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
 
   // Strict-local: on-device Gemma only.
   if (strictLocal) {
-    if (!(await shouldUseGemmaLocal())) return null;
+    if (!(await shouldUseGemmaLocal('classify'))) return null;
     _inFlight++;
     emit(CLASSIFY_PROGRESS_EVENT);
     try {
-      const raw = await callGemmaLocal(SYSTEM_PROMPT, text, MAX_TOKENS);
+      const raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS);
       const result = parseAndReturn(raw, GEMMA_LOCAL_MODEL);
       if (result) await writeCachedSafe(cacheInput, GEMMA_LOCAL_MODEL, raw);
       return result;
@@ -168,7 +168,7 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
   }
 
   // Non-strict: collect all candidate paths up front.
-  const useGemmaLocal = await shouldUseGemmaLocal();
+  const useGemmaLocal = await shouldUseGemmaLocal('classify');
   const gemmaCloudKey = await getGemmaCloudKey();
   const openaiKey = await getOpenAIKey();
   const anthropicKey = await getAnthropicKey();
@@ -184,7 +184,7 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
 
     if (useGemmaLocal) {
       try {
-        raw = await callGemmaLocal(SYSTEM_PROMPT, text, MAX_TOKENS);
+        raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS);
         usedModel = GEMMA_LOCAL_MODEL;
       } catch (err) {
         console.warn('[classify] gemma local failed, falling back:', err instanceof Error ? err.message : err);
@@ -243,7 +243,7 @@ export async function isClassifierAvailable(): Promise<boolean> {
     getOpenAIKey(),
     getAnthropicKey(),
     getGemmaCloudKey(),
-    shouldUseGemmaLocal(),
+    shouldUseGemmaLocal('classify'),
   ]);
   return useGemmaLocal || !!gemmaKey || !!openaiKey || !!anthropicKey;
 }
