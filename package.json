@@ -32,6 +32,7 @@
     "expo-status-bar": "~55.0.4",
     "expo-updates": "~55.0.15",
     "expo-video-thumbnails": "~55.0.14",
+    "llama.rn": "^0.12.4",
     "lucide-react-native": "^0.475.0",
     "react": "19.2.0",
     "react-dom": "^19.2.4",

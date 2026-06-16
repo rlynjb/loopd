@@ -33,7 +33,13 @@
       "expo-sqlite",
       "expo-sharing",
       "expo-updates",
-      "react-native-video"
+      "react-native-video",
+      [
+        "llama.rn",
+        {
+          "forceCxx20": true
+        }
+      ]
     ],
     "extra": {
       "router": {},
