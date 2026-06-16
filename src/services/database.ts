@@ -466,6 +466,32 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     );
   `);
 
+  // chain_cache — content-hashed cache for LLM chain outputs. Local-only,
+  // NOT in SYNCED_TABLES. Per-device by design: cloud Gemma vs on-device
+  // Gemma produce different served-model identifiers and shouldn't share
+  // entries; switching providers (Claude → Gemma) shouldn't return stale
+  // outputs from the previous one.
+  //
+  // Ships in Phase C of the Gemma plan
+  // (.aipe/plans/gemma-integration.md v3). The chains wire it in when
+  // on-device inference makes per-call cost (battery + latency) actually
+  // worth caching against — see src/services/ai/cache.ts for the public
+  // API. Until that wiring lands the table is created but unused, which is
+  // intentional: shipping the migration ahead of the wiring means upgrade
+  // is a pure no-op until the wiring commit.
+  await database.execAsync(`
+    CREATE TABLE IF NOT EXISTS chain_cache (
+      cache_key TEXT PRIMARY KEY,
+      chain TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model_served TEXT NOT NULL,
+      result TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chain_cache_chain ON chain_cache(chain);
+    CREATE INDEX IF NOT EXISTS idx_chain_cache_created ON chain_cache(created_at);
+  `);
+
   // Backfill updated_at
   await database.execAsync(`UPDATE entries SET updated_at = created_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE habits SET updated_at = datetime('now') WHERE updated_at IS NULL`);
