@@ -1,4 +1,12 @@
-import { getAnthropicKey, getOpenAIKey, getProvider } from './config';
+import {
+  getAnthropicKey, getOpenAIKey, getProvider,
+  getGemmaCloudKey, getStrictLocalMode,
+  type AIProvider,
+} from './config';
+import {
+  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+} from './providers/gemma';
 import {
   CAPTION_VARIANT_KEYS,
   type CaptionInput,
@@ -20,6 +28,7 @@ import {
 
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
+const MAX_TOKENS = 768;
 
 const SYSTEM_PROMPT = `You generate four variant captions for a daily vlog from the user's raw log. Each variant is the same 3-line body about the same day, written in a different tonal voice. The user picks which voice to publish.
 
@@ -127,7 +136,7 @@ async function callClaude(apiKey: string, system: string, user: string): Promise
     model: CLAUDE_MODEL,
     // 4 variants × ~30 tokens + theme + JSON overhead ≈ 200–300 tokens.
     // 768 leaves headroom for verbose models without runaway cost.
-    max_tokens: 768,
+    max_tokens: MAX_TOKENS,
     system,
     messages: [{ role: 'user', content: user }],
   });
@@ -140,7 +149,7 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      max_tokens: 768,
+      max_tokens: MAX_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: system },
@@ -198,20 +207,75 @@ function parseAndValidate(text: string): CaptionVariantOutput | null {
   };
 }
 
+// Routes the caption LLM call following the same pattern as the other
+// user-preference chains. Returns the served model so a future cache layer
+// can key on it.
+async function runCaptionLLM(
+  provider: AIProvider,
+  strictLocal: boolean,
+  system: string,
+  user: string,
+): Promise<{ text: string; model: string }> {
+  if (strictLocal) {
+    if (!(await shouldUseGemmaLocal())) {
+      throw new Error('Strict local mode: on-device AI not ready');
+    }
+    const text = await callGemmaLocal(system, user, MAX_TOKENS);
+    return { text, model: GEMMA_LOCAL_MODEL };
+  }
+
+  if (provider === 'gemma') {
+    if (await shouldUseGemmaLocal()) {
+      try {
+        const text = await callGemmaLocal(system, user, MAX_TOKENS);
+        return { text, model: GEMMA_LOCAL_MODEL };
+      } catch (err) {
+        console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    const gemmaKey = await getGemmaCloudKey();
+    if (gemmaKey) {
+      try {
+        const text = await callGemmaCloud(gemmaKey, system, user, MAX_TOKENS);
+        return { text, model: GEMMA_CLOUD_MODEL };
+      } catch (err) {
+        console.warn('[buffr ai] Gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    const claudeKey = await getAnthropicKey();
+    if (claudeKey) {
+      const text = await callClaude(claudeKey, system, user);
+      return { text, model: CLAUDE_MODEL };
+    }
+    throw new Error('No API key configured');
+  }
+
+  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
+  if (!apiKey) throw new Error('No API key configured');
+  const text = provider === 'openai'
+    ? await callOpenAI(apiKey, system, user)
+    : await callClaude(apiKey, system, user);
+  return { text, model: provider === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL };
+}
+
 export async function generateCaption(
   input: CaptionInput,
 ): Promise<{ output: CaptionVariantOutput | null; error?: string }> {
   const provider = await getProvider();
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-  if (!apiKey) return { output: null, error: 'No API key configured' };
+  const strictLocal = await getStrictLocalMode();
+
+  // Non-gemma early-out (mirrors prior behavior): if the chosen cloud
+  // provider has no key, surface 'No API key configured' as today.
+  if (!strictLocal && provider !== 'gemma') {
+    const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
+    if (!apiKey) return { output: null, error: 'No API key configured' };
+  }
 
   const system = SYSTEM_PROMPT;
   const user = buildUserPrompt(input);
 
   try {
-    const text = provider === 'openai'
-      ? await callOpenAI(apiKey, system, user)
-      : await callClaude(apiKey, system, user);
+    const { text } = await runCaptionLLM(provider, strictLocal, system, user);
     const output = parseAndValidate(text);
     if (!output) return { output: null, error: 'Could not parse caption JSON' };
     return { output };

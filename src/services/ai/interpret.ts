@@ -1,4 +1,12 @@
-import { getProvider, getAnthropicKey, getOpenAIKey } from './config';
+import {
+  getProvider, getAnthropicKey, getOpenAIKey,
+  getGemmaCloudKey, getStrictLocalMode,
+  type AIProvider,
+} from './config';
+import {
+  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+} from './providers/gemma';
 import type { Interpretation } from '../../types/ai';
 
 // Long-form interpretation chain. Output is markdown — multi-section essay
@@ -107,26 +115,83 @@ function cleanMarkdown(raw: string): string | null {
   return s;
 }
 
+// Routes the interpret LLM call. Gemma helpers want (system, user) shape;
+// the existing callClaude / callOpenAI here take only `user` and add the
+// "User journal entry:\n" prefix themselves. We build that prefix once for
+// the Gemma side and let the existing helpers preserve their internals.
+async function runInterpretLLM(
+  provider: AIProvider,
+  strictLocal: boolean,
+  truncatedText: string,
+): Promise<{ text: string; model: string }> {
+  const fullUser = `User journal entry:\n${truncatedText}`;
+
+  // Strict-local: only on-device Gemma.
+  if (strictLocal) {
+    if (!(await shouldUseGemmaLocal())) {
+      throw new Error('Strict local mode: on-device AI not ready');
+    }
+    const text = await callGemmaLocal(SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+    return { text, model: GEMMA_LOCAL_MODEL };
+  }
+
+  if (provider === 'gemma') {
+    if (await shouldUseGemmaLocal()) {
+      try {
+        const text = await callGemmaLocal(SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+        return { text, model: GEMMA_LOCAL_MODEL };
+      } catch (err) {
+        console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    const gemmaKey = await getGemmaCloudKey();
+    if (gemmaKey) {
+      try {
+        const text = await callGemmaCloud(gemmaKey, SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+        return { text, model: GEMMA_CLOUD_MODEL };
+      } catch (err) {
+        console.warn('[buffr ai] Gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    const claudeKey = await getAnthropicKey();
+    if (claudeKey) {
+      const text = await callClaude(claudeKey, truncatedText);
+      return { text, model: CLAUDE_MODEL };
+    }
+    throw new Error('No API key configured');
+  }
+
+  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
+  if (!apiKey) throw new Error('No API key configured');
+  const text = provider === 'openai'
+    ? await callOpenAI(apiKey, truncatedText)
+    : await callClaude(apiKey, truncatedText);
+  return { text, model: provider === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL };
+}
+
 // Run the interpretation chain for a single piece of journal text. Provider
-// follows the user's configured preference (Claude → OpenAI fallback).
-// Snapshots `sourceText` (the truncated input that actually reached the
-// model) so the modal can detect staleness later.
+// follows the user's configured preference (Claude → OpenAI → Gemma, or
+// strict-local on-device only). Snapshots `sourceText` (the truncated input
+// that actually reached the model) so the modal can detect staleness later.
 export async function interpretEntry(rawText: string): Promise<InterpretResult> {
   const text = rawText.trim();
   if (text.length < MIN_TEXT_LENGTH) return { ok: false, reason: 'too-short' };
 
   const provider = await getProvider();
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-  if (!apiKey) return { ok: false, reason: 'no-ai' };
+  const strictLocal = await getStrictLocalMode();
+
+  // Non-gemma early-out: if the chosen cloud provider has no key, surface
+  // 'no-ai' the same as today. Gemma path validates its own keys inside
+  // runInterpretLLM (multiple candidates).
+  if (!strictLocal && provider !== 'gemma') {
+    const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
+    if (!apiKey) return { ok: false, reason: 'no-ai' };
+  }
 
   const truncated = truncateTail(text, MAX_INPUT_CHARS);
-  const useOpenAI = provider === 'openai';
-  const modelId = useOpenAI ? OPENAI_MODEL : CLAUDE_MODEL;
 
   try {
-    const raw = useOpenAI
-      ? await callOpenAI(apiKey, truncated)
-      : await callClaude(apiKey, truncated);
+    const { text: raw, model: modelId } = await runInterpretLLM(provider, strictLocal, truncated);
     const md = cleanMarkdown(raw);
     if (!md) return { ok: false, reason: 'malformed' };
 
@@ -140,10 +205,12 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
       },
     };
   } catch (err) {
-    return {
-      ok: false,
-      reason: 'network',
-      message: err instanceof Error ? err.message : String(err),
-    };
+    const msg = err instanceof Error ? err.message : String(err);
+    // 'No API key configured' / 'Strict local mode' map to 'no-ai'; the rest
+    // is a network/upstream failure.
+    if (msg.includes('No API key') || msg.includes('Strict local mode')) {
+      return { ok: false, reason: 'no-ai', message: msg };
+    }
+    return { ok: false, reason: 'network', message: msg };
   }
 }

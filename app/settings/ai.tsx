@@ -6,6 +6,8 @@ import { Icon } from '../../src/components/ui/Icon';
 import {
   getAnthropicKey, setAnthropicKey, clearAnthropicKey,
   getOpenAIKey, setOpenAIKey, clearOpenAIKey,
+  getGemmaCloudKey, setGemmaCloudKey, clearGemmaCloudKey,
+  getStrictLocalMode, setStrictLocalMode,
   getProvider, setProvider, type AIProvider,
 } from '../../src/services/ai/config';
 import { testConnection } from '../../src/services/ai/summarize';
@@ -15,6 +17,8 @@ export default function AISettingsScreen() {
   const [provider, setProviderState] = useState<AIProvider>('claude');
   const [claudeKey, setClaudeKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
+  const [gemmaKey, setGemmaKeyState] = useState('');
+  const [strictLocal, setStrictLocalState] = useState(false);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<'none' | 'ok' | 'error'>('none');
 
@@ -26,24 +30,40 @@ export default function AISettingsScreen() {
       if (ck) setClaudeKey(ck);
       const ok = await getOpenAIKey();
       if (ok) setOpenaiKey(ok);
-      if ((p === 'claude' && ck) || (p === 'openai' && ok)) setStatus('ok');
+      const gk = await getGemmaCloudKey();
+      if (gk) setGemmaKeyState(gk);
+      const sl = await getStrictLocalMode();
+      setStrictLocalState(sl);
+      if (
+        (p === 'claude' && ck) ||
+        (p === 'openai' && ok) ||
+        (p === 'gemma' && gk)
+      ) setStatus('ok');
     })();
   }, []);
 
   const handleProviderChange = async (p: AIProvider) => {
     setProviderState(p);
     await setProvider(p);
-    const key = p === 'openai' ? openaiKey : claudeKey;
+    const key = p === 'openai' ? openaiKey : p === 'gemma' ? gemmaKey : claudeKey;
     setStatus(key ? 'ok' : 'none');
+  };
+
+  const handleStrictLocalToggle = async (on: boolean) => {
+    setStrictLocalState(on);
+    await setStrictLocalMode(on);
   };
 
   const handleSave = async () => {
     if (provider === 'claude') {
       if (!claudeKey.trim()) return;
       await setAnthropicKey(claudeKey.trim());
-    } else {
+    } else if (provider === 'openai') {
       if (!openaiKey.trim()) return;
       await setOpenAIKey(openaiKey.trim());
+    } else {
+      if (!gemmaKey.trim()) return;
+      await setGemmaCloudKey(gemmaKey.trim());
     }
     setStatus('ok');
   };
@@ -65,16 +85,32 @@ export default function AISettingsScreen() {
     if (provider === 'claude') {
       await clearAnthropicKey();
       setClaudeKey('');
-    } else {
+    } else if (provider === 'openai') {
       await clearOpenAIKey();
       setOpenaiKey('');
+    } else {
+      await clearGemmaCloudKey();
+      setGemmaKeyState('');
     }
     setStatus('none');
   };
 
-  const currentKey = provider === 'claude' ? claudeKey : openaiKey;
-  const setCurrentKey = provider === 'claude' ? setClaudeKey : setOpenaiKey;
-  const placeholder = provider === 'claude' ? 'sk-ant-...' : 'sk-...';
+  const currentKey =
+    provider === 'claude' ? claudeKey :
+    provider === 'openai' ? openaiKey :
+    gemmaKey;
+  const setCurrentKey =
+    provider === 'claude' ? setClaudeKey :
+    provider === 'openai' ? setOpenaiKey :
+    setGemmaKeyState;
+  const placeholder =
+    provider === 'claude' ? 'sk-ant-...' :
+    provider === 'openai' ? 'sk-...' :
+    'Together API key';
+  const keyLabel =
+    provider === 'claude' ? 'ANTHROPIC' :
+    provider === 'openai' ? 'OPENAI' :
+    'TOGETHER';
   const hasSavedKey = currentKey.length > 0;
 
   return (
@@ -87,7 +123,7 @@ export default function AISettingsScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.title}>AI Settings</Text>
-        <Text style={styles.subtitle}>Connect to Claude or OpenAI for AI-powered vlog summaries and auto-composition.</Text>
+        <Text style={styles.subtitle}>Connect to Claude, OpenAI, or Gemma (via Together) for AI-powered vlog summaries and auto-composition.</Text>
 
         {/* Provider toggle */}
         <Text style={styles.label}>PROVIDER</Text>
@@ -104,10 +140,16 @@ export default function AISettingsScreen() {
           >
             <Text style={[styles.providerText, provider === 'openai' && styles.providerTextActive]}>OpenAI</Text>
           </Pressable>
+          <Pressable
+            onPress={() => handleProviderChange('gemma')}
+            style={[styles.providerBtn, provider === 'gemma' && styles.providerBtnActive]}
+          >
+            <Text style={[styles.providerText, provider === 'gemma' && styles.providerTextActive]}>Gemma</Text>
+          </Pressable>
         </View>
 
         {/* API key */}
-        <Text style={styles.label}>{provider === 'claude' ? 'ANTHROPIC' : 'OPENAI'} API KEY</Text>
+        <Text style={styles.label}>{keyLabel} API KEY</Text>
         <TextInput
           value={currentKey}
           onChangeText={setCurrentKey}
@@ -118,6 +160,28 @@ export default function AISettingsScreen() {
           autoCorrect={false}
           style={styles.input}
         />
+
+        {/* Strict local mode */}
+        <Text style={styles.label}>STRICT LOCAL MODE</Text>
+        <View style={styles.providerRow}>
+          <Pressable
+            onPress={() => handleStrictLocalToggle(false)}
+            style={[styles.providerBtn, !strictLocal && styles.providerBtnActive]}
+          >
+            <Text style={[styles.providerText, !strictLocal && styles.providerTextActive]}>Off</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => handleStrictLocalToggle(true)}
+            style={[styles.providerBtn, strictLocal && styles.providerBtnActive]}
+          >
+            <Text style={[styles.providerText, strictLocal && styles.providerTextActive]}>On</Text>
+          </Pressable>
+        </View>
+        <Text style={styles.hint}>
+          {strictLocal
+            ? 'AI features that the device can\'t serve are disabled. Nothing leaves your device.'
+            : 'Cloud fallback enabled when on-device AI can\'t serve.'}
+        </Text>
 
         <View style={styles.btnRow}>
           <Pressable onPress={handleSave} style={[styles.btn, styles.saveBtn]}>
@@ -158,6 +222,7 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.heading, fontSize: 28, color: colors.text, letterSpacing: -0.5 },
   subtitle: { fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, lineHeight: 18 },
   label: { fontFamily: fonts.mono, fontSize: 9, color: colors.textDim, letterSpacing: 1, marginTop: 4 },
+  hint: { fontFamily: fonts.body, fontSize: 12, color: colors.textMuted, lineHeight: 17, marginTop: -2 },
   providerRow: { flexDirection: 'row', gap: 8 },
   providerBtn: {
     flex: 1,

@@ -1,4 +1,11 @@
-import { getAnthropicKey, getOpenAIKey } from '../ai/config';
+import {
+  getAnthropicKey, getOpenAIKey,
+  getGemmaCloudKey, getStrictLocalMode,
+} from '../ai/config';
+import {
+  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+} from '../ai/providers/gemma';
 import { emit } from '../../utils/events';
 import type { TodoType, ClassifierConfidence } from '../../types/todoMeta';
 
@@ -6,6 +13,7 @@ import type { TodoType, ClassifierConfidence } from '../../types/todoMeta';
 // Both are fast and ~$0.0001 per call at this prompt size.
 const OPENAI_MODEL = 'gpt-4o-mini';
 const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
+const MAX_TOKENS = 50;
 
 // Per spec §5.3 — context-free for speed and cost. Surrounding entry
 // context comes back in at expansion time (Phase C), not here.
@@ -40,7 +48,7 @@ async function callClaude(apiKey: string, text: string): Promise<string> {
   const client = new Anthropic({ apiKey });
   const r = await client.messages.create({
     model: CLAUDE_MODEL,
-    max_tokens: 50,
+    max_tokens: MAX_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: text }],
   });
@@ -53,7 +61,7 @@ async function callOpenAI(apiKey: string, text: string): Promise<string> {
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      max_tokens: 50,
+      max_tokens: MAX_TOKENS,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -82,32 +90,86 @@ function parseClassifyJson(raw: string): { type?: string; confidence?: string } 
   }
 }
 
-// Picks the cheapest configured model (OpenAI mini preferred). Returns null
-// when no AI is configured or the call fails — caller should leave the
-// meta row at type='todo', classifier_confidence=null and try again later.
+// Picks the cheapest configured model. Gemma (free, local or cloud) takes
+// precedence over OpenAI mini and Claude Haiku. Returns null when no AI is
+// configured or the call fails — caller leaves the meta row at type='todo',
+// classifier_confidence=null and tries again later.
+//
+// Routing precedence under non-strict mode:
+//   1. Gemma local (free, fastest, private)
+//   2. Gemma cloud / Together (free, fast)
+//   3. OpenAI mini (~$0.0001/call)
+//   4. Claude Haiku (~$0.0001/call)
+//
+// Under strict-local mode, only step 1 is attempted. Cloud paths are off.
 export async function classifyTodo(text: string): Promise<ClassifyResult | null> {
+  if (!text.trim()) return null;
+
+  const strictLocal = await getStrictLocalMode();
+
+  // Strict-local: on-device Gemma only.
+  if (strictLocal) {
+    if (!(await shouldUseGemmaLocal())) return null;
+    _inFlight++;
+    emit(CLASSIFY_PROGRESS_EVENT);
+    try {
+      const raw = await callGemmaLocal(SYSTEM_PROMPT, text, MAX_TOKENS);
+      return parseAndReturn(raw, GEMMA_LOCAL_MODEL);
+    } catch (err) {
+      console.warn('[classify] failed:', err);
+      return null;
+    } finally {
+      _inFlight--;
+      emit(CLASSIFY_PROGRESS_EVENT);
+    }
+  }
+
+  // Non-strict: collect all candidate paths up front.
+  const useGemmaLocal = await shouldUseGemmaLocal();
+  const gemmaCloudKey = await getGemmaCloudKey();
   const openaiKey = await getOpenAIKey();
   const anthropicKey = await getAnthropicKey();
-  if (!openaiKey && !anthropicKey) return null;
-  if (!text.trim()) return null;
+
+  if (!useGemmaLocal && !gemmaCloudKey && !openaiKey && !anthropicKey) return null;
 
   _inFlight++;
   emit(CLASSIFY_PROGRESS_EVENT);
 
   try {
-    const useOpenAI = !!openaiKey;
-    const raw = useOpenAI
-      ? await callOpenAI(openaiKey!, text)
-      : await callClaude(anthropicKey!, text);
-    const parsed = parseClassifyJson(raw);
-    if (!parsed?.type || !parsed?.confidence) return null;
-    if (!VALID_TYPES.has(parsed.type as TodoType)) return null;
-    if (!VALID_CONFIDENCES.has(parsed.confidence)) return null;
-    return {
-      type: parsed.type as TodoType,
-      confidence: parsed.confidence as ClassifyResult['confidence'],
-      model: useOpenAI ? OPENAI_MODEL : CLAUDE_MODEL,
-    };
+    let raw: string | null = null;
+    let usedModel: string = '';
+
+    if (useGemmaLocal) {
+      try {
+        raw = await callGemmaLocal(SYSTEM_PROMPT, text, MAX_TOKENS);
+        usedModel = GEMMA_LOCAL_MODEL;
+      } catch (err) {
+        console.warn('[classify] gemma local failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    if (raw === null && gemmaCloudKey) {
+      try {
+        raw = await callGemmaCloud(gemmaCloudKey, SYSTEM_PROMPT, text, MAX_TOKENS);
+        usedModel = GEMMA_CLOUD_MODEL;
+      } catch (err) {
+        console.warn('[classify] gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    if (raw === null && openaiKey) {
+      try {
+        raw = await callOpenAI(openaiKey, text);
+        usedModel = OPENAI_MODEL;
+      } catch (err) {
+        console.warn('[classify] openai failed, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
+    if (raw === null && anthropicKey) {
+      raw = await callClaude(anthropicKey, text);
+      usedModel = CLAUDE_MODEL;
+    }
+
+    if (raw === null) return null;
+    return parseAndReturn(raw, usedModel);
   } catch (err) {
     console.warn('[classify] failed:', err);
     return null;
@@ -117,7 +179,26 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
   }
 }
 
+function parseAndReturn(raw: string, model: string): ClassifyResult | null {
+  const parsed = parseClassifyJson(raw);
+  if (!parsed?.type || !parsed?.confidence) return null;
+  if (!VALID_TYPES.has(parsed.type as TodoType)) return null;
+  if (!VALID_CONFIDENCES.has(parsed.confidence)) return null;
+  return {
+    type: parsed.type as TodoType,
+    confidence: parsed.confidence as ClassifyResult['confidence'],
+    model,
+  };
+}
+
 export async function isClassifierAvailable(): Promise<boolean> {
-  const [openaiKey, anthropicKey] = await Promise.all([getOpenAIKey(), getAnthropicKey()]);
-  return !!openaiKey || !!anthropicKey;
+  const strictLocal = await getStrictLocalMode();
+  if (strictLocal) return shouldUseGemmaLocal();
+  const [openaiKey, anthropicKey, gemmaKey, useGemmaLocal] = await Promise.all([
+    getOpenAIKey(),
+    getAnthropicKey(),
+    getGemmaCloudKey(),
+    shouldUseGemmaLocal(),
+  ]);
+  return useGemmaLocal || !!gemmaKey || !!openaiKey || !!anthropicKey;
 }
