@@ -153,6 +153,20 @@ export async function shouldUseGemmaLocal(): Promise<boolean> {
   return isModelDownloaded();
 }
 
+// Eagerly loads the llama context if conditions are met. Called once at
+// app start so the first chain call doesn't pay the multi-second
+// model-load cost. No-op when on-device isn't ready (device too small,
+// model not downloaded) — fire-and-forget at the call site, never blocks
+// UI rendering.
+export async function warmLlamaContext(): Promise<void> {
+  if (!(await shouldUseGemmaLocal())) return;
+  try {
+    await getLlamaContext();
+  } catch (err) {
+    console.warn('[buffr ai] llama warm failed:', err instanceof Error ? err.message : err);
+  }
+}
+
 // Releases the cached llama context. Called when the user clears the
 // downloaded model (Phase 5b) or switches device-class manually
 // (forces re-init with the new variant on next call).

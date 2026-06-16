@@ -91,6 +91,23 @@ function AppContent() {
     })();
   }, [ready]);
 
+  // Warm the llama context as soon as the database is ready. shouldUseGemmaLocal
+  // gates internally — if no model is downloaded or the device class is
+  // 'disabled', this is a fast no-op. Otherwise initLlama loads the GGUF
+  // (~2.5 GB) into memory off the UI thread so the first chain call is fast.
+  // Fire-and-forget; never blocks UI render.
+  useEffect(() => {
+    if (!ready) return;
+    (async () => {
+      try {
+        const { warmLlamaContext } = await import('../src/services/ai/providers/gemma');
+        await warmLlamaContext();
+      } catch (err) {
+        console.warn('[buffr] llama warm failed:', err);
+      }
+    })();
+  }, [ready]);
+
   // Auto-generate AI summary for yesterday on app open
   useEffect(() => {
     if (!ready) return;
