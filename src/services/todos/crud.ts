@@ -9,16 +9,6 @@ import {
 import { generateId } from '../../utils/id';
 import { getTodayString } from '../../utils/time';
 import { rewriteTodoLine } from './scanTodos';
-import { scanThreadsForEntry } from '../threads/scanThreads';
-
-// Fire-and-forget threads scan for a todo write. The journal editor calls
-// this through useEntries.editEntry; non-journal CRUD paths (the /todos
-// page, SmartTodoList) call it from here. Failure can't break the write.
-function scheduleThreadsScan(entry: { id: string; date: string; text: string | null; todos: TodoItem[] }): void {
-  scanThreadsForEntry(entry.id, entry.date, entry.text, entry.todos).catch(err => {
-    console.warn('[threads] todo-crud scan failed:', err);
-  });
-}
 
 // Add a todo to an existing entry (if `entryId` is given) or to today's
 // shared todos-bucket entry. The bucket is a todos-only entry (no text, no
@@ -44,7 +34,6 @@ export async function addTodo(
     if (!existing) throw new Error(`Entry ${entryId} not found`);
     const nextTodos = [...(existing.todos ?? []), todo];
     await updateEntry({ ...existing, todos: nextTodos });
-    scheduleThreadsScan({ id: existing.id, date: existing.date, text: existing.text, todos: nextTodos });
     return { todo, entryId };
   }
 
@@ -61,7 +50,6 @@ export async function addTodo(
   if (bucket) {
     const nextTodos = [...(bucket.todos ?? []), todo];
     await updateEntry({ ...bucket, todos: nextTodos });
-    scheduleThreadsScan({ id: bucket.id, date: bucket.date, text: bucket.text, todos: nextTodos });
     return { todo, entryId: bucket.id };
   }
 
@@ -78,7 +66,6 @@ export async function addTodo(
     createdAt: new Date().toISOString(),
   };
   await insertEntry(newEntry);
-  scheduleThreadsScan({ id: newEntry.id, date: newEntry.date, text: newEntry.text, todos: newEntry.todos });
   return { todo, entryId: newEntry.id };
 }
 
@@ -110,10 +97,6 @@ export async function updateTodo(
     : entry.text;
 
   await updateEntry({ ...entry, text: nextText, todos });
-  // Re-scan threads when text changed — picks up new/removed #tag mentions.
-  if ('text' in updates) {
-    scheduleThreadsScan({ id: entry.id, date: entry.date, text: nextText, todos });
-  }
 }
 
 // Remove a todo. If the entry becomes empty (no text, no clips, no habits, no

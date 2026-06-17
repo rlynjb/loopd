@@ -5,26 +5,20 @@ import { useRouter } from 'expo-router';
 import { colors, fonts, GLOBAL_NAV_HEIGHT } from '../../src/constants/theme';
 import { Icon, type IconName } from '../../src/components/ui/Icon';
 import { HomeHeader } from '../../src/components/home/HomeHeader';
-import { getDatabase, getHabits, getThreads } from '../../src/services/database';
+import { getDatabase, getHabits } from '../../src/services/database';
 import { isDueOn } from '../../src/services/habits/cadence';
-import { computeStaleness } from '../../src/services/threads/staleness';
-import { getLastMentionByThread } from '../../src/services/database';
 import { getTodayString } from '../../src/utils/time';
 
 type HubStats = {
   nutritionWeek: number;
   habitsActive: number;
   habitsDueToday: number;
-  threadsActive: number;
-  threadsStale: number;
 };
 
 const EMPTY_STATS: HubStats = {
   nutritionWeek: 0,
   habitsActive: 0,
   habitsDueToday: 0,
-  threadsActive: 0,
-  threadsStale: 0,
 };
 
 export default function MoreHub() {
@@ -57,21 +51,10 @@ export default function MoreHub() {
       }
     }
 
-    const threads = await getThreads(false);
-    const lastMention = await getLastMentionByThread();
-    let staleCount = 0;
-    for (const t of threads) {
-      const last = lastMention.get(t.id) ?? null;
-      const s = computeStaleness(t, last, todayDate);
-      if (s === 'stale' || s === 'cold') staleCount++;
-    }
-
     setStats({
       nutritionWeek: nutRow?.c ?? 0,
       habitsActive: habits.length,
       habitsDueToday: dueCount,
-      threadsActive: threads.length,
-      threadsStale: staleCount,
     });
   }, []);
 
@@ -97,16 +80,6 @@ export default function MoreHub() {
               : `${stats.habitsActive} active${stats.habitsDueToday > 0 ? ` · ${stats.habitsDueToday} due today` : ''}`
           }
           onPress={() => router.push('/more/habits')}
-        />
-        <HubLink
-          icon="gitBranch"
-          label="threads"
-          stat={
-            stats.threadsActive === 0
-              ? 'no threads yet'
-              : `${stats.threadsActive} active${stats.threadsStale > 0 ? ` · ${stats.threadsStale} going stale` : ''}`
-          }
-          onPress={() => router.push('/more/threads')}
         />
       </ScrollView>
     </View>

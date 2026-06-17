@@ -10,7 +10,7 @@ import type { PullResult } from './pull';
 
 const SYNCED_TABLES = [
   'entries', 'projects', 'day_meta', 'vlogs', 'ai_summaries',
-  'nutrition', 'habits', 'todo_meta', 'threads', 'thread_mentions',
+  'nutrition', 'habits', 'todo_meta',
 ];
 
 /**
@@ -36,8 +36,8 @@ export async function resetCloud(): Promise<{ ok: boolean; error?: string; delet
   const deleted: Record<string, number> = {};
   for (const t of SYNCED_TABLES) {
     // Children before parents to avoid FK cascade noise — delete reverse
-    // pull-order, which is roughly (mentions/nutrition/todo_meta) before
-    // (threads/habits/entries).
+    // pull-order, which is roughly (nutrition/todo_meta) before
+    // (habits/entries).
     const { error, count } = await supabase
       .from(t)
       .delete({ count: 'exact' })
@@ -73,7 +73,7 @@ export async function resetLocalFromCloud(): Promise<{
   // Don't drop schema — just truncate. Children before parents to avoid
   // cascade-delete order issues (sqlite has no enforced FKs but clean is clean).
   const truncationOrder = [
-    'thread_mentions', 'nutrition', 'todo_meta', 'threads', 'habits',
+    'nutrition', 'todo_meta', 'habits',
     'ai_summaries', 'vlogs', 'day_meta', 'projects', 'entries',
     'sync_deletions', 'sync_meta',
   ];

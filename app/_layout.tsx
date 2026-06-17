@@ -167,25 +167,6 @@ function AppContent() {
     })();
   }, [ready]);
 
-  // Lazy backfill for thread #tag mentions. Short-circuits when no threads
-  // exist yet (so a fresh install doesn't burn cycles scanning prose with
-  // no slugs to match against). Once the user creates their first thread,
-  // the next boot picks it up and scans.
-  useEffect(() => {
-    if (!ready) return;
-    (async () => {
-      try {
-        const { backfillThreadMentions } = await import('../src/services/threads/migrate');
-        const result = await backfillThreadMentions();
-        if (!result.skipped) {
-          console.log(`[buffr] threads backfill scanned ${result.scanned} entries`);
-        }
-      } catch (err) {
-        console.warn('[buffr] threads backfill failed:', err);
-      }
-    })();
-  }, [ready]);
-
   // One-time backfill for habits cadence + slug. Adds default cadence_type
   // ('daily') is handled by the ALTER TABLE default; this fills in the slug
   // derived from each habit's label. SecureStore-gated, runs once.

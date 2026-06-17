@@ -1,70 +1,54 @@
-// Daily Schedule weekly grid — 7-column weekday layout for habits AND threads.
-// See docs/buffr-daily-schedule-grid-spec.md (with the §13 deviation: per
-// user direction, threads share the grid bucketed by time_of_day instead of
-// rendering as a separate strip below).
+// Daily Schedule weekly grid — 7-column weekday layout for habits.
+// See docs/buffr-daily-schedule-grid-spec.md.
 //
-// Receives the visible week's anchor (Monday) plus habits + threads + their
-// check-in / touch maps; renders mixed rows bucketed by time_of_day. Habit
-// rows use cellStateFor() (cadence-aware); thread rows use the simpler
-// cellStateForThread() (touched/not-touched only).
+// Receives the visible week's anchor (Monday) plus habits + their check-in
+// maps; renders rows bucketed by time_of_day. cellStateFor() drives the
+// per-cell visual (cadence-aware).
 //
 // Tap is enabled only on today's pending/done cells. Tap-on-name routes
-// to the appropriate edit/detail surface.
+// to the habit edit screen.
 import { useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { colors, fonts } from '../../constants/theme';
 import type { Habit, TimeOfDay } from '../../types/entry';
-import type { Thread, ThreadCard } from '../../types/thread';
 import { isoWeekDates, summarizeCadence } from '../../services/habits/cadence';
-import { cellStateFor, cellStateForThread, type CellState } from './cellState';
+import { cellStateFor, type CellState } from './cellState';
 
 type Props = {
   habits: Habit[];
-  threads: ThreadCard[];
   checkedDatesByHabit: Map<string, Set<string>>;
   weekStart: string;            // YYYY-MM-DD, Monday of the visible week
   today: string;                // YYYY-MM-DD
   offDayMode: 'hidden' | 'faded';
   isReadOnly?: boolean;         // true for past-week views
   onToggleHabitToday: (habitId: string) => void;
-  onToggleThreadToday: (threadId: string, slug: string) => void;
   onTapHabit?: (habit: Habit) => void;
-  onTapThread?: (thread: Thread) => void;
 };
 
 const BUCKET_ORDER: TimeOfDay[] = ['morning', 'midday', 'evening', 'anytime'];
 
-type Row =
-  | { kind: 'habit'; habit: Habit }
-  | { kind: 'thread'; card: ThreadCard };
-
 export function DailyScheduleGrid({
   habits,
-  threads,
   checkedDatesByHabit,
   weekStart,
   today,
   offDayMode,
   isReadOnly = false,
   onToggleHabitToday,
-  onToggleThreadToday,
   onTapHabit,
-  onTapThread,
 }: Props) {
   // Generate the week's date strings — Mon..Sun based on weekStart.
   const weekDates = useMemo(() => isoWeekDates(new Date(weekStart + 'T12:00:00')), [weekStart]);
 
-  // Bucket habits + threads by time_of_day (habits first within each bucket
-  // — matches the previous combined-strip ordering convention).
+  // Bucket habits by time_of_day.
   const { buckets, showHeaders } = useMemo(() => {
-    const map: Record<TimeOfDay, Row[]> = {
+    const map: Record<TimeOfDay, Habit[]> = {
       morning: [], midday: [], evening: [], anytime: [],
     };
-    for (const h of habits) map[h.timeOfDay ?? 'anytime'].push({ kind: 'habit', habit: h });
-    for (const c of threads) map[c.thread.timeOfDay ?? 'anytime'].push({ kind: 'thread', card: c });
+    for (const h of habits) map[h.timeOfDay ?? 'anytime'].push(h);
     const occupied = BUCKET_ORDER.filter(b => map[b].length > 0);
     return { buckets: occupied.map(b => ({ name: b, rows: map[b] })), showHeaders: occupied.length >= 2 };
-  }, [habits, threads]);
+  }, [habits]);
 
   if (buckets.length === 0) return null;
 
@@ -73,35 +57,19 @@ export function DailyScheduleGrid({
       {buckets.map(bucket => (
         <View key={bucket.name}>
           {showHeaders && <Text style={styles.bucketHeader}>{bucket.name}</Text>}
-          {bucket.rows.map(row => {
-            if (row.kind === 'habit') {
-              return (
-                <HabitRow
-                  key={`habit-${row.habit.id}`}
-                  habit={row.habit}
-                  checkedDates={checkedDatesByHabit.get(row.habit.id) ?? EMPTY_SET}
-                  weekDates={weekDates}
-                  today={today}
-                  offDayMode={offDayMode}
-                  isReadOnly={isReadOnly}
-                  onToggleToday={onToggleHabitToday}
-                  onTapHabit={onTapHabit}
-                />
-              );
-            }
-            return (
-              <ThreadRow
-                key={`thread-${row.card.thread.id}`}
-                card={row.card}
-                weekDates={weekDates}
-                today={today}
-                offDayMode={offDayMode}
-                isReadOnly={isReadOnly}
-                onToggleToday={onToggleThreadToday}
-                onTapThread={onTapThread}
-              />
-            );
-          })}
+          {bucket.rows.map(habit => (
+            <HabitRow
+              key={`habit-${habit.id}`}
+              habit={habit}
+              checkedDates={checkedDatesByHabit.get(habit.id) ?? EMPTY_SET}
+              weekDates={weekDates}
+              today={today}
+              offDayMode={offDayMode}
+              isReadOnly={isReadOnly}
+              onToggleToday={onToggleHabitToday}
+              onTapHabit={onTapHabit}
+            />
+          ))}
         </View>
       ))}
     </View>
@@ -149,54 +117,6 @@ function HabitRow({
             offDayMode={offDayMode}
             interactive={!isReadOnly && date === today}
             onTap={() => onToggleToday(habit.id)}
-          />
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function ThreadRow({
-  card,
-  weekDates,
-  today,
-  offDayMode,
-  isReadOnly,
-  onToggleToday,
-  onTapThread,
-}: {
-  card: ThreadCard;
-  weekDates: string[];
-  today: string;
-  offDayMode: 'hidden' | 'faded';
-  isReadOnly: boolean;
-  onToggleToday: (threadId: string, slug: string) => void;
-  onTapThread?: (thread: Thread) => void;
-}) {
-  const { thread } = card;
-  const touched = card.activeDates ?? EMPTY_SET;
-  return (
-    <View style={styles.row}>
-      <Pressable
-        onPress={onTapThread ? () => onTapThread(thread) : undefined}
-        hitSlop={4}
-        style={styles.label}
-      >
-        <Text style={styles.labelName} numberOfLines={1}>{`#${thread.slug}`}</Text>
-        <Text style={styles.labelCadence}>
-          {thread.targetCadenceDays ? `every ${thread.targetCadenceDays}d` : 'thread'}
-        </Text>
-      </Pressable>
-      <View style={styles.cells}>
-        {weekDates.map(date => (
-          <Cell
-            key={date}
-            date={date}
-            state={cellStateForThread(touched, date, today)}
-            isTodayColumn={!isReadOnly && date === today}
-            offDayMode={offDayMode}
-            interactive={!isReadOnly && date === today}
-            onTap={() => onToggleToday(thread.id, thread.slug)}
           />
         ))}
       </View>

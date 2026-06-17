@@ -223,51 +223,13 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
     );
   `);
 
-  // Threads — lightweight project-attribution metadata. Mirrors habits.
-  // The `slug` column is the matching key for #tag mentions in prose; UNIQUE
-  // is enforced by the index. `archived` and `pinned` stored as 0/1.
+  // Threads + thread_mentions tables were removed in the threads-removal
+  // refactor. Drop them on existing installs so the cloud sync engine
+  // doesn't try to push to/pull from tables that no longer exist on the
+  // cloud side either. Idempotent — no-op on fresh installs.
   await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS threads (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL,
-      icon TEXT,
-      color TEXT,
-      target_cadence_days INTEGER,
-      archived INTEGER NOT NULL DEFAULT 0,
-      pinned INTEGER NOT NULL DEFAULT 0,
-      time_of_day TEXT NOT NULL DEFAULT 'anytime',
-      notion_page_id TEXT,
-      notion_last_synced TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_threads_slug ON threads(slug);
-    CREATE INDEX IF NOT EXISTS idx_threads_archived ON threads(archived);
-    CREATE INDEX IF NOT EXISTS idx_threads_notion ON threads(notion_page_id);
-  `);
-  // Migration for existing installs that already have threads without time_of_day.
-  await addColumn('threads', 'time_of_day', `TEXT NOT NULL DEFAULT 'anytime'`);
-
-  // Thread mentions — junction between threads and entries/todos. One row
-  // per #tag occurrence. Constraint: every mention has either an entry_id
-  // or a todo_id (enforced in the scanner; SQLite CHECK omitted because
-  // partial indexes / partial CHECK is awkward to evolve).
-  await database.execAsync(`
-    CREATE TABLE IF NOT EXISTS thread_mentions (
-      id TEXT PRIMARY KEY,
-      thread_id TEXT NOT NULL,
-      entry_id TEXT,
-      entry_date TEXT NOT NULL,
-      todo_id TEXT,
-      source_line INTEGER NOT NULL DEFAULT 0,
-      tag_text TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_thread_mentions_thread ON thread_mentions(thread_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_thread_mentions_entry ON thread_mentions(entry_id);
-    CREATE INDEX IF NOT EXISTS idx_thread_mentions_todo ON thread_mentions(todo_id);
-    CREATE INDEX IF NOT EXISTS idx_thread_mentions_date ON thread_mentions(entry_date);
+    DROP TABLE IF EXISTS thread_mentions;
+    DROP TABLE IF EXISTS threads;
   `);
 
   // Migration: drop dead columns (type, mood, category) from entries
@@ -371,7 +333,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   // table uniformly (its existing `generated_at` is the data event; the new
   // `updated_at` mirrors it and is what sync compares against).
   for (const t of ['entries', 'projects', 'vlogs', 'day_meta', 'ai_summaries',
-                   'nutrition', 'habits', 'todo_meta', 'threads', 'thread_mentions']) {
+                   'nutrition', 'habits', 'todo_meta']) {
     await addColumn(t, 'synced_at', 'TEXT');
     await addColumn(t, 'deleted_at', 'TEXT');
   }
@@ -380,10 +342,8 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   // Backfill from created_at / generated_at so existing rows stamp correctly.
   await addColumn('ai_summaries', 'updated_at', 'TEXT');
   await addColumn('vlogs', 'updated_at', 'TEXT');
-  await addColumn('thread_mentions', 'updated_at', 'TEXT');
   await database.execAsync(`UPDATE ai_summaries SET updated_at = generated_at WHERE updated_at IS NULL`);
   await database.execAsync(`UPDATE vlogs SET updated_at = created_at WHERE updated_at IS NULL`);
-  await database.execAsync(`UPDATE thread_mentions SET updated_at = created_at WHERE updated_at IS NULL`);
 
   // CHECK-constraint history on todo_meta.type:
   //   - 2026-05-09: added 'study'
@@ -684,13 +644,6 @@ export async function deleteEntry(id: string): Promise<void> {
     'UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
     [now, now, id],
   );
-  // Cascade soft-delete thread_mentions referencing this entry. Local schema
-  // never had this cascade; soft delete makes it explicit so cloud sync sees
-  // a consistent view (no mention left dangling against a deleted entry).
-  await db.runAsync(
-    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL',
-    [now, now, id],
-  );
   // Soft-delete the entry itself.
   await db.runAsync(
     'UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?',
@@ -935,255 +888,6 @@ export async function deleteTodoMetasByEntry(entryId: string): Promise<void> {
   await db.runAsync(
     `UPDATE todo_meta SET deleted_at = ?, updated_at = ? WHERE entry_id = ? AND deleted_at IS NULL`,
     [now, now, entryId],
-  );
-  schedulePush();
-}
-
-// ── Threads ──
-
-import type { Thread, ThreadMention } from '../types/thread';
-
-type ThreadRow = {
-  id: string;
-  name: string;
-  slug: string;
-  icon: string | null;
-  color: string | null;
-  target_cadence_days: number | null;
-  archived: number;
-  pinned: number;
-  time_of_day: string | null;
-  notion_page_id: string | null;
-  notion_last_synced: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-function mapRowToThread(r: ThreadRow): Thread {
-  return {
-    id: r.id,
-    name: r.name,
-    slug: r.slug,
-    icon: r.icon,
-    color: r.color,
-    targetCadenceDays: r.target_cadence_days,
-    archived: r.archived === 1,
-    pinned: r.pinned === 1,
-    timeOfDay: (r.time_of_day ?? 'anytime') as TimeOfDay,
-    notionPageId: r.notion_page_id,
-    notionLastSynced: r.notion_last_synced,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-  };
-}
-
-// Reusable bucket-order CASE — keep in sync with TIME_OF_DAY_ORDER_SQL above.
-const THREAD_TIME_OF_DAY_ORDER_SQL = `
-  CASE COALESCE(time_of_day, 'anytime')
-    WHEN 'morning' THEN 0
-    WHEN 'midday' THEN 1
-    WHEN 'evening' THEN 2
-    ELSE 3
-  END
-`;
-
-export async function getThreads(includeArchived = false): Promise<Thread[]> {
-  const db = await getDatabase();
-  // Sort: pinned first, then by time-of-day bucket, then alphabetic within.
-  const rows = await db.getAllAsync<ThreadRow>(
-    includeArchived
-      ? `SELECT * FROM threads WHERE deleted_at IS NULL ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
-      : `SELECT * FROM threads WHERE archived = 0 AND deleted_at IS NULL ORDER BY pinned DESC, ${THREAD_TIME_OF_DAY_ORDER_SQL}, name COLLATE NOCASE ASC`
-  );
-  return rows.map(mapRowToThread);
-}
-
-export async function getThreadBySlug(slug: string): Promise<Thread | null> {
-  const db = await getDatabase();
-  const row = await db.getFirstAsync<ThreadRow>(
-    'SELECT * FROM threads WHERE slug = ? COLLATE NOCASE AND deleted_at IS NULL',
-    [slug]
-  );
-  return row ? mapRowToThread(row) : null;
-}
-
-export async function getThreadById(id: string): Promise<Thread | null> {
-  const db = await getDatabase();
-  const row = await db.getFirstAsync<ThreadRow>('SELECT * FROM threads WHERE id = ? AND deleted_at IS NULL', [id]);
-  return row ? mapRowToThread(row) : null;
-}
-
-export async function insertThread(thread: Thread): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    `INSERT INTO threads (
-       id, name, slug, icon, color, target_cadence_days,
-       archived, pinned, time_of_day, notion_page_id, notion_last_synced,
-       created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      thread.id, thread.name, thread.slug,
-      thread.icon ?? null, thread.color ?? null, thread.targetCadenceDays,
-      thread.archived ? 1 : 0, thread.pinned ? 1 : 0,
-      thread.timeOfDay ?? 'anytime',
-      thread.notionPageId ?? null, thread.notionLastSynced ?? null,
-      thread.createdAt, thread.updatedAt,
-    ]
-  );
-  schedulePush();
-}
-
-export async function updateThread(thread: Thread): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    `UPDATE threads SET
-       name = ?, slug = ?, icon = ?, color = ?, target_cadence_days = ?,
-       archived = ?, pinned = ?, time_of_day = ?,
-       notion_page_id = ?, notion_last_synced = ?,
-       updated_at = ?
-     WHERE id = ?`,
-    [
-      thread.name, thread.slug, thread.icon ?? null, thread.color ?? null,
-      thread.targetCadenceDays,
-      thread.archived ? 1 : 0, thread.pinned ? 1 : 0,
-      thread.timeOfDay ?? 'anytime',
-      thread.notionPageId ?? null, thread.notionLastSynced ?? null,
-      new Date().toISOString(),
-      thread.id,
-    ]
-  );
-  schedulePush();
-}
-
-export async function deleteThread(id: string): Promise<void> {
-  const db = await getDatabase();
-  const now = new Date().toISOString();
-  // Cascade soft-delete all mentions for this thread.
-  await db.runAsync(
-    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE thread_id = ? AND deleted_at IS NULL',
-    [now, now, id],
-  );
-  await db.runAsync(
-    'UPDATE threads SET deleted_at = ?, updated_at = ? WHERE id = ?',
-    [now, now, id],
-  );
-  schedulePush();
-}
-
-// ── Thread mentions ──
-
-type ThreadMentionRow = {
-  id: string;
-  thread_id: string;
-  entry_id: string | null;
-  entry_date: string;
-  todo_id: string | null;
-  source_line: number;
-  tag_text: string;
-  created_at: string;
-};
-
-function mapRowToMention(r: ThreadMentionRow): ThreadMention {
-  return {
-    id: r.id,
-    threadId: r.thread_id,
-    entryId: r.entry_id,
-    entryDate: r.entry_date,
-    todoId: r.todo_id,
-    sourceLine: r.source_line,
-    tagText: r.tag_text,
-    createdAt: r.created_at,
-  };
-}
-
-export async function getMentionsByEntry(entryId: string): Promise<ThreadMention[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE entry_id = ? AND deleted_at IS NULL', [entryId]
-  );
-  return rows.map(mapRowToMention);
-}
-
-export async function getMentionsByTodo(todoId: string): Promise<ThreadMention[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE todo_id = ? AND deleted_at IS NULL', [todoId]
-  );
-  return rows.map(mapRowToMention);
-}
-
-export async function getMentionsByThread(threadId: string, limit = 100): Promise<ThreadMention[]> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<ThreadMentionRow>(
-    'SELECT * FROM thread_mentions WHERE thread_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT ?',
-    [threadId, limit]
-  );
-  return rows.map(mapRowToMention);
-}
-
-// Map: todoId → Set<threadId>. Used by the /todos page thread filter.
-// Single SQL query reads all (todo_id, thread_id) pairs from thread_mentions.
-export async function getTodoThreadLinks(): Promise<Map<string, Set<string>>> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<{ todo_id: string; thread_id: string }>(
-    `SELECT DISTINCT todo_id, thread_id FROM thread_mentions WHERE todo_id IS NOT NULL AND deleted_at IS NULL`
-  );
-  const out = new Map<string, Set<string>>();
-  for (const r of rows) {
-    let set = out.get(r.todo_id);
-    if (!set) { set = new Set(); out.set(r.todo_id, set); }
-    set.add(r.thread_id);
-  }
-  return out;
-}
-
-// Most-recent mention timestamp per thread. Used by Today view's staleness sort.
-export async function getLastMentionByThread(): Promise<Map<string, string>> {
-  const db = await getDatabase();
-  const rows = await db.getAllAsync<{ thread_id: string; max_at: string }>(
-    'SELECT thread_id, MAX(created_at) AS max_at FROM thread_mentions WHERE deleted_at IS NULL GROUP BY thread_id'
-  );
-  return new Map(rows.map(r => [r.thread_id, r.max_at]));
-}
-
-export async function insertMention(m: ThreadMention): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    `INSERT INTO thread_mentions (
-       id, thread_id, entry_id, entry_date, todo_id, source_line, tag_text, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      m.id, m.threadId, m.entryId, m.entryDate, m.todoId,
-      m.sourceLine, m.tagText, m.createdAt, m.createdAt,
-    ]
-  );
-  schedulePush();
-}
-
-export async function updateMentionTagText(id: string, tagText: string): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    'UPDATE thread_mentions SET tag_text = ?, updated_at = ? WHERE id = ?',
-    [tagText, new Date().toISOString(), id],
-  );
-  schedulePush();
-}
-
-export async function updateMentionSourceLine(id: string, sourceLine: number): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    'UPDATE thread_mentions SET source_line = ?, updated_at = ? WHERE id = ?',
-    [sourceLine, new Date().toISOString(), id],
-  );
-  schedulePush();
-}
-
-export async function deleteMention(id: string): Promise<void> {
-  const db = await getDatabase();
-  const now = new Date().toISOString();
-  await db.runAsync(
-    'UPDATE thread_mentions SET deleted_at = ?, updated_at = ? WHERE id = ?',
-    [now, now, id],
   );
   schedulePush();
 }

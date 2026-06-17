@@ -9,11 +9,8 @@ import { Icon } from '../../src/components/ui/Icon';
 import { InlineEntry } from '../../src/components/journal/InlineEntry';
 import { InlineTextInput, type InlineTextInputHandle } from '../../src/components/journal/InlineTextInput';
 import { NutritionAutocomplete } from '../../src/components/journal/NutritionAutocomplete';
-import { TagAutocomplete } from '../../src/components/journal/TagAutocomplete';
 import { InterpretModal } from '../../src/components/journal/InterpretModal';
 import { MIN_TEXT_LENGTH as INTERPRET_MIN } from '../../src/services/ai/interpret';
-import { createThread } from '../../src/services/threads/crud';
-import type { Thread } from '../../src/types/thread';
 import { KeyboardToolbar } from '../../src/components/journal/KeyboardToolbar';
 import { useEntries } from '../../src/hooks/useEntries';
 import { useHabits } from '../../src/hooks/useHabits';
@@ -347,16 +344,6 @@ export default function JournalScreen() {
     rangeEnd: number;
   } | null>(null);
 
-  // Tag autocomplete state. When the cursor sits immediately after a "#"
-  // followed by a partial slug (alphanumerics + hyphens), this holds the
-  // partial query and the absolute range covering the "#xyz" so a pick
-  // can replace it cleanly.
-  const [tagAutocomplete, setTagAutocomplete] = useState<{
-    query: string;
-    rangeStart: number;  // start of "#"
-    rangeEnd: number;    // current cursor
-  } | null>(null);
-
   const handleCursorChange = useCallback((state: { text: string; selection: { start: number; end: number } }) => {
     const { text, selection } = state;
     const cursor = selection.start;
@@ -394,26 +381,6 @@ export default function JournalScreen() {
     } else {
       setNutAutocomplete(null);
     }
-
-    // Tag autocomplete: find the most recent "#" that starts the active
-    // token. Token must be at line start OR preceded by a non-word, non-#
-    // char (so "##foo" or "abc#foo" don't trigger). Body is letters/digits/-.
-    // The slug-tail constraint means the "#" must be the start of a new
-    // identifier, not e.g. inside a URL fragment.
-    const tagRe = /(?:^|[^\w#-])#([a-zA-Z][a-zA-Z0-9-]*)?$/;
-    const tagMatch = tagRe.exec(beforeCursor);
-    if (tagMatch) {
-      const tagBody = tagMatch[1] ?? '';
-      // matchIndex of the "#" itself: account for the leading boundary char.
-      const matchStart = tagMatch.index + (tagMatch[0].startsWith('#') ? 0 : 1);
-      setTagAutocomplete({
-        query: tagBody,
-        rangeStart: lineStart + matchStart,
-        rangeEnd: cursor,
-      });
-    } else {
-      setTagAutocomplete(null);
-    }
   }, []);
 
   const handleNutritionSelect = useCallback((pick: { name: string; kcal: number }) => {
@@ -425,31 +392,6 @@ export default function JournalScreen() {
     inputRef.current?.replaceRange(active.rangeStart, active.rangeEnd, replacement);
     setNutAutocomplete(null);
   }, [nutAutocomplete]);
-
-  const handleTagSelectExisting = useCallback((thread: Thread) => {
-    const active = tagAutocomplete;
-    if (!active) return;
-    // Replace the typed "#xyz" with the canonical "#<slug> ".
-    inputRef.current?.replaceRange(active.rangeStart, active.rangeEnd, `#${thread.slug} `);
-    setTagAutocomplete(null);
-  }, [tagAutocomplete]);
-
-  const handleTagCreateNew = useCallback(async (slug: string) => {
-    const active = tagAutocomplete;
-    if (!active) return;
-    // Inline-create thread — name = slug per spec § 5.3 (rename later from CRUD).
-    const result = await createThread({ name: slug, slug });
-    if (!result.ok) {
-      // slug-taken: treat as an existing-pick. Otherwise abort silently.
-      if (result.error === 'slug-taken') {
-        inputRef.current?.replaceRange(active.rangeStart, active.rangeEnd, `#${slug} `);
-      }
-      setTagAutocomplete(null);
-      return;
-    }
-    inputRef.current?.replaceRange(active.rangeStart, active.rangeEnd, `#${result.thread.slug} `);
-    setTagAutocomplete(null);
-  }, [tagAutocomplete]);
 
   // Toolbar Todo button: insert a "[] " checkbox-drop marker into whichever
   // input is currently mounted (either the editing-an-entry input or the
@@ -807,14 +749,6 @@ export default function JournalScreen() {
       <NutritionAutocomplete
         query={nutAutocomplete?.query ?? null}
         onSelect={handleNutritionSelect}
-      />
-
-      {/* Tag autocomplete — same strip pattern as nutrition. Active whenever
-          the cursor sits immediately after a "#xyz" partial tag. */}
-      <TagAutocomplete
-        query={tagAutocomplete?.query ?? null}
-        onSelectExisting={handleTagSelectExisting}
-        onCreateNew={handleTagCreateNew}
       />
 
       {/* Keyboard toolbar — outside Pressable so taps aren't intercepted */}

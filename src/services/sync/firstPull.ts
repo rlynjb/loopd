@@ -14,7 +14,7 @@ import type { PullResult } from './pull';
 
 const SYNCED_TABLES = [
   'entries', 'projects', 'day_meta', 'vlogs', 'ai_summaries',
-  'nutrition', 'habits', 'todo_meta', 'threads', 'thread_mentions',
+  'nutrition', 'habits', 'todo_meta',
 ];
 
 export async function firstPullAll(): Promise<PullResult[]> {

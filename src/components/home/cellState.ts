@@ -42,26 +42,3 @@ export function cellStateFor(
   return 'missed';
 }
 
-/**
- * Cell state for a thread row. Threads don't have a weekday schedule the way
- * habits do — they have a target_cadence_days "aspiration" plus a binary
- * touched/not-touched signal per day. So the state space collapses to three:
- *
- *   - 'done'    when the user manually touched the thread on this date
- *   - 'pending' when this is today and there's no touch yet
- *   - 'off-day' for every other day (past or future, untouched)
- *
- * The 'off-day' visual reads as "empty/inactive" which matches threads'
- * non-scheduled nature. Today's cell stays interactive even when 'off-day'
- * resolves to invisible-with-mode='hidden' — but that's a UI concern handled
- * by the grid, not this function.
- */
-export function cellStateForThread(
-  touchedDates: ReadonlySet<string>,
-  dateStr: string,
-  todayStr: string,
-): CellState {
-  if (touchedDates.has(dateStr)) return 'done';
-  if (dateStr === todayStr) return 'pending';
-  return 'off-day';
-}

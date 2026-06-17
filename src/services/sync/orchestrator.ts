@@ -15,8 +15,6 @@ import { aiSummariesSyncable } from './tables/aiSummaries';
 import { nutritionSyncable } from './tables/nutrition';
 import { habitsSyncable } from './tables/habits';
 import { todoMetaSyncable } from './tables/todoMeta';
-import { threadsSyncable } from './tables/threads';
-import { threadMentionsSyncable } from './tables/threadMentions';
 
 // Cast to the type-erased shape for the registry — each table's TLocal /
 // TCloud generics differ, but the orchestrator only calls interface methods.
@@ -31,8 +29,6 @@ const REGISTRY: AnySyncable[] = [
   nutritionSyncable as unknown as AnySyncable,
   habitsSyncable as unknown as AnySyncable,
   todoMetaSyncable as unknown as AnySyncable,
-  threadsSyncable as unknown as AnySyncable,
-  threadMentionsSyncable as unknown as AnySyncable,
 ];
 
 export async function pushAll(): Promise<PushResult[]> {

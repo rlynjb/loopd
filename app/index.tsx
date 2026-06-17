@@ -189,8 +189,7 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* DAILY SCHEDULE — habits-only weekly grid, current week locked.
-            Threads were removed from this surface 2026-05-10. */}
+        {/* DAILY SCHEDULE — habits-only weekly grid, current week locked. */}
         {habits.length > 0 && (
           <View style={styles.section}>
             <Pressable
@@ -205,14 +204,12 @@ export default function HomeScreen() {
             <DailyScheduleHeader weekStart={weekStart} today={today} />
             <DailyScheduleGrid
               habits={habits}
-              threads={[]}
               checkedDatesByHabit={checkedDatesByHabit}
               weekStart={weekStart}
               today={today}
               offDayMode={offDayMode}
               isReadOnly={false}
               onToggleHabitToday={toggleHabitToday}
-              onToggleThreadToday={() => { /* no-op: threads removed from grid */ }}
               onTapHabit={() => router.push('/more/habits')}
             />
             <OffDayToggle mode={offDayMode} onChange={setOffDayMode} />
