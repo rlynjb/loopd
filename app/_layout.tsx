@@ -3,7 +3,6 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { View, Text, ActivityIndicator, Alert, StyleSheet } from 'react-native';
-import * as Updates from 'expo-updates';
 import { useDatabase } from '../src/hooks/useDatabase';
 import { colors } from '../src/constants/theme';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -44,29 +43,6 @@ function AppContent() {
     NunitoItalic800: require('../assets/fonts/NunitoItalic-ExtraBold.ttf'),
     NunitoItalic900: require('../assets/fonts/NunitoItalic-Black.ttf'),
   });
-
-  // Check for OTA updates on app open
-  useEffect(() => {
-    if (__DEV__) return;
-    (async () => {
-      try {
-        const update = await Updates.checkForUpdateAsync();
-        if (update.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          Alert.alert(
-            'Update Available',
-            'A new version has been downloaded. Restart to apply?',
-            [
-              { text: 'Later', style: 'cancel' },
-              { text: 'Restart', onPress: () => Updates.reloadAsync() },
-            ]
-          );
-        }
-      } catch (err) {
-        console.warn('[buffr] Update check failed:', err);
-      }
-    })();
-  }, []);
 
   // Cloud sync (Supabase). Bootstrap detects initial-push vs first-pull on
   // the first cold start after the feature ships; subsequent boots run

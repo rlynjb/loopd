@@ -1,66 +1,10 @@
-import { View, Text, Pressable, ScrollView, Alert, StyleSheet } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, fonts } from '../../src/constants/theme';
 import { Icon } from '../../src/components/ui/Icon';
 
 export default function SettingsMenu() {
   const router = useRouter();
-
-  const handleExportDb = async () => {
-    try {
-      const SQLite = await import('expo-sqlite');
-      const Sharing = await import('expo-sharing');
-      const db = await SQLite.openDatabaseAsync('buffr.db');
-      const dbPath = (db as unknown as { databasePath: string }).databasePath;
-      await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
-      const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(`file://${dbPath}`, {
-          mimeType: 'application/x-sqlite3',
-          dialogTitle: 'Export buffr database',
-        });
-      }
-    } catch (err) {
-      console.warn('[buffr] DB export failed:', err);
-    }
-  };
-
-  const handleImportDb = async () => {
-    Alert.alert(
-      'Import Database',
-      'This will replace ALL your current data. Are you sure?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Import',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const DocumentPicker = await import('expo-document-picker');
-              const SQLite = await import('expo-sqlite');
-              const { File: FSFile } = await import('expo-file-system');
-              const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
-              if (result.canceled || !result.assets?.[0]) return;
-              const pickedUri = result.assets[0].uri;
-
-              const db = await SQLite.openDatabaseAsync('buffr.db');
-              const dbPath = (db as unknown as { databasePath: string }).databasePath;
-              await (db as unknown as { closeAsync: () => Promise<void> }).closeAsync();
-
-              const src = new FSFile(pickedUri);
-              const dest = new FSFile(`file://${dbPath}`);
-              src.move(dest);
-
-              Alert.alert('Import Complete', 'Restart the app to load the imported data.');
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              Alert.alert('Import Failed', msg);
-            }
-          },
-        },
-      ]
-    );
-  };
 
   return (
     <View style={styles.container}>
@@ -92,39 +36,6 @@ export default function SettingsMenu() {
           <View style={styles.menuInfo}>
             <Text style={styles.menuLabel}>AI Settings</Text>
             <Text style={styles.menuSub}>Claude API key for vlog auto-compose</Text>
-          </View>
-        </Pressable>
-
-        {/* Export Database */}
-        <Pressable onPress={handleExportDb} style={styles.menuItem}>
-          <View style={styles.menuIcon}>
-            <Icon name="download" size={18} color={colors.accent2} />
-          </View>
-          <View style={styles.menuInfo}>
-            <Text style={styles.menuLabel}>Export Database</Text>
-            <Text style={styles.menuSub}>Share SQLite file to laptop</Text>
-          </View>
-        </Pressable>
-
-        {/* Import Database */}
-        <Pressable onPress={handleImportDb} style={styles.menuItem}>
-          <View style={styles.menuIcon}>
-            <Icon name="upload" size={18} color={colors.accent2} />
-          </View>
-          <View style={styles.menuInfo}>
-            <Text style={styles.menuLabel}>Import Database</Text>
-            <Text style={styles.menuSub}>Restore from exported SQLite file</Text>
-          </View>
-        </Pressable>
-
-        {/* App Updates */}
-        <Pressable onPress={() => router.push('/settings/updates')} style={styles.menuItem}>
-          <View style={styles.menuIcon}>
-            <Icon name="zap" size={18} color={colors.accent2} />
-          </View>
-          <View style={styles.menuInfo}>
-            <Text style={styles.menuLabel}>App Updates</Text>
-            <Text style={styles.menuSub}>Check for new versions</Text>
           </View>
         </Pressable>
       </ScrollView>
