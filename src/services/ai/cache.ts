@@ -16,11 +16,16 @@
 // at this scale (would need both djb2 hash AND length to match).
 
 import { getDatabase } from '../database';
-import type { AIProvider } from './config';
+import type { RouteChoice } from './config';
 
+// `provider` here is the route axis — 'on-device' or 'cloud' — not the
+// specific cloud provider (Anthropic vs OpenAI). The dryrun-parity
+// refactor narrowed this from AIProvider to RouteChoice: switching the
+// per-chain route changes the cache key naturally, while transient
+// cloud failovers (Anthropic → OpenAI) stay under the same key.
 export type CacheKeyInput = {
   chain: string;
-  provider: AIProvider;
+  provider: RouteChoice;
   promptVersion: string;
   system: string;
   user: string;

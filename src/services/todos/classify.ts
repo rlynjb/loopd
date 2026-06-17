@@ -1,12 +1,13 @@
 import {
-  getAnthropicKey, getOpenAIKey,
-  getGemmaCloudKey, getStrictLocalMode,
-  type AIProvider,
+  getAnthropicKey, getOpenAIKey, getProvider,
+  getStrictLocalMode, getChainRoute,
+  type RouteChoice,
 } from '../ai/config';
 import {
-  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
-  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+  callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_LOCAL_MODEL,
 } from '../ai/providers/gemma';
+import { orchestrateCloud } from '../ai/providers/cloud';
 import { getCached, writeCachedSafe, type CacheKeyInput } from '../ai/cache';
 import { emit } from '../../utils/events';
 import type { TodoType, ClassifierConfidence } from '../../types/todoMeta';
@@ -18,7 +19,7 @@ const CLAUDE_MODEL = 'claude-haiku-4-5-20251001';
 const MAX_TOKENS = 50;
 
 // Bump on meaningful prompt or output-format changes.
-const PROMPT_VERSION = 'classify-v1';
+const PROMPT_VERSION = 'classify-v2';
 
 // Per spec §5.3 — context-free for speed and cost. Surrounding entry
 // context comes back in at expansion time (Phase C), not here.
@@ -42,9 +43,7 @@ export type ClassifyResult = {
 };
 
 // Module-level in-flight counter so the /todos banner can show progress.
-// Updated atomically in classifyTodo's try/finally; subscribers listen on
-// the events bus. Cache hits do NOT tick this counter — no LLM work
-// happened, no progress to surface.
+// Cache hits do NOT tick this counter — no LLM work happened.
 let _inFlight = 0;
 export function getClassifyInFlight(): number { return _inFlight; }
 export const CLASSIFY_PROGRESS_EVENT = 'classify-progress';
@@ -96,59 +95,46 @@ function parseClassifyJson(raw: string): { type?: string; confidence?: string } 
   }
 }
 
-// Predicts which provider the cascade will try FIRST. Used to derive the
-// cache lookup key. Per the v3 plan's "model_id in cache key" intent: the
-// cache is provider-aware so cloud Gemma and on-device Gemma (and
-// Claude/OpenAI) don't share entries, and switching providers doesn't
-// return stale outputs from the previous one. If the cascade actually
-// falls back from the predicted provider to a different one, the write
-// happens under the predicted key — next call with same configuration
-// hits naturally.
-async function predictClassifyProvider(strictLocal: boolean): Promise<AIProvider> {
-  if (strictLocal) return 'gemma';
-  if (await shouldUseGemmaLocal('classify')) return 'gemma';
-  if (await getGemmaCloudKey()) return 'gemma';
-  if (await getOpenAIKey()) return 'openai';
-  return 'claude';
+// Predicts which route the cascade will take — 'on-device' or 'cloud'.
+// Used to derive the cache lookup key so swapping the route invalidates
+// the cache naturally.
+async function predictClassifyRoute(strictLocal: boolean): Promise<RouteChoice> {
+  if (strictLocal) return 'on-device';
+  const route = await getChainRoute('classify');
+  if (route === 'on-device' && (await shouldUseGemmaLocal('classify'))) return 'on-device';
+  return 'cloud';
 }
 
-// Picks the cheapest configured model. Gemma (free, local or cloud) takes
-// precedence over OpenAI mini and Claude Haiku. Returns null when no AI
-// is configured or the call fails — caller leaves the meta row at
-// type='todo', classifier_confidence=null and tries again later.
-//
-// Routing precedence under non-strict mode:
-//   1. Gemma local (free, fastest, private)
-//   2. Gemma cloud / Together (free, fast)
-//   3. OpenAI mini (~$0.0001/call)
-//   4. Claude Haiku (~$0.0001/call)
-//
-// Under strict-local mode, only step 1 is attempted. Cloud paths are off.
-//
-// Cache layer: lookup happens BEFORE the cascade; hits short-circuit the
-// entire function (no LLM call, no _inFlight tick). Cache writes happen
-// AFTER cascade success under the predicted-provider key.
+// Classifies a single todo line. Routes per the chain's setting:
+//   - strict-local: on-device only; fails if not ready.
+//   - route='on-device': try local, fall back to cloud on failure.
+//   - route='cloud': straight to cloud cascade.
+// Cloud cascade uses orchestrateCloud (Anthropic primary + OpenAI
+// fallback per the user's getProvider() pick) with the cheap models
+// (Haiku, gpt-4o-mini). Returns null when no path can serve — caller
+// leaves the meta row at type='todo', classifier_confidence=null and
+// tries again later.
 export async function classifyTodo(text: string): Promise<ClassifyResult | null> {
   if (!text.trim()) return null;
 
   const strictLocal = await getStrictLocalMode();
-  const predicted = await predictClassifyProvider(strictLocal);
+  const cacheRoute = await predictClassifyRoute(strictLocal);
   const cacheInput: CacheKeyInput = {
     chain: 'classify',
-    provider: predicted,
+    provider: cacheRoute,
     promptVersion: PROMPT_VERSION,
     system: SYSTEM_PROMPT,
     user: text,
   };
 
-  // Cache lookup first. A hit avoids both the LLM call and the in-flight
-  // counter increment.
+  // Cache lookup BEFORE the cascade. A hit skips the LLM call entirely
+  // and doesn't tick the in-flight counter (no work being done).
   const cached = await getCached(cacheInput);
   if (cached) {
     return parseAndReturn(cached.result, cached.modelServed);
   }
 
-  // Strict-local: on-device Gemma only.
+  // Strict-local: on-device only.
   if (strictLocal) {
     if (!(await shouldUseGemmaLocal('classify'))) return null;
     _inFlight++;
@@ -159,7 +145,7 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
       if (result) await writeCachedSafe(cacheInput, GEMMA_LOCAL_MODEL, raw);
       return result;
     } catch (err) {
-      console.warn('[classify] failed:', err);
+      console.warn('[classify] strict-local failed:', err);
       return null;
     } finally {
       _inFlight--;
@@ -167,13 +153,17 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
     }
   }
 
-  // Non-strict: collect all candidate paths up front.
-  const useGemmaLocal = await shouldUseGemmaLocal('classify');
-  const gemmaCloudKey = await getGemmaCloudKey();
-  const openaiKey = await getOpenAIKey();
-  const anthropicKey = await getAnthropicKey();
+  // Non-strict: route decides whether to try on-device first.
+  const userRoute = await getChainRoute('classify');
+  const tryLocal = userRoute === 'on-device' && (await shouldUseGemmaLocal('classify'));
 
-  if (!useGemmaLocal && !gemmaCloudKey && !openaiKey && !anthropicKey) return null;
+  const [openaiKey, anthropicKey] = await Promise.all([
+    getOpenAIKey(),
+    getAnthropicKey(),
+  ]);
+  const cloudReady = !!openaiKey || !!anthropicKey;
+
+  if (!tryLocal && !cloudReady) return null;
 
   _inFlight++;
   emit(CLASSIFY_PROGRESS_EVENT);
@@ -182,33 +172,30 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
     let raw: string | null = null;
     let usedModel: string = '';
 
-    if (useGemmaLocal) {
+    if (tryLocal) {
       try {
         raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS);
         usedModel = GEMMA_LOCAL_MODEL;
       } catch (err) {
-        console.warn('[classify] gemma local failed, falling back:', err instanceof Error ? err.message : err);
+        console.warn('[classify] gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
       }
     }
-    if (raw === null && gemmaCloudKey) {
+
+    if (raw === null && cloudReady) {
+      const primary = await getProvider();
       try {
-        raw = await callGemmaCloud(gemmaCloudKey, SYSTEM_PROMPT, text, MAX_TOKENS);
-        usedModel = GEMMA_CLOUD_MODEL;
+        const { result, servedBy } = await orchestrateCloud({
+          primary,
+          callClaude: () => callClaude(anthropicKey ?? '', text),
+          callOpenAI: () => callOpenAI(openaiKey ?? '', text),
+          hasClaudeKey: !!anthropicKey,
+          hasOpenAIKey: !!openaiKey,
+        });
+        raw = result;
+        usedModel = servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL;
       } catch (err) {
-        console.warn('[classify] gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
+        console.warn('[classify] cloud cascade failed:', err instanceof Error ? err.message : err);
       }
-    }
-    if (raw === null && openaiKey) {
-      try {
-        raw = await callOpenAI(openaiKey, text);
-        usedModel = OPENAI_MODEL;
-      } catch (err) {
-        console.warn('[classify] openai failed, falling back:', err instanceof Error ? err.message : err);
-      }
-    }
-    if (raw === null && anthropicKey) {
-      raw = await callClaude(anthropicKey, text);
-      usedModel = CLAUDE_MODEL;
     }
 
     if (raw === null) return null;
@@ -238,12 +225,11 @@ function parseAndReturn(raw: string, model: string): ClassifyResult | null {
 
 export async function isClassifierAvailable(): Promise<boolean> {
   const strictLocal = await getStrictLocalMode();
-  if (strictLocal) return shouldUseGemmaLocal();
-  const [openaiKey, anthropicKey, gemmaKey, useGemmaLocal] = await Promise.all([
+  if (strictLocal) return shouldUseGemmaLocal('classify');
+  const [openaiKey, anthropicKey, useGemmaLocal] = await Promise.all([
     getOpenAIKey(),
     getAnthropicKey(),
-    getGemmaCloudKey(),
     shouldUseGemmaLocal('classify'),
   ]);
-  return useGemmaLocal || !!gemmaKey || !!openaiKey || !!anthropicKey;
+  return useGemmaLocal || !!openaiKey || !!anthropicKey;
 }

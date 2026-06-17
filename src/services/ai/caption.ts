@@ -1,12 +1,13 @@
 import {
   getAnthropicKey, getOpenAIKey, getProvider,
-  getGemmaCloudKey, getStrictLocalMode,
-  type AIProvider,
+  getStrictLocalMode, getChainRoute,
+  type RouteChoice,
 } from './config';
 import {
-  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
-  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+  callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
 import {
   CAPTION_VARIANT_KEYS,
@@ -20,19 +21,13 @@ import {
 // docs/buffr-caption-variants-plan.md §2 (the system prompt converted from
 // the user's tonal-style sample). Single LLM call emits four variants of
 // the same day in different voices.
-//
-// Lives as a separate call from summarize() so the structured editor data
-// (clip order, trims, filters) and the human-feeling caption don't share a
-// long prompt. Cleaner separation, independently retryable, and the
-// caption prompt can stay strict on its forbidden patterns without bleeding
-// into the editor composition logic.
 
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
 const MAX_TOKENS = 768;
 
 // Bump on meaningful prompt or output-format changes.
-const PROMPT_VERSION = 'caption-v1';
+const PROMPT_VERSION = 'caption-v2';
 
 const SYSTEM_PROMPT = `You generate four variant captions for a daily vlog from the user's raw log. Each variant is the same 3-line body about the same day, written in a different tonal voice. The user picks which voice to publish.
 
@@ -138,8 +133,6 @@ async function callClaude(apiKey: string, system: string, user: string): Promise
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model: CLAUDE_MODEL,
-    // 4 variants × ~30 tokens + theme + JSON overhead ≈ 200–300 tokens.
-    // 768 leaves headroom for verbose models without runaway cost.
     max_tokens: MAX_TOKENS,
     system,
     messages: [{ role: 'user', content: user }],
@@ -172,8 +165,6 @@ function normalizeVariant(v: unknown): string | null {
   if (typeof v !== 'string') return null;
   const trimmed = v.trim();
   if (!trimmed) return null;
-  // Soft cap at 3 lines — the prompt asks for exactly 3 but models drift.
-  // Take the first 3 non-empty lines.
   const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 3);
   if (lines.length === 0) return null;
   return lines.join('\n');
@@ -189,7 +180,6 @@ function parseAndValidate(text: string): CaptionVariantOutput | null {
     return null;
   }
 
-  // Insufficient-input escape hatch from the prompt.
   if (typeof obj.error === 'string') return null;
 
   const variants: Partial<Record<CaptionVariantKey, string>> = {};
@@ -197,7 +187,6 @@ function parseAndValidate(text: string): CaptionVariantOutput | null {
     const normalized = normalizeVariant(obj[key]);
     if (normalized) variants[key] = normalized;
   }
-  // Require all four variants — partial output is treated as malformed.
   if (CAPTION_VARIANT_KEYS.some(k => !variants[k])) return null;
 
   const themeRaw = typeof obj.detectedTheme === 'string'
@@ -211,12 +200,9 @@ function parseAndValidate(text: string): CaptionVariantOutput | null {
   };
 }
 
-// Routes the caption LLM call following the same pattern as the other
-// user-preference chains. Returns the served model so a future cache layer
-// can key on it.
 async function runCaptionLLM(
-  provider: AIProvider,
   strictLocal: boolean,
+  route: RouteChoice,
   system: string,
   user: string,
 ): Promise<{ text: string; model: string }> {
@@ -228,51 +214,41 @@ async function runCaptionLLM(
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
-  if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal('caption')) {
-      try {
-        const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
-        return { text, model: GEMMA_LOCAL_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);
-      }
+  if (route === 'on-device' && (await shouldUseGemmaLocal('caption'))) {
+    try {
+      const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
+      return { text, model: GEMMA_LOCAL_MODEL };
+    } catch (err) {
+      console.warn('[buffr ai] caption gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
-    const gemmaKey = await getGemmaCloudKey();
-    if (gemmaKey) {
-      try {
-        const text = await callGemmaCloud(gemmaKey, system, user, MAX_TOKENS);
-        return { text, model: GEMMA_CLOUD_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
-      }
-    }
-    const claudeKey = await getAnthropicKey();
-    if (claudeKey) {
-      const text = await callClaude(claudeKey, system, user);
-      return { text, model: CLAUDE_MODEL };
-    }
-    throw new Error('No API key configured');
   }
 
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-  if (!apiKey) throw new Error('No API key configured');
-  const text = provider === 'openai'
-    ? await callOpenAI(apiKey, system, user)
-    : await callClaude(apiKey, system, user);
-  return { text, model: provider === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL };
+  const primary = await getProvider();
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const { result: text, servedBy } = await orchestrateCloud({
+    primary,
+    callClaude: () => callClaude(claudeKey ?? '', system, user),
+    callOpenAI: () => callOpenAI(openaiKey ?? '', system, user),
+    hasClaudeKey: !!claudeKey,
+    hasOpenAIKey: !!openaiKey,
+  });
+  return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
 
 export async function generateCaption(
   input: CaptionInput,
 ): Promise<{ output: CaptionVariantOutput | null; error?: string }> {
-  const provider = await getProvider();
   const strictLocal = await getStrictLocalMode();
+  const route = await getChainRoute('caption');
 
-  // Non-gemma early-out (mirrors prior behavior): if the chosen cloud
-  // provider has no key, surface 'No API key configured' as today.
-  if (!strictLocal && provider !== 'gemma') {
-    const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-    if (!apiKey) return { output: null, error: 'No API key configured' };
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const cloudReady = !!claudeKey || !!openaiKey;
+  const gemmaReady = await shouldUseGemmaLocal('caption');
+  if (strictLocal && !gemmaReady) {
+    return { output: null, error: 'Strict local mode: on-device AI not ready' };
+  }
+  if (!strictLocal && !gemmaReady && !cloudReady) {
+    return { output: null, error: 'No API key configured' };
   }
 
   const system = SYSTEM_PROMPT;
@@ -281,13 +257,13 @@ export async function generateCaption(
   try {
     const cacheInput: CacheKeyInput = {
       chain: 'caption',
-      provider,
+      provider: strictLocal ? 'on-device' : route,
       promptVersion: PROMPT_VERSION,
       system,
       user,
     };
     const { text } = await cachedCall(cacheInput, async () => {
-      const r = await runCaptionLLM(provider, strictLocal, system, user);
+      const r = await runCaptionLLM(strictLocal, route, system, user);
       return { text: r.text, modelServed: r.model };
     });
     const output = parseAndValidate(text);

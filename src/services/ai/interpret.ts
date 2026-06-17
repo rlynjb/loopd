@@ -1,12 +1,13 @@
 import {
   getProvider, getAnthropicKey, getOpenAIKey,
-  getGemmaCloudKey, getStrictLocalMode,
-  type AIProvider,
+  getStrictLocalMode, getChainRoute,
+  type RouteChoice,
 } from './config';
 import {
-  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
-  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+  callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
 import type { Interpretation } from '../../types/ai';
 
@@ -17,13 +18,11 @@ import type { Interpretation } from '../../types/ai';
 // follows the user's actual content rather than padding empty sections.
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
-// Bigger budget than the prior structured-JSON pass: the new format averages
-// 600–1000 tokens of prose. Cap leaves headroom for longer entries.
 const MAX_TOKENS = 1800;
 const TEMPERATURE = 0.7;
 
 // Bump on meaningful prompt or output-format changes.
-const PROMPT_VERSION = 'interpret-v1';
+const PROMPT_VERSION = 'interpret-v2';
 
 export const MIN_TEXT_LENGTH = 20;
 export const MAX_INPUT_CHARS = 2000;
@@ -65,8 +64,6 @@ export type InterpretResult =
   | { ok: true; interpretation: Interpretation }
   | { ok: false; reason: 'no-ai' | 'too-short' | 'malformed' | 'network'; message?: string };
 
-// Keep the most recent 2000 chars — the user's most recent thought matters
-// more than older sentences from earlier in the day.
 function truncateTail(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(s.length - max);
@@ -104,13 +101,9 @@ async function callOpenAI(apiKey: string, user: string): Promise<string> {
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-// Strips an outer ```markdown code fence if the model wrapped its response.
-// Required headings/bullets aren't enforced — caller renders whatever comes
-// back. Empty / whitespace-only output is treated as malformed.
 function cleanMarkdown(raw: string): string | null {
   let s = raw.trim();
   if (s.startsWith('```')) {
-    // strip leading ``` or ```markdown
     s = s.replace(/^```(?:markdown|md)?\s*\n?/i, '');
     s = s.replace(/\n?```\s*$/i, '');
     s = s.trim();
@@ -119,18 +112,17 @@ function cleanMarkdown(raw: string): string | null {
   return s;
 }
 
-// Routes the interpret LLM call. Gemma helpers want (system, user) shape;
-// the existing callClaude / callOpenAI here take only `user` and add the
-// "User journal entry:\n" prefix themselves. We build that prefix once for
-// the Gemma side and let the existing helpers preserve their internals.
+// Routes the interpret LLM call. The existing callClaude/callOpenAI take
+// only `user` and add the "User journal entry:\n" prefix internally — for
+// the Gemma side we build the prefix once and pass system + fullUser
+// directly to callGemmaLocal.
 async function runInterpretLLM(
-  provider: AIProvider,
   strictLocal: boolean,
+  route: RouteChoice,
   truncatedText: string,
 ): Promise<{ text: string; model: string }> {
   const fullUser = `User journal entry:\n${truncatedText}`;
 
-  // Strict-local: only on-device Gemma.
   if (strictLocal) {
     if (!(await shouldUseGemmaLocal('interpret'))) {
       throw new Error('Strict local mode: on-device AI not ready');
@@ -139,57 +131,45 @@ async function runInterpretLLM(
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
-  if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal('interpret')) {
-      try {
-        const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
-        return { text, model: GEMMA_LOCAL_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);
-      }
+  if (route === 'on-device' && (await shouldUseGemmaLocal('interpret'))) {
+    try {
+      const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+      return { text, model: GEMMA_LOCAL_MODEL };
+    } catch (err) {
+      console.warn('[buffr ai] interpret gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
-    const gemmaKey = await getGemmaCloudKey();
-    if (gemmaKey) {
-      try {
-        const text = await callGemmaCloud(gemmaKey, SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
-        return { text, model: GEMMA_CLOUD_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
-      }
-    }
-    const claudeKey = await getAnthropicKey();
-    if (claudeKey) {
-      const text = await callClaude(claudeKey, truncatedText);
-      return { text, model: CLAUDE_MODEL };
-    }
-    throw new Error('No API key configured');
   }
 
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-  if (!apiKey) throw new Error('No API key configured');
-  const text = provider === 'openai'
-    ? await callOpenAI(apiKey, truncatedText)
-    : await callClaude(apiKey, truncatedText);
-  return { text, model: provider === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL };
+  const primary = await getProvider();
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const { result: text, servedBy } = await orchestrateCloud({
+    primary,
+    callClaude: () => callClaude(claudeKey ?? '', truncatedText),
+    callOpenAI: () => callOpenAI(openaiKey ?? '', truncatedText),
+    hasClaudeKey: !!claudeKey,
+    hasOpenAIKey: !!openaiKey,
+  });
+  return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
 
-// Run the interpretation chain for a single piece of journal text. Provider
-// follows the user's configured preference (Claude → OpenAI → Gemma, or
-// strict-local on-device only). Snapshots `sourceText` (the truncated input
-// that actually reached the model) so the modal can detect staleness later.
+// Run the interpretation chain for a single piece of journal text.
+// Snapshots `sourceText` (the truncated input that actually reached the
+// model) so the modal can detect staleness later.
 export async function interpretEntry(rawText: string): Promise<InterpretResult> {
   const text = rawText.trim();
   if (text.length < MIN_TEXT_LENGTH) return { ok: false, reason: 'too-short' };
 
-  const provider = await getProvider();
   const strictLocal = await getStrictLocalMode();
+  const route = await getChainRoute('interpret');
 
-  // Non-gemma early-out: if the chosen cloud provider has no key, surface
-  // 'no-ai' the same as today. Gemma path validates its own keys inside
-  // runInterpretLLM (multiple candidates).
-  if (!strictLocal && provider !== 'gemma') {
-    const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-    if (!apiKey) return { ok: false, reason: 'no-ai' };
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const cloudReady = !!claudeKey || !!openaiKey;
+  const gemmaReady = await shouldUseGemmaLocal('interpret');
+  if (strictLocal && !gemmaReady) {
+    return { ok: false, reason: 'no-ai', message: 'Strict local mode: on-device AI not ready' };
+  }
+  if (!strictLocal && !gemmaReady && !cloudReady) {
+    return { ok: false, reason: 'no-ai' };
   }
 
   const truncated = truncateTail(text, MAX_INPUT_CHARS);
@@ -197,13 +177,13 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
   try {
     const cacheInput: CacheKeyInput = {
       chain: 'interpret',
-      provider,
+      provider: strictLocal ? 'on-device' : route,
       promptVersion: PROMPT_VERSION,
       system: SYSTEM_PROMPT,
       user: truncated,
     };
     const { text: raw, modelServed: modelId } = await cachedCall(cacheInput, async () => {
-      const r = await runInterpretLLM(provider, strictLocal, truncated);
+      const r = await runInterpretLLM(strictLocal, route, truncated);
       return { text: r.text, modelServed: r.model };
     });
     const md = cleanMarkdown(raw);
@@ -220,8 +200,6 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // 'No API key configured' / 'Strict local mode' map to 'no-ai'; the rest
-    // is a network/upstream failure.
     if (msg.includes('No API key') || msg.includes('Strict local mode')) {
       return { ok: false, reason: 'no-ai', message: msg };
     }

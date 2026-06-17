@@ -1,32 +1,26 @@
-// Gemma provider — cloud (Together.ai) and on-device (llama.rn).
+// Gemma provider — on-device only via llama.rn.
 //
-// Together.ai serves Gemma 3 4B free as of mid-2026 and exposes an
-// OpenAI-compatible /v1/chat/completions endpoint, so callGemmaCloud
-// mirrors the existing per-chain callOpenAI implementations.
-//
-// callGemmaLocal runs Gemma 3 4B (Q4_K_M GGUF) on-device via llama.rn
+// Runs Gemma 3 4B (Q4_K_M GGUF) on-device through llama.rn
 // (mybigday/llama.rn — React Native binding of llama.cpp). CPU-only on
-// Android in Phase 5a — GPU offload is "improving but not production
-// stable" per Phase A research; revisit when llama.rn ships stable
-// Android GPU. The context is initialized lazily on first call and
-// cached for the session (initLlama loads the full ~2.5 GB model into
-// memory; we never want to do that twice).
+// Android — GPU offload is "improving but not production stable" per
+// Phase A research; revisit when llama.rn ships stable Android GPU.
 //
-// Phase 7 adds a latency probe: each callGemmaLocal records the wall-
-// clock time against the per-chain budget. Three consecutive over-
-// budget runs auto-skip that chain from the on-device path until the
-// user re-downloads the model (which clears the skip flags). This keeps
-// a slow device from chronically dragging out user-facing operations.
+// The context is initialized lazily on first call and cached for the
+// session (initLlama loads the full ~2.5 GB model into memory; we
+// never want to do that twice).
+//
+// Latency probe: each callGemmaLocal records the wall-clock time
+// against the per-chain budget. Three consecutive over-budget runs
+// auto-skip that chain from the on-device path until the user re-
+// downloads the model (which clears the skip flags).
+//
+// The cloud-Gemma (Together.ai) path that existed in earlier phases
+// was removed in the dryrun-parity refactor — cloud is always Anthropic
+// primary + OpenAI fallback now; Gemma is local-only.
 
 import { initLlama } from 'llama.rn';
 import { Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
-
-const TOGETHER_ENDPOINT = 'https://api.together.xyz/v1/chat/completions';
-
-// Cloud model identifier. Together's catalog as of Phase A research
-// (mid-2026); adjust if Together's canonical name shifts.
-export const GEMMA_CLOUD_MODEL = 'google/gemma-3-4b-it';
 
 // On-device model. The bartowski community quantization of Gemma 3 4B
 // Instruct, Q4_K_M variant — ~2.5 GB; the standard pick for mobile.
@@ -34,16 +28,14 @@ export const GEMMA_LOCAL_MODEL = 'gemma-3-4b-it-q4_k_m';
 export const MODEL_FILENAME = 'gemma-3-4b-it-Q4_K_M.gguf';
 
 // Where the model file lives on the device. The document directory
-// survives app updates and is removed only on uninstall. Phase 5b's
-// download flow writes here.
+// survives app updates and is removed only on uninstall.
 export function getModelPath(): string {
   return `${Paths.document.uri}/buffr/models/${MODEL_FILENAME}`;
 }
 
-// Per-chain latency budgets (ms) for on-device Gemma. Sourced from the
-// plan v3 "Per-chain latency budgets" table. Sustained over-budget runs
-// auto-skip that chain. Tune up if Gemma local turns out faster than
-// expected (probe resets cleanly via resetGemmaLocalSkip()).
+// Per-chain latency budgets (ms) for on-device Gemma. Sustained over-
+// budget runs auto-skip that chain. Tune up if Gemma local turns out
+// faster than expected (probe resets cleanly via resetGemmaLocalSkip()).
 const BUDGETS_MS: Record<string, number> = {
   classify: 1500,
   caption: 3000,
@@ -58,39 +50,6 @@ const KEY_GEMMA_STREAK_PREFIX = 'gemma_local_streak_';
 // Chains the probe knows about. Used by resetGemmaLocalSkip() when
 // clearing all probe state on model re-download.
 const KNOWN_CHAINS = ['classify', 'caption', 'summarize', 'interpret'] as const;
-
-// Cloud Gemma via Together. Same input/output shape as callOpenAI in the
-// chain files so it can be wired in symmetrically. Throws on non-2xx so
-// callers can fall through to their existing claude/openai fallback.
-export async function callGemmaCloud(
-  apiKey: string,
-  system: string,
-  user: string,
-  maxTokens: number,
-  temperature?: number,
-): Promise<string> {
-  const body: Record<string, unknown> = {
-    model: GEMMA_CLOUD_MODEL,
-    max_tokens: maxTokens,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-  };
-  if (temperature !== undefined) body.temperature = temperature;
-
-  const res = await fetch(TOGETHER_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`Together API error: ${res.status}`);
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? '';
-}
 
 // Singleton llama.rn context. initLlama loads the GGUF (~2.5 GB) into
 // memory — multi-second op; we cache the result for the session.
@@ -108,8 +67,8 @@ async function getLlamaContext(): Promise<LlamaContext> {
     const ctx = await initLlama({
       model: `file://${modelPath}`,
       n_ctx: 2048,
-      // CPU-only for Phase 5a. Flip to >0 once Android GPU offload
-      // (OpenCL/Vulkan in llama.cpp) is production-stable.
+      // CPU-only. Flip to >0 once Android GPU offload (OpenCL/Vulkan in
+      // llama.cpp) is production-stable.
       n_gpu_layers: 0,
       // mlock pins the model in RAM. Risky on mobile where the OS may
       // need to page; let it page if memory pressure spikes.
@@ -126,10 +85,10 @@ async function getLlamaContext(): Promise<LlamaContext> {
   }
 }
 
-// On-device Gemma. Replaces the Phase B stub. Throws on init failure
-// (model file missing, native module not built into the binary) so the
-// chain code falls through to the next provider — unless strict-local
-// mode is on, in which case the chain surfaces its existing failure.
+// On-device Gemma. Throws on init failure (model file missing, native
+// module not built into the binary) so the chain code falls through to
+// the cloud — unless strict-local mode is on, in which case the chain
+// surfaces its existing failure.
 //
 // The first arg (chain) is the chain name — 'classify' / 'caption' /
 // 'summarize' / 'interpret'. Used by the latency probe to track over-
@@ -171,7 +130,6 @@ async function updateGemmaLocalProbe(chain: string, elapsedMs: number): Promise<
   const streakKey = `${KEY_GEMMA_STREAK_PREFIX}${chain}`;
   try {
     if (elapsedMs <= budget) {
-      // Under budget — reset streak.
       await SecureStore.deleteItemAsync(streakKey);
       return;
     }
@@ -194,8 +152,8 @@ async function updateGemmaLocalProbe(chain: string, elapsedMs: number): Promise<
   }
 }
 
-// True when the GGUF file exists at the expected path. Phase 5b's
-// download UX and Phase 5d's readiness check both consult this.
+// True when the GGUF file exists at the expected path. The download UX
+// and shouldUseGemmaLocal both consult this.
 export async function isModelDownloaded(): Promise<boolean> {
   try {
     const { File: FSFile } = await import('expo-file-system');
@@ -210,10 +168,10 @@ export async function isModelDownloaded(): Promise<boolean> {
 // Returns true when ALL of these hold:
 //   - the GGUF model file exists at getModelPath()
 //   - the device class is not 'disabled' (>= 2 GB RAM)
-//   - the per-chain auto-skip flag is not set (Phase 7 latency probe)
+//   - the per-chain auto-skip flag is not set (latency probe)
 // The optional `chain` arg gates the per-chain skip check. Callers that
-// don't pass it (e.g. warmLlamaContext, predictClassifyProvider when
-// deciding cache key) get the device-and-model gates only.
+// don't pass it (e.g. warmLlamaContext) get the device-and-model gates
+// only.
 export async function shouldUseGemmaLocal(chain?: string): Promise<boolean> {
   const { detectDeviceClass } = await import('../deviceClass');
   const cls = await detectDeviceClass();
@@ -260,8 +218,8 @@ export async function warmLlamaContext(): Promise<void> {
 }
 
 // Releases the cached llama context. Called when the user clears the
-// downloaded model (Phase 5b) or switches device-class manually
-// (forces re-init with the new variant on next call).
+// downloaded model or switches device-class manually (forces re-init
+// with the new variant on next call).
 export async function unloadLlamaContext(): Promise<void> {
   if (_llamaContext) {
     try {

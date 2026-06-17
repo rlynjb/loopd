@@ -6,7 +6,6 @@ import { Icon } from '../../src/components/ui/Icon';
 import {
   getAnthropicKey, setAnthropicKey, clearAnthropicKey,
   getOpenAIKey, setOpenAIKey, clearOpenAIKey,
-  getGemmaCloudKey, setGemmaCloudKey, clearGemmaCloudKey,
   getStrictLocalMode, setStrictLocalMode,
   getProvider, setProvider, type AIProvider,
 } from '../../src/services/ai/config';
@@ -29,12 +28,18 @@ type DeviceInfo = {
 const GB = 1024 * 1024 * 1024;
 const MB = 1024 * 1024;
 
+// NOTE: This page is the interim cloud-only patch for the dryrun-parity
+// refactor. The Tabbed redesign (Routing / On-Device / Anthropic / OpenAI
+// / Cloud Sync) lands in a follow-up commit per
+// `.aipe/plans/settings-dryrun-parity.md`. For now: only the Anthropic /
+// OpenAI provider toggle, single API key field, strict-local toggle, and
+// Gemma on-device card.
+
 export default function AISettingsScreen() {
   const router = useRouter();
   const [provider, setProviderState] = useState<AIProvider>('claude');
   const [claudeKey, setClaudeKey] = useState('');
   const [openaiKey, setOpenaiKey] = useState('');
-  const [gemmaKey, setGemmaKeyState] = useState('');
   const [strictLocal, setStrictLocalState] = useState(false);
   const [testing, setTesting] = useState(false);
   const [status, setStatus] = useState<'none' | 'ok' | 'error'>('none');
@@ -52,15 +57,9 @@ export default function AISettingsScreen() {
       if (ck) setClaudeKey(ck);
       const ok = await getOpenAIKey();
       if (ok) setOpenaiKey(ok);
-      const gk = await getGemmaCloudKey();
-      if (gk) setGemmaKeyState(gk);
       const sl = await getStrictLocalMode();
       setStrictLocalState(sl);
-      if (
-        (p === 'claude' && ck) ||
-        (p === 'openai' && ok) ||
-        (p === 'gemma' && gk)
-      ) setStatus('ok');
+      if ((p === 'claude' && ck) || (p === 'openai' && ok)) setStatus('ok');
 
       const info = await getDeviceInfo();
       setDeviceInfo(info);
@@ -72,7 +71,7 @@ export default function AISettingsScreen() {
   const handleProviderChange = async (p: AIProvider) => {
     setProviderState(p);
     await setProvider(p);
-    const key = p === 'openai' ? openaiKey : p === 'gemma' ? gemmaKey : claudeKey;
+    const key = p === 'openai' ? openaiKey : claudeKey;
     setStatus(key ? 'ok' : 'none');
   };
 
@@ -85,12 +84,9 @@ export default function AISettingsScreen() {
     if (provider === 'claude') {
       if (!claudeKey.trim()) return;
       await setAnthropicKey(claudeKey.trim());
-    } else if (provider === 'openai') {
+    } else {
       if (!openaiKey.trim()) return;
       await setOpenAIKey(openaiKey.trim());
-    } else {
-      if (!gemmaKey.trim()) return;
-      await setGemmaCloudKey(gemmaKey.trim());
     }
     setStatus('ok');
   };
@@ -112,12 +108,9 @@ export default function AISettingsScreen() {
     if (provider === 'claude') {
       await clearAnthropicKey();
       setClaudeKey('');
-    } else if (provider === 'openai') {
+    } else {
       await clearOpenAIKey();
       setOpenaiKey('');
-    } else {
-      await clearGemmaCloudKey();
-      setGemmaKeyState('');
     }
     setStatus('none');
   };
@@ -125,7 +118,7 @@ export default function AISettingsScreen() {
   const handleDownloadModel = async () => {
     if (!deviceInfo) return;
     if (deviceInfo.deviceClass === 'disabled') {
-      Alert.alert('Unsupported device', 'On-device AI requires at least 2 GB of RAM. Use cloud Gemma instead.');
+      Alert.alert('Unsupported device', 'On-device AI requires at least 2 GB of RAM. Use cloud (Anthropic / OpenAI) instead.');
       return;
     }
     const variant = deviceInfo.deviceClass === 'full' ? 'gemma-3-4b' : 'gemma-3-1b';
@@ -159,22 +152,10 @@ export default function AISettingsScreen() {
     );
   };
 
-  const currentKey =
-    provider === 'claude' ? claudeKey :
-    provider === 'openai' ? openaiKey :
-    gemmaKey;
-  const setCurrentKey =
-    provider === 'claude' ? setClaudeKey :
-    provider === 'openai' ? setOpenaiKey :
-    setGemmaKeyState;
-  const placeholder =
-    provider === 'claude' ? 'sk-ant-...' :
-    provider === 'openai' ? 'sk-...' :
-    'Together API key';
-  const keyLabel =
-    provider === 'claude' ? 'ANTHROPIC' :
-    provider === 'openai' ? 'OPENAI' :
-    'TOGETHER';
+  const currentKey = provider === 'claude' ? claudeKey : openaiKey;
+  const setCurrentKey = provider === 'claude' ? setClaudeKey : setOpenaiKey;
+  const placeholder = provider === 'claude' ? 'sk-ant-...' : 'sk-...';
+  const keyLabel = provider === 'claude' ? 'ANTHROPIC' : 'OPENAI';
   const hasSavedKey = currentKey.length > 0;
   const modelDownloaded = modelDiskBytes > 0;
   const modelSizeGB = modelDiskBytes / GB;
@@ -189,28 +170,22 @@ export default function AISettingsScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <Text style={styles.title}>AI Settings</Text>
-        <Text style={styles.subtitle}>Connect to Claude, OpenAI, or Gemma (via Together) for AI-powered vlog summaries and auto-composition.</Text>
+        <Text style={styles.subtitle}>Cloud uses Anthropic primary with OpenAI fallback. On-device runs Gemma 3 (4B / 1B) locally via llama.cpp.</Text>
 
-        {/* Provider toggle */}
-        <Text style={styles.label}>PROVIDER</Text>
+        {/* Cloud primary picker — which cloud provider to call first. */}
+        <Text style={styles.label}>CLOUD PRIMARY</Text>
         <View style={styles.providerRow}>
           <Pressable
             onPress={() => handleProviderChange('claude')}
             style={[styles.providerBtn, provider === 'claude' && styles.providerBtnActive]}
           >
-            <Text style={[styles.providerText, provider === 'claude' && styles.providerTextActive]}>Claude</Text>
+            <Text style={[styles.providerText, provider === 'claude' && styles.providerTextActive]}>Anthropic</Text>
           </Pressable>
           <Pressable
             onPress={() => handleProviderChange('openai')}
             style={[styles.providerBtn, provider === 'openai' && styles.providerBtnActive]}
           >
             <Text style={[styles.providerText, provider === 'openai' && styles.providerTextActive]}>OpenAI</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => handleProviderChange('gemma')}
-            style={[styles.providerBtn, provider === 'gemma' && styles.providerBtnActive]}
-          >
-            <Text style={[styles.providerText, provider === 'gemma' && styles.providerTextActive]}>Gemma</Text>
           </Pressable>
         </View>
 
@@ -288,7 +263,7 @@ export default function AISettingsScreen() {
             </Text>
             {deviceInfo.deviceClass === 'disabled' ? (
               <Text style={styles.hint}>
-                On-device AI requires {'>='} 2 GB RAM. This device should use cloud Gemma.
+                On-device AI requires {'>='} 2 GB RAM. This device should use cloud only.
               </Text>
             ) : modelDownloaded ? (
               <>

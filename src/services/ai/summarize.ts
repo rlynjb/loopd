@@ -1,12 +1,13 @@
 import {
   getAnthropicKey, getOpenAIKey, getProvider,
-  getGemmaCloudKey, getStrictLocalMode,
-  type AIProvider,
+  getStrictLocalMode, getChainRoute,
+  type RouteChoice,
 } from './config';
 import {
-  callGemmaCloud, callGemmaLocal, shouldUseGemmaLocal,
-  GEMMA_CLOUD_MODEL, GEMMA_LOCAL_MODEL,
+  callGemmaLocal, shouldUseGemmaLocal,
+  GEMMA_LOCAL_MODEL,
 } from './providers/gemma';
+import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
 import { buildPrompt } from './prompt';
 import { validateSummary } from './validate';
@@ -19,10 +20,11 @@ const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const OPENAI_MODEL = 'gpt-4o';
 const MAX_TOKENS = 1024;
 
-// Bump on meaningful prompt or output-format changes to invalidate the
-// cached rows naturally. The cache key composite includes this so a
-// reader can sweep all summarize rows by dropping previous versions.
-const PROMPT_VERSION = 'summarize-v1';
+// Bump on meaningful prompt or output-format changes. v2 is the
+// dryrun-parity refactor that swapped the cache key's `provider` field
+// from AIProvider to RouteChoice; old rows naturally expire by missing
+// the new key.
+const PROMPT_VERSION = 'summarize-v2';
 
 async function callClaude(apiKey: string, system: string, user: string): Promise<string> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
@@ -54,18 +56,16 @@ async function callOpenAI(apiKey: string, system: string, user: string): Promise
   return data.choices?.[0]?.message?.content ?? '';
 }
 
-// Routes the summarize LLM call to the right provider, honoring strict-local
-// mode and the user's provider preference. Returns the served text alongside
-// the model identifier so the upsert records what actually ran (matters once
-// Phase C adds a content-hash cache keyed by model_id).
+// Routes the summarize LLM call based on strict-local + per-chain route.
+// Returns {text, model} so the cache layer records what actually served.
 async function runSummarizeLLM(
-  provider: AIProvider,
   strictLocal: boolean,
+  route: RouteChoice,
   system: string,
   user: string,
 ): Promise<{ text: string; model: string }> {
-  // Strict-local: on-device Gemma only. Cloud paths (incl. cloud Gemma)
-  // are off-limits regardless of which provider the user picked.
+  // Strict-local: on-device only. Skips all cloud paths regardless of
+  // the per-chain route.
   if (strictLocal) {
     if (!(await shouldUseGemmaLocal('summarize'))) {
       throw new Error('Strict local mode: on-device AI not ready');
@@ -74,52 +74,42 @@ async function runSummarizeLLM(
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
-  // User picked Gemma: try on-device, then cloud Gemma, then graceful
-  // fallback to Claude if neither served.
-  if (provider === 'gemma') {
-    if (await shouldUseGemmaLocal('summarize')) {
-      try {
-        const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
-        return { text, model: GEMMA_LOCAL_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma local failed, falling back:', err instanceof Error ? err.message : err);
-      }
+  // route='on-device': try local, fall back to cloud on failure.
+  if (route === 'on-device' && (await shouldUseGemmaLocal('summarize'))) {
+    try {
+      const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
+      return { text, model: GEMMA_LOCAL_MODEL };
+    } catch (err) {
+      console.warn('[buffr ai] summarize gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
-    const gemmaKey = await getGemmaCloudKey();
-    if (gemmaKey) {
-      try {
-        const text = await callGemmaCloud(gemmaKey, system, user, MAX_TOKENS);
-        return { text, model: GEMMA_CLOUD_MODEL };
-      } catch (err) {
-        console.warn('[buffr ai] Gemma cloud failed, falling back:', err instanceof Error ? err.message : err);
-      }
-    }
-    const claudeKey = await getAnthropicKey();
-    if (claudeKey) {
-      const text = await callClaude(claudeKey, system, user);
-      return { text, model: CLAUDE_MODEL };
-    }
-    throw new Error('No API key configured');
   }
 
-  // Existing Claude / OpenAI path unchanged.
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-  if (!apiKey) throw new Error('No API key configured');
-  const text = provider === 'openai'
-    ? await callOpenAI(apiKey, system, user)
-    : await callClaude(apiKey, system, user);
-  return { text, model: provider === 'openai' ? OPENAI_MODEL : CLAUDE_MODEL };
+  // Cloud path: Anthropic primary + OpenAI fallback (per orchestrateCloud).
+  const primary = await getProvider();
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const { result: text, servedBy } = await orchestrateCloud({
+    primary,
+    callClaude: () => callClaude(claudeKey ?? '', system, user),
+    callOpenAI: () => callOpenAI(openaiKey ?? '', system, user),
+    hasClaudeKey: !!claudeKey,
+    hasOpenAIKey: !!openaiKey,
+  });
+  return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
 
 export async function summarize(date: string): Promise<{ summary: AISummary | null; error?: string }> {
-  const provider = await getProvider();
   const strictLocal = await getStrictLocalMode();
+  const route = await getChainRoute('summarize');
 
-  // Early-out for non-gemma when no key is configured. Gemma path validates
-  // its own keys inside runSummarizeLLM (multiple possible keys to check).
-  if (provider !== 'gemma' && !strictLocal) {
-    const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
-    if (!apiKey) return { summary: null, error: 'No API key configured' };
+  // Check whether ANY path can serve this chain before spending DB I/O.
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const cloudReady = !!claudeKey || !!openaiKey;
+  const gemmaReady = await shouldUseGemmaLocal('summarize');
+  if (strictLocal && !gemmaReady) {
+    return { summary: null, error: 'Strict local mode: on-device AI not ready' };
+  }
+  if (!strictLocal && !gemmaReady && !cloudReady) {
+    return { summary: null, error: 'No API key configured' };
   }
 
   const entries = await getEntriesByDate(date);
@@ -143,15 +133,18 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
   const { system, user } = buildPrompt(entries, allClips, allHabits, date);
 
   try {
+    // Cache key uses the route as the "provider" axis — what kind of
+    // compute path served the call. Switching from cloud to on-device
+    // (or vice versa) misses the cache and re-runs naturally.
     const cacheInput: CacheKeyInput = {
       chain: 'summarize',
-      provider,
+      provider: strictLocal ? 'on-device' : route,
       promptVersion: PROMPT_VERSION,
       system,
       user,
     };
     const { text, modelServed: model } = await cachedCall(cacheInput, async () => {
-      const r = await runSummarizeLLM(provider, strictLocal, system, user);
+      const r = await runSummarizeLLM(strictLocal, route, system, user);
       return { text: r.text, modelServed: r.model };
     });
 
@@ -248,24 +241,13 @@ async function buildCaptionInput(
 }
 
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
-  const provider = await getProvider();
-
-  if (provider === 'gemma') {
-    const gemmaKey = await getGemmaCloudKey();
-    if (!gemmaKey) return { ok: false, error: 'No Gemma API key' };
-    try {
-      await callGemmaCloud(gemmaKey, 'You are a test.', 'Say "ok"', 10);
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  }
-
-  const apiKey = provider === 'openai' ? await getOpenAIKey() : await getAnthropicKey();
+  const primary = await getProvider();
+  const [claudeKey, openaiKey] = await Promise.all([getAnthropicKey(), getOpenAIKey()]);
+  const apiKey = primary === 'openai' ? openaiKey : claudeKey;
   if (!apiKey) return { ok: false, error: 'No API key' };
 
   try {
-    if (provider === 'openai') {
+    if (primary === 'openai') {
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
