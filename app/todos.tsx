@@ -11,7 +11,6 @@ import {
   getAllEntries, getAllTodoMetas, updateTodoMeta,
 } from '../src/services/database';
 import { addTodo, updateTodo, deleteTodo } from '../src/services/todos/crud';
-import { TYPE_META, TYPES_IN_ORDER } from '../src/services/todos/typeMeta';
 import { formatRelativeTime } from '../src/services/todos/rank';
 import {
   isClassifierAvailable, getClassifyInFlight, CLASSIFY_PROGRESS_EVENT,
@@ -22,7 +21,6 @@ import type { Entry, TodoItem } from '../src/types/entry';
 import type { TodoMeta, TodoType } from '../src/types/todoMeta';
 
 type Status = 'all' | 'open' | 'done';
-type CategoryFilter = 'all' | TodoType;
 
 // Flat row shape used by the list — joins TodoItem with its parent entry's
 // id/date and the matching todo_meta row (default placeholder if missing).
@@ -57,7 +55,6 @@ export default function TodosScreen() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [metas, setMetas] = useState<Map<string, TodoMeta>>(new Map());
   const [status, setStatus] = useState<Status>('open');
-  const [category, setCategory] = useState<CategoryFilter>('all');
   const [adding, setAdding] = useState(false);
   const [newText, setNewText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -176,19 +173,9 @@ export default function TodosScreen() {
       } else if (status === 'done') {
         if (!r.done) return false;
       }
-      if (category !== 'all' && r.meta.type !== category) return false;
       return true;
     });
-  }, [allRows, status, category]);
-
-  const categoryCounts = useMemo(() => {
-    const counts = new Map<TodoType, number>();
-    for (const t of TYPES_IN_ORDER) counts.set(t, 0);
-    for (const r of allRows) {
-      counts.set(r.meta.type, (counts.get(r.meta.type) ?? 0) + 1);
-    }
-    return counts;
-  }, [allRows]);
+  }, [allRows, status]);
 
   const handleAdd = useCallback(async () => {
     if (addingRef.current) return;
@@ -325,48 +312,6 @@ export default function TodosScreen() {
         </ScrollView>
       </View>
 
-      {/* Thinking-mode filter — wraps to the next line so all chips are
-          visible without horizontal scrolling. */}
-      <View style={[styles.filterRow, styles.catFilterWrap]}>
-        <Text style={styles.filterLabel}>Thinking-mode:</Text>
-        <View style={styles.catFiltersWrap}>
-          <Pressable
-            onPress={() => setCategory('all')}
-            style={[styles.catPill, category === 'all' && styles.catPillActive]}
-          >
-            <Text style={[styles.catPillText, category === 'all' && styles.catPillTextActive]}>
-              ALL {allRows.length}
-            </Text>
-          </Pressable>
-          {TYPES_IN_ORDER.map(t => {
-            const meta = TYPE_META[t];
-            const count = categoryCounts.get(t) ?? 0;
-            const active = category === t;
-            return (
-              <Pressable
-                key={t}
-                onPress={() => setCategory(t)}
-                style={[
-                  styles.catPill,
-                  active && {
-                    borderColor: meta.color,
-                    backgroundColor: `${meta.color}15`,
-                  },
-                ]}
-              >
-                <Icon name={meta.icon} size={11} color={active ? meta.color : colors.textDim} />
-                <Text style={[
-                  styles.catPillText,
-                  active && { color: meta.color },
-                ]}>
-                  {meta.label.toLowerCase()} {count}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      </View>
-
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
@@ -375,7 +320,6 @@ export default function TodosScreen() {
         {filtered.length === 0 && (
           <Text style={styles.emptyText}>
             {status === 'done' ? 'Nothing completed yet.'
-              : category !== 'all' ? `No ${TYPE_META[category as TodoType].label.toLowerCase()} entries.`
               : 'No todos yet. Tap ⊕ Add to create one.'}
           </Text>
         )}
@@ -627,45 +571,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   pillTextActive: {
-    color: colors.accent,
-  },
-  // The thinking-mode filter row stacks the label above the chips so
-  // they have the full row width to wrap into. Status filter still uses
-  // the inline-row layout (only 3 chips, fits horizontally).
-  catFilterWrap: {
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingTop: 8,
-    paddingBottom: 8,
-    paddingRight: 20,
-  },
-  catFiltersWrap: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  catPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    borderRadius: 999,
-  },
-  catPillActive: {
-    borderColor: colors.accent,
-    backgroundColor: `${colors.accent}10`,
-  },
-  catPillText: {
-    fontFamily: fonts.mono,
-    fontSize: 9,
-    color: colors.textDim,
-    letterSpacing: 0.5,
-  },
-  catPillTextActive: {
     color: colors.accent,
   },
   scroll: {
