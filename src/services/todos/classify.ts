@@ -9,6 +9,7 @@ import {
 } from '../ai/providers/gemma';
 import { orchestrateCloud } from '../ai/providers/cloud';
 import { getCached, writeCachedSafe, type CacheKeyInput } from '../ai/cache';
+import type { LlmProgress } from '../ai/LlmProgress';
 import { emit } from '../../utils/events';
 import type { TodoType, ClassifierConfidence } from '../../types/todoMeta';
 
@@ -114,7 +115,10 @@ async function predictClassifyRoute(strictLocal: boolean): Promise<RouteChoice> 
 // (Haiku, gpt-4o-mini). Returns null when no path can serve — caller
 // leaves the meta row at type='todo', classifier_confidence=null and
 // tries again later.
-export async function classifyTodo(text: string): Promise<ClassifyResult | null> {
+export async function classifyTodo(
+  text: string,
+  onProgress?: (p: LlmProgress) => void,
+): Promise<ClassifyResult | null> {
   if (!text.trim()) return null;
 
   const strictLocal = await getStrictLocalMode();
@@ -140,7 +144,7 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
     _inFlight++;
     emit(CLASSIFY_PROGRESS_EVENT);
     try {
-      const raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS);
+      const raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS, undefined, onProgress);
       const result = parseAndReturn(raw, GEMMA_LOCAL_MODEL);
       if (result) await writeCachedSafe(cacheInput, GEMMA_LOCAL_MODEL, raw);
       return result;
@@ -174,7 +178,7 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
 
     if (tryLocal) {
       try {
-        raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS);
+        raw = await callGemmaLocal('classify', SYSTEM_PROMPT, text, MAX_TOKENS, undefined, onProgress);
         usedModel = GEMMA_LOCAL_MODEL;
       } catch (err) {
         console.warn('[classify] gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
@@ -190,6 +194,8 @@ export async function classifyTodo(text: string): Promise<ClassifyResult | null>
           callOpenAI: () => callOpenAI(openaiKey ?? '', text),
           hasClaudeKey: !!anthropicKey,
           hasOpenAIKey: !!openaiKey,
+          onProgress,
+          phase: 'classify',
         });
         raw = result;
         usedModel = servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL;

@@ -21,6 +21,7 @@
 import { initLlama } from 'llama.rn';
 import { Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
+import type { LlmProgress } from '../LlmProgress';
 
 // On-device model. The bartowski community quantization of Gemma 3 4B
 // Instruct, Q4_K_M variant — ~2.5 GB; the standard pick for mobile.
@@ -93,29 +94,48 @@ async function getLlamaContext(): Promise<LlamaContext> {
 // The first arg (chain) is the chain name — 'classify' / 'caption' /
 // 'summarize' / 'interpret'. Used by the latency probe to track over-
 // budget runs per chain and auto-disable when sustained.
+//
+// Optional onProgress receives an LlmProgress event per streamed token
+// (estimated:true with climbing outputTokens), then a final done:true
+// event with the same total on completion. Surfaces directly into the
+// useLlmProgressTracker hook on the UI side.
 export async function callGemmaLocal(
   chain: string,
   system: string,
   user: string,
   maxTokens: number,
   temperature?: number,
+  onProgress?: (p: LlmProgress) => void,
 ): Promise<string> {
   const ctx = await getLlamaContext();
   const start = Date.now();
-  const result = await ctx.completion({
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    n_predict: maxTokens,
-    ...(temperature !== undefined ? { temperature } : {}),
-    // Gemma's primary stop token + common fallbacks. The tokenizer
-    // embedded in the GGUF usually self-stops; these guard against
-    // runaway generation if it doesn't.
-    stop: ['<end_of_turn>', '</s>', '<|end_of_text|>'],
-  });
+  let outputTokens = 0;
+  const result = await ctx.completion(
+    {
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      n_predict: maxTokens,
+      ...(temperature !== undefined ? { temperature } : {}),
+      // Gemma's primary stop token + common fallbacks. The tokenizer
+      // embedded in the GGUF usually self-stops; these guard against
+      // runaway generation if it doesn't.
+      stop: ['<end_of_turn>', '</s>', '<|end_of_text|>'],
+    },
+    (data: { token?: string }) => {
+      // llama.rn fires this callback once per generated token. We use
+      // its presence as the climb signal — we don't accumulate the
+      // tokens themselves (the SDK returns the full text via result).
+      if (data?.token !== undefined && onProgress) {
+        outputTokens++;
+        onProgress({ phase: chain, outputTokens, estimated: true });
+      }
+    },
+  );
   const elapsed = Date.now() - start;
   await updateGemmaLocalProbe(chain, elapsed);
+  onProgress?.({ phase: chain, outputTokens, estimated: false, done: true });
   return result.text ?? '';
 }
 

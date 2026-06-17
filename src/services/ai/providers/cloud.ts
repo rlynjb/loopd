@@ -11,6 +11,7 @@
 // already-built call functions and wires them together.
 
 import type { AIProvider } from '../config';
+import type { LlmProgress } from '../LlmProgress';
 
 export type OrchestratorParams<T> = {
   primary: AIProvider;
@@ -18,6 +19,15 @@ export type OrchestratorParams<T> = {
   callOpenAI: () => Promise<T>;
   hasClaudeKey: boolean;
   hasOpenAIKey: boolean;
+  // Optional. When provided, emits a single done:true event after the
+  // call returns successfully. Token counts are estimated (true) because
+  // this orchestrator doesn't peek inside per-chain SDK responses; a
+  // follow-up commit could expose `usage` from each chain's
+  // callClaude / callOpenAI if the per-call count matters in UI.
+  onProgress?: (p: LlmProgress) => void;
+  // Label for the progress event's `phase` field (chain name in
+  // practice). Defaults to 'cloud' if omitted.
+  phase?: string;
 };
 
 export type OrchestratorResult<T> = {
@@ -37,6 +47,7 @@ export async function orchestrateCloud<T>(p: OrchestratorParams<T>): Promise<Orc
   const primaryHasKey = p.primary === 'claude' ? p.hasClaudeKey : p.hasOpenAIKey;
   const fallbackHasKey = p.primary === 'claude' ? p.hasOpenAIKey : p.hasClaudeKey;
   const fallback: AIProvider = p.primary === 'claude' ? 'openai' : 'claude';
+  const phase = p.phase ?? 'cloud';
 
   if (!primaryHasKey && !fallbackHasKey) {
     throw new Error('No API key configured');
@@ -45,18 +56,26 @@ export async function orchestrateCloud<T>(p: OrchestratorParams<T>): Promise<Orc
   const tryPrimary = p.primary === 'claude' ? p.callClaude : p.callOpenAI;
   const tryFallback = p.primary === 'claude' ? p.callOpenAI : p.callClaude;
 
+  // Emits the single done:true progress event on a successful return.
+  // Errors propagate without an event — the tracker's `finally` block
+  // settles state anyway.
+  const settle = (res: OrchestratorResult<T>): OrchestratorResult<T> => {
+    p.onProgress?.({ phase, estimated: true, done: true });
+    return res;
+  };
+
   // Primary not configured — go straight to fallback.
   if (!primaryHasKey) {
-    return { result: await tryFallback(), servedBy: fallback };
+    return settle({ result: await tryFallback(), servedBy: fallback });
   }
 
   // Try primary. On transient error, try fallback if it's configured.
   try {
-    return { result: await tryPrimary(), servedBy: p.primary };
+    return settle({ result: await tryPrimary(), servedBy: p.primary });
   } catch (err) {
     if (fallbackHasKey && isTransient(err)) {
       console.warn(`[buffr ai] cloud primary (${p.primary}) failed, trying fallback (${fallback}):`, err instanceof Error ? err.message : err);
-      return { result: await tryFallback(), servedBy: fallback };
+      return settle({ result: await tryFallback(), servedBy: fallback });
     }
     throw err;
   }

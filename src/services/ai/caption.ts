@@ -9,6 +9,7 @@ import {
 } from './providers/gemma';
 import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
+import type { LlmProgress } from './LlmProgress';
 import {
   CAPTION_VARIANT_KEYS,
   type CaptionInput,
@@ -205,18 +206,19 @@ async function runCaptionLLM(
   route: RouteChoice,
   system: string,
   user: string,
+  onProgress?: (p: LlmProgress) => void,
 ): Promise<{ text: string; model: string }> {
   if (strictLocal) {
     if (!(await shouldUseGemmaLocal('caption'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
+    const text = await callGemmaLocal('caption', system, user, MAX_TOKENS, undefined, onProgress);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   if (route === 'on-device' && (await shouldUseGemmaLocal('caption'))) {
     try {
-      const text = await callGemmaLocal('caption', system, user, MAX_TOKENS);
+      const text = await callGemmaLocal('caption', system, user, MAX_TOKENS, undefined, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
       console.warn('[buffr ai] caption gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
@@ -231,12 +233,15 @@ async function runCaptionLLM(
     callOpenAI: () => callOpenAI(openaiKey ?? '', system, user),
     hasClaudeKey: !!claudeKey,
     hasOpenAIKey: !!openaiKey,
+    onProgress,
+    phase: 'caption',
   });
   return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
 
 export async function generateCaption(
   input: CaptionInput,
+  onProgress?: (p: LlmProgress) => void,
 ): Promise<{ output: CaptionVariantOutput | null; error?: string }> {
   const strictLocal = await getStrictLocalMode();
   const route = await getChainRoute('caption');
@@ -263,7 +268,7 @@ export async function generateCaption(
       user,
     };
     const { text } = await cachedCall(cacheInput, async () => {
-      const r = await runCaptionLLM(strictLocal, route, system, user);
+      const r = await runCaptionLLM(strictLocal, route, system, user, onProgress);
       return { text: r.text, modelServed: r.model };
     });
     const output = parseAndValidate(text);

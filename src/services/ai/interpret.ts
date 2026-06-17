@@ -9,6 +9,7 @@ import {
 } from './providers/gemma';
 import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
+import type { LlmProgress } from './LlmProgress';
 import type { Interpretation } from '../../types/ai';
 
 // Long-form interpretation chain. Output is markdown — multi-section essay
@@ -120,6 +121,7 @@ async function runInterpretLLM(
   strictLocal: boolean,
   route: RouteChoice,
   truncatedText: string,
+  onProgress?: (p: LlmProgress) => void,
 ): Promise<{ text: string; model: string }> {
   const fullUser = `User journal entry:\n${truncatedText}`;
 
@@ -127,13 +129,13 @@ async function runInterpretLLM(
     if (!(await shouldUseGemmaLocal('interpret'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+    const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE, onProgress);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   if (route === 'on-device' && (await shouldUseGemmaLocal('interpret'))) {
     try {
-      const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE);
+      const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
       console.warn('[buffr ai] interpret gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
@@ -148,6 +150,8 @@ async function runInterpretLLM(
     callOpenAI: () => callOpenAI(openaiKey ?? '', truncatedText),
     hasClaudeKey: !!claudeKey,
     hasOpenAIKey: !!openaiKey,
+    onProgress,
+    phase: 'interpret',
   });
   return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
@@ -155,7 +159,10 @@ async function runInterpretLLM(
 // Run the interpretation chain for a single piece of journal text.
 // Snapshots `sourceText` (the truncated input that actually reached the
 // model) so the modal can detect staleness later.
-export async function interpretEntry(rawText: string): Promise<InterpretResult> {
+export async function interpretEntry(
+  rawText: string,
+  onProgress?: (p: LlmProgress) => void,
+): Promise<InterpretResult> {
   const text = rawText.trim();
   if (text.length < MIN_TEXT_LENGTH) return { ok: false, reason: 'too-short' };
 
@@ -183,7 +190,7 @@ export async function interpretEntry(rawText: string): Promise<InterpretResult> 
       user: truncated,
     };
     const { text: raw, modelServed: modelId } = await cachedCall(cacheInput, async () => {
-      const r = await runInterpretLLM(strictLocal, route, truncated);
+      const r = await runInterpretLLM(strictLocal, route, truncated, onProgress);
       return { text: r.text, modelServed: r.model };
     });
     const md = cleanMarkdown(raw);

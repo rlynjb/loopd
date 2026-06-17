@@ -9,6 +9,7 @@ import {
 } from './providers/gemma';
 import { orchestrateCloud } from './providers/cloud';
 import { cachedCall, type CacheKeyInput } from './cache';
+import type { LlmProgress } from './LlmProgress';
 import { buildPrompt } from './prompt';
 import { validateSummary } from './validate';
 import { generateCaption } from './caption';
@@ -63,6 +64,7 @@ async function runSummarizeLLM(
   route: RouteChoice,
   system: string,
   user: string,
+  onProgress?: (p: LlmProgress) => void,
 ): Promise<{ text: string; model: string }> {
   // Strict-local: on-device only. Skips all cloud paths regardless of
   // the per-chain route.
@@ -70,14 +72,14 @@ async function runSummarizeLLM(
     if (!(await shouldUseGemmaLocal('summarize'))) {
       throw new Error('Strict local mode: on-device AI not ready');
     }
-    const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
+    const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS, undefined, onProgress);
     return { text, model: GEMMA_LOCAL_MODEL };
   }
 
   // route='on-device': try local, fall back to cloud on failure.
   if (route === 'on-device' && (await shouldUseGemmaLocal('summarize'))) {
     try {
-      const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS);
+      const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS, undefined, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
       console.warn('[buffr ai] summarize gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
@@ -93,11 +95,16 @@ async function runSummarizeLLM(
     callOpenAI: () => callOpenAI(openaiKey ?? '', system, user),
     hasClaudeKey: !!claudeKey,
     hasOpenAIKey: !!openaiKey,
+    onProgress,
+    phase: 'summarize',
   });
   return { text, model: servedBy === 'claude' ? CLAUDE_MODEL : OPENAI_MODEL };
 }
 
-export async function summarize(date: string): Promise<{ summary: AISummary | null; error?: string }> {
+export async function summarize(
+  date: string,
+  onProgress?: (p: LlmProgress) => void,
+): Promise<{ summary: AISummary | null; error?: string }> {
   const strictLocal = await getStrictLocalMode();
   const route = await getChainRoute('summarize');
 
@@ -144,7 +151,7 @@ export async function summarize(date: string): Promise<{ summary: AISummary | nu
       user,
     };
     const { text, modelServed: model } = await cachedCall(cacheInput, async () => {
-      const r = await runSummarizeLLM(strictLocal, route, system, user);
+      const r = await runSummarizeLLM(strictLocal, route, system, user, onProgress);
       return { text: r.text, modelServed: r.model };
     });
 
