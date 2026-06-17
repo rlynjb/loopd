@@ -434,7 +434,7 @@ export default function TodosScreen() {
           ambiguous rows. Doesn't flicker — only changes when the user
           configures a key, so it's safe to leave inline. */}
       {!aiAvailable && ambiguousCount > 0 && (
-        <Pressable onPress={() => router.push('/settings/ai')} style={styles.banner}>
+        <Pressable onPress={() => router.push('/settings')} style={styles.banner}>
           <Text style={styles.bannerText}>
             AI classification disabled — {ambiguousCount} ambiguous todo{ambiguousCount === 1 ? '' : 's'} waiting. Tap to configure.
           </Text>
