@@ -6,6 +6,7 @@ import { Icon } from '../ui/Icon';
 import { getAISummary } from '../../services/database';
 import { summarize } from '../../services/ai/summarize';
 import { isAIConfigured } from '../../services/ai/config';
+import { useLlmProgressTracker } from '../../services/ai/useLlmProgressTracker';
 import type { AISummary } from '../../types/ai';
 
 type Props = {
@@ -28,6 +29,7 @@ function parseSummary(json: string): AISummary | null {
 export function AISummaryCard({ date, hasEntries }: Props) {
   const router = useRouter();
   const [state, setState] = useState<CardState>({ kind: 'loading' });
+  const tracker = useLlmProgressTracker();
 
   const load = useCallback(async () => {
     const row = await getAISummary(date);
@@ -44,10 +46,16 @@ export function AISummaryCard({ date, hasEntries }: Props) {
 
   const handleGenerate = useCallback(async () => {
     setState({ kind: 'generating' });
-    const { summary, error } = await summarize(date);
-    if (summary) setState({ kind: 'ready', summary });
-    else setState({ kind: 'error', message: error ?? 'Failed to generate summary' });
-  }, [date]);
+    try {
+      const { summary, error } = await tracker.track('Summarize', (onProgress) =>
+        summarize(date, onProgress),
+      );
+      if (summary) setState({ kind: 'ready', summary });
+      else setState({ kind: 'error', message: error ?? 'Failed to generate summary' });
+    } finally {
+      tracker.clear();
+    }
+  }, [date, tracker]);
 
   const openVlog = useCallback(() => {
     router.push(`/journal/${date}`);
@@ -95,6 +103,12 @@ export function AISummaryCard({ date, hasEntries }: Props) {
           <Text style={styles.label}>✦ Generating summary…</Text>
           <ActivityIndicator size="small" color={colors.teal} />
         </View>
+        {tracker.state && (
+          <Text style={styles.progressDetail}>
+            {tracker.state.outputTokens > 0 ? `${tracker.state.outputTokens} tokens · ` : ''}
+            {(tracker.state.elapsedMs / 1000).toFixed(1)}s
+          </Text>
+        )}
       </View>
     );
   }
@@ -161,6 +175,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
     lineHeight: 18,
+  },
+  progressDetail: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.textDim,
+    letterSpacing: 0.3,
+    opacity: 0.7,
   },
   errorText: {
     fontFamily: fonts.mono,

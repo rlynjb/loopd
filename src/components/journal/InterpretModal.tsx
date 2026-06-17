@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, fonts } from '../../constants/theme';
 import { Icon } from '../ui/Icon';
 import { interpretEntry, MIN_TEXT_LENGTH, MAX_INPUT_CHARS } from '../../services/ai/interpret';
+import { useLlmProgressTracker } from '../../services/ai/useLlmProgressTracker';
 import { getAISummary, upsertAISummary } from '../../services/database';
 import { InterpretMarkdown } from './InterpretMarkdown';
 import type { AISummary, Interpretation } from '../../types/ai';
@@ -34,6 +35,7 @@ function tail(s: string, max = MAX_INPUT_CHARS): string {
 export function InterpretModal({ visible, date, dayText, onClose }: Props) {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const tracker = useLlmProgressTracker();
 
   const trimmed = dayText.trim();
   const tooShort = trimmed.length < MIN_TEXT_LENGTH;
@@ -80,21 +82,27 @@ export function InterpretModal({ visible, date, dayText, onClose }: Props) {
   const run = useCallback(async () => {
     if (tooShort) return;
     setStatus({ kind: 'loading' });
-    const r = await interpretEntry(trimmed);
-    if (r.ok) {
-      setStatus({ kind: 'result', interpretation: r.interpretation });
-      await persist(r.interpretation);
-    } else {
-      const msg = r.reason === 'no-ai'
-        ? 'Configure an AI provider in Settings → AI to use Interpret.'
-        : r.reason === 'malformed'
-        ? "Couldn't parse the response. Try again."
-        : r.reason === 'network'
-        ? 'No connection — interpretation needs internet.'
-        : 'Write a little more first.';
-      setStatus({ kind: 'error', message: msg });
+    try {
+      const r = await tracker.track('Interpret', (onProgress) =>
+        interpretEntry(trimmed, onProgress),
+      );
+      if (r.ok) {
+        setStatus({ kind: 'result', interpretation: r.interpretation });
+        await persist(r.interpretation);
+      } else {
+        const msg = r.reason === 'no-ai'
+          ? 'Configure an AI provider in Settings → AI to use Interpret.'
+          : r.reason === 'malformed'
+          ? "Couldn't parse the response. Try again."
+          : r.reason === 'network'
+          ? 'No connection — interpretation needs internet.'
+          : 'Write a little more first.';
+        setStatus({ kind: 'error', message: msg });
+      }
+    } finally {
+      tracker.clear();
     }
-  }, [trimmed, tooShort, persist]);
+  }, [trimmed, tooShort, persist, tracker]);
 
   const isStale =
     status.kind === 'result' &&
@@ -139,7 +147,16 @@ export function InterpretModal({ visible, date, dayText, onClose }: Props) {
           ) : status.kind === 'loading' ? (
             <View style={styles.loadingBlock}>
               <ActivityIndicator color={colors.accent} size="small" />
-              <Text style={styles.loadingText}>Interpreting…</Text>
+              <Text style={styles.loadingText}>
+                {tracker.state?.phase ? `${tracker.state.phase}…` : 'Interpreting…'}
+              </Text>
+              {tracker.state && (
+                <Text style={styles.loadingDetail}>
+                  {tracker.state.outputTokens > 0 ? `${tracker.state.outputTokens} tokens` : ''}
+                  {tracker.state.outputTokens > 0 ? ' · ' : ''}
+                  {(tracker.state.elapsedMs / 1000).toFixed(1)}s
+                </Text>
+              )}
             </View>
           ) : status.kind === 'error' ? (
             <View style={styles.errorBlock}>
@@ -261,6 +278,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.textDim,
     letterSpacing: 0.5,
+  },
+  loadingDetail: {
+    fontFamily: fonts.mono,
+    fontSize: 10,
+    color: colors.textDim,
+    letterSpacing: 0.3,
+    opacity: 0.7,
   },
   empty: {
     paddingVertical: 48,

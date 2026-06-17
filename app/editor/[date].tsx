@@ -23,6 +23,7 @@ import { useTextRenderer } from '../../src/services/textRenderer';
 import { FILTERS } from '../../src/constants/filters';
 import { isAIConfigured } from '../../src/services/ai/config';
 import { summarize } from '../../src/services/ai/summarize';
+import { useLlmProgressTracker } from '../../src/services/ai/useLlmProgressTracker';
 import { autoCompose, fallbackCompose } from '../../src/services/ai/compose';
 import { getAISummary } from '../../src/services/database';
 import type { AISummary } from '../../src/types/ai';
@@ -61,6 +62,7 @@ export default function EditorScreen() {
   useFocusEffect(useCallback(() => { reloadEntries(); }, [reloadEntries]));
 
   const [generating, setGenerating] = useState(false);
+  const tracker = useLlmProgressTracker();
   // Cached AI summary held alongside the project so the TEXT-tab variant
   // chips can read `caption` / `captionAlternate` / `summary` without
   // re-querying ai_summaries on every render.
@@ -119,7 +121,9 @@ export default function EditorScreen() {
         }
       } else if (aiConfigured) {
         setGenerating(true);
-        const result = await summarize(date);
+        const result = await tracker.track('Summarize', (onProgress) =>
+          summarize(date, onProgress),
+        );
         if (!cancelled && result.summary) {
           const composed = autoCompose(result.summary, entries, date, dayTitle);
           if (composed.clips && composed.clips.length > 0) {
@@ -131,6 +135,7 @@ export default function EditorScreen() {
           setCaptionVariant(defaultVariantFor(result.summary));
         }
         setGenerating(false);
+        tracker.clear();
       }
       // fallbackCompose is handled by useProject's default behavior
     })();
@@ -144,8 +149,11 @@ export default function EditorScreen() {
         text: 'Regenerate',
         onPress: async () => {
           setGenerating(true);
-          const result = await summarize(date);
+          const result = await tracker.track('Summarize', (onProgress) =>
+            summarize(date, onProgress),
+          );
           setGenerating(false);
+          tracker.clear();
           if (result.summary) {
             const composed = autoCompose(result.summary, entries, date, dayTitle);
             // Only update text overlay — preserve user's clip trims/splits.
@@ -903,7 +911,11 @@ export default function EditorScreen() {
               >
                 <Icon name="zap" size={14} color={colors.amber} />
                 <Text style={styles.regenerateBtnText}>
-                  {generating ? 'GENERATING…' : 'REGENERATE WITH AI'}
+                  {generating
+                    ? tracker.state
+                      ? `GENERATING… ${(tracker.state.elapsedMs / 1000).toFixed(1)}S${tracker.state.outputTokens > 0 ? ` · ${tracker.state.outputTokens} TOK` : ''}`
+                      : 'GENERATING…'
+                    : 'REGENERATE WITH AI'}
                 </Text>
               </Pressable>
               {/* Variant chips — pick which body text fills the overlay.
