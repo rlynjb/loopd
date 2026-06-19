@@ -1,4 +1,4 @@
-// Generic incremental pull. See docs/buffr-cloud-sync-spec.md §4.2 + §4.7.
+// Generic incremental pull. See docs/loopd-cloud-sync-spec.md §4.2 + §4.7.
 //
 // 1. Get server time via RPC (avoids clock-skew bugs where a device's local
 //    clock disagrees with the server's).

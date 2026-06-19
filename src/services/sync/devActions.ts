@@ -82,7 +82,7 @@ export async function resetLocalFromCloud(): Promise<{
       await db.runAsync(`DELETE FROM ${t}`);
     } catch (err) {
       // sync_deletions might not exist if a fresh install never had Notion.
-      console.warn(`[buffr sync] resetLocalFromCloud: skipped ${t}:`, err instanceof Error ? err.message : err);
+      console.warn(`[loopd sync] resetLocalFromCloud: skipped ${t}:`, err instanceof Error ? err.message : err);
     }
   }
   // Pull everything from cloud.

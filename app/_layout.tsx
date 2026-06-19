@@ -59,10 +59,10 @@ function AppContent() {
           await pushAll();
         } else {
           const decision = await bootstrapCloudSync();
-          console.log('[buffr sync] bootstrap decision:', decision);
+          console.log('[loopd sync] bootstrap decision:', decision);
         }
       } catch (err) {
-        console.warn('[buffr] Cloud sync boot failed:', err instanceof Error ? err.message : err);
+        console.warn('[loopd] Cloud sync boot failed:', err instanceof Error ? err.message : err);
       }
     })();
   }, [ready]);
@@ -79,7 +79,7 @@ function AppContent() {
         const { warmLlamaContext } = await import('../src/services/ai/providers/gemma');
         await warmLlamaContext();
       } catch (err) {
-        console.warn('[buffr] llama warm failed:', err);
+        console.warn('[loopd] llama warm failed:', err);
       }
     })();
   }, [ready]);
@@ -97,9 +97,9 @@ function AppContent() {
         if (existing) return;
         const { summarize } = await import('../src/services/ai/summarize');
         await summarize(yStr);
-        console.log('[buffr] Auto-generated AI summary for', yStr);
+        console.log('[loopd] Auto-generated AI summary for', yStr);
       } catch (err) {
-        console.warn('[buffr] AI auto-generate failed:', err);
+        console.warn('[loopd] AI auto-generate failed:', err);
       }
     })();
   }, [ready]);
@@ -114,10 +114,10 @@ function AppContent() {
         const { backfillTodosFromText } = await import('../src/services/todos/migrate');
         const result = await backfillTodosFromText();
         if (!result.skipped) {
-          console.log(`[buffr] drops backfill scanned ${result.scanned} entries, updated ${result.updated}`);
+          console.log(`[loopd] drops backfill scanned ${result.scanned} entries, updated ${result.updated}`);
         }
       } catch (err) {
-        console.warn('[buffr] drops backfill failed:', err);
+        console.warn('[loopd] drops backfill failed:', err);
       }
     })();
   }, [ready]);
@@ -131,10 +131,10 @@ function AppContent() {
         const { backfillNutritionFromText } = await import('../src/services/nutrition/migrate');
         const result = await backfillNutritionFromText();
         if (!result.skipped) {
-          console.log(`[buffr] nutrition backfill scanned ${result.scanned} entries`);
+          console.log(`[loopd] nutrition backfill scanned ${result.scanned} entries`);
         }
       } catch (err) {
-        console.warn('[buffr] nutrition backfill failed:', err);
+        console.warn('[loopd] nutrition backfill failed:', err);
       }
     })();
   }, [ready]);
@@ -151,18 +151,18 @@ function AppContent() {
         const { backfillTodoMeta, classifyAmbiguousMeta } = await import('../src/services/todos/migrateMeta');
         const result = await backfillTodoMeta();
         if (!result.skipped) {
-          console.log(`[buffr] todo_meta backfill scanned ${result.scannedEntries} entries`);
+          console.log(`[loopd] todo_meta backfill scanned ${result.scannedEntries} entries`);
         }
         // Phase B catch-up — fire-and-forget, doesn't block other init.
         classifyAmbiguousMeta()
           .then(r => {
             if (!r.skipped && r.classified > 0) {
-              console.log(`[buffr] classified ${r.classified} ambiguous todos`);
+              console.log(`[loopd] classified ${r.classified} ambiguous todos`);
             }
           })
-          .catch(err => console.warn('[buffr] classify catch-up failed:', err));
+          .catch(err => console.warn('[loopd] classify catch-up failed:', err));
       } catch (err) {
-        console.warn('[buffr] todo_meta backfill failed:', err);
+        console.warn('[loopd] todo_meta backfill failed:', err);
       }
     })();
   }, [ready]);
@@ -177,10 +177,10 @@ function AppContent() {
         const { backfillHabitsCadence } = await import('../src/services/habits/migrate');
         const result = await backfillHabitsCadence();
         if (!result.skipped) {
-          console.log(`[buffr] habits cadence backfill scanned ${result.scanned}, slugged ${result.slugged}`);
+          console.log(`[loopd] habits cadence backfill scanned ${result.scanned}, slugged ${result.slugged}`);
         }
       } catch (err) {
-        console.warn('[buffr] habits cadence backfill failed:', err);
+        console.warn('[loopd] habits cadence backfill failed:', err);
       }
     })();
   }, [ready]);
@@ -195,10 +195,10 @@ function AppContent() {
         const { countPendingMigrations, migrateOldClips } = await import('../src/services/clipMigration');
         const pending = await countPendingMigrations();
         if (pending === 0) return;
-        console.log(`[buffr] starting clip migration for ${pending} clip(s)`);
+        console.log(`[loopd] starting clip migration for ${pending} clip(s)`);
         await migrateOldClips();
       } catch (err) {
-        console.warn('[buffr] clip migration failed:', err);
+        console.warn('[loopd] clip migration failed:', err);
       }
     })();
   }, [ready]);
@@ -207,7 +207,7 @@ function AppContent() {
     if (!error) return;
     Alert.alert(
       'Database Error',
-      `buffr could not open its local database.\n\n${error}`
+      `loopd could not open its local database.\n\n${error}`
     );
   }, [error]);
 

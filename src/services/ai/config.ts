@@ -8,7 +8,7 @@ const KEY_ROUTE_PREFIX = 'route_';
 
 // "AIProvider" is the cloud-primary picker — which cloud provider to call
 // first. The other one becomes the fallback when the primary is down /
-// rate-limited. dryrun calls this the "cloud-primary"; buffr keeps the
+// rate-limited. dryrun calls this the "cloud-primary"; loopd keeps the
 // historical name for less churn through the existing call sites.
 export type AIProvider = 'claude' | 'openai';
 

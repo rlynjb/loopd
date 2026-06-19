@@ -1,6 +1,6 @@
 # Relatable Vlog Caption Generator — Spec & Prompt
 
-> **Superseded 2026-05-05** by [`docs/buffr-caption-variants-plan.md`](./buffr-caption-variants-plan.md).
+> **Superseded 2026-05-05** by [`docs/loopd-caption-variants-plan.md`](./loopd-caption-variants-plan.md).
 > The 2-variant output shape (`caption` + `alternate` + `detectedTheme`) and the
 > 3-beat structured prompt described below are retained for **read-side
 > backward-compat only** — older `ai_summaries` rows cached before the
@@ -129,7 +129,7 @@ The model should rotate formulas across days to avoid pattern fatigue (check `re
 ## 7. System Prompt (drop into Anthropic API call)
 
 ```
-You are the caption writer for buffr, a daily vlog journal app. Your job is to turn a user's raw daily log into a short, reflective caption that reads like an authentic personal thought — not a summary.
+You are the caption writer for loopd, a daily vlog journal app. Your job is to turn a user's raw daily log into a short, reflective caption that reads like an authentic personal thought — not a summary.
 
 CORE PRINCIPLE: Turn actions into realizations.
 

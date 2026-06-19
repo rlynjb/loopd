@@ -1,5 +1,5 @@
 // Pure cell-state engine for the Daily Schedule weekly grid.
-// See docs/buffr-daily-schedule-grid-spec.md §2.6.
+// See docs/loopd-daily-schedule-grid-spec.md §2.6.
 //
 // Maps (habit, cell date, today, checkedDates) → one of five visual states.
 // No DB reads, no side effects — easy to test in isolation, easy to reuse

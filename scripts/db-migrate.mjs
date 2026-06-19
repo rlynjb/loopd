@@ -2,7 +2,7 @@
 // Tiny migration runner for Supabase Postgres. Reads .env for the project
 // ref + DB password, connects directly, runs whichever .sql files you pass
 // (or `--all-pending` to apply everything not yet recorded in the
-// buffr_migrations tracking table).
+// loopd_migrations tracking table).
 //
 // Usage:
 //   node scripts/db-migrate.mjs supabase/migrations/0003_server_time_rpc.sql
@@ -50,7 +50,7 @@ const client = new pg.Client({
 
 const MIGRATIONS_DIR = resolve(fileURLToPath(import.meta.url), '../../supabase/migrations');
 const TRACKING_TABLE_DDL = `
-  CREATE TABLE IF NOT EXISTS buffr_migrations (
+  CREATE TABLE IF NOT EXISTS loopd_migrations (
     name TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
@@ -61,7 +61,7 @@ async function ensureTrackingTable() {
 }
 
 async function getApplied() {
-  const { rows } = await client.query('SELECT name FROM buffr_migrations ORDER BY name');
+  const { rows } = await client.query('SELECT name FROM loopd_migrations ORDER BY name');
   return new Set(rows.map(r => r.name));
 }
 
@@ -72,7 +72,7 @@ async function applyFile(absPath) {
   await client.query('BEGIN');
   try {
     await client.query(sql);
-    await client.query('INSERT INTO buffr_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
+    await client.query('INSERT INTO loopd_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [name]);
     await client.query('COMMIT');
     console.log(`  applied`);
   } catch (err) {
@@ -83,7 +83,7 @@ async function applyFile(absPath) {
 
 async function markApplied(name) {
   await client.query(
-    'INSERT INTO buffr_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING',
+    'INSERT INTO loopd_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING',
     [name],
   );
   console.log(`  marked ${name} as applied (no SQL run)`);

@@ -1,5 +1,5 @@
 // Daily Schedule weekly grid — 7-column weekday layout for habits.
-// See docs/buffr-daily-schedule-grid-spec.md.
+// See docs/loopd-daily-schedule-grid-spec.md.
 //
 // Receives the visible week's anchor (Monday) plus habits + their check-in
 // maps; renders rows bucketed by time_of_day. cellStateFor() drives the

@@ -1,16 +1,16 @@
-# buffr — Feature Spec: Thinking Modes for Todos
+# loopd — Feature Spec: Thinking Modes for Todos
 
 Last updated: 2026-04-26 · revision 5
 
-An expansion of buffr's existing `[]` todos feature. Every `[]` line in journal prose gets classified into one of seven thinking modes (lifted from [buffr § 5](./buffr-build-upon-agent-spec.md#5-prompt-library)). Plain action items stay as plain checkboxes; ambiguous lines get an "expand" affordance that opens a side-panel modal with structured AI output. The `/todos` page stays a single flat chronological list — categories are *visible* on each row but don't reorganize the list. Bidirectional Notion sync extends the existing `syncAllTodos` to push/pull the new fields.
+An expansion of loopd's existing `[]` todos feature. Every `[]` line in journal prose gets classified into one of seven thinking modes (lifted from [loopd § 5](./loopd-build-upon-agent-spec.md#5-prompt-library)). Plain action items stay as plain checkboxes; ambiguous lines get an "expand" affordance that opens a side-panel modal with structured AI output. The `/todos` page stays a single flat chronological list — categories are *visible* on each row but don't reorganize the list. Bidirectional Notion sync extends the existing `syncAllTodos` to push/pull the new fields.
 
-This spec extends [`spec.md`](./spec.md). It assumes familiarity with the existing todos feature (Section 6.3), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of buffr.
+This spec extends [`spec.md`](./spec.md). It assumes familiarity with the existing todos feature (Section 6.3), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of loopd.
 
 ---
 
 ## 1. Purpose & Origin
 
-This is the fifth revision of how to bring buffr's [Build Upon thinking-agent feature](./buffr-build-upon-agent-spec.md) into buffr. Earlier revisions explored a separate `>>` marker, a separate `/drops` page, and a category-grouped accordion. This revision lands on the simplest shape: **one marker, one flat list, categories as labels not sections.**
+This is the fifth revision of how to bring loopd's [Build Upon thinking-agent feature](./loopd-build-upon-agent-spec.md) into loopd. Earlier revisions explored a separate `>>` marker, a separate `/drops` page, and a category-grouped accordion. This revision lands on the simplest shape: **one marker, one flat list, categories as labels not sections.**
 
 The reasoning: grouping by category creates an organizational tax. Every glance at the page asks the user "where did the AI put my thought?" instead of "what did I capture today?" A flat chronological list keeps the journaling rhythm intact — recent captures are right there in order, and the category badge is information you can act on without restructuring the view.
 
@@ -20,11 +20,11 @@ You write `[] something` in your journal. A heuristic guesses if it's a plain ac
 
 **What it isn't:**
 - Not a chat. One thought in, one structured artifact out per expansion.
-- Not a buffr clone. We port the prompt library and chain-of-thought design. We don't port the agent state machine, project/session model, or graph database.
+- Not a loopd clone. We port the prompt library and chain-of-thought design. We don't port the agent state machine, project/session model, or graph database.
 - Not a new marker, not a new page, not a new bottom-nav tab. The whole feature lives inside the existing todos surface.
 - Not category-grouped. A flat chronological list with category badges and a category filter chip row.
 
-**Scope at v1:** all seven thinking modes, heuristic-first classification with AI fallback, manual side-panel expansion, full bidirectional Notion sync (including autosync). Multi-pass expansion (buffr § 5 technique 2) is a v2 toggle.
+**Scope at v1:** all seven thinking modes, heuristic-first classification with AI fallback, manual side-panel expansion, full bidirectional Notion sync (including autosync). Multi-pass expansion (loopd § 5 technique 2) is a v2 toggle.
 
 ---
 
@@ -40,7 +40,7 @@ You write `[] something` in your journal. A heuristic guesses if it's a plain ac
 | `knowledge` | crystallization thinking | Expand → `{ concept, whereUsed, whyItMatters, example }` |
 | `content` | communication thinking | Expand → `{ hook, keyPoints[], format, draftOutline }` |
 
-Six expansion prompts at v1 (todo doesn't expand). All shapes are direct ports from buffr § 5.
+Six expansion prompts at v1 (todo doesn't expand). All shapes are direct ports from loopd § 5.
 
 ---
 
@@ -266,14 +266,14 @@ Configured primary model (Claude Sonnet 4.6 or GPT-4o), via the existing AI serv
 
 ### 7.3 Per-type prompts — [`src/services/todos/expandPrompts.ts`](../src/services/todos/expandPrompts.ts)
 
-Six system prompts (todo doesn't expand). Stored as functions keyed by type, mirroring buffr § 5's `getSystemPrompt(type)` pattern:
+Six system prompts (todo doesn't expand). Stored as functions keyed by type, mirroring loopd § 5's `getSystemPrompt(type)` pattern:
 
 ```typescript
 export function getSystemPrompt(type: Exclude<TodoType, 'todo'>): string;
 export function getUserMessage(todo: TodoItem, meta: TodoMeta, context: ExpansionContext): string;
 ```
 
-**Reasoning preambles** are lifted directly from buffr § 5:
+**Reasoning preambles** are lifted directly from loopd § 5:
 
 | Type | Reasoning preamble |
 |---|---|
@@ -284,7 +284,7 @@ export function getUserMessage(todo: TodoItem, meta: TodoMeta, context: Expansio
 | `knowledge` | "Before crystallizing this knowledge, consider: What's the essential insight here, stripped of context? Where else could this apply beyond the current situation? What would someone need to know to use this effectively? What's the most minimal, reusable example?" |
 | `content` | "Before shaping this for an audience, think about: Who would care about this and why? What's the one thing they should take away? What makes this more interesting than a generic take? What format would reach them best?" |
 
-### 7.4 Output schemas — direct port of buffr § 5
+### 7.4 Output schemas — direct port of loopd § 5
 
 - **`idea`** → `{ what, why, conditions, firstStep }`
 - **`bug`** → `{ observed, expected, suspectedCause, reproSteps[] }`
@@ -295,7 +295,7 @@ export function getUserMessage(todo: TodoItem, meta: TodoMeta, context: Expansio
 
 ### 7.5 Context shape
 
-Adapted from buffr § 4 to buffr's data model:
+Adapted from loopd § 4 to loopd's data model:
 
 ```typescript
 interface ExpansionContext {
@@ -515,12 +515,12 @@ Existing Notion DBs without the new properties continue to work — sync detects
 
 ### 11.2 Source-of-truth rules
 
-Buffr is **prose-canonical** — the `[]` line in `entries.text` is the source for `text`. Notion is a sync mirror.
+Loopd is **prose-canonical** — the `[]` line in `entries.text` is the source for `text`. Notion is a sync mirror.
 
 | Field | Source of truth | Pull-down behavior on conflict |
 |---|---|---|
 | `text` | Local (prose) | **Ignore** Notion edits to Title. Log a warning in dev mode. The user shouldn't edit the title in Notion; if they do, it gets overwritten on next push. |
-| `done` | Bidirectional | Standard `last_edited_time` merge per buffr's existing pattern. |
+| `done` | Bidirectional | Standard `last_edited_time` merge per loopd's existing pattern. |
 | `type` | Local | Notion changes pull down (treated like a manual override → sets `user_overridden_type = 1`). |
 | `expanded_md` | Local (when present) | Notion changes pull down. |
 | `model`, `classifier_confidence`, `user_overridden_type` | Local | Notion changes pull down. |
@@ -632,8 +632,8 @@ A new principle this feature suggests, worth promoting to [`CLAUDE.md`](../CLAUD
 
 ## 15. What This Spec Does NOT Cover
 
-- **Multi-pass expansion** (buffr § 5 technique 2) — v2 toggle.
-- **Cross-entry context** — analog to buffr's Tier 4 Memgraph. Out of scope.
+- **Multi-pass expansion** (loopd § 5 technique 2) — v2 toggle.
+- **Cross-entry context** — analog to loopd's Tier 4 Memgraph. Out of scope.
 - **Sharing or exporting expansions outside Notion** — out of scope.
 - **Conversational follow-up** — out of scope.
 - **Round-trip back into prose** — explicitly rejected. Prose stays clean, expansion lives in the modal.

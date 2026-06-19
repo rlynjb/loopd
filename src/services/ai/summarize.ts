@@ -82,7 +82,7 @@ async function runSummarizeLLM(
       const text = await callGemmaLocal('summarize', system, user, MAX_TOKENS, undefined, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
-      console.warn('[buffr ai] summarize gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
+      console.warn('[loopd ai] summarize gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -160,10 +160,10 @@ export async function summarize(
 
     const parsed = JSON.parse(jsonMatch[0]);
     const { summary, errors } = validateSummary(parsed, clipIds, clipDurations);
-    if (errors.length > 0) console.warn('[buffr ai] Validation warnings:', errors);
+    if (errors.length > 0) console.warn('[loopd ai] Validation warnings:', errors);
 
     // Second LLM call: 4-variant tonal caption per
-    // docs/buffr-caption-variants-plan.md. Single call emits all four
+    // docs/loopd-caption-variants-plan.md. Single call emits all four
     // variants (clean / smoother / reflective / punchy). Independent of the
     // structured summary — kept in its own call so the caption prompt can
     // stay strict on its forbidden patterns. Failures here don't fail the
@@ -177,14 +177,14 @@ export async function summarize(
         summary.variantsTheme = captionOut.detectedTheme;
       }
     } catch (err) {
-      console.warn('[buffr ai] Caption skipped:', err instanceof Error ? err.message : err);
+      console.warn('[loopd ai] Caption skipped:', err instanceof Error ? err.message : err);
     }
 
     await upsertAISummary(date, JSON.stringify(summary), model);
     return { summary };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn('[buffr ai] Summarize error:', msg);
+    console.warn('[loopd ai] Summarize error:', msg);
     return { summary: null, error: msg };
   }
 }

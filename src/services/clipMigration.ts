@@ -3,16 +3,16 @@ import { getAllEntries, getDatabase } from './database';
 import { transcodeToProxy, normalizeClipUriForStorage } from './fileManager';
 
 // Clips imported before the transcode-on-capture change live at the old
-// per-date path (`buffr/clips/{date}/…`) at original (usually 4K) resolution.
+// per-date path (`loopd/clips/{date}/…`) at original (usually 4K) resolution.
 // The editor's double-buffer preview stutters on those because two
 // concurrent 4K decoders exceed Android MediaCodec limits. This service
-// walks the DB, re-transcodes each old clip into the flat `buffr/media/`
+// walks the DB, re-transcodes each old clip into the flat `loopd/media/`
 // proxy layout, and rewrites all entries that reference the old URI.
 //
-// Safe to re-run: any URI already containing `/buffr/media/` is skipped,
+// Safe to re-run: any URI already containing `/loopd/media/` is skipped,
 // so re-running only picks up whatever failed last time.
 
-const PROXY_PATH_MARKER = '/buffr/media/';
+const PROXY_PATH_MARKER = '/loopd/media/';
 
 function needsMigration(uri: string | null | undefined): boolean {
   if (!uri) return false;

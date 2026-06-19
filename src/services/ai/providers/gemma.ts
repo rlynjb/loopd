@@ -31,7 +31,7 @@ export const MODEL_FILENAME = 'gemma-3-4b-it-Q4_K_M.gguf';
 // Where the model file lives on the device. The document directory
 // survives app updates and is removed only on uninstall.
 export function getModelPath(): string {
-  return `${Paths.document.uri}/buffr/models/${MODEL_FILENAME}`;
+  return `${Paths.document.uri}/loopd/models/${MODEL_FILENAME}`;
 }
 
 // Per-chain latency budgets (ms) for on-device Gemma. Sustained over-
@@ -162,7 +162,7 @@ async function updateGemmaLocalProbe(chain: string, elapsedMs: number): Promise<
       await SecureStore.setItemAsync(`${KEY_GEMMA_SKIP_PREFIX}${chain}`, '1');
       await SecureStore.deleteItemAsync(streakKey);
       console.warn(
-        `[buffr ai] gemma local for ${chain} skipped after ${STRIKES_TO_SKIP} slow runs (last: ${elapsedMs}ms > ${budget}ms budget)`,
+        `[loopd ai] gemma local for ${chain} skipped after ${STRIKES_TO_SKIP} slow runs (last: ${elapsedMs}ms > ${budget}ms budget)`,
       );
     } else {
       await SecureStore.setItemAsync(streakKey, String(newStreak));
@@ -233,7 +233,7 @@ export async function warmLlamaContext(): Promise<void> {
   try {
     await getLlamaContext();
   } catch (err) {
-    console.warn('[buffr ai] llama warm failed:', err instanceof Error ? err.message : err);
+    console.warn('[loopd ai] llama warm failed:', err instanceof Error ? err.message : err);
   }
 }
 
@@ -245,7 +245,7 @@ export async function unloadLlamaContext(): Promise<void> {
     try {
       await _llamaContext.release();
     } catch (err) {
-      console.warn('[buffr ai] llama context release failed:', err);
+      console.warn('[loopd ai] llama context release failed:', err);
     }
     _llamaContext = null;
   }

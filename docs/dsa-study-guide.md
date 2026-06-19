@@ -1,8 +1,8 @@
-# buffr — DSA study guide
+# loopd — DSA study guide
 
 A coding-interview prep deck where every problem is derived from a real operation in this codebase. Each problem cites the file:line where the pattern appears, gives both brute-force and optimal solutions in TypeScript, and ends with a follow-up question a senior interviewer would actually ask.
 
-The closing **complexity cheat sheet** lists every significant data operation in buffr with current Big-O and a "would this hold at scale" judgment.
+The closing **complexity cheat sheet** lists every significant data operation in loopd with current Big-O and a "would this hold at scale" judgment.
 
 ## Table of contents
 
@@ -18,7 +18,7 @@ The closing **complexity cheat sheet** lists every significant data operation in
 
 ## 1. Array manipulation — apply a target order
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 When the user reorders a todo via the up/down arrows in [/todos](../app/todos.tsx), the page rebuilds visible-sort positions and persists them. The current implementation does an adjacent swap ([reorder.ts:51-62](../src/services/todos/reorder.ts#L51-L62)) — but the *generalized primitive* this problem covers is what you'd build for a drag-and-drop UI: given a target order of IDs, mutate positions to match. Same hashmap-driven shape, broader use case.
 
@@ -105,7 +105,7 @@ Re-sorted by position ASC:
 
 ## 2. HashMap / Set — deduplicate by normalized content
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 [scanTodos.ts:33-40](../src/services/todos/scanTodos.ts#L33-L40) — when the parser walks an entry's text and finds two `[]` lines with the same content (case-insensitively, after trim), only the first is kept. The dedup uses a `seen: Set<string>` keyed by the normalized content.
 
@@ -161,13 +161,13 @@ function uniqueOptimal(lines: string[]): string[] {
 
 ### Key insight
 
-Two distinct concerns: *display format* (preserve original whitespace and capitalization) and *identity* (case-insensitive normalized). Don't conflate them. The Set holds normalized keys; the output array holds raw values. Same idea as how buffr hashes drop content separately from rendering it — see [scanTodos.ts:43](../src/services/todos/scanTodos.ts#L43) (`const key = content.toLowerCase()`).
+Two distinct concerns: *display format* (preserve original whitespace and capitalization) and *identity* (case-insensitive normalized). Don't conflate them. The Set holds normalized keys; the output array holds raw values. Same idea as how loopd hashes drop content separately from rendering it — see [scanTodos.ts:43](../src/services/todos/scanTodos.ts#L43) (`const key = content.toLowerCase()`).
 
 ### Follow-up question
 
 > "What if the dataset is too large to fit in memory?"
 
-A senior answer: the in-memory Set scales to roughly the number of distinct items, not raw lines. If distinct items also exceed memory, you'd switch to either (a) a Bloom filter — accept some false positives, get O(1) space per item bit-rate, or (b) external sort + adjacent-dedup — sort lines on disk, then walk linearly skipping consecutive duplicates. (a) trades correctness for memory; (b) trades latency for memory. In buffr's case, "distinct todos in one entry" maxes out in single digits, so the in-memory Set is correct and trivial.
+A senior answer: the in-memory Set scales to roughly the number of distinct items, not raw lines. If distinct items also exceed memory, you'd switch to either (a) a Bloom filter — accept some false positives, get O(1) space per item bit-rate, or (b) external sort + adjacent-dedup — sort lines on disk, then walk linearly skipping consecutive duplicates. (a) trades correctness for memory; (b) trades latency for memory. In loopd's case, "distinct todos in one entry" maxes out in single digits, so the in-memory Set is correct and trivial.
 
 ### Execution trace
 
@@ -190,7 +190,7 @@ out  = ["Call mom", "buy milk"]
 
 ## 3. Tree / nested data — flatten + join with metadata
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 [app/todos.tsx](../app/todos.tsx) — building the row list for the screen. `Entry[]` is loaded; each entry has nested `todos: TodoItem[]`. Separately, `TodoMeta[]` is loaded from `todo_meta`. The render layer needs a flat array of rows where each todo carries its parent's `entryDate` plus its meta. This is a tree-flatten + hash-join in one pass.
 
@@ -243,7 +243,7 @@ function joinOptimal(entries: Entry[], metas: Meta[]): Row[] {
 
 ### Key insight
 
-The "tree flatten" doesn't add asymptotic cost — it's just nested iteration over a fixed dataset. The win is the same hashmap-join trick from problem 1, applied during the flatten. **Pre-build the lookup; keep the inner loop O(1).** The pattern is so common it has a name in databases: *hash join*. Buffr uses it in [app/todos.tsx:124-135](../app/todos.tsx#L124-L135) where `metas: Map<string, TodoMeta>` is built once on load, then keyed `metas.get(todo.id)` per row.
+The "tree flatten" doesn't add asymptotic cost — it's just nested iteration over a fixed dataset. The win is the same hashmap-join trick from problem 1, applied during the flatten. **Pre-build the lookup; keep the inner loop O(1).** The pattern is so common it has a name in databases: *hash join*. Loopd uses it in [app/todos.tsx:124-135](../app/todos.tsx#L124-L135) where `metas: Map<string, TodoMeta>` is built once on load, then keyed `metas.get(todo.id)` per row.
 
 ### Follow-up question
 
@@ -287,7 +287,7 @@ Output rows: [
 
 ## 4. Sorting — composite priority sort
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 [rank.ts:50-71](../src/services/todos/rank.ts#L50-L71) — the dashboard's `SmartTodoList` uses `rankTodos` to surface what the user should attend to. The sort is *lexicographic* across two keys: source priority (carried-from-yesterday < AI-generated < journal-origin), then `createdAt` ASC within each source.
 
@@ -351,7 +351,7 @@ Algorithmic complexity doesn't improve — both are `O(n log n)`. The optimizati
 
 > "What if I want to sort by *user-defined* priority (the user can drag categories around)?"
 
-A senior answer: replace the static `PRIORITY` constant with a `Map<source, number>` parameter. Pass it in. The sort algorithm doesn't change; only the comparator's lookup does. This is the same pattern buffr uses for [TYPE_META in typeMeta.ts](../src/services/todos/typeMeta.ts) — type ordering is a constant today, but the data structure is already a Map so swapping in user-configurable order is a one-file change.
+A senior answer: replace the static `PRIORITY` constant with a `Map<source, number>` parameter. Pass it in. The sort algorithm doesn't change; only the comparator's lookup does. This is the same pattern loopd uses for [TYPE_META in typeMeta.ts](../src/services/todos/typeMeta.ts) — type ordering is a constant today, but the data structure is already a Map so swapping in user-configurable order is a one-file change.
 
 ### Execution trace
 
@@ -377,7 +377,7 @@ Step 3 — undecorate:
 
 ## 5. String manipulation — line-state-machine markdown parser
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 [`RenderedMarkdown` in app/todos/[id].tsx](../app/todos/[id].tsx#L226-L284) — the expansion view renders a markdown subset (headings, key-value lines, bullet lists, paragraphs) into React. The current implementation is a hand-rolled state machine that walks the lines once and groups consecutive bullets / paragraphs together.
 
@@ -479,7 +479,7 @@ A markdown subset is a *line-level grammar*. Each line's classification depends 
 
 > "What if I need to support nested bullets (`  - sub-bullet` indented under `- bullet`)?"
 
-A senior answer: nested bullets break the single-pass-flat model. You need a stack — push when indent increases, pop when it decreases — to track current depth. The block shape becomes recursive: `{ kind: 'bullets', items: (string | NestedBullets)[] }`. You can still do it in one pass with the right data structure; the algorithm is still O(n), but the state machine has more states (depth tracking). For buffr's expansion output, I deliberately ship without nesting because the LLM's output schema doesn't include hierarchical bullets — adding parser support before there's a producer is premature.
+A senior answer: nested bullets break the single-pass-flat model. You need a stack — push when indent increases, pop when it decreases — to track current depth. The block shape becomes recursive: `{ kind: 'bullets', items: (string | NestedBullets)[] }`. You can still do it in one pass with the right data structure; the algorithm is still O(n), but the state machine has more states (depth tracking). For loopd's expansion output, I deliberately ship without nesting because the LLM's output schema doesn't include hierarchical bullets — adding parser support before there's a producer is premature.
 
 ### Execution trace
 
@@ -517,7 +517,7 @@ output: [
 
 ## 6. Queue / stack — rate-limited serial drain with retry
 
-### Where this appears in buffr
+### Where this appears in loopd
 
 Two parts. (1) [notion/api.ts:7-16](../src/services/notion/api.ts#L7-L16) — module-level rate limiter enforces ≥350ms between every Notion call, regardless of which feature is calling. (2) [database.ts:121-129](../src/services/database.ts#L121-L129) — `sync_deletions` table acts as a FIFO queue of pending Notion archive operations, drained in order on the next sync.
 
@@ -600,7 +600,7 @@ Three intertwined concerns: **serialization** (one call at a time), **rate gatin
 
 > "How would you support multiple concurrent workers, each rate-limited independently?"
 
-A senior answer: replace the single `lastCallAt` with one per worker. If the rate limit is *per-account* (not per-worker), share a single `lastCallAt` across all workers — but then you've effectively re-serialized them and gained nothing. The honest pattern is a **token bucket**: a shared bucket holds N tokens; each call consumes one; tokens refill at the rate limit. Multiple workers compete for tokens. This decouples concurrency from rate limiting and lets you tune them independently. Buffr doesn't need this today (single client per device), but if I built a server-side sync gateway for the multi-user case, I'd reach for token-bucket-via-Redis.
+A senior answer: replace the single `lastCallAt` with one per worker. If the rate limit is *per-account* (not per-worker), share a single `lastCallAt` across all workers — but then you've effectively re-serialized them and gained nothing. The honest pattern is a **token bucket**: a shared bucket holds N tokens; each call consumes one; tokens refill at the rate limit. Multiple workers compete for tokens. This decouples concurrency from rate limiting and lets you tune them independently. Loopd doesn't need this today (single client per device), but if I built a server-side sync gateway for the multi-user case, I'd reach for token-bucket-via-Redis.
 
 ### Execution trace
 
@@ -632,7 +632,7 @@ return { succeeded: 3, failed: 0 }
 
 ## 7. Complexity cheat sheet
 
-Per-operation Big-O for everything significant in buffr. *N* = total entries, *T* = total todos across all entries, *M* = total `todo_meta` rows (= *T*).
+Per-operation Big-O for everything significant in loopd. *N* = total entries, *T* = total todos across all entries, *M* = total `todo_meta` rows (= *T*).
 
 | Operation | Time | Space | At scale | Notes |
 |---|---|---|---|---|
@@ -644,7 +644,7 @@ Per-operation Big-O for everything significant in buffr. *N* = total entries, *T
 | `moveTodoUp/Down()` | O(T) on first reorder, O(1) thereafter | O(1) | OK to ~1000 todos | First call runs `ensureAllTodoPositions` (O(T) bulk write) |
 | `scanTodosFromText(text, existing)` | O(L + E) | O(L + E) | Fine | L = lines in text; E = existing todos for entry |
 | `reconcileTodoMetaForEntry(entry)` | O(T_e + M_e) | O(M_e) | Fine | T_e, M_e = per-entry counts (single digits typical) |
-| `pullTodos(notion)` | O(P + T) where P = Notion pages | O(P) | Fine; bounded by Notion API page size | Builds `byBuffrId` Map first |
+| `pullTodos(notion)` | O(P + T) where P = Notion pages | O(P) | Fine; bounded by Notion API page size | Builds `byLoopdId` Map first |
 | `pushTodos(notion, dirty)` | O(d × 350ms) where d = dirty rows | O(d) | Bounded by rate limit | One Notion API call per dirty row, serialized |
 | `classifyTodo(text)` | 1 LLM call (~1-3s) | O(1) | Cost-bounded by `MAX_CONCURRENT=3` (expand) and ad-hoc (classify) | Module-level in-flight counter |
 | `expandTodo(id, text)` | 1-2 LLM calls (~5-15s) | O(1) | Bounded by `MAX_CONCURRENT=3` | Auto-retry once on malformed JSON |

@@ -1,14 +1,14 @@
-# buffr — Feature Spec: Today, Habits Expansion, and Threads
+# loopd — Feature Spec: Today, Habits Expansion, and Threads
 
 Last updated: 2026-04-26 · revision 1
 
-A continuity feature for buffr. Three pieces working together:
+A continuity feature for loopd. Three pieces working together:
 
 1. **Habits expansion** — recurrence rules (daily / weekly / M/W/F / etc.), full CRUD, cadence-aware streak tracking
 2. **Threads** — `#tag` system for project attribution. Real `threads` table with autocomplete in journal and todos.
 3. **Today view** — new bottom-nav tab combining habits-due-today + thread cards sorted by staleness + recent captures
 
-This spec extends [`spec.md`](./spec.md) and the [thinking-modes spec](./buffr-thinking-modes-spec.md). It assumes familiarity with the existing habit tracker (Section 6.4 of spec.md), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of buffr.
+This spec extends [`spec.md`](./spec.md) and the [thinking-modes spec](./loopd-thinking-modes-spec.md). It assumes familiarity with the existing habit tracker (Section 6.4 of spec.md), data model (Section 5), Notion sync (Section 6.8), and architectural principles (Section 10) of loopd.
 
 ---
 
@@ -16,7 +16,7 @@ This spec extends [`spec.md`](./spec.md) and the [thinking-modes spec](./buffr-t
 
 The user-stated friction: *"I want something where I can see what I've worked on previous days so I can focus on other tasks without leaving them stale."*
 
-That isn't a scheduling problem. It's a **continuity problem**. The user works across multiple personal projects (buffr, contrl, dpth, buffr) and the failure mode is: a project goes a few days without attention and starts feeling stale, by which point the cost of context-switching back into it is higher than picking up something new. The result is project drift — capture stays high (drops, todos, ideas keep flowing into the journal), but follow-through fragments.
+That isn't a scheduling problem. It's a **continuity problem**. The user works across multiple personal projects (loopd, contrl, dpth, loopd) and the failure mode is: a project goes a few days without attention and starts feeling stale, by which point the cost of context-switching back into it is higher than picking up something new. The result is project drift — capture stays high (drops, todos, ideas keep flowing into the journal), but follow-through fragments.
 
 This feature is designed to solve that single friction. It doesn't try to be a calendar, a planner, or a time-blocked daily view. It's a **continuity dashboard** — a today-tab that surfaces what's been getting attention, what's going stale, and what anchor routines are due, so neglect becomes visible instead of invisible.
 
@@ -87,7 +87,7 @@ Mirrors the lightweight metadata pattern (similar to `habits`).
 | Column | Type | Notes |
 |---|---|---|
 | `id` | TEXT PK | uuid |
-| `name` | TEXT | display name (e.g. "buffr", "contrl") |
+| `name` | TEXT | display name (e.g. "loopd", "contrl") |
 | `slug` | TEXT UNIQUE | lowercased, hyphenated. **Source of truth for tag matching** (see § 3.2). |
 | `icon` | TEXT | optional emoji or lucide icon |
 | `color` | TEXT | optional hex; defaults from a palette |
@@ -116,7 +116,7 @@ One row per `#tag` occurrence. Source-of-truth for "where is this thread mention
 | `entry_date` | TEXT | denormalized for query speed |
 | `todo_id` | TEXT | nullable — set when mention is in a `[]` todo line |
 | `source_line` | INTEGER | line index in entry text where the mention occurred |
-| `tag_text` | TEXT | the literal text of the tag as typed (e.g. "buffr", "Buffr"); preserved for analytics |
+| `tag_text` | TEXT | the literal text of the tag as typed (e.g. "loopd", "Loopd"); preserved for analytics |
 | `created_at` | TEXT | ISO timestamp |
 
 **Constraint:** `(entry_id IS NOT NULL) OR (todo_id IS NOT NULL)` — every mention must have a source.
@@ -127,7 +127,7 @@ One row per `#tag` occurrence. Source-of-truth for "where is this thread mention
 - `thread_mentions(todo_id)` — same for todo mentions
 - `thread_mentions(entry_date)` — used for "entries this week" stat
 
-A single entry tagging `#buffr` and `#contrl` produces two rows. A single entry tagging `#buffr` twice produces one row (de-duped at scan time within the same entry).
+A single entry tagging `#loopd` and `#contrl` produces two rows. A single entry tagging `#loopd` twice produces one row (de-duped at scan time within the same entry).
 
 ### 2.4 Updates to existing tables
 
@@ -215,9 +215,9 @@ export interface ThreadCard {
 
 **Match rules:**
 - The pattern is `#[a-zA-Z][a-zA-Z0-9-]*` — must start with a letter, alphanumerics + hyphens after.
-- Case-insensitive matching: `#Buffr`, `#buffr`, `#BUFFR` all resolve to the same thread (slug `buffr`).
-- Tags are detected anywhere on a line, including inline mid-sentence: *"spent the morning on #buffr then went to lunch"* registers a `buffr` mention.
-- Tags inside `[]` todo lines are detected too: `[] fix the auth bug #buffr` registers a `buffr` mention attributed to the todo.
+- Case-insensitive matching: `#Loopd`, `#loopd`, `#LOOPD` all resolve to the same thread (slug `loopd`).
+- Tags are detected anywhere on a line, including inline mid-sentence: *"spent the morning on #loopd then went to lunch"* registers a `loopd` mention.
+- Tags inside `[]` todo lines are detected too: `[] fix the auth bug #loopd` registers a `loopd` mention attributed to the todo.
 - Tags inside code spans (backticks) or code blocks (triple-backticks) are **not** matched. Protects prose like `` `git #branch` ``.
 - A tag the scanner doesn't recognize (no matching thread slug) is **not** registered as a mention. The text remains in prose; no error, no banner. The user creates the thread via the autocomplete (§ 5) and existing entries get re-scanned on next edit. (For a one-time backscan of historical mentions, see § 8.)
 
@@ -225,15 +225,15 @@ export interface ThreadCard {
 
 The scanner lowercases the matched tag text and looks it up in `threads.slug`. Match → register mention. No match → ignore.
 
-This means `#buffr` and `#Buffr` always hit the same thread — there is no path to two threads with the same slug. The CRUD page (§ 6.2) enforces slug uniqueness on create.
+This means `#loopd` and `#Loopd` always hit the same thread — there is no path to two threads with the same slug. The CRUD page (§ 6.2) enforces slug uniqueness on create.
 
-No aliases at v1. If you want `#buffr` and `#journal-app` to point to the same thread, you create one thread and the other isn't matched — there's no merging of slugs.
+No aliases at v1. If you want `#loopd` and `#journal-app` to point to the same thread, you create one thread and the other isn't matched — there's no merging of slugs.
 
 ### 3.3 Two-pass matching for entry mentions
 
 Same idiom as todos and nutrition (Architectural Principle 7):
 
-1. **Pass 1 — exact reconcile:** for the current entry, find existing `thread_mentions` rows whose `(thread_id, source_line)` matches the parsed mentions. Keep them. Update `tag_text` if it changed (e.g. user changed `#Buffr` to `#buffr` — same thread, same line, just preserve the literal).
+1. **Pass 1 — exact reconcile:** for the current entry, find existing `thread_mentions` rows whose `(thread_id, source_line)` matches the parsed mentions. Keep them. Update `tag_text` if it changed (e.g. user changed `#Loopd` to `#loopd` — same thread, same line, just preserve the literal).
 2. **Pass 2 — line-index fallback:** mentions whose source_line shifted (insert a line above) get matched by `(thread_id, tag_text)` proximity within ±3 lines.
 3. **Unmatched existing rows** for this entry are deleted. **Unmatched parsed mentions** are inserted as new rows.
 
@@ -458,7 +458,7 @@ ANCHORS
 ─────────────────────────────────────
 THREADS                            manage →
 ─────────────────────────────────────
-[buffr · fresh · 4 entries · 9 open · 3 expanded]
+[loopd · fresh · 4 entries · 9 open · 3 expanded]
   ⊕ going with notion-only sync, dropping supabase plan
   ◊ vlog mode that auto-detects format from clip count
   ◊ build a thought tracker view next to nutrition
@@ -471,7 +471,7 @@ THREADS                            manage →
   ◊ curriculum parser handles nested codeblocks better
   going stale — pick one open item or archive the thread
 ─────────────────────────────────────
-[buffr · 12d ago · COLD]
+[loopd · 12d ago · COLD]
   cold — archive to clean up the view, or revive with a journal mention
 ─────────────────────────────────────
 RECENT CAPTURES                    all todos →
@@ -585,11 +585,11 @@ Source-of-truth rules:
 | Field | Source | Pull behavior |
 |---|---|---|
 | `name` | Bidirectional | Standard merge |
-| `slug` | Local | Slug edits in Notion are **rejected** (slug changes can break existing mentions; force user to do this from the buffr CRUD which handles re-scanning). Log a warning. |
+| `slug` | Local | Slug edits in Notion are **rejected** (slug changes can break existing mentions; force user to do this from the loopd CRUD which handles re-scanning). Log a warning. |
 | `icon`, `color`, `target_cadence_days`, `archived`, `pinned` | Bidirectional | Standard merge |
 | `created_at` | Local | Never overwritten |
 
-Mentions (`thread_mentions`) are **not synced** to Notion. They're a derived index over entries and todos; the entries and todos already sync. If you wanted to query "what was tagged buffr" in Notion, you'd filter the Entries and Todos DBs by text containing `#buffr`. Not perfect, but avoids syncing 100s of junction rows.
+Mentions (`thread_mentions`) are **not synced** to Notion. They're a derived index over entries and todos; the entries and todos already sync. If you wanted to query "what was tagged loopd" in Notion, you'd filter the Entries and Todos DBs by text containing `#loopd`. Not perfect, but avoids syncing 100s of junction rows.
 
 ### 9.3 New row from Notion (created in Notion, no local match)
 
@@ -717,8 +717,8 @@ Even with all three cuts, ~30h is the floor — this is a sizable feature with t
 - **Drag-and-drop** of todos onto times. Out of scope.
 - **Calendar view** — no week or month grid. Out of scope.
 - **Project-level objects beyond threads** — no roadmaps, no milestones, no deadlines per thread. v2 candidate.
-- **Tag aliases** — `#buffr` and `#journal-app` cannot point to the same thread without a manual merge. v2 candidate.
-- **Tag co-occurrence analytics** — "show me all entries tagging both #buffr and #idea". v2 candidate.
+- **Tag aliases** — `#loopd` and `#journal-app` cannot point to the same thread without a manual merge. v2 candidate.
+- **Tag co-occurrence analytics** — "show me all entries tagging both #loopd and #idea". v2 candidate.
 - **Collaborative threads** — single-user only.
 - **Habit reminders / push notifications** — out of scope.
 - **Habit data on dashboards beyond Today and the existing 28-day heatmap** — v2.
@@ -731,6 +731,6 @@ Even with all three cuts, ~30h is the floor — this is a sizable feature with t
 
 - **Default staleness thresholds** (1/3/7 days for fresh/aging/stale, cold beyond 7) — first-pass guess. Worth revisiting after a week of dogfooding.
 - **Habit tile grid layout** — 2-column with overflow scroll, or single horizontal scrollrow, or other? § 7.2 leaves this for build time.
-- **Slug edit re-scanning behavior** — when user renames thread `buffr` → `buffr-app`, the existing mentions reference the old slug in `tag_text`. Two options: (a) bulk-update `tag_text` and force re-scan of all entries containing the old text, or (b) leave the mentions and let the next normal scan reconcile. Default: (b), simpler. Confirm.
+- **Slug edit re-scanning behavior** — when user renames thread `loopd` → `loopd-app`, the existing mentions reference the old slug in `tag_text`. Two options: (a) bulk-update `tag_text` and force re-scan of all entries containing the old text, or (b) leave the mentions and let the next normal scan reconcile. Default: (b), simpler. Confirm.
 - **n_per_week cadence semantics for streaks** — if a habit is "3x per week" and you do it Mon/Wed/Fri, streak = 3? Or streak = 1 (one full week completed)? Default: streak counts completed-weeks where target was hit.
-- **Tag visibility in rendered prose** — does `#buffr` render as a clickable inline pill in the read-only journal view, or stays plain text? v1 assumes plain text in editor, plain text in read view. v1.1 candidate: render as a clickable pill in the read view.
+- **Tag visibility in rendered prose** — does `#loopd` render as a clickable inline pill in the read-only journal view, or stays plain text? v1 assumes plain text in editor, plain text in read view. v1.1 candidate: render as a clickable pill in the read view.

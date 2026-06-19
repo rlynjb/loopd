@@ -12,7 +12,7 @@ export type CaptionInput = {
 };
 
 // Four-variant tonal caption set. Same day, same content, different voice
-// per spec docs/buffr-caption-variants-plan.md. The user picks which
+// per spec docs/loopd-caption-variants-plan.md. The user picks which
 // variant to publish via chips in the editor TEXT tab.
 export type CaptionVariantKey = 'clean' | 'smoother' | 'reflective' | 'punchy';
 

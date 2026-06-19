@@ -553,7 +553,7 @@ function CloudSyncTab() {
 
   const refreshMeta = useCallback(async () => {
     try { setMeta(await getAllSyncMeta()); } catch (err) {
-      console.warn('[buffr] sync meta load failed:', err);
+      console.warn('[loopd] sync meta load failed:', err);
     }
   }, []);
 
@@ -589,7 +589,7 @@ function CloudSyncTab() {
     setDevBusy(true);
     try {
       const result = await fn();
-      console.log(`[buffr sync] dev ${label}:`, result);
+      console.log(`[loopd sync] dev ${label}:`, result);
       Alert.alert(label, JSON.stringify(result, null, 2).slice(0, 600));
       await refreshMeta();
     } catch (err) {

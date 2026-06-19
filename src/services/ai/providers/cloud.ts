@@ -74,7 +74,7 @@ export async function orchestrateCloud<T>(p: OrchestratorParams<T>): Promise<Orc
     return settle({ result: await tryPrimary(), servedBy: p.primary });
   } catch (err) {
     if (fallbackHasKey && isTransient(err)) {
-      console.warn(`[buffr ai] cloud primary (${p.primary}) failed, trying fallback (${fallback}):`, err instanceof Error ? err.message : err);
+      console.warn(`[loopd ai] cloud primary (${p.primary}) failed, trying fallback (${fallback}):`, err instanceof Error ? err.message : err);
       return settle({ result: await tryFallback(), servedBy: fallback });
     }
     throw err;

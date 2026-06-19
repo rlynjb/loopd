@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "buffr",
-    "slug": "buffr",
+    "name": "loopd",
+    "slug": "loopd",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "scheme": "buffr",
+    "scheme": "loopd",
     "platforms": ["android"],
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -25,7 +25,7 @@
       },
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [],
-      "package": "com.anonymous.buffr"
+      "package": "com.anonymous.loopd"
     },
     "plugins": [
       "expo-router",

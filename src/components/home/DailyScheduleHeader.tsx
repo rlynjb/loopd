@@ -1,5 +1,5 @@
 // Header for the Daily Schedule weekly grid.
-// See docs/buffr-daily-schedule-grid-spec.md §2.3.
+// See docs/loopd-daily-schedule-grid-spec.md §2.3.
 //
 // 100px label spacer + 7 day-column headers (letter + day-of-month).
 // Today's column gets a cream-pill day-of-month badge. Locked to the

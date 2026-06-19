@@ -1,6 +1,6 @@
-# buffr — Daily Schedule Grid Implementation Plan
+# loopd — Daily Schedule Grid Implementation Plan
 
-Working plan for executing [`buffr-daily-schedule-grid-spec.md`](./buffr-daily-schedule-grid-spec.md). The spec covers *what* and *why*; this doc covers *in what order, with what checkpoints, and what to confirm before starting.*
+Working plan for executing [`loopd-daily-schedule-grid-spec.md`](./loopd-daily-schedule-grid-spec.md). The spec covers *what* and *why*; this doc covers *in what order, with what checkpoints, and what to confirm before starting.*
 
 The spec is small (~12–17h total) because it's a pure view-layer redesign — same `habits` table, same cadence engine, same streak math. No data migration. The plan reflects that: 8 milestones, mostly thin, with two checkpoints and a list of confirm-first decisions.
 
@@ -16,7 +16,7 @@ The current dashboard's `DAILY SCHEDULE` renders habits AND threads in one combi
 
 - **(a) Keep threads' 14-cell strip below the new habits grid** — two visually distinct sections under one header. Easiest ship; mixed visual language.
 - **(b) Threads get the same weekly grid treatment** — requires extending the cadence engine for threads (real work).
-- **(c) Threads move out of the dashboard entirely** — cleaner, but loses the at-a-glance "did I touch buffr today" signal.
+- **(c) Threads move out of the dashboard entirely** — cleaner, but loses the at-a-glance "did I touch loopd today" signal.
 
 **Recommendation: (a) for v1.** Ship the habits redesign without expanding scope. (b) is a follow-up; (c) is a separate product call.
 

@@ -4,10 +4,10 @@ description: Bidirectional Notion sync — two-table approach (Daily Log + Entri
 type: project
 ---
 
-Notion sync is bidirectional (Notion ↔ buffr) using **two related Notion tables**:
+Notion sync is bidirectional (Notion ↔ loopd) using **two related Notion tables**:
 
 **Table 1: Daily Log** — one row per day, habit checkbox columns, daily summary. User's existing habit tracker format.
-**Table 2: Entries** — multiple rows per day, maps to buffr captures (clip/journal/habit).
+**Table 2: Entries** — multiple rows per day, maps to loopd captures (clip/journal/habit).
 
 Daily Log is auto-populated from Entries data on sync. Entries table is the primary sync target.
 

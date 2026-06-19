@@ -19,7 +19,7 @@ import {
 } from '../../types/ai';
 
 // 4-variant tonal caption generator for the vlog editor. Implements
-// docs/buffr-caption-variants-plan.md §2 (the system prompt converted from
+// docs/loopd-caption-variants-plan.md §2 (the system prompt converted from
 // the user's tonal-style sample). Single LLM call emits four variants of
 // the same day in different voices.
 
@@ -86,7 +86,7 @@ UNIVERSAL RULES (apply to all four variants):
 - No questions, no exclamations.
 - No motivational platitudes ("trust the process", "embrace the journey").
 - Use specific nouns from the raw log when natural — "technical concepts",
-  "the morning workout", "the buffr codebase". Don't invent details.
+  "the morning workout", "the loopd codebase". Don't invent details.
 - All four variants describe the SAME day. Don't shift the topic between
   voices. Only the surface changes.
 
@@ -221,7 +221,7 @@ async function runCaptionLLM(
       const text = await callGemmaLocal('caption', system, user, MAX_TOKENS, undefined, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
-      console.warn('[buffr ai] caption gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
+      console.warn('[loopd ai] caption gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -276,7 +276,7 @@ export async function generateCaption(
     return { output };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn('[buffr ai] Caption error:', msg);
+    console.warn('[loopd ai] Caption error:', msg);
     return { output: null, error: msg };
   }
 }

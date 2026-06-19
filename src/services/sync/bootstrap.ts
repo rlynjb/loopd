@@ -8,7 +8,7 @@
 // SecureStore-gated by `cloud_initial_push_done` so it only runs once per
 // install. After the flag is set, normal incremental sync takes over.
 //
-// See docs/buffr-cloud-sync-spec.md §5.3.
+// See docs/loopd-cloud-sync-spec.md §5.3.
 import * as SecureStore from 'expo-secure-store';
 import { getDatabase } from '../database';
 import { getSupabase, isCloudConfigured, PHASE_A_USER_ID } from './client';
@@ -50,7 +50,7 @@ async function cloudHasData(): Promise<boolean> {
     .eq('user_id', PHASE_A_USER_ID)
     .is('deleted_at', null);
   if (error) {
-    console.warn('[buffr sync] bootstrap cloudHasData check failed:', error.message);
+    console.warn('[loopd sync] bootstrap cloudHasData check failed:', error.message);
     return false;
   }
   return (count ?? 0) > 0;
@@ -88,7 +88,7 @@ export async function bootstrapCloudSync(): Promise<BootstrapDecision> {
   // Both populated. Solo Phase A doesn't need a UI prompt — log and default
   // to initial push (assumes local is the trusted source). Phase B should
   // expose a "pick which side wins" dialog before any destructive action.
-  console.warn('[buffr sync] bootstrap: both local AND cloud have data. Defaulting to initial push (local is canonical).');
+  console.warn('[loopd sync] bootstrap: both local AND cloud have data. Defaulting to initial push (local is canonical).');
   const results = await pushAll();
   const pushed = results.reduce((sum, r) => sum + r.succeeded, 0);
   await markBootstrapDone();

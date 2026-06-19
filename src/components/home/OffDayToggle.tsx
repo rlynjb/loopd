@@ -31,7 +31,7 @@ export function OffDayToggle({
     try {
       await SecureStore.setItemAsync(STORAGE_KEY, next);
     } catch (err) {
-      console.warn('[buffr] off-day mode persist failed:', err);
+      console.warn('[loopd] off-day mode persist failed:', err);
     }
   }, [mode, onChange]);
 

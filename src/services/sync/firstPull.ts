@@ -7,7 +7,7 @@
 // don't need a separate code path — just guarantee the "from scratch"
 // starting point.
 //
-// See docs/buffr-cloud-sync-spec.md §4.2.
+// See docs/loopd-cloud-sync-spec.md §4.2.
 import { getDatabase } from '../database';
 import { pullAll } from './orchestrator';
 import type { PullResult } from './pull';

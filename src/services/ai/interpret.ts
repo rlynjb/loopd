@@ -138,7 +138,7 @@ async function runInterpretLLM(
       const text = await callGemmaLocal('interpret', SYSTEM_PROMPT, fullUser, MAX_TOKENS, TEMPERATURE, onProgress);
       return { text, model: GEMMA_LOCAL_MODEL };
     } catch (err) {
-      console.warn('[buffr ai] interpret gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
+      console.warn('[loopd ai] interpret gemma local failed, falling back to cloud:', err instanceof Error ? err.message : err);
     }
   }
 

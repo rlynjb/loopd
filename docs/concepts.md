@@ -1,4 +1,4 @@
-# buffr — Concepts you can learn from this codebase
+# loopd — Concepts you can learn from this codebase
 
 A self-study guide that uses your own code as the curriculum. Every concept points at a specific file/line so you can see the pattern in context, with a transferable rule at the end so you can use it in other stacks.
 
@@ -54,11 +54,11 @@ Categories follow the four-quadrant framing:
 
 ### 1. Single source of truth
 
-**What.** Every piece of derivable state has exactly one writer; everything else reads or syncs from it. In buffr, two layered "sources" coexist: SQLite is the source of truth for app state; *prose inside `entries.text`* is the source of truth for derived drops (todos, nutrition).
+**What.** Every piece of derivable state has exactly one writer; everything else reads or syncs from it. In loopd, two layered "sources" coexist: SQLite is the source of truth for app state; *prose inside `entries.text`* is the source of truth for derived drops (todos, nutrition).
 
 **Where.** [CLAUDE.md](../CLAUDE.md) Data Rules + Autosave Rules sections codify both. The shape shows up in [src/services/todos/scanTodos.ts:139-181](../src/services/todos/scanTodos.ts#L139-L181) (`rewriteTodoLine` writes back into prose so prose stays canonical when the dashboard mutates a todo).
 
-**Why.** Two writers + one shared field = drift. Buffr had real data-loss bugs from races between focus cleanup and idle timers (CLAUDE.md called these out post-mortem). Picking a canonical source ends the argument: dashboard toggles round-trip into prose, never into a separate "todos table" of record.
+**Why.** Two writers + one shared field = drift. Loopd had real data-loss bugs from races between focus cleanup and idle timers (CLAUDE.md called these out post-mortem). Picking a canonical source ends the argument: dashboard toggles round-trip into prose, never into a separate "todos table" of record.
 
 **Rule (Universal).** Pick one canonical writer per concept. Every other surface is a cache or a mirror. When state diverges, the canonical source wins.
 
@@ -90,7 +90,7 @@ Categories follow the four-quadrant framing:
 
 **Rule.** Files should split by *responsibility*, not by *layer*. "Parsers in one folder, mutations in another" is a smell — keep the cohesive parts of one feature together.
 
-**Go deeper.** Read `feature-folders` discussions; compare buffr's `services/todos/*` to a "model/controller/repository" split for the same logic.
+**Go deeper.** Read `feature-folders` discussions; compare loopd's `services/todos/*` to a "model/controller/repository" split for the same logic.
 
 ---
 
@@ -440,7 +440,7 @@ Categories follow the four-quadrant framing:
 
 **Where.** [src/services/notion/todosMapper.ts](../src/services/notion/todosMapper.ts) — `detectMissingTodoProperties()` (line ~100) inspects schema; `todoToNotionProperties()` accepts an `availableProperties: Set<string>` parameter and `has(name)` guards each write.
 
-**Why.** When buffr added the five Phase-D properties (Type / Expanded / Model / Confidence / User Overridden), existing users had Notion DBs without them. Sync still works — the new fields are simply skipped, and `result.debug` lists them so the UI can prompt for the schema upgrade.
+**Why.** When loopd added the five Phase-D properties (Type / Expanded / Model / Confidence / User Overridden), existing users had Notion DBs without them. Sync still works — the new fields are simply skipped, and `result.debug` lists them so the UI can prompt for the schema upgrade.
 
 **Rule (Code).** When you depend on an external schema you don't fully control, design for the version skew. "Missing column" should be a non-fatal degraded mode, not a crash.
 
@@ -450,7 +450,7 @@ Categories follow the four-quadrant framing:
 
 ### 29. Last-edit-wins with field-level merge rules
 
-**What.** When two systems can both edit the same record (buffr ↔ Notion), conflict resolution can't be a single rule. Each field gets its own policy: prose-canonical (Notion edits dropped), bidirectional (last-edited-time wins), pull-down (Notion is read-canonical when local is empty), etc.
+**What.** When two systems can both edit the same record (loopd ↔ Notion), conflict resolution can't be a single rule. Each field gets its own policy: prose-canonical (Notion edits dropped), bidirectional (last-edited-time wins), pull-down (Notion is read-canonical when local is empty), etc.
 
 **Where.** [src/services/notion/sync.ts](../src/services/notion/sync.ts) `pullTodos` — the matched-row merge has explicit per-field rules. `text` is prose-canonical (skipped). `done` and `done_at` use last-edited-time. `type` pull-down sets `userOverriddenType=1`. `expanded_md` only pulls when local is empty.
 
@@ -472,7 +472,7 @@ Categories follow the four-quadrant framing:
 
 **Rule.** A tiny DSL embedded in a richer surface can give you structured data without forcing the user into a structured editor. The trick is making the markers feel like punctuation, not syntax.
 
-**Go deeper.** Look at Roam Research's `[[backlinks]]`, Obsidian's `#tags`, Notion's `/slash commands`. Each is a different point on the prose↔structure spectrum. Read [buffr-drops-summary.md](../buffr-drops-summary.md) — the user-facing pitch for this feature.
+**Go deeper.** Look at Roam Research's `[[backlinks]]`, Obsidian's `#tags`, Notion's `/slash commands`. Each is a different point on the prose↔structure spectrum. Read [loopd-drops-summary.md](../loopd-drops-summary.md) — the user-facing pitch for this feature.
 
 ---
 
@@ -544,11 +544,11 @@ You're learning *how to handle the messy real world*. Two systems that share sta
 
 ---
 
-## What buffr doesn't yet teach you
+## What loopd doesn't yet teach you
 
 Concepts that are *partially* implemented or deliberately deferred — completing them in your own learning would deepen the picture:
 
-- **Tool use / function calling.** buffr uses LLMs for classification and structured generation, but never lets the LLM call back into the app's APIs. Building a feature where the LLM invokes a tool ("schedule this todo for next Monday") would teach you the agentic pattern at the next level.
+- **Tool use / function calling.** loopd uses LLMs for classification and structured generation, but never lets the LLM call back into the app's APIs. Building a feature where the LLM invokes a tool ("schedule this todo for next Monday") would teach you the agentic pattern at the next level.
 - **Streaming responses.** All LLM calls are awaited as full responses. Streaming would teach you how to handle partial JSON, surface progress in the UI, and cancel mid-flight.
 - **Evaluation harnesses.** There's no automated eval suite for the heuristic classifier or the expansion outputs. Building a fixture-based evaluator with a "golden dataset" would teach you how to track LLM regressions.
 - **Multi-agent orchestration.** Each LLM call is a single round trip. A "research → outline → draft → review" multi-step agent flow would teach you state machines and `ReAct` loops.

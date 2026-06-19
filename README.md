@@ -1,4 +1,4 @@
-# buffr
+# loopd
 
 A daily vlogging app that combines a story journal, habit tracking, and a lightweight video editor. Built with React Native + Expo.
 
@@ -209,7 +209,7 @@ rebuilt the release APK in the previous step, reinstall the dev build
 once with `npm run android:device` to get live reload back.
 
 > **Which APK is on my phone right now?** Dev-client and release-standalone
-> share the same package name (`com.anonymous.buffr`), so installing one
+> share the same package name (`com.anonymous.loopd`), so installing one
 > replaces the other. Pick per session — dev-client for editing code,
 > release for unplugged use.
 
@@ -264,11 +264,11 @@ eas build:run --platform android
 ```
 
 **Option B:** From browser — open on your phone:
-Go to **expo.dev** → sign in → your project **buffr** → **Builds** → latest build → **Install**
+Go to **expo.dev** → sign in → your project **loopd** → **Builds** → latest build → **Install**
 
 > If you get `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, uninstall the old debug build first:
 > ```bash
-> ~/Library/Android/sdk/platform-tools/adb uninstall com.anonymous.buffr
+> ~/Library/Android/sdk/platform-tools/adb uninstall com.anonymous.loopd
 > ```
 
 5. From now on, push JS changes with (no reinstall needed):
@@ -299,7 +299,7 @@ Transfer to your phone and install over the existing app (no uninstall needed, d
 ## Project Structure
 
 ```
-buffr/
+loopd/
 ├── app/                        # Expo Router screens
 │   ├── _layout.tsx             # Root layout (fonts, DB, auto-sync)
 │   ├── index.tsx               # Home screen

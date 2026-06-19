@@ -33,16 +33,16 @@ function urlFor(variant: ModelVariant): string {
   return variant === 'gemma-3-1b' ? MODEL_URL_1B : MODEL_URL_4B;
 }
 
-// Idempotent — creates the buffr/models/ subdirectory if missing.
+// Idempotent — creates the loopd/models/ subdirectory if missing.
 async function ensureModelsDir(): Promise<void> {
-  const dir = `${FileSystem.documentDirectory}buffr/models/`;
+  const dir = `${FileSystem.documentDirectory}loopd/models/`;
   const info = await FileSystem.getInfoAsync(dir);
   if (!info.exists) {
     await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
   }
 }
 
-// Streams the model file to MODEL_FILENAME in the buffr models dir.
+// Streams the model file to MODEL_FILENAME in the loopd models dir.
 // Reports progress via the optional callback. Releases any cached llama
 // context first since the underlying file may be about to change.
 //
@@ -105,7 +105,7 @@ export async function deleteGemmaModel(): Promise<{ success: boolean }> {
     await resetGemmaLocalSkip();
     return { success: true };
   } catch (err) {
-    console.warn('[buffr ai] deleteGemmaModel failed:', err);
+    console.warn('[loopd ai] deleteGemmaModel failed:', err);
     return { success: false };
   }
 }

@@ -27,39 +27,39 @@ async function ensureDir(dir: Directory): Promise<void> {
   }
 }
 
-export async function saveToDCIMBuffr(sourceUri: string): Promise<void> {
+export async function saveToDCIMLoopd(sourceUri: string): Promise<void> {
   const { status } = await MediaLibrary.requestPermissionsAsync();
   if (status !== 'granted') return;
 
   // Save to gallery — Android places it in DCIM automatically
   await MediaLibrary.createAssetAsync(sourceUri);
-  console.log('[buffr] Saved to gallery');
+  console.log('[loopd] Saved to gallery');
 }
 
 export async function ensureDirectories(date: string): Promise<void> {
   // `media/` is a flat folder of transcoded proxies shared across all dates.
   // Backup = copy this folder; restore = drop it into the new install.
-  await ensureDir(new Directory(Paths.document, 'buffr', 'media'));
-  await ensureDir(new Directory(Paths.document, 'buffr', 'exports', date));
-  await ensureDir(new Directory(Paths.document, 'buffr', 'temp'));
+  await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
+  await ensureDir(new Directory(Paths.document, 'loopd', 'exports', date));
+  await ensureDir(new Directory(Paths.document, 'loopd', 'temp'));
 }
 
 export function getMediaPath(clipId: string): string {
-  return new File(Paths.document, 'buffr', 'media', `${clipId}.mp4`).uri;
+  return new File(Paths.document, 'loopd', 'media', `${clipId}.mp4`).uri;
 }
 
-function getBuffrRootPath(): string {
-  return uriToPath(new Directory(Paths.document, 'buffr').uri);
+function getLoopdRootPath(): string {
+  return uriToPath(new Directory(Paths.document, 'loopd').uri);
 }
 
 // Convert an absolute clip URI inside our sandbox to a path relative to
-// `{docs}/buffr/` so the DB survives a sandbox-path change (reinstall,
+// `{docs}/loopd/` so the DB survives a sandbox-path change (reinstall,
 // different Android user profile). External URIs (content://, other
 // filesystem locations) pass through unchanged.
 export function normalizeClipUriForStorage(uri: string | null | undefined): string | null {
   if (!uri) return null;
   if (uri.startsWith('content://')) return uri;
-  const root = getBuffrRootPath();
+  const root = getLoopdRootPath();
   const path = uriToPath(uri);
   if (path.startsWith(root + '/')) return path.slice(root.length + 1);
   return uri;
@@ -71,14 +71,14 @@ export function resolveClipUri(stored: string | null | undefined): string | null
   if (!stored) return null;
   if (stored.startsWith('content://') || stored.startsWith('file://')) return stored;
   if (stored.startsWith('/')) return `file://${stored}`;
-  // Treat as relative to buffr root.
-  const rootUri = new Directory(Paths.document, 'buffr').uri;
+  // Treat as relative to loopd root.
+  const rootUri = new Directory(Paths.document, 'loopd').uri;
   return `${rootUri}/${stored}`;
 }
 
 /**
  * Transcode a source video (camera recording or library pick) into a
- * 1080p-max H.264 proxy stored in `buffr/media/{clipId}.mp4`. The original
+ * 1080p-max H.264 proxy stored in `loopd/media/{clipId}.mp4`. The original
  * is never copied or moved; only the proxy lives inside app storage.
  *
  * All editor operations (preview, trim, double-buffered playback, export)
@@ -138,7 +138,7 @@ export async function transcodeToProxy(
   try {
     const { FFmpegKit, ReturnCode } = await getFFmpeg();
     const clipId = generateId('m');
-    await ensureDir(new Directory(Paths.document, 'buffr', 'media'));
+    await ensureDir(new Directory(Paths.document, 'loopd', 'media'));
     const outputUri = getMediaPath(clipId);
     const outputPath = uriToPath(outputUri);
 
@@ -157,7 +157,7 @@ export async function transcodeToProxy(
       `-movflags +faststart ` +
       `${outQuoted}`;
 
-    console.log('[buffr] transcode:', cmd);
+    console.log('[loopd] transcode:', cmd);
 
     // Run asynchronously so we can hand back a cancel() before awaiting completion.
     let cancelled = false;
@@ -219,7 +219,7 @@ export async function captureToProxy(
   } catch (e) {
     if (e instanceof TranscodeCancelledError) throw e;
     if (e instanceof DiskFullError) throw e;
-    console.warn('[buffr] Transcode failed, falling back to source URI:', e);
+    console.warn('[loopd] Transcode failed, falling back to source URI:', e);
     // Fallback: caller keeps referencing the original (content:// or file://).
     // Editor/export will still work, just without the proxy benefits.
     return { uri: asset.uri, durationMs };
@@ -259,15 +259,15 @@ export async function pickVideoAssets(
 }
 
 export function getExportPath(date: string): string {
-  return new File(Paths.document, 'buffr', 'exports', date, `vlog-${date}.mp4`).uri;
+  return new File(Paths.document, 'loopd', 'exports', date, `vlog-${date}.mp4`).uri;
 }
 
 export function getTempDir(): string {
-  return new Directory(Paths.document, 'buffr', 'temp').uri;
+  return new Directory(Paths.document, 'loopd', 'temp').uri;
 }
 
 export async function cleanTemp(): Promise<void> {
-  const tempDir = new Directory(Paths.document, 'buffr', 'temp');
+  const tempDir = new Directory(Paths.document, 'loopd', 'temp');
   if (tempDir.exists) {
     await tempDir.delete();
     await tempDir.create();

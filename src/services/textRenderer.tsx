@@ -41,7 +41,7 @@ export function useTextRenderer() {
           });
           resolve(uri.startsWith('file://') ? uri.replace('file://', '') : uri);
         } catch (err) {
-          console.warn('[buffr] Text capture failed:', err);
+          console.warn('[loopd] Text capture failed:', err);
           resolve(null);
         }
       }, 150);

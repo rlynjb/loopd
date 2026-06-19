@@ -134,7 +134,7 @@ export async function cachedCall(
   try {
     await setCached(input, result.modelServed, result.text);
   } catch (err) {
-    console.warn('[buffr ai cache] setCached failed:', err);
+    console.warn('[loopd ai cache] setCached failed:', err);
   }
   return result;
 }
@@ -150,7 +150,7 @@ export async function writeCachedSafe(
   try {
     await setCached(input, modelServed, result);
   } catch (err) {
-    console.warn('[buffr ai cache] setCached failed:', err);
+    console.warn('[loopd ai cache] setCached failed:', err);
   }
 }
 

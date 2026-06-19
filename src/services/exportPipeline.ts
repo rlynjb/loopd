@@ -21,7 +21,7 @@ function getEffectiveSec(clip: ClipItem): number {
 
 async function runCommand(cmd: string, label: string): Promise<void> {
   const { FFmpegKit, ReturnCode } = await getFFmpeg();
-  console.log(`[buffr] FFmpeg ${label}:`, cmd);
+  console.log(`[loopd] FFmpeg ${label}:`, cmd);
   const session = await FFmpegKit.execute(cmd);
   const returnCode = await session.getReturnCode();
   if (!ReturnCode.isSuccess(returnCode)) {
