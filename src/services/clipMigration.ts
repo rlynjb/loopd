@@ -30,6 +30,7 @@ export type MigrationStatus = {
   total: number;
   done: number;
   failed: number;
+  dropped: number;
   currentUri: string | null;
 };
 
@@ -40,6 +41,7 @@ let status: MigrationStatus = {
   total: 0,
   done: 0,
   failed: 0,
+  dropped: 0,
   currentUri: null,
 };
 const listeners = new Set<Listener>();
@@ -99,7 +101,7 @@ export async function countPendingMigrations(): Promise<number> {
 
 export async function migrateOldClips(): Promise<void> {
   if (status.running) return;
-  emit({ running: true, total: 0, done: 0, failed: 0, currentUri: null });
+  emit({ running: true, total: 0, done: 0, failed: 0, dropped: 0, currentUri: null });
 
   try {
     const entries = await getAllEntries();
@@ -120,17 +122,19 @@ export async function migrateOldClips(): Promise<void> {
     }
     console.log(`[clipMigration] ${oldUris.size} clip URI(s) to migrate`);
 
-    // oldUri -> newUri (null if transcode failed or source missing)
-    const uriMap = new Map<string, string | null>();
+    // oldUri -> newUri. Transcode-failed URIs are not added (treated as
+    // keep-and-retry-next-run). Missing-source URIs go into `missingUris`
+    // and get dropped from entries below — the file is gone, no recovery.
+    const uriMap = new Map<string, string>();
+    const missingUris = new Set<string>();
 
     for (const oldUri of oldUris) {
       emit({ currentUri: oldUri });
       try {
         const exists = await fileExists(oldUri);
         if (!exists) {
-          console.warn('[clipMigration] source missing, skipping:', oldUri);
-          uriMap.set(oldUri, null);
-          emit({ failed: status.failed + 1 });
+          missingUris.add(oldUri);
+          emit({ dropped: status.dropped + 1 });
           continue;
         }
         const newUri = await transcodeToProxy(oldUri);
@@ -139,26 +143,37 @@ export async function migrateOldClips(): Promise<void> {
         console.log(`[clipMigration] ${oldUri} -> ${newUri}`);
       } catch (err) {
         console.error('[clipMigration] transcode failed:', oldUri, err);
-        uriMap.set(oldUri, null);
         emit({ failed: status.failed + 1 });
       }
     }
 
-    // Rewrite entries. For each entry, replace clips[i].uri and legacy
-    // clipUri/clipDurationMs if they were successfully migrated.
+    // Rewrite entries. For each entry: replace clips[i].uri with the
+    // migrated proxy URI when available; drop clips whose source was
+    // missing; clear legacy clipUri/clipDurationMs if pointed at a
+    // missing source.
     for (const entry of entries) {
       let mutated = false;
-      const newClips = entry.clips.map(c => {
+      const newClips: typeof entry.clips = [];
+      for (const c of entry.clips) {
+        if (missingUris.has(c.uri)) {
+          mutated = true;
+          continue;
+        }
         const mapped = uriMap.get(c.uri);
         if (mapped) {
           mutated = true;
-          return { ...c, uri: mapped };
+          newClips.push({ ...c, uri: mapped });
+        } else {
+          newClips.push(c);
         }
-        return c;
-      });
+      }
       let newClipUri = entry.clipUri;
       let newClipDurationMs = entry.clipDurationMs;
-      if (entry.clipUri && uriMap.get(entry.clipUri)) {
+      if (entry.clipUri && missingUris.has(entry.clipUri)) {
+        newClipUri = null;
+        newClipDurationMs = null;
+        mutated = true;
+      } else if (entry.clipUri && uriMap.get(entry.clipUri)) {
         newClipUri = uriMap.get(entry.clipUri)!;
         // durationMs stays the same — source content unchanged, just re-encoded.
         mutated = true;
@@ -168,7 +183,7 @@ export async function migrateOldClips(): Promise<void> {
       }
     }
 
-    console.log(`[clipMigration] done: ${status.done} migrated, ${status.failed} failed`);
+    console.log(`[clipMigration] done: ${status.done} migrated, ${status.dropped} dropped, ${status.failed} failed`);
   } finally {
     emit({ running: false, currentUri: null });
   }

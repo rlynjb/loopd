@@ -41,7 +41,7 @@ export function HomeHeader({ dayStarted, dateLabel, onBack }: Props) {
       {migration && (
         <View style={styles.syncStatus}>
           <Text style={[styles.syncStatusText, { color: colors.teal }]}>
-            Optimizing clips… {migration.done + migration.failed}/{migration.total}
+            Optimizing clips… {migration.done + migration.failed + migration.dropped}/{migration.total}
           </Text>
         </View>
       )}
