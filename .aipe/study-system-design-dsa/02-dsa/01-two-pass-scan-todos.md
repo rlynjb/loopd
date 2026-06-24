@@ -439,27 +439,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (teacher-attendance metaphor + frontend bridge to React keyed lists); added Move 3 principle paragraph after the Comparison block. Algorithm/trace structure preserved.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (teacher-with-seating-chart scenario → naming the pattern as strongest-evidence-first matching → bolded "what depends on getting this right" pivot with `todo_meta` 1:1 invariant stakes → before/after bullets walking a `[] call mom` re-edit → one-line summary "strongest evidence first, weakest evidence cleans up the rest").
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced teacher/seating-chart analogy with React's keyed-list reconciler and DevTools-warning behaviour).

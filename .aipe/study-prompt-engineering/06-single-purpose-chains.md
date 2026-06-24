@@ -464,4 +464,3 @@ Without opening files:
 - Which one has a heuristic-first short-circuit, and where does the heuristic live?
 
 ---
-Updated: 2026-05-29 — aligned the heuristic short-circuit rate (`heuristicClassify`) from "~80%" to "~70%" in the interview-defense Q, consistent with the 08-few-shot alignment and the other two guides (unmeasured back-of-envelope estimate).

@@ -520,37 +520,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — branch-site count grew from 4 to 5 (interpret added). 4 callsites × 2 providers became 5 × 2 = 10 code paths.
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + restored missing `## Quick summary` heading + disambiguated `expand.ts` path to `src/services/todos/expand.ts`.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @anthropic-ai/sdk, Raw fetch to OpenAI, LangChain BaseChatModel.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (power-strip-two-outlets metaphor opening / 4 layered sub-sections — config from SecureStore, Claude SDK vs OpenAI raw fetch branch, shared parse-validate-persist tail, why no shared interface — each with frontend bridges and concrete consequences / principle paragraph on thin abstractions over thick differences).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-stoves-one-switch kitchen scenario → thin strategy seam named as the answer → bolded "what depends on getting this right" with getProvider/switch-branch/shared-tail stakes → before/after walking an Anthropic-to-OpenAI swap → one-line "the seam is a switch on the counter — same pan, different burner").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-two-stoves + power-strip analogies with React Native platform-specific module pattern .ios.ts/.android.ts + Stripe PaymentIntent payment_method_types + Vercel adapter). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: trimmed level-5 whole-product anchors (Stripe `PaymentIntent` + Vercel adapter) from both Why care Move 1 and How it works Move 1; the level-1 React Native `.ios.ts`/`.android.ts` primitive already carried the point. Added Move 1 mnemonic diagram (strategy-pattern shape) + 4 Move 2 sub-section diagrams: config surface + key-cache, two-branch side-by-side, shared-tail pipeline, interface-vs-switch comparison. Total: 5 new diagrams.

@@ -117,9 +117,3 @@ Use this lens to walk any system — your own codebase, an interview prompt, a n
 | 16 | Pin replaces reorder             | 1 (Data model)                             |
 
 Read this table as a 30-second orientation: any pattern's job in the bigger system is whichever step(s) it lives in. If you're trying to understand a single screen end-to-end, follow the chain of steps each pattern touches.
-
----
-Updated: 2026-05-10 — refreshed system-map snippet to reflect /vlogs route, Interpret modal, 8 migrations (was 5), and 5 AI chains (was 4).
-
----
-Updated: 2026-05-10 — added the 6-step mental checklist + per-pattern step tagging.

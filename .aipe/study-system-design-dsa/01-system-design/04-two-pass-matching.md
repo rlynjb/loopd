@@ -496,35 +496,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-
----
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a single-function algorithm trace (Pass 1 / Pass 2 decision logic), not a cross-layer composition.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (librarian rebuilding a rearranged shelf scenario → layered identity match pattern named as the answer → bolded "what depends on getting this right" with metadata-preservation stakes → before/after walking a typo-fix on a classified todo → one-line "title first, shelf position second").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced librarian-rebuilding-shelf + librarian-re-cataloguing analogies with React keyed-list reconciler + git rename detection layered identity checks). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already use level-1 primitives: React reconciler + `key` prop + git rename detection). Added Move 1 mnemonic diagram (cascade-of-checks shape) + 4 Move 2 sub-section diagrams: Pass 1 reordering trace, Pass 2 same-line-edit trace, signal-failure comparison table, last-known-scan snapshot. Total: 5 new diagrams.

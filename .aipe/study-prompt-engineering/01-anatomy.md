@@ -433,4 +433,3 @@ Without opening any files, answer:
 Then open the file and verify.
 
 ---
-Updated: 2026-05-29 — codebase-drift fix: removed the phantom `reduce` thinking-mode type. The Move 4 before/after example now uses a clearly-hypothetical new label (`plan`) instead of `reduce` (which collided with the migration name `0008_todo_meta_type_reduce` — that migration *reduces* the set, it doesn't add a type); the interview-defense answer now states the real 5-type set `{todo, idea, knowledge, study, reflect}`.

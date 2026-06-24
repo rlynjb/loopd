@@ -377,4 +377,3 @@ Without opening files:
 - Where in the prompt anatomy do few-shot examples live?
 
 ---
-Updated: 2026-05-29 — aligned the heuristic short-circuit rate (`heuristicClassify`) from "80%" to "~70%" in the two interview-defense references, for consistency with the study-system-design-dsa and study-ai-engineering guides (the figure is an unmeasured back-of-envelope estimate). Left the unrelated "~80% of behaviour set" few-shot-coverage figure unchanged.

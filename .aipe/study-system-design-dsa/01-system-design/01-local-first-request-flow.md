@@ -482,38 +482,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected database.ts line count to 1455.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-
----
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-sqlite, @supabase/supabase-js.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (bank-teller metaphor opening / 4 layered sub-sections with frontend bridges — single funnel, synchronous local write, debounced push, offline reconciliation / principle paragraph on decoupling availability from durability).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (subway scenario → "what decides which app felt usable" pattern naming → bolded "what depends on getting this right" pivot with the autosave-invariant stakes → before/after bullets walking a `[] call mom` keystroke → one-line metaphor "writes to the device, cloud catches up later").
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of How it works to anchor on real software (replaced bank-teller-with-ledger analogy with Git's `commit` / `push` split + Gmail's optimistic send + background SMTP retry).
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from Apple Notes (whole-product) to a `<textarea>` + `setState` vs awaited `fetch()` primitive. Swapped How it works Move 1 from Git + Gmail to `setState`/`fetch()` primitive (kept git as level-4 industry primitive). Added Move 1 mnemonic diagram + 4 Move 2 sub-section mechanism diagrams (funnel shape, synchronous-write timing sequence, debounce timeline, offline reconciliation side-by-side). Total: 5 new diagrams.

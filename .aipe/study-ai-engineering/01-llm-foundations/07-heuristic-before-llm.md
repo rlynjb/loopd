@@ -327,4 +327,3 @@ Without opening files:
 - What's the symptom of heuristic drift?
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set AND the mischaracterized heuristic. The heuristic was shown as a multi-class router (book→errand, decide→decision, etc.) with invented task-management types; it actually emits only `'todo'` (imperative/deadline signals) or `null` (abstain → LLM picks `idea`/`knowledge`/`study`/`reflect`). Reframed Move 1, the Layer 1 heuristic table, the dispatch diagram, and the In-this-codebase pipeline diagram.

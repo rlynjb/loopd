@@ -523,33 +523,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses legacy position-based sort.
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (grocery-list drag-vs-star scenario → subtractive design named as the answer → bolded "what depends on getting this right" with `pinned`/`position`/300-line-deletion stakes → before/after walking a rapid reorder with vs. without `position` → one-line "find the cheapest version of the same affordance and ship that").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced grocery-list-with-star analogies with Gmail starred + GitHub pinned repositories + Slack pinned messages + Linear favorited issues). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from four whole-product references (Gmail starred / GitHub pinned / Slack pinned / Linear favorited) to the level-1 primitive (a `BOOLEAN pinned` column on the table + `ORDER BY pinned DESC, created_at DESC` two-key sort; equivalent JS comparator `arr.sort((a,b) => Number(b.starred) - Number(a.starred) || b.createdAt - a.createdAt)`). Added Move 1 mnemonic diagram (before/after schema + UI swap) + 5 Move 2 sub-section diagrams: migration SQL + row state, sort walkthrough on 8 rows, tap-to-resort flow, removed-vs-added in the same commit, Phase A/B side-by-side. Total: 6 new diagrams.

@@ -210,4 +210,3 @@ The breakpoint: build eval sets the moment a chain ships to production OR is bei
 - What's the gate to ship a prompt change?
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set: regression-case example `book flight as task instead of errand` → `revisit the auth design as study instead of reflect`; "all 7 thinking-mode types" → "all 5 thinking-mode types (`todo, idea, knowledge, study, reflect`)" per migrations 0006-0008.

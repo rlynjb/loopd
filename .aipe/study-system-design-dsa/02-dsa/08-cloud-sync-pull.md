@@ -427,33 +427,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (newspaper-delivery metaphor + frontend bridge to React Query pagination + staleTime) and Move 3 principle after the Comparison block.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (shared-journal-drop-box-with-library-clock scenario → naming the cursor-based-pull-anchored-to-server-time pattern → bolded "what depends on getting this right" pivot with `last_pull_at` clock-skew + offline-edits-survival stakes → before/after bullets comparing full-table-with-local-clock vs cursor+serverTime+chooseWinner → one-line summary "cost scales with what changed, not what exists; the cursor lives on a clock both sides agree on").
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-friends-with-drop-box + newspaper-delivery analogies with Notion's two-device sync, GitHub's `since` cursor API, RSS `If-Modified-Since`, and React Query's `useInfiniteQuery` with server-provided `nextCursor`). Why care WC1 was missed by the original triage; included in this pass.
-
----
-Updated: 2026-05-19 — added `Schema namespace` line to `## In this codebase` documenting migration 0010 (both `supabase.from(table).gt(…)` and `supabase.rpc('get_server_time')` now resolve under `buffr.*`; cursor + page-by-200 algorithm is unchanged).

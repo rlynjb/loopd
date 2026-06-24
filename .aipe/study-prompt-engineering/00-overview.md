@@ -40,4 +40,3 @@ Vendor-specific syntax quirks (those live inside individual files' Tech referenc
 If you came from a production failure, skip directly to the file matching the bug. If you're new to the discipline, read 01–05 in order, then jump around the techniques as the codebase calls for them. If you're auditing a system that uses LLMs, the Validate block at the end of each file tells you what good looks like — a reader who can pass Level 4 on each of 01–05 has the operational discipline; the techniques follow from that base.
 
 ---
-Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (per-repo scope: buffr is the anchor; aipe demoted from co-anchor to illustrative reference).

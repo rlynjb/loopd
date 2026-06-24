@@ -415,30 +415,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0). Flagged content drift: `SmartTodoList.tsx` still uses position-based sort, not pinned-first.
-Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (starred-grocery metaphor + frontend bridge to Array.sort comparators) and Move 3 principle after the Comparison block.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (fridge-magnet-with-star-stickers scenario → naming the two-key stable comparator with priority partition → bolded "what depends on getting this right" pivot with `todo_meta.pinned` write-path simplicity and `SmartTodoList` drift stakes → before/after bullets comparing drag-to-reorder `position` vs boolean+timestamp comparator → one-line summary "two keys, lexicographic fall-through; the policy IS the comparator").
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-product references (Gmail starred / Slack pinned / GitHub pinned repos) to a frontend primitive (a todo list rendering with a `pinned` boolean column + `created_at` timestamp, sorted via `.sort()` two-key comparator). Same swap on How it works Move 1 — replaced Gmail / Linear / Notion references with the generic `Array.prototype.sort` two-key comparator primitive. R2 not applicable (DSA file uses the pseudocode + execution-trace shape, already diagram-rich).
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced fridge-magnet-board + starred-grocery-list analogies with Gmail starred + Slack pinned + GitHub pinned-repos + Linear/Notion sort patterns). Why care WC1 was missed by the original triage; included in this pass.

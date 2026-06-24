@@ -520,36 +520,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + added missing 5th chain `interpret` to External LLMs list.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped adding outer layer labels because the diagram is itself a storage-layer enumeration — adding a wrapper would be redundant.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for expo-sqlite, @supabase/supabase-js.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (five-kitchen-drawers metaphor opening / 5 layered sub-sections — SQLite canonical, filesystem blobs, SecureStore keys, Supabase mirror, stateless LLMs — each with frontend bridges and concrete consequences / principle paragraph on one-job-per-layer with explicit trust directions).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (one-giant-drawer-vs-five-labelled-drawers kitchen scenario → polyglot persistence named as the answer → bolded "what depends on getting this right" with five-layer (SQLite/FS/SecureStore/Supabase/LLM) stakes → before/after walking everything-in-SQLite vs split storage → one-line "five drawers, each with one job").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced kitchen-with-five-drawers analogies with AWS storage stack — DynamoDB hot rows + S3 blobs + Secrets Manager keys + RDS relational + Lambda stateless compute). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (anchors already at level-4 — AWS storage services as polyglot-persistence primitives; no level-1 frontend primitive captures "five layers, one job each" at the same fidelity). Added Move 1 mnemonic diagram (five-layers-with-trust-directions shape) + 5 Move 2 sub-section diagrams: SQLite table inventory, row-points-at-bytes filesystem shape, SecureStore key-value inventory, Supabase write-vs-read paths, stateless-LLM API flow. Total: 6 new diagrams.

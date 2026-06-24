@@ -475,33 +475,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram; added architectural-layer labels to the primary diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (busy-cafe waiter-clearing-once scenario → debounce named as the answer → bolded "what depends on getting this right" with schedulePush/PUSH_DEBOUNCE_MS stakes → before/after walking a 30-keystroke typing burst → one-line "the waiter clears once, after the burst is over").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced waiter-at-cafe-clearing-table analogies with search-box autocomplete debouncing + Lodash _.debounce + React Query useDebouncedCallback + Gmail autosave). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from "Google's search box / Linear / Algolia" whole-product autocomplete anchors to a level-1 primitive (`clearTimeout`/`setTimeout` in an `<input>` `onChange`; lodash `_.debounce` and `useDebouncedCallback` kept as level-1/3 library mentions). Dropped Gmail autosave from How it works Move 1. Added Move 1 mnemonic diagram (write-events-to-fire timeline) + 4 Move 2 sub-section diagrams: schedulePush body annotated, in-flight push re-arm timeline, REGISTRY orchestrator walk, 5s-knob three-column tradeoff. Total: 5 new diagrams.

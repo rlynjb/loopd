@@ -456,9 +456,3 @@ Without opening files:
 - Which chain is the highest-priority candidate for an eval set?
 - Where would the eval files live (path convention)?
 - What's the difference between the golden set and the regression suite?
-
----
-Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (aipe paragraph reworded as external illustrative example rather than in-portfolio co-anchor).
-
----
-Updated: 2026-05-29 — codebase-drift fix: B3.9 golden-set exercise removed the phantom `reduce` label (a misread of migration `0008_todo_meta_type_reduce`); the real label set is 5 (`todo, idea, knowledge, study, reflect`), so the set is sized 5×5 + 5 boundary = 30 cases, not 35.

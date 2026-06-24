@@ -503,33 +503,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet + corrected "11-principle list" → "12-principle list".
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (mental-model opening / layered walkthrough with frontend bridges / principle paragraph); each move-2 sub-section now carries its technical term, frontend bridge, concrete consequence, and boundary condition.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (house front-door + service entrance on the floor plan scenario → named carve-out pattern as the answer → bolded "what depends on getting this right" with Principle-11 contract stakes around `toggleThreadTouchToday` → before/after walking a "quick add nutrition" PR → one-line "drawn on the floor plan in the same colour as the front door").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced house-with-front-door-and-service-entrance analogies with GitHub CODEOWNERS + dependabot auto-merge as a named documented exception to the all-PRs-require-review rule). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care + How it works Move 1 anchors from whole-product references (GitHub CODEOWNERS + dependabot auto-merge) to level-1 TypeScript primitives (`as any` cast with `// eslint-disable-next-line` comment in one named file; `// @ts-expect-error` line as the named escape hatch under `strict: true`). Same swap on Why care Move 5 summary. Added Move 1 mnemonic diagram (rule + one-named-exception shape) + 4 Move 2 sub-section diagrams: invariant in code+row form, tap-to-insert mechanics, prose-vs-touch row table + export filter, budget decision flow on PR proposing a second deviation. Total: 5 new diagrams.

@@ -441,28 +441,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — flagged content drift: `getThreadCards()` is now dead code. Threads were dropped from the dashboard in commit 42ee8a6 (2026-05-08) and no UI surface calls the aggregate anymore.
-Updated: 2026-05-10 — added v1.14.0 subtitle block + brute-force section + comparison table.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (waiter-bulk-order metaphor + frontend bridge to React Query batching) and Move 3 principle after the Comparison block.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (waiter-with-order-pad scenario → naming the dataloader/bulk-then-join pattern → bolded "what depends on getting this right" pivot with dashboard render-latency stakes → before/after bullets comparing N+1 roundtrip costs to 4-query+2-join shape → one-line summary "round-trips are the cost; row count is the variable").
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of Why care + How it works to anchor on real software (replaced waiter/kitchen analogy with DevTools Network tab, GraphQL DataLoader, Prisma `include`, and React Query's batched `useQueries`).

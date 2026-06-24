@@ -359,4 +359,3 @@ Without opening files:
 - What's the load-bearing cost of meta-prompting?
 
 ---
-Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (`In this codebase` rewritten as Case B for buffr; Layer 4 aipe block, Move 2.5, breakpoint paragraph, Summary Part 1, senior interview Q, and one-line anchors all reframed so aipe appears only as illustrative reference and amortisation/complexity thresholds become the load-bearing point).

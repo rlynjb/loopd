@@ -455,38 +455,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-
----
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a read-vs-write SQL contrast within a single storage layer, not a cross-layer composition.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (gravestone metaphor opening / 4 layered sub-sections — UPDATE not DELETE, the read filter, why sync needs the tombstone, the deferred 30-day vacuum — each with frontend bridges and concrete consequences / principle paragraph on deletes-as-ordinary-edits).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (graveyard with-and-without-headstones scenario → tombstone pattern named as the answer → bolded "what depends on getting this right" with sync-resurrection stakes → before/after walking a delete-then-pull on a tablet → one-line "tombstone is an edit that says 'I'm not here anymore'").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced graveyard + gravestone analogies with GitHub closed PRs + Linear archived issues + Stripe canceled_at subscriptions). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 anchor from whole-product references (GitHub closed PRs / Linear archived / Stripe canceled_at) to a level-1 primitive (a `users` table with a `deleted_at TIMESTAMP NULL` column and `WHERE deleted_at IS NULL` read filter). Same swap on How it works Move 1. Added Move 1 mnemonic diagram (delete-to-propagation flow) + 4 Move 2 sub-section diagrams: UPDATE-not-DELETE SQL trace, table-with-tombstone shape, two-device propagation, vacuum timeline. Total: 5 new diagrams.

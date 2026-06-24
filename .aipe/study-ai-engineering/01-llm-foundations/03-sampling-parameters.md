@@ -339,4 +339,3 @@ Without opening files:
 - What's the symptom if you ship a classifier at temperature=0.7?
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set in the reproducibility examples: `book flight → errand/task` (invented task-management types) → `look into vector search → study/idea` (real thinking-mode types per migrations 0006-0008). Set is `todo, idea, knowledge, study, reflect`.

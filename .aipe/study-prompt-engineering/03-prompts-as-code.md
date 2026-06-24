@@ -415,4 +415,3 @@ Without opening files:
 - What does aipe's `pr-review-protocol-v2.md` filename tell you about its versioning convention?
 
 ---
-Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (aipe dedicated sub-section in `In this codebase` demoted to one illustrative paragraph).

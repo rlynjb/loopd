@@ -312,4 +312,3 @@ Without opening files:
 - What's the symptom of a missing lock?
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set in the override example: `book flight: errand→task` (invented task-management types) → `revisit the caption-variants decision: study→reflect` (real thinking-mode types). Updated the field-shape diagram (`type: 'task'` → `'reflect'`) and the schema annotation. Set is `todo, idea, knowledge, study, reflect`.

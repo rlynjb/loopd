@@ -46,4 +46,3 @@ Voice: working AI engineer who has shipped production LLM systems. Hedging is ba
 → **Start with [00-overview.md](./00-overview.md)** if you want the discipline summarised on one page. → **Skip to the file matching the bug you're chasing** if you came here from a production failure.
 
 ---
-Updated: 2026-05-24 — voice/scope realignment per v1.38.0 spec (per-repo scope: this codebase is the primary anchor; aipe/others are illustrative).

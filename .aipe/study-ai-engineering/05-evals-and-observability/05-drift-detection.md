@@ -195,4 +195,3 @@ The breakpoint: detect drift once you have the trace data (`B3.11`) AND meaningf
 - What does the alert trigger?
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set in the drift-distribution example: the per-class distribution used 7 invented task-management types (task/errand/decision/learning/creative/social/admin); rebuilt it with the 5 real thinking-mode types (`todo, idea, knowledge, study, reflect`, todo-dominant) summing to 100%, with `study` as the drifting class. Set per migrations 0006-0008.

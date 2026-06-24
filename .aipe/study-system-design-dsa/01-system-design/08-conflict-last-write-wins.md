@@ -447,38 +447,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-
----
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram. Skipped layer labels — the diagram is a pure-function decision table, not a cross-layer composition.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (two-children-one-toy metaphor opening / 4 layered sub-sections — pure chooseWinner, ISO-string compare, same-second cloud bias, malformed-timestamp healing — each with frontend bridges and concrete consequences / principle paragraph on convergent merge under total order).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (two-children-one-toy adult-rule scenario → LWW pattern named as the deterministic answer → bolded "what depends on getting this right" with pure-function/ISO-compare stakes → before/after walking a plane-vs-cafe concurrent edit → one-line "the resolver is a referee that always blows the whistle the same way").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced two-children-with-toy analogies with Notion two-device concurrent edits + CouchDB/Firebase LWW + Postgres MVCC last_updated timestamp). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: swapped Why care Move 1 from a whole-product anchor (Notion two-device edits) down to a level-1 primitive (a `posts` table with `last_updated` and two UPDATE statements + Postgres MVCC). Kept How it works Move 1 anchor on Postgres MVCC (level-4 industry primitive); kept Firebase/CouchDB as level-4 examples. Added Move 1 mnemonic diagram (resolver decision tree) + 4 Move 2 sub-section diagrams: pure-function signature, ISO-string compare with annotation, ping-pong-prevented tie trace, malformed-timestamp healing trace. Total: 5 new diagrams.

@@ -497,36 +497,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-07 — appended Interview defense section (template v1.11.1).
-Updated: 2026-05-07 — added Validate your understanding section + structured code reference (template v1.12.0).
-Updated: 2026-05-10 — converted subtitle to v1.14.0 two-line block + added Checklist step bullet.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-
----
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 tech-stack-rule pass: added industry-leader pairing block at end of Tradeoffs for @supabase/supabase-js, expo-sqlite.
-
----
-Updated: 2026-05-10 — v1.23.0 pass: promoted Tech reference from H3 inside Tradeoffs to dedicated H2 section between Tradeoffs and Summary; reformatted ASCII boxes as `###` per-tech subsections with five labelled bullets.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: restructured How it works into three moves (suitcase-at-baggage-claim metaphor opening / 4 layered sub-sections — SecureStore gates, four-quadrant query, the four branches + awkward (yes,yes) case, why the flag is essential — each with frontend bridges and concrete consequences / principle paragraph on cold-start as explicit decision tree).
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (baggage-claim two-suitcases-check-the-tag scenario → first-run decision tree named as the answer → bolded "what depends on getting this right" with bootstrap()/SecureStore-flag stakes → before/after walking a `(yes, yes)` first boot → one-line "the flag is the airport's stamp; once it's on your pass, the gate stops asking").
-
----
-Updated: 2026-05-14 — v1.31.0 pass (system-design re-scan): rewrote Move 1 of Why care + How it works to anchor on real software (replaced airport-baggage-claim-with-suitcases analogies with Chrome DevTools Service Worker install event four-state decision tree + React Query hydration check). Both Move 1s were missed by the original triage agent.
-
----
-Updated: 2026-05-14 — v1.32.0 pass: R1 no-op (Why care + How it works anchors already use level-3 engineering surfaces: Chrome DevTools Service Worker panel + React Query hydration check). Added Move 1 mnemonic diagram (three-layer flow: flags → 4-quadrant query → branch + flag) + 4 Move 2 sub-section diagrams: SecureStore gates in code-flow form, 4-quadrant grid, each-branch-in-detail, with-vs-without-flag two-device timeline. Total: 5 new diagrams.

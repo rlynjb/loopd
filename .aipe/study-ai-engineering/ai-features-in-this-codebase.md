@@ -111,4 +111,3 @@ These features are described in the per-concept files as "Not yet implemented" w
 - **No prompt-injection guards on user-generated text.** The chains interpolate `entries.text` directly into prompts. Buffr's input source is the user's own private journal (single-user app), so the threat model is narrow — but the Phase 5 spec defines the sanitization layer as an exercise.
 
 ---
-Updated: 2026-05-29 — corrected the classifier type set. The original generation invented a 7-type task-management set (`task, errand, decision, learning, creative, social, admin`); buffr's actual set is 5 thinking-mode types (`todo, idea, knowledge, study, reflect`) per `src/types/todoMeta.ts` + migrations 0006/0007/0008. Reframed the classifier-feature description accordingly.

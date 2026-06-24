@@ -481,23 +481,3 @@ Then open the file and verify.
 
 ✓ Pass: you named the file and function correctly
 ✗ Fail on lines: that's fine — line numbers change. File and function are what matter.
-
----
-Updated: 2026-05-10 — added Why care block (template v1.18.0).
-Updated: 2026-05-10 — Quick summary moved to after Tradeoffs and reshaped to v1.19.0 recap form (paragraph + key-point bullets).
-Updated: 2026-05-10 — v1.20.0 swap: moved primary diagram to after How it works (now the recap visual); rewrote Why care handoff sentence; appended How-it-works handoff to the diagram.
-
----
-Updated: 2026-05-10 — v1.21.0 pass: renamed Quick summary → Summary; expanded Tradeoffs into comparison table + 4 sub-blocks; added per-answer diagrams in Interview defense Q&As; added comparison diagram to dodge Q&A.
-
----
-Updated: 2026-05-10 — v1.22.0 + v1.23.0 pass: inserted `## Tech reference (industry pairing)` section between Tradeoffs and Summary with `###` per tech + five labelled bullets each.
-
----
-Updated: 2026-05-10 — v1.24.0 pass: wrapped algorithm body in a `## How it works` heading; added Move 1 mental-model opening (fridge-snapshot metaphor + frontend bridge to rsync --delete) and Move 3 principle after the Comparison block.
-
----
-Updated: 2026-05-13 — v1.30.0 pass: restructured Why care into five-move form (rsync-mirror-vs-additive-mode scenario → naming the share-matcher-vary-apply-tail pattern → bolded "what depends on getting this right" pivot with `nutrition` 1:1-with-prose invariant stakes → before/after bullets walking a deleted `** banana 95 kcal` line through carryover vs delete-sweep → one-line summary "share the matcher, vary the apply tail; prose is canonical").
-
----
-Updated: 2026-05-13 — v1.31.0 pass: rewrote Move 1 of How it works to anchor on real software (replaced fridge-snapshots analogy with `git status` vs `git clean -fd` and rsync's `--delete` flag — same matcher, opposite cleanup policy). Why care Move 1 already used `rsync` and was left untouched.
