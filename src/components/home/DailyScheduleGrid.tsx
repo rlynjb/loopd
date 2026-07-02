@@ -104,7 +104,7 @@ function HabitRow({
         hitSlop={4}
         style={styles.label}
       >
-        <Text style={styles.labelName} numberOfLines={1}>{habit.label}</Text>
+        <Text style={styles.labelName}>{habit.label}</Text>
         <Text style={styles.labelCadence}>{summarizeCadence(habit)}</Text>
       </Pressable>
       <View style={styles.cells}>
